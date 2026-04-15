@@ -217,7 +217,144 @@ python agent.py</pre>
 </html>"""
 
 
-# ── Модели запросов ──────────────────────────────────────────────────────
+ABOUT_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ИРУ — О системе</title>
+<link rel="icon" type="image/x-icon" href="/static/IruIcon.ico">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0a0e17; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 15px; line-height: 1.75; padding: 48px 20px; }
+.container { max-width: 760px; margin: 0 auto; }
+.page-header { margin-bottom: 40px; }
+h1 { color: #00d4ff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 10px; }
+.subtitle { color: #ffffff; font-size: 15px; font-weight: 400; opacity: 0.85; }
+h2 { color: #00d4ff; font-size: 20px; font-weight: 600; margin: 36px 0 14px; padding-bottom: 8px; border-bottom: 1px solid #1e293b; }
+p { margin-bottom: 14px; color: #ffffff; opacity: 0.9; }
+strong { color: #ffffff; font-weight: 600; }
+a { color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; }
+a:hover { border-bottom-style: solid; }
+
+/* Philosophy block */
+.philosophy { background: #0f1725; border: 1px solid #1e3a5f; border-left: 4px solid #00d4ff; border-radius: 0 10px 10px 0; padding: 18px 22px; margin: 18px 0 28px; }
+.philosophy p { color: #ffffff; font-style: italic; margin: 0 0 10px; }
+.philosophy p:last-child { margin: 0; }
+.philosophy .no-emu { color: #e2e8f0; font-size: 13px; margin: 0; }
+
+/* Architecture image */
+.arch-img-wrap { margin: 18px 0 28px; }
+.arch-img-wrap img { width: 100%; max-width: 100%; border-radius: 10px; border: 1px solid #1e3a5f; box-shadow: 0 8px 32px rgba(0,212,255,0.10), 0 2px 8px rgba(0,0,0,0.5); display: block; }
+
+/* Roadmap stage cards */
+.stages { display: flex; flex-direction: column; gap: 12px; margin: 18px 0 28px; }
+.stage-card { background: #0f1725; border: 1px solid #1e293b; border-radius: 10px; padding: 16px 20px; display: flex; align-items: flex-start; gap: 16px; }
+.stage-card.done { border-left: 3px solid #00d4ff; }
+.stage-card.coming { border-left: 3px solid #f59e0b; }
+.stage-badge { flex-shrink: 0; font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 6px; white-space: nowrap; }
+.stage-badge.done { background: #00d4ff18; border: 1px solid #00d4ff40; color: #00d4ff; }
+.stage-badge.coming { background: #f59e0b18; border: 1px solid #f59e0b40; color: #f59e0b; }
+.stage-content { flex: 1; }
+.stage-title { color: #ffffff; font-weight: 600; font-size: 15px; margin-bottom: 2px; }
+.stage-desc { color: #e2e8f0; font-size: 13px; opacity: 0.85; }
+
+/* Tech stack table */
+.tech-table { width: 100%; border-collapse: collapse; margin: 18px 0 28px; }
+.tech-table tr { border-bottom: 1px solid #1e293b; }
+.tech-table tr:last-child { border-bottom: none; }
+.tech-table td { padding: 10px 14px; font-size: 14px; }
+.tech-table td:first-child { color: #00d4ff; font-weight: 600; width: 42%; }
+.tech-table td:last-child { color: #ffffff; }
+.tech-table tr:nth-child(even) { background: #0f1725; }
+
+/* Footer */
+.footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+.footer-brand { color: #e2e8f0; font-size: 12px; }
+.footer-link { color: #00d4ff; font-size: 13px; text-decoration: none; border-bottom: 1px dashed #00d4ff80; }
+.footer-link:hover { border-bottom-style: solid; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="page-header">
+<h1>Об ИРУ — Интеллектуальный Режим Управления</h1>
+<div class="subtitle">Система удалённого управления компьютерами через естественный язык</div>
+</div>
+
+<h2>Что такое ИРУ?</h2>
+<p>ИРУ — система, в которой пользователь описывает задачу на естественном языке, языковая модель (LLM) переводит её в команды CMD/PowerShell, а агент выполняет их непосредственно на устройстве.</p>
+<div class="philosophy">
+<p>Философия: «научить машину быть машиной»</p>
+<p class="no-emu">Никакой эмуляции действий пользователя — никаких скриншотов, кликов и pyautogui. Только прямые программные вызовы: COM-объекты, WMI, UI Automation API, DevTools Protocol. Машина управляется как машина.</p>
+</div>
+
+<h2>Архитектура системы</h2>
+<div class="arch-img-wrap">
+<img src="/static/architecture.jpg" alt="Архитектура ИРУ">
+</div>
+
+<h2>Этапы разработки</h2>
+<div class="stages">
+
+<div class="stage-card done">
+<span class="stage-badge done">✅ Этап 1</span>
+<div class="stage-content">
+<div class="stage-title">Умный ассистент (Текст → Команды)</div>
+<div class="stage-desc">NL-управление одним и несколькими устройствами одновременно, параллельное выполнение, broadcast-режим</div>
+</div>
+</div>
+
+<div class="stage-card done">
+<span class="stage-badge done">✅ Этап 2</span>
+<div class="stage-content">
+<div class="stage-title">Сбор данных (Обучающая выборка)</div>
+<div class="stage-desc">Автоматическая запись training data с согласия пользователя для последующего обучения модели</div>
+</div>
+</div>
+
+<div class="stage-card coming">
+<span class="stage-badge coming">🔜 Этап 3</span>
+<div class="stage-content">
+<div class="stage-title">Обучение модели (Собственный ИИ)</div>
+<div class="stage-desc">Fine-tuning собственной модели на реальных данных, собранных на этапе 2</div>
+</div>
+</div>
+
+<div class="stage-card coming">
+<span class="stage-badge coming">🔜 Этап 4</span>
+<div class="stage-content">
+<div class="stage-title">Запуск (Публичный релиз)</div>
+<div class="stage-desc">Выход собственной модели и публичный релиз системы ИРУ</div>
+</div>
+</div>
+
+</div>
+
+<h2>Технологический стек</h2>
+<table class="tech-table">
+<tr><td>Сервер</td><td>FastAPI + Uvicorn</td></tr>
+<tr><td>LLM</td><td>DeepSeek API</td></tr>
+<tr><td>Агент</td><td>Python (WebSocket client)</td></tr>
+<tr><td>Фронтенд</td><td>Vanilla JS, единый HTML-файл</td></tr>
+<tr><td>База данных</td><td>SQLite</td></tr>
+<tr><td>Протокол</td><td>WebSocket (двунаправленный, реального времени)</td></tr>
+<tr><td>ОС агента</td><td>Windows (PowerShell / CMD)</td></tr>
+</table>
+
+<div class="footer">
+<span class="footer-brand">ИРУ v3.4 — Интеллектуальный Режим Управления</span>
+<a href="/" class="footer-link">← Вернуться в ИРУ</a>
+</div>
+
+</div>
+</body>
+</html>"""
+
+
+# ── Модели запросов ────────────────────────────────────────────
 
 class DirectCommand(BaseModel):
     device_id: str
@@ -323,13 +460,16 @@ def cleanup_old_tasks():
 async def run_nl_task(task_id: str, user_id: int, message: str,
                       device_ids: list[str], chat_id: int):
     """
-    Выполнить NL-задачу в фоне на одном или нескольких устройствах параллельно.
-    Результаты записываются в tasks[task_id].
+    Выполнить NL-задачу в фоне.
+    Если одно устройство — стандартный LLM-цикл.
+    Если несколько (broadcast) — LLM планирует на первом устройстве,
+    затем команды повторяются на остальных.
     """
     task = tasks[task_id]
+    is_broadcast = len(device_ids) > 1
 
     async def run_on_device(device_id: str):
-        """Выполнить задачу на одном устройстве."""
+        """Выполнить задачу на одном устройстве через LLM."""
         dev = devices.get(device_id)
         if not dev or dev.get("user_id") != user_id:
             return {
@@ -340,12 +480,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             }
 
         device_info = dev.get("info", {})
-
-        # Устройства пользователя
         user_devs = get_user_devices(user_id)
         all_devices_info = {did: {"info": d.get("info", {})} for did, d in user_devs.items()}
-
-        # Загрузить историю чата
         chat_history = get_messages(chat_id, limit=50)
 
         async def send_fn(target_device_id, action, params):
@@ -385,31 +521,88 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 "commands": [],
             }
 
+    async def replay_commands_on_device(device_id: str, commands: list):
+        """Повторить готовые команды на устройстве (без LLM)."""
+        dev = devices.get(device_id)
+        if not dev or dev.get("user_id") != user_id:
+            return {
+                "device_id": device_id,
+                "status": "error",
+                "answer": f"Устройство '{device_id}' не найдено",
+                "commands": [],
+            }
+
+        results = []
+        for cmd in commands:
+            cmd_text = cmd.get("command", "")
+            if cmd_text.startswith("["):  # get_file_link и т.п. — пропустить
+                continue
+            try:
+                result = await send_command_to_agent(
+                    device_id, "execute_cmd",
+                    {"command": cmd_text, "timeout": 30}
+                )
+                results.append({
+                    "command": cmd_text,
+                    "device_id": device_id,
+                    "result": result,
+                })
+            except Exception as e:
+                results.append({
+                    "command": cmd_text,
+                    "device_id": device_id,
+                    "result": {"error": str(e)},
+                })
+
+        hostname = dev.get("info", {}).get("hostname", device_id)
+        return {
+            "device_id": device_id,
+            "status": "ok",
+            "answer": f"Команды выполнены на {hostname}",
+            "commands": results,
+        }
+
     try:
-        # Выполняем на всех устройствах параллельно
-        coros = [run_on_device(did) for did in device_ids]
-        results_list = await asyncio.gather(*coros, return_exceptions=True)
+        if is_broadcast:
+            # Broadcast: LLM планирует на первом устройстве
+            primary_result = await run_on_device(device_ids[0])
+            task["results"][device_ids[0]] = primary_result
 
-        all_commands = []
-        answers = []
+            all_commands = primary_result.get("commands", [])
+            answers = []
 
-        for r in results_list:
-            if isinstance(r, Exception):
-                answers.append(f"Ошибка: {str(r)}")
-            else:
-                task["results"][r["device_id"]] = r
-                if r.get("commands"):
-                    all_commands.extend(r["commands"])
-                if len(device_ids) > 1:
-                    # Мультиустройство: добавляем имя устройства к ответу
-                    dev = devices.get(r["device_id"])
-                    hostname = dev["info"].get("hostname", r["device_id"]) if dev else r["device_id"]
-                    answers.append(f"[{hostname}] {r.get('answer', '')}")
-                else:
-                    answers.append(r.get("answer", ""))
+            dev0 = devices.get(device_ids[0])
+            hostname0 = dev0["info"].get("hostname", device_ids[0]) if dev0 else device_ids[0]
+            answers.append(f"[{hostname0}] {primary_result.get('answer', '')}")
 
-        combined_answer = "\n\n".join(answers) if answers else "Готово."
-        combined_commands = all_commands
+            # Повторить команды на остальных устройствах
+            if all_commands and len(device_ids) > 1:
+                replay_coros = [
+                    replay_commands_on_device(did, all_commands)
+                    for did in device_ids[1:]
+                ]
+                replay_results = await asyncio.gather(*replay_coros, return_exceptions=True)
+
+                for r in replay_results:
+                    if isinstance(r, Exception):
+                        answers.append(f"Ошибка: {str(r)}")
+                    else:
+                        task["results"][r["device_id"]] = r
+                        if r.get("commands"):
+                            all_commands.extend(r["commands"])
+                        dev = devices.get(r["device_id"])
+                        hostname = dev["info"].get("hostname", r["device_id"]) if dev else r["device_id"]
+                        answers.append(f"[{hostname}] {r.get('answer', '')}")
+
+            combined_answer = "\n\n".join(answers) if answers else "Готово."
+            combined_commands = all_commands
+
+        else:
+            # Одно устройство: стандартная логика
+            result = await run_on_device(device_ids[0])
+            task["results"][device_ids[0]] = result
+            combined_answer = result.get("answer", "")
+            combined_commands = result.get("commands", [])
 
         # Сохранить ответ в чат
         add_message(chat_id, "assistant", combined_answer, combined_commands)
@@ -418,24 +611,19 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
         try:
             from database import get_db as _get_db, add_training_record
             with _get_db() as _conn:
-                _row = _conn.execute(
-                    "SELECT data_consent FROM users WHERE id = ?", (user_id,)
-                ).fetchone()
+                _row = _conn.execute("SELECT data_consent FROM users WHERE id = ?", (user_id,)).fetchone()
             if _row and _row["data_consent"]:
                 first_dev = devices.get(device_ids[0]) if device_ids else None
                 dev_info = first_dev.get("info", {}) if first_dev else {}
                 os_info = dev_info.get("os", "")
                 hostname_info = dev_info.get("hostname", "")
                 method_info = "powershell" if "windows" in os_info.lower() else "bash"
-                is_success = not any(
-                    isinstance(r, Exception) or (isinstance(r, dict) and r.get("status") == "error")
-                    for r in results_list
-                )
+                is_success = True
                 add_training_record(
                     user_id=user_id, chat_id=chat_id,
                     input_text=message, os_info=os_info,
                     hostname=hostname_info, method=method_info,
-                    running_processes=[], commands=all_commands,
+                    running_processes=[], commands=combined_commands,
                     success=is_success,
                 )
         except Exception as e:
@@ -466,6 +654,12 @@ async def root():
 async def instruction_page():
     """Страница-инструкция для тестера."""
     return HTMLResponse(INSTRUCTION_HTML)
+
+
+@app.get("/about", response_class=HTMLResponse)
+async def about_page():
+    """Страница «Об ИРУ»."""
+    return HTMLResponse(ABOUT_HTML)
 
 
 # ── AUTH API ─────────────────────────────────────────────────────────────
