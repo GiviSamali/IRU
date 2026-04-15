@@ -1,10 +1,11 @@
 """
-database.py — SQLite база данных ИРУ v3.2
+database.py — SQLite база данных ИРУ v3.3
 
 Таблицы:
-  users    — пользователи (token, имя, дата создания)
-  chats    — чаты пользователей (title, user_id, timestamps)
-  messages — сообщения в чатах (role, content, commands_json)
+  users         — пользователи (token, имя, дата создания, согласие на сбор данных)
+  chats         — чаты пользователей (title, user_id, timestamps)
+  messages      — сообщения в чатах (role, content, commands_json)
+  training_data — записи для обучения модели (input, команды, контекст ОС)
 
 Файл БД создаётся рядом с main.py при первом запуске.
 При старте автоматически создаётся администратор (admin).
@@ -65,9 +66,30 @@ def init_db():
                 created_at  REAL    NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS training_data (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL REFERENCES users(id),
+                chat_id     INTEGER NOT NULL REFERENCES chats(id),
+                input       TEXT    NOT NULL,
+                os          TEXT,
+                hostname    TEXT,
+                method      TEXT DEFAULT 'powershell',
+                running_processes TEXT,
+                commands    TEXT,
+                success     INTEGER DEFAULT 1,
+                created_at  REAL    NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_chats_user ON chats(user_id);
             CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
+            CREATE INDEX IF NOT EXISTS idx_training_user ON training_data(user_id);
         """)
+
+        # Миграция: добавить data_consent если нет
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN data_consent INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # Колонка уже существует
 
         # Создать admin-пользователя, если его нет
         admin = conn.execute("SELECT id FROM users WHERE name = 'admin'").fetchone()
@@ -247,3 +269,67 @@ def get_message_count(chat_id: int) -> int:
             (chat_id,)
         ).fetchone()
         return row["cnt"]
+
+
+# ── Training Data ───────────────────────────────────────────────────
+
+def add_training_record(user_id: int, chat_id: int, input_text: str,
+                        os_info: str, hostname: str, method: str,
+                        running_processes: list, commands: list,
+                        success: bool) -> dict:
+    """Сохранить запись для обучения модели."""
+    now = time.time()
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO training_data
+               (user_id, chat_id, input, os, hostname, method, running_processes, commands, success, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, chat_id, input_text, os_info, hostname, method,
+             json.dumps(running_processes, ensure_ascii=False) if running_processes else None,
+             json.dumps(commands, ensure_ascii=False) if commands else None,
+             1 if success else 0, now)
+        )
+        return {"id": cursor.lastrowid}
+
+
+def get_training_data(limit: int = 100, offset: int = 0) -> list[dict]:
+    """Получить записи обучения (для админа)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM training_data ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        ).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            if d.get("running_processes"):
+                try:
+                    d["running_processes"] = json.loads(d["running_processes"])
+                except Exception:
+                    pass
+            if d.get("commands"):
+                try:
+                    d["commands"] = json.loads(d["commands"])
+                except Exception:
+                    pass
+            result.append(d)
+        return result
+
+
+def get_training_count() -> int:
+    """Количество записей обучения."""
+    with get_db() as conn:
+        row = conn.execute("SELECT COUNT(*) as cnt FROM training_data").fetchone()
+        return row["cnt"]
+
+
+# ── Согласие пользователя ──────────────────────────────────────────
+
+def set_user_consent(user_id: int, consent: bool) -> bool:
+    """Установить согласие пользователя на сбор данных."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE users SET data_consent = ? WHERE id = ?",
+            (1 if consent else 0, user_id)
+        )
+        return cursor.rowcount > 0

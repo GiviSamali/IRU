@@ -1,7 +1,7 @@
 """
-main.py — FastAPI-сервер ИРУ v3.3
+main.py — FastAPI-сервер ИРУ v3.4
 
-Новое в v3.3:
+Новое в v3.4:
   - Параллельное выполнение: задачи выполняются в фоне, UI не блокируется
   - Broadcast: одна команда на все/выбранные устройства одновременно
   - GET /api/tasks — список активных/завершённых задач
@@ -54,6 +54,8 @@ from database import (
     init_db, get_user_by_token, create_user, list_users, delete_user,
     create_chat, list_chats, get_chat, update_chat_title, delete_chat,
     add_message, get_messages,
+    add_training_record, get_training_data, get_training_count,
+    set_user_consent,
 )
 
 # ── Хранение подключённых устройств ───────────────────────────────────────
@@ -83,17 +85,136 @@ TASK_TTL = 3600  # хранить задачи 1 час
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    print("[server] ИРУ v3.3 запущен")
+    print("[server] ИРУ v3.4 запущен")
     yield
-    print("[server] ИРУ v3.3 остановлен")
+    print("[server] ИРУ v3.4 остановлен")
 
 
-app = FastAPI(title="ИРУ v3.3", lifespan=lifespan)
+app = FastAPI(title="ИРУ v3.4", lifespan=lifespan)
 
 # Статические файлы (UI)
 STATIC_DIR = Path(__file__).parent.parent / "ui"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# ── Страница инструкции для тестера ──────────────────────────────────────
+INSTRUCTION_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ИРУ — Инструкция для тестера</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0a0e17; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.7; padding: 40px 20px; }
+.container { max-width: 700px; margin: 0 auto; }
+h1 { color: #00d4ff; font-size: 24px; margin-bottom: 8px; }
+.subtitle { color: #64748b; font-size: 12px; margin-bottom: 32px; }
+h2 { color: #00d4ff; font-size: 16px; margin: 28px 0 12px; border-bottom: 1px solid #1e293b; padding-bottom: 6px; }
+h3 { color: #94a3b8; font-size: 14px; margin: 20px 0 8px; }
+p { margin-bottom: 12px; color: #94a3b8; }
+ol, ul { padding-left: 20px; margin-bottom: 16px; color: #94a3b8; }
+li { margin-bottom: 8px; }
+code { background: #141b2a; border: 1px solid #1e293b; border-radius: 4px; padding: 2px 6px; font-size: 13px; color: #00d4ff; }
+pre { background: #0f1520; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; margin: 12px 0; overflow-x: auto; font-size: 12px; color: #e2e8f0; }
+.warning { background: #1a1500; border: 1px solid #f59e0b33; border-radius: 8px; padding: 12px 16px; margin: 16px 0; color: #f59e0b; font-size: 12px; }
+.step-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; background: #00d4ff20; border: 1px solid #00d4ff33; border-radius: 50%; font-size: 12px; color: #00d4ff; margin-right: 8px; }
+a { color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; }
+a:hover { border-bottom-style: solid; }
+.footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #1e293b; color: #64748b; font-size: 11px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>ИРУ — Инструкция для тестера</h1>
+<div class="subtitle">Интеллектуальный Режим Управления v3.4</div>
+
+<h2>Что такое ИРУ?</h2>
+<p>ИРУ — система удалённого управления компьютером через естественный язык. Вы описываете задачу текстом, ИИ переводит её в команды и выполняет на вашем ПК.</p>
+
+<h2>Что вам понадобится</h2>
+<ul>
+<li>Компьютер на <strong>Windows 10/11</strong></li>
+<li>Установленный <strong>Python 3.10+</strong> (<a href="https://python.org/downloads" target="_blank">скачать</a>)</li>
+<li><strong>Токен доступа</strong> — получите у администратора</li>
+<li>Файлы агента: <code>agent.py</code> + <code>config.json</code></li>
+</ul>
+
+<h2>Шаг 1: Установите Python</h2>
+<p>Скачайте Python с <a href="https://python.org/downloads" target="_blank">python.org</a>. При установке обязательно отметьте <code>Add Python to PATH</code>.</p>
+
+<h2>Шаг 2: Установите зависимость</h2>
+<p>Откройте терминал (Win+R → <code>cmd</code>) и выполните:</p>
+<pre>pip install websockets</pre>
+
+<h2>Шаг 3: Настройте агент</h2>
+<p>Создайте папку (например, <code>C:\\IRU</code>) и поместите туда файлы <code>agent.py</code> и <code>config.json</code>.</p>
+<p>Откройте <code>config.json</code> и заполните:</p>
+<pre>{
+  "device_id": "МОЙ_ПК",
+  "server_url": "ws://ВАШ_СЕРВЕР:8000",
+  "user_token": "ваш-токен"
+}</pre>
+<ul>
+<li><code>device_id</code> — любое имя для вашего ПК (латиница, без пробелов)</li>
+<li><code>server_url</code> — адрес сервера (получите у администратора)</li>
+<li><code>user_token</code> — ваш токен доступа</li>
+</ul>
+
+<h2>Шаг 4: Запустите агент</h2>
+<p>В терминале перейдите в папку с агентом и запустите:</p>
+<pre>cd C:\\IRU
+python agent.py</pre>
+<p>Или используйте готовый EXE-файл (если предоставлен):</p>
+<pre>agent.exe</pre>
+<p>Вы увидите сообщение о подключении:</p>
+<pre>[agent] device=МОЙ_ПК, connecting to ws://...
+[agent] connected</pre>
+
+<h2>Шаг 5: Войдите в интерфейс</h2>
+<ol>
+<li>Откройте браузер и перейдите по адресу сервера</li>
+<li>Введите ваш токен доступа</li>
+<li>Выберите устройство в правом верхнем углу</li>
+<li>Создайте новый чат и начните общение</li>
+</ol>
+
+<h2>Примеры команд</h2>
+<ul>
+<li><code>Открой браузер</code></li>
+<li><code>Покажи IP-адрес</code></li>
+<li><code>Сколько свободного места на диске?</code></li>
+<li><code>Покажи запущенные процессы</code></li>
+<li><code>Создай файл test.txt на рабочем столе с текстом "привет"</code></li>
+<li><code>Какая версия Windows?</code></li>
+</ul>
+
+<div class="warning">
+⚠️ <strong>Важно:</strong> Агент выполняет команды от имени вашего пользователя Windows. Не запрашивайте удаление системных файлов или форматирование дисков. ИРУ отклонит опасные команды, но будьте аккуратны.
+</div>
+
+<h2>Частые проблемы</h2>
+<h3>Агент не подключается</h3>
+<ul>
+<li>Проверьте адрес сервера в <code>config.json</code></li>
+<li>Убедитесь, что используете <code>ws://</code> (или <code>wss://</code> для HTTPS)</li>
+<li>Проверьте интернет-соединение</li>
+</ul>
+
+<h3>Устройство не появляется в UI</h3>
+<ul>
+<li>Убедитесь, что агент запущен и показывает <code>[agent] connected</code></li>
+<li>Проверьте, что токен в <code>config.json</code> совпадает с вашим токеном для UI</li>
+</ul>
+
+<h3>Кракозябры в выводе</h3>
+<p>ИРУ автоматически обрабатывает кодировку, но если проблема остаётся — укажите это в чате, ИРУ попробует другой подход.</p>
+
+<div class="footer">ИРУ v3.4 — Интеллектуальный Режим Управления</div>
+</div>
+</body>
+</html>"""
 
 
 # ── Модели запросов ──────────────────────────────────────────────────────
@@ -293,6 +414,33 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
         # Сохранить ответ в чат
         add_message(chat_id, "assistant", combined_answer, combined_commands)
 
+        # ── Training data: автозапись ──────────────────────────────────
+        try:
+            from database import get_db as _get_db, add_training_record
+            with _get_db() as _conn:
+                _row = _conn.execute(
+                    "SELECT data_consent FROM users WHERE id = ?", (user_id,)
+                ).fetchone()
+            if _row and _row["data_consent"]:
+                first_dev = devices.get(device_ids[0]) if device_ids else None
+                dev_info = first_dev.get("info", {}) if first_dev else {}
+                os_info = dev_info.get("os", "")
+                hostname_info = dev_info.get("hostname", "")
+                method_info = "powershell" if "windows" in os_info.lower() else "bash"
+                is_success = not any(
+                    isinstance(r, Exception) or (isinstance(r, dict) and r.get("status") == "error")
+                    for r in results_list
+                )
+                add_training_record(
+                    user_id=user_id, chat_id=chat_id,
+                    input_text=message, os_info=os_info,
+                    hostname=hostname_info, method=method_info,
+                    running_processes=[], commands=all_commands,
+                    success=is_success,
+                )
+        except Exception as e:
+            print(f"[training] Ошибка записи: {e}")
+
         task["status"] = "done"
         task["answer"] = combined_answer
         task["commands"] = combined_commands
@@ -311,7 +459,13 @@ async def root():
     index = Path(__file__).parent.parent / "ui" / "index.html"
     if index.exists():
         return HTMLResponse(index.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>ИРУ v3.3 — UI не найден</h1>")
+    return HTMLResponse("<h1>ИРУ v3.4 — UI не найден</h1>")
+
+
+@app.get("/instruction", response_class=HTMLResponse)
+async def instruction_page():
+    """Страница-инструкция для тестера."""
+    return HTMLResponse(INSTRUCTION_HTML)
 
 
 # ── AUTH API ─────────────────────────────────────────────────────────────
@@ -327,8 +481,27 @@ async def auth(body: AuthRequest):
         )
     return {
         "status": "ok",
-        "user": {"id": user["id"], "name": user["name"], "token": user["token"]}
+        "user": {
+            "id": user["id"],
+            "name": user["name"],
+            "token": user["token"],
+            "data_consent": bool(user.get("data_consent", 0)),
+        },
     }
+
+
+# ── CONSENT API ─────────────────────────────────────────────────
+
+class ConsentRequest(BaseModel):
+    consent: bool
+
+
+@app.post("/api/consent")
+async def api_set_consent(body: ConsentRequest, request: Request):
+    """Установить согласие пользователя на сбор данных."""
+    user = get_current_user(request)
+    ok = set_user_consent(user["id"], body.consent)
+    return {"status": "ok" if ok else "error"}
 
 
 # ── ADMIN API ────────────────────────────────────────────────────────────
@@ -360,6 +533,17 @@ async def admin_delete_user(user_id: int, request: Request):
         raise HTTPException(status_code=400, detail="Нельзя удалить самого себя")
     ok = delete_user(user_id)
     return {"status": "ok" if ok else "error", "deleted": ok}
+
+
+@app.get("/api/admin/training")
+async def admin_training_data(request: Request, limit: int = 100, offset: int = 0):
+    """Записи обучения (только для администратора)."""
+    user = get_current_user(request)
+    if user["name"] != "admin":
+        raise HTTPException(status_code=403, detail="Только для администратора")
+    data = get_training_data(limit, offset)
+    count = get_training_count()
+    return {"status": "ok", "data": data, "total": count}
 
 
 # ── DEVICES API ──────────────────────────────────────────────────────────

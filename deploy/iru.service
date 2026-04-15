@@ -1,0 +1,15 @@
+[Unit]
+Description=ИРУ v3.4 Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/iru/app/server
+ExecStart=/opt/iru/venv/bin/python main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

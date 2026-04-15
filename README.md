@@ -1,4 +1,4 @@
-# ИРУ v3.2 — Интеллектуальный Режим Управления
+# ИРУ v3.4 — Интеллектуальный Режим Управления
 
 Веб-приложение для удалённого управления компьютерами через естественный язык.
 Пользователь описывает задачу текстом — ИИ (DeepSeek) переводит её в команды
@@ -24,7 +24,7 @@ PowerShell/bash и выполняет на подключённых устрой
 |-----------|------|----------|
 | **Сервер** | `server/main.py` | FastAPI, REST API, WebSocket-хаб, авторизация |
 | **Контроллер** | `server/controller.py` | LLM-планировщик (DeepSeek), tool-call loop |
-| **База данных** | `server/database.py` | SQLite: пользователи, чаты, сообщения |
+| **База данных** | `server/database.py` | SQLite: пользователи, чаты, сообщения, training data |
 | **Агент** | `agent/agent.py` | Исполнитель команд на устройстве |
 | **UI** | `ui/index.html` | Веб-интерфейс (SPA, без фреймворков) |
 
@@ -45,7 +45,7 @@ pip install -r requirements.txt
 ```json
 {
   "base_url": "https://api.deepseek.com/v1",
-  "api_key": "sk-ваш-ключ-здесь",
+  "api_key": "YOUR_API_KEY_HERE",
   "model": "deepseek-chat",
   "max_tokens": 1024,
   "temperature": 0.0
@@ -68,7 +68,7 @@ python main.py
 
 ```
 [db] Создан admin-пользователь. Токен: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-[server] ИРУ v3.2 запущен
+[server] ИРУ v3.4 запущен
 ```
 
 ### 4. Вход в UI
@@ -100,49 +100,101 @@ python agent.py
 
 ---
 
-## Удалённый доступ (через интернет)
+## Развёртывание на VPS
 
-Для подключения агентов через интернет используйте туннель.
+### Требования
 
-### Вариант A: Serveo (бесплатно, без установки)
+- VPS с Ubuntu/Debian, Python 3.11+
+- Открытые порты: 80, 443 (для HTTPS через Caddy)
 
-```bash
-ssh -R 80:localhost:8000 serveo.net
-```
-
-Вы получите URL вида `https://xxxxx.serveo.net`.
-
-### Вариант B: Cloudflare Tunnel (бесплатно, стабильно)
+### Установка
 
 ```bash
-cloudflared tunnel --url http://localhost:8000
+# Создать директорию и виртуальное окружение
+mkdir -p /opt/iru/app
+cd /opt/iru
+python3 -m venv venv
+source venv/bin/activate
+
+# Скопировать файлы проекта в /opt/iru/app/
+# Установить зависимости
+pip install -r app/requirements.txt
 ```
 
-### Вариант C: ngrok
+### HTTPS через Caddy (рекомендуется)
+
+Caddy автоматически получает SSL-сертификаты от Let's Encrypt.
 
 ```bash
-ngrok http 8000
+# Установить Caddy
+apt install -y debian-keyring debian-archive-keyring apt-transport-https
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+apt update && apt install caddy
 ```
 
-После получения публичного URL:
+Создайте `/etc/caddy/Caddyfile`:
 
-1. В `agent/config.json` замените `server_url`:
-   ```json
-   "server_url": "wss://xxxxx.serveo.net"
-   ```
-   (используйте `wss://` для HTTPS-туннелей)
+```
+ваш-домен.ru {
+    reverse_proxy localhost:8000
+}
+```
 
-2. Откройте публичный URL в браузере для UI
+Если нет домена (только IP), используйте HTTP-режим:
+
+```
+:80 {
+    reverse_proxy localhost:8000
+}
+```
+
+```bash
+systemctl enable caddy
+systemctl restart caddy
+```
+
+### Автозапуск сервера (systemd)
+
+Создайте `/etc/systemd/system/iru.service`:
+
+```ini
+[Unit]
+Description=ИРУ v3.4 Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/iru/app/server
+ExecStart=/opt/iru/venv/bin/python main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+systemctl daemon-reload
+systemctl enable iru
+systemctl start iru
+systemctl status iru
+```
 
 ---
 
 ## Управление пользователями
 
-### Через консоль (при запуске)
+### Через админ-панель в UI (рекомендуется)
 
-Токен admin выводится при первом запуске. Сохраните его.
+Войдите в UI под admin-токеном. Нажмите кнопку 👥 в правом верхнем углу:
+- **Создание** — введите имя, нажмите «Создать»
+- **Удаление** — кнопка × рядом с пользователем
+- **Копирование токена** — клик по токену копирует в буфер
 
-### Через API (только для admin)
+### Через API (curl)
 
 **Создать пользователя:**
 ```bash
@@ -151,8 +203,6 @@ curl -X POST http://localhost:8000/api/admin/users \
   -H "Content-Type: application/json" \
   -d '{"name": "Имя_тестера"}'
 ```
-
-Ответ содержит `token` — передайте его тестеру.
 
 **Список пользователей:**
 ```bash
@@ -170,19 +220,52 @@ curl -X DELETE http://localhost:8000/api/admin/users/2 \
 
 ## Как раздать тестеру
 
-1. Создайте пользователя через API (см. выше)
+1. Создайте пользователя через админ-панель
 2. Передайте тестеру:
    - Публичный URL сервера (для браузера)
    - Токен пользователя (для входа в UI)
-   - Папку `agent/` (agent.py + config.json)
+   - Папку `agent/` (agent.py + config.json) или EXE-файл
 3. Тестер редактирует `config.json`:
-   - `device_id` — любое имя для своего ПК
-   - `server_url` — `wss://ваш-публичный-url`
+   - `device_id` — любое имя для своего ПК (латиница, без пробелов)
+   - `server_url` — `ws://IP:8000` или `wss://домен`
    - `user_token` — его токен
-4. Запускает `python agent.py`
-5. Открывает публичный URL в браузере, вводит токен
+4. Запускает `python agent.py` (или `agent.exe`)
+5. Открывает URL сервера в браузере, вводит токен
 
 Каждый тестер видит **только свои устройства** и **свои чаты**.
+
+**Страница-инструкция:** `http://сервер:8000/instruction` — подробное руководство для тестера.
+
+---
+
+## Новое в v3.4
+
+### Мобильная адаптация
+- Адаптивный UI для смартфонов и планшетов
+- Выдвижной сайдбар с оверлеем
+- Гамбургер-меню в шапке
+- Полноэкранные панели (проводник, админка) на мобильных
+
+### Сбор данных для обучения
+- Таблица `training_data` в SQLite
+- Автоматическая запись: запрос → команды → результат
+- Контекст системы: ОС, hostname, метод (powershell/bash)
+- API для выгрузки данных: `GET /api/admin/training`
+
+### Согласие на сбор данных
+- Модальное окно при первом входе
+- Данные собираются только с согласия пользователя
+- Можно изменить через API: `POST /api/consent`
+
+### Админ-панель в UI
+- Создание и удаление пользователей без curl
+- Копирование токена по клику
+- Статистика пользователей
+
+### Инструкция для тестера
+- Standalone-страница: `/instruction`
+- Пошаговое руководство на русском
+- Тёмная тема в стиле ИРУ
 
 ---
 
@@ -209,6 +292,8 @@ curl -X DELETE http://localhost:8000/api/admin/users/2 \
 - Ответ ИРУ с компактным логом команд
 - Сворачиваемые блоки с деталями выполнения
 - Подсказки-чипы для быстрого старта
+- Параллельное выполнение задач (v3.3)
+- Broadcast — одна команда на все устройства (v3.3)
 
 ### Проводник
 - Навигация по файловой системе устройства
@@ -226,16 +311,16 @@ curl -X DELETE http://localhost:8000/api/admin/users/2 \
 ```
 iru_v3_new/
 ├── server/
-│   ├── main.py           # FastAPI сервер + API эндпоинты
+│   ├── main.py           # FastAPI сервер + API эндпоинты + инструкция
 │   ├── controller.py     # LLM-планировщик (DeepSeek)
-│   ├── database.py       # SQLite: users, chats, messages
+│   ├── database.py       # SQLite: users, chats, messages, training_data
 │   ├── llm_config.json   # Конфиг DeepSeek API
 │   └── iru.db            # БД (создаётся при запуске)
 ├── agent/
 │   ├── agent.py          # Агент-исполнитель
 │   └── config.json       # Конфиг: device_id, server_url, user_token
 ├── ui/
-│   └── index.html        # Веб-интерфейс (SPA)
+│   └── index.html        # Веб-интерфейс (SPA, адаптивный)
 ├── requirements.txt      # Python-зависимости
 └── README.md             # Документация
 ```
@@ -244,12 +329,14 @@ iru_v3_new/
 
 ## API-эндпоинты
 
-Все эндпоинты (кроме `/`, `/api/auth`, `/api/download/{token}`) требуют заголовок `X-Token`.
+Все эндпоинты (кроме `/`, `/api/auth`, `/api/download/{token}`, `/instruction`) требуют заголовок `X-Token`.
 
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/` | UI (index.html) |
+| GET | `/instruction` | Страница-инструкция для тестера |
 | POST | `/api/auth` | Авторизация по токену |
+| POST | `/api/consent` | Согласие на сбор данных |
 | GET | `/api/devices` | Устройства пользователя |
 | POST | `/api/chats` | Создать чат |
 | GET | `/api/chats` | Список чатов |
@@ -258,21 +345,24 @@ iru_v3_new/
 | DELETE | `/api/chats/{id}` | Удалить чат |
 | POST | `/command` | Прямая команда агенту |
 | POST | `/nl_command` | NL-команда через LLM |
+| GET | `/api/tasks` | Список задач пользователя |
+| GET | `/api/tasks/{task_id}` | Статус задачи |
 | GET | `/api/download/{token}` | Скачать файл |
 | POST | `/api/download_request` | Запрос на скачивание |
 | GET | `/api/admin/users` | Список пользователей (admin) |
 | POST | `/api/admin/users` | Создать пользователя (admin) |
 | DELETE | `/api/admin/users/{id}` | Удалить пользователя (admin) |
+| GET | `/api/admin/training` | Данные обучения (admin) |
 | WS | `/ws/{device_id}?user_token=` | WebSocket для агентов |
 
 ---
 
 ## Дорожная карта
 
-1. **Умный ассистент** — текущий этап (v3.2)
-2. **Сбор данных** — аналитика использования, логирование
-3. **Обучение модели** — fine-tuning на собранных данных
-4. **Запуск** — публичный релиз
+1. ✅ **Умный ассистент** — управление через NL, мультиустройства, параллельность
+2. ✅ **Сбор данных** — автозапись training data с согласием
+3. 🔜 **Обучение модели** — fine-tuning на собранных данных
+4. 🔜 **Запуск** — публичный релиз
 
 ---
 
@@ -281,5 +371,5 @@ iru_v3_new/
 - **Backend:** Python 3.11+, FastAPI, Uvicorn, SQLite
 - **LLM:** DeepSeek Chat (OpenAI-совместимый API)
 - **Agent:** Python, websockets, subprocess
-- **Frontend:** HTML/CSS/JS (без фреймворков), JetBrains Mono
-- **Туннель:** Serveo / Cloudflare Tunnel / ngrok
+- **Frontend:** HTML/CSS/JS (без фреймворков), JetBrains Mono, адаптивный дизайн
+- **Деплой:** VPS + Caddy (HTTPS) + systemd

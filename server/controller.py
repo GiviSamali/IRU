@@ -1,5 +1,5 @@
 """
-controller.py — LLM-планировщик ИРУ v3.2
+controller.py — LLM-планировщик ИРУ v3.4
 
 Принимает текстовую задачу пользователя, через DeepSeek переводит в
 последовательность команд PowerShell/cmd, отправляет агенту на выполнение,
@@ -184,6 +184,8 @@ async def process_nl_command(
     send_command_fn,
     get_file_link_fn,
     chat_history: list[dict] | None = None,
+    user_id: int = None,
+    chat_id: int = None,
 ) -> dict:
     """
     Обработка команды на естественном языке.
@@ -196,9 +198,11 @@ async def process_nl_command(
         send_command_fn: async fn(device_id, action, params) -> result
         get_file_link_fn: fn(device_id, file_path) -> url_string
         chat_history: история сообщений чата (для памяти)
+        user_id: ID пользователя (для записи training data)
+        chat_id: ID чата (для записи training data)
 
     Returns:
-        {"answer": str, "commands": [...]}
+        {"answer": str, "commands": [...], "training_context": {...}}
     """
     cfg = load_llm_config()
 
@@ -255,9 +259,16 @@ async def process_nl_command(
 
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
+                # Формируем контекст для записи тренировочных данных
+                training_context = {
+                    "os": device_info.get("os", ""),
+                    "hostname": device_info.get("hostname", ""),
+                    "method": "powershell" if "windows" in device_info.get("os", "").lower() else "bash",
+                }
                 return {
                     "answer": assistant_msg.get("content", "Готово."),
                     "commands": commands_log,
+                    "training_context": training_context,
                 }
 
             for tc in tool_calls:
@@ -306,7 +317,14 @@ async def process_nl_command(
                     "content": json.dumps(tool_result, ensure_ascii=False)[:2000],
                 })
 
+    # Формируем контекст для записи тренировочных данных (предел итераций)
+    training_context = {
+        "os": device_info.get("os", ""),
+        "hostname": device_info.get("hostname", ""),
+        "method": "powershell" if "windows" in device_info.get("os", "").lower() else "bash",
+    }
     return {
         "answer": "Достигнут лимит итераций. Последние результаты в логе.",
         "commands": commands_log,
+        "training_context": training_context,
     }
