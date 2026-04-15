@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <title>ИРУ v3.4 — Интеллектуальный Режим Управления</title>
 <link rel="icon" type="image/x-icon" href="/static/IruIcon.ico">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -34,6 +34,7 @@
 }
 html, body {
   height: 100%;
+  height: 100dvh;
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font);
@@ -45,7 +46,7 @@ html, body {
 /* ── AUTH SCREEN ─────────────────────────────── */
 .auth-screen {
   display: flex; align-items: center; justify-content: center;
-  height: 100vh; background: var(--bg-primary);
+  height: 100vh; height: 100dvh; background: var(--bg-primary);
 }
 .auth-box {
   width: 380px; padding: 40px 32px;
@@ -80,7 +81,7 @@ html, body {
 }
 
 /* ── APP LAYOUT ──────────────────────────────── */
-.app { display: none; flex-direction: row; height: 100vh; }
+.app { display: none; flex-direction: row; height: 100vh; height: 100dvh; }
 .app.active { display: flex; }
 
 /* ── SIDEBAR ─────────────────────────────────── */
@@ -589,8 +590,12 @@ html, body {
   .btn-header-link span { display: none; }
   .btn-header-link { padding: 4px 8px; }
   
-  .chat-input-area { padding: 8px 10px 12px; }
+  .chat-input-area { padding: 8px 10px calc(12px + env(safe-area-inset-bottom, 0px)); }
   .chat-messages { padding: 10px; }
+  
+  .input-device-btn { font-size: 10px; padding: 4px 7px; gap: 3px; max-width: 110px; }
+  .input-device-btn #inputDeviceLabel { overflow: hidden; text-overflow: ellipsis; }
+  .input-device-dropdown { min-width: 180px; }
   
   .msg { max-width: 95%; }
   .msg-body { font-size: 12px; padding: 8px 10px; }
@@ -1563,6 +1568,16 @@ function copyToken(token) {
 }
 
 // ── INIT ───────────────────────────────────────────────────
+// Mobile keyboard fix — resize app when virtual keyboard opens
+if (window.visualViewport) {
+  const resizeApp = () => {
+    const app = document.querySelector('.app');
+    if (app) app.style.height = window.visualViewport.height + 'px';
+  };
+  window.visualViewport.addEventListener('resize', resizeApp);
+  window.visualViewport.addEventListener('scroll', resizeApp);
+}
+
 tryAutoLogin();
 </script>
 </body>
