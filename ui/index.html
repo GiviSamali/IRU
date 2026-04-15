@@ -53,7 +53,7 @@ html, body {
   border-radius: var(--radius-lg); text-align: center;
 }
 .auth-logo { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 24px; }
-.auth-logo img { height: 40px; width: auto; }
+.auth-logo img { height: 48px; width: 48px; }
 .auth-logo-text { font-size: 22px; font-weight: 700; letter-spacing: 3px; color: var(--accent); }
 .auth-logo-ver { font-size: 10px; color: var(--text-muted); }
 .auth-desc { font-size: 11px; color: var(--text-muted); margin-bottom: 24px; }
@@ -95,7 +95,7 @@ html, body {
   min-height: 48px;
 }
 .sidebar-logo { display: flex; align-items: center; gap: 8px; }
-.sidebar-logo img { height: 24px; width: auto; }
+.sidebar-logo img { height: 22px; width: 22px; }
 .sidebar-logo-text { font-size: 14px; font-weight: 700; letter-spacing: 2px; color: var(--accent); }
 .sidebar-logo-ver { font-size: 9px; color: var(--text-muted); letter-spacing: 1px; }
 
@@ -214,7 +214,7 @@ html, body {
   flex: 1; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 12px; opacity: 0.7;
 }
-.chat-welcome img { height: 64px; width: auto; opacity: 0.8; }
+.chat-welcome img { height: 56px; width: 56px; opacity: 0.8; }
 .chat-welcome h2 { font-size: 16px; font-weight: 600; }
 .chat-welcome p { font-size: 11px; color: var(--text-muted); max-width: 380px; text-align: center; }
 .hints { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 6px; }
@@ -589,8 +589,9 @@ html, body {
 <div class="auth-screen" id="authScreen">
   <div class="auth-box">
     <div class="auth-logo">
-      <img src="/static/iru_logo.png" alt="ИРУ">
+      <img src="/static/IruIcon.ico" alt="ИРУ">
       <div>
+        <div class="auth-logo-text">ИРУ</div>
         <div class="auth-logo-ver">v3.4</div>
       </div>
     </div>
@@ -608,8 +609,11 @@ html, body {
   <aside class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-logo">
-        <img src="/static/iru_logo.png" alt="ИРУ">
-        <div class="sidebar-logo-ver">v3.4</div>
+        <img src="/static/IruIcon.ico" alt="ИРУ">
+        <div>
+          <div class="sidebar-logo-text">ИРУ</div>
+          <div class="sidebar-logo-ver">v3.4</div>
+        </div>
       </div>
       <button class="btn-new-chat" onclick="createNewChat()" title="Новый чат">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
@@ -992,8 +996,8 @@ function renderMessages() {
   if (state.messages.length === 0) {
     container.innerHTML = `
       <div class="chat-welcome">
-        <img src="/static/iru_logo.png" alt="ИРУ">
-        <h2>Интеллектуальный Режим Управления</h2>
+        <img src="/static/IruIcon.ico" alt="ИРУ">
+        <h2>ИРУ — Интеллектуальный Режим Управления</h2>
         <p>Опиши задачу на естественном языке — ИРУ выполнит на твоём устройстве.</p>
         <div class="hints">
           <div class="hint-chip" onclick="sendHint(this)">Открой браузер</div>
