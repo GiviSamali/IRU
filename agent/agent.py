@@ -13,10 +13,17 @@ import subprocess
 import websockets
 import platform
 import os
+import sys
 import base64
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
+# Для PyInstaller: определяем путь к exe, а не к временной папке
+if getattr(sys, 'frozen', False):
+    BASE_DIR = Path(sys.executable).parent
+else:
+    BASE_DIR = Path(__file__).parent
+
+CONFIG_PATH = BASE_DIR / "config.json"
 
 
 def load_config():
