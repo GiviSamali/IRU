@@ -1,5 +1,11 @@
 """
-main.py — FastAPI-сервер ИРУ v3.2
+main.py — FastAPI-сервер ИРУ v3.3
+
+Новое в v3.3:
+  - Параллельное выполнение: задачи выполняются в фоне, UI не блокируется
+  - Broadcast: одна команда на все/выбранные устройства одновременно
+  - GET /api/tasks — список активных/завершённых задач
+  - GET /api/tasks/{task_id} — статус конкретной задачи
 
 Эндпоинты:
   GET  /                         — отдаёт index.html
@@ -11,7 +17,9 @@ main.py — FastAPI-сервер ИРУ v3.2
   DELETE /api/chats/{id}         — удалить чат
   PATCH /api/chats/{id}          — переименовать чат
   POST /command                  — прямая команда агенту
-  POST /nl_command               — NL команда → LLM → агент (в контексте чата)
+  POST /nl_command               — NL команда → фоновая задача (возвращает task_id)
+  GET  /api/tasks                — список задач пользователя
+  GET  /api/tasks/{task_id}      — статус задачи
   GET  /api/download/{token}     — скачать файл по временному токену
   POST /api/download_request     — запрос на скачивание (проводник)
   WS   /ws/{device_id}           — WebSocket для агентов
@@ -49,22 +57,25 @@ from database import (
 )
 
 # ── Хранение подключённых устройств ───────────────────────────────────────
-# {
-#   "device_id": {
-#       "ws": WebSocket,
-#       "info": {"os": ..., "hostname": ..., ...},
-#       "pending": {cmd_id: asyncio.Future, ...},
-#       "user_id": int  # владелец устройства
-#   }
-# }
 devices: dict = {}
 
 # ── Токены для скачивания файлов ─────────────────────────────────────────
 download_tokens: dict = {}
 TOKEN_TTL = 300  # 5 минут
 
-# ── Конфиг админ-токена ──────────────────────────────────────────────────
-ADMIN_CONFIG_PATH = Path(__file__).parent / "admin_config.json"
+# ── Очередь задач (in-memory) ────────────────────────────────────────────
+# task_id -> {
+#   "task_id": str,
+#   "user_id": int,
+#   "chat_id": int,
+#   "message": str,
+#   "device_ids": [str],       # на каких устройствах
+#   "status": "running"|"done"|"error",
+#   "results": {device_id: {...}},  # результаты по устройствам
+#   "created_at": float,
+# }
+tasks: dict = {}
+TASK_TTL = 3600  # хранить задачи 1 час
 
 
 # ── Lifespan ─────────────────────────────────────────────────────────────
@@ -72,12 +83,12 @@ ADMIN_CONFIG_PATH = Path(__file__).parent / "admin_config.json"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    print("[server] ИРУ v3.2 запущен")
+    print("[server] ИРУ v3.3 запущен")
     yield
-    print("[server] ИРУ v3.2 остановлен")
+    print("[server] ИРУ v3.3 остановлен")
 
 
-app = FastAPI(title="ИРУ v3.2", lifespan=lifespan)
+app = FastAPI(title="ИРУ v3.3", lifespan=lifespan)
 
 # Статические файлы (UI)
 STATIC_DIR = Path(__file__).parent.parent / "ui"
@@ -95,7 +106,9 @@ class DirectCommand(BaseModel):
 class NLCommand(BaseModel):
     device_id: str
     message: str
-    chat_id: int | None = None  # если указан — работает в контексте чата
+    chat_id: int | None = None
+    broadcast: bool = False  # отправить на все устройства
+    device_ids: list[str] = []  # конкретные устройства (если broadcast=False)
 
 class AuthRequest(BaseModel):
     token: str
@@ -176,6 +189,121 @@ def get_file_link_fn(device_id: str, file_path: str) -> str:
     return f"/api/download/{token}"
 
 
+def cleanup_old_tasks():
+    """Удалить задачи старше TASK_TTL."""
+    now = time.time()
+    expired = [tid for tid, t in tasks.items() if now - t["created_at"] > TASK_TTL]
+    for tid in expired:
+        tasks.pop(tid, None)
+
+
+# ── Фоновое выполнение задачи ────────────────────────────────────────────
+
+async def run_nl_task(task_id: str, user_id: int, message: str,
+                      device_ids: list[str], chat_id: int):
+    """
+    Выполнить NL-задачу в фоне на одном или нескольких устройствах параллельно.
+    Результаты записываются в tasks[task_id].
+    """
+    task = tasks[task_id]
+
+    async def run_on_device(device_id: str):
+        """Выполнить задачу на одном устройстве."""
+        dev = devices.get(device_id)
+        if not dev or dev.get("user_id") != user_id:
+            return {
+                "device_id": device_id,
+                "status": "error",
+                "answer": f"Устройство '{device_id}' не найдено или нет доступа",
+                "commands": [],
+            }
+
+        device_info = dev.get("info", {})
+
+        # Устройства пользователя
+        user_devs = get_user_devices(user_id)
+        all_devices_info = {did: {"info": d.get("info", {})} for did, d in user_devs.items()}
+
+        # Загрузить историю чата
+        chat_history = get_messages(chat_id, limit=50)
+
+        async def send_fn(target_device_id, action, params):
+            target_dev = devices.get(target_device_id)
+            if not target_dev or target_dev.get("user_id") != user_id:
+                raise RuntimeError(f"Нет доступа к устройству '{target_device_id}'")
+            return await send_command_to_agent(target_device_id, action, params)
+
+        try:
+            result = await process_nl_command(
+                user_message=message,
+                device_id=device_id,
+                device_info=device_info,
+                all_devices=all_devices_info,
+                send_command_fn=send_fn,
+                get_file_link_fn=get_file_link_fn,
+                chat_history=chat_history,
+            )
+            return {
+                "device_id": device_id,
+                "status": "ok",
+                "answer": result.get("answer", ""),
+                "commands": result.get("commands", []),
+            }
+        except httpx.HTTPStatusError as e:
+            return {
+                "device_id": device_id,
+                "status": "error",
+                "answer": f"Ошибка LLM API: {e.response.status_code}",
+                "commands": [],
+            }
+        except Exception as e:
+            return {
+                "device_id": device_id,
+                "status": "error",
+                "answer": f"Ошибка: {str(e)}",
+                "commands": [],
+            }
+
+    try:
+        # Выполняем на всех устройствах параллельно
+        coros = [run_on_device(did) for did in device_ids]
+        results_list = await asyncio.gather(*coros, return_exceptions=True)
+
+        all_commands = []
+        answers = []
+
+        for r in results_list:
+            if isinstance(r, Exception):
+                answers.append(f"Ошибка: {str(r)}")
+            else:
+                task["results"][r["device_id"]] = r
+                if r.get("commands"):
+                    all_commands.extend(r["commands"])
+                if len(device_ids) > 1:
+                    # Мультиустройство: добавляем имя устройства к ответу
+                    dev = devices.get(r["device_id"])
+                    hostname = dev["info"].get("hostname", r["device_id"]) if dev else r["device_id"]
+                    answers.append(f"[{hostname}] {r.get('answer', '')}")
+                else:
+                    answers.append(r.get("answer", ""))
+
+        combined_answer = "\n\n".join(answers) if answers else "Готово."
+        combined_commands = all_commands
+
+        # Сохранить ответ в чат
+        add_message(chat_id, "assistant", combined_answer, combined_commands)
+
+        task["status"] = "done"
+        task["answer"] = combined_answer
+        task["commands"] = combined_commands
+
+    except Exception as e:
+        task["status"] = "error"
+        task["answer"] = f"Ошибка: {str(e)}"
+        task["commands"] = []
+        add_message(chat_id, "assistant", task["answer"])
+
+
 # ── HTML ─────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -183,14 +311,14 @@ async def root():
     index = Path(__file__).parent.parent / "ui" / "index.html"
     if index.exists():
         return HTMLResponse(index.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>ИРУ v3.2 — UI не найден</h1>")
+    return HTMLResponse("<h1>ИРУ v3.3 — UI не найден</h1>")
 
 
 # ── AUTH API ─────────────────────────────────────────────────────────────
 
 @app.post("/api/auth")
 async def auth(body: AuthRequest):
-    """Авторизация по токену. Возвращает информацию о пользователе."""
+    """Авторизация по токену."""
     user = get_user_by_token(body.token)
     if not user:
         return JSONResponse(
@@ -207,7 +335,6 @@ async def auth(body: AuthRequest):
 
 @app.get("/api/admin/users")
 async def admin_list_users(request: Request):
-    """Список всех пользователей (только для admin)."""
     user = get_current_user(request)
     if user["name"] != "admin":
         raise HTTPException(status_code=403, detail="Только для администратора")
@@ -217,7 +344,6 @@ async def admin_list_users(request: Request):
 
 @app.post("/api/admin/users")
 async def admin_create_user(body: CreateUserRequest, request: Request):
-    """Создать нового пользователя (только для admin)."""
     user = get_current_user(request)
     if user["name"] != "admin":
         raise HTTPException(status_code=403, detail="Только для администратора")
@@ -227,7 +353,6 @@ async def admin_create_user(body: CreateUserRequest, request: Request):
 
 @app.delete("/api/admin/users/{user_id}")
 async def admin_delete_user(user_id: int, request: Request):
-    """Удалить пользователя (только для admin)."""
     user = get_current_user(request)
     if user["name"] != "admin":
         raise HTTPException(status_code=403, detail="Только для администратора")
@@ -240,8 +365,7 @@ async def admin_delete_user(user_id: int, request: Request):
 # ── DEVICES API ──────────────────────────────────────────────────────────
 
 @app.get("/api/devices")
-async def get_devices(request: Request):
-    """Список устройств текущего пользователя."""
+async def get_devices_api(request: Request):
     user = get_current_user(request)
     user_devs = get_user_devices(user["id"])
     result = {}
@@ -258,7 +382,6 @@ async def get_devices(request: Request):
 
 @app.post("/api/chats")
 async def api_create_chat(body: CreateChatRequest, request: Request):
-    """Создать новый чат."""
     user = get_current_user(request)
     title = body.title.strip() or "Новый чат"
     chat = create_chat(user["id"], title)
@@ -267,7 +390,6 @@ async def api_create_chat(body: CreateChatRequest, request: Request):
 
 @app.get("/api/chats")
 async def api_list_chats(request: Request):
-    """Список чатов пользователя."""
     user = get_current_user(request)
     chats = list_chats(user["id"])
     return {"status": "ok", "chats": chats}
@@ -275,7 +397,6 @@ async def api_list_chats(request: Request):
 
 @app.get("/api/chats/{chat_id}/messages")
 async def api_get_messages(chat_id: int, request: Request):
-    """Сообщения чата (последние 50)."""
     user = get_current_user(request)
     chat = get_chat(chat_id, user["id"])
     if not chat:
@@ -286,7 +407,6 @@ async def api_get_messages(chat_id: int, request: Request):
 
 @app.patch("/api/chats/{chat_id}")
 async def api_rename_chat(chat_id: int, body: RenameChatRequest, request: Request):
-    """Переименовать чат."""
     user = get_current_user(request)
     ok = update_chat_title(chat_id, user["id"], body.title)
     if not ok:
@@ -296,7 +416,6 @@ async def api_rename_chat(chat_id: int, body: RenameChatRequest, request: Reques
 
 @app.delete("/api/chats/{chat_id}")
 async def api_delete_chat(chat_id: int, request: Request):
-    """Удалить чат."""
     user = get_current_user(request)
     ok = delete_chat(chat_id, user["id"])
     return {"status": "ok" if ok else "error", "deleted": ok}
@@ -306,7 +425,7 @@ async def api_delete_chat(chat_id: int, request: Request):
 
 @app.post("/command")
 async def direct_command(cmd: DirectCommand, request: Request):
-    """Прямая команда агенту (без LLM). Проверка доступа к устройству."""
+    """Прямая команда агенту (без LLM). Синхронная."""
     user = get_current_user(request)
     dev = devices.get(cmd.device_id)
     if not dev or dev.get("user_id") != user["id"]:
@@ -320,32 +439,39 @@ async def direct_command(cmd: DirectCommand, request: Request):
 
 @app.post("/nl_command")
 async def nl_command(cmd: NLCommand, request: Request):
-    """Команда на естественном языке → LLM → агент. С памятью чата."""
+    """
+    NL-команда → фоновая задача.
+    Возвращает task_id сразу, не дожидаясь выполнения.
+    Поддерживает broadcast (на все устройства) и список device_ids.
+    """
     user = get_current_user(request)
+    cleanup_old_tasks()
 
-    dev = devices.get(cmd.device_id)
-    if not dev or dev.get("user_id") != user["id"]:
-        return {"status": "error", "error": f"Устройство '{cmd.device_id}' не найдено или нет доступа"}
-
-    device_info = dev.get("info", {})
-
-    # Устройства только этого пользователя
+    # Определить целевые устройства
     user_devs = get_user_devices(user["id"])
-    all_devices_info = {}
-    for did, d in user_devs.items():
-        all_devices_info[did] = {"info": d.get("info", {})}
 
-    # Автоматически создать чат, если не указан
+    if cmd.broadcast:
+        # Все устройства пользователя
+        target_ids = list(user_devs.keys())
+    elif cmd.device_ids:
+        # Конкретные устройства
+        target_ids = [did for did in cmd.device_ids if did in user_devs]
+    else:
+        # Одно устройство (как раньше)
+        if cmd.device_id not in user_devs:
+            return {"status": "error", "error": f"Устройство '{cmd.device_id}' не найдено или нет доступа"}
+        target_ids = [cmd.device_id]
+
+    if not target_ids:
+        return {"status": "error", "error": "Нет доступных устройств"}
+
+    # Создать/определить чат
     chat_id = cmd.chat_id
     if not chat_id:
-        # Новый чат с названием из первого сообщения
-        title = cmd.message[:50].strip()
-        if not title:
-            title = "Новый чат"
+        title = cmd.message[:50].strip() or "Новый чат"
         chat = create_chat(user["id"], title)
         chat_id = chat["id"]
     else:
-        # Проверить, что чат принадлежит пользователю
         chat = get_chat(chat_id, user["id"])
         if not chat:
             return {"status": "error", "error": "Чат не найден"}
@@ -353,46 +479,83 @@ async def nl_command(cmd: NLCommand, request: Request):
     # Сохранить сообщение пользователя
     add_message(chat_id, "user", cmd.message)
 
-    # Загрузить историю чата для контекста LLM (последние 50 сообщений)
-    chat_history = get_messages(chat_id, limit=50)
+    # Создать задачу
+    task_id = str(uuid.uuid4())[:12]
+    tasks[task_id] = {
+        "task_id": task_id,
+        "user_id": user["id"],
+        "chat_id": chat_id,
+        "message": cmd.message,
+        "device_ids": target_ids,
+        "status": "running",
+        "results": {},
+        "answer": None,
+        "commands": None,
+        "created_at": time.time(),
+    }
 
-    async def send_fn(target_device_id, action, params):
-        # Проверить, что целевое устройство принадлежит пользователю
-        target_dev = devices.get(target_device_id)
-        if not target_dev or target_dev.get("user_id") != user["id"]:
-            raise RuntimeError(f"Нет доступа к устройству '{target_device_id}'")
-        return await send_command_to_agent(target_device_id, action, params)
+    # Запустить в фоне
+    asyncio.create_task(run_nl_task(task_id, user["id"], cmd.message, target_ids, chat_id))
 
-    try:
-        result = await process_nl_command(
-            user_message=cmd.message,
-            device_id=cmd.device_id,
-            device_info=device_info,
-            all_devices=all_devices_info,
-            send_command_fn=send_fn,
-            get_file_link_fn=get_file_link_fn,
-            chat_history=chat_history,
-        )
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "chat_id": chat_id,
+        "device_ids": target_ids,
+    }
 
-        # Сохранить ответ ассистента
-        add_message(chat_id, "assistant", result.get("answer", ""), result.get("commands"))
 
-        return {"status": "ok", "chat_id": chat_id, **result}
-    except httpx.HTTPStatusError as e:
-        error_msg = f"Ошибка LLM API: {e.response.status_code} — {e.response.text[:200]}"
-        add_message(chat_id, "assistant", error_msg)
-        return {"status": "error", "chat_id": chat_id, "error": error_msg}
-    except Exception as e:
-        error_msg = str(e)
-        add_message(chat_id, "assistant", f"Ошибка: {error_msg}")
-        return {"status": "error", "chat_id": chat_id, "error": error_msg}
+# ── TASKS API ────────────────────────────────────────────────────────────
+
+@app.get("/api/tasks")
+async def api_list_tasks(request: Request):
+    """Список задач текущего пользователя."""
+    user = get_current_user(request)
+    cleanup_old_tasks()
+    user_tasks = [t for t in tasks.values() if t["user_id"] == user["id"]]
+    user_tasks.sort(key=lambda t: t["created_at"], reverse=True)
+    return {
+        "status": "ok",
+        "tasks": [{
+            "task_id": t["task_id"],
+            "chat_id": t["chat_id"],
+            "message": t["message"][:80],
+            "device_ids": t["device_ids"],
+            "status": t["status"],
+            "answer": t.get("answer"),
+            "commands": t.get("commands"),
+            "created_at": t["created_at"],
+        } for t in user_tasks[:20]],
+    }
+
+
+@app.get("/api/tasks/{task_id}")
+async def api_get_task(task_id: str, request: Request):
+    """Статус конкретной задачи."""
+    user = get_current_user(request)
+    task = tasks.get(task_id)
+    if not task or task["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    return {
+        "status": "ok",
+        "task": {
+            "task_id": task["task_id"],
+            "chat_id": task["chat_id"],
+            "message": task["message"],
+            "device_ids": task["device_ids"],
+            "status": task["status"],
+            "answer": task.get("answer"),
+            "commands": task.get("commands"),
+            "results": task.get("results", {}),
+            "created_at": task["created_at"],
+        }
+    }
 
 
 # ── DOWNLOAD API ─────────────────────────────────────────────────────────
 
 @app.get("/api/download/{token}")
 async def download_file(token: str):
-    """Скачать файл по временному токену."""
     info = download_tokens.pop(token, None)
     if not info:
         return {"status": "error", "error": "Ссылка недействительна или истекла"}
@@ -425,7 +588,6 @@ async def download_file(token: str):
 
 @app.post("/api/download_request")
 async def download_request(body: dict, request: Request):
-    """Запрос на скачивание файла из UI (проводник)."""
     user = get_current_user(request)
     device_id = body.get("device_id")
     file_path = body.get("file_path")
@@ -444,11 +606,6 @@ async def download_request(body: dict, request: Request):
 
 @app.websocket("/ws/{device_id}")
 async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query(default="")):
-    """
-    WebSocket для агентов.
-    Агент подключается с ?user_token=... — привязывается к пользователю.
-    """
-    # Проверить токен пользователя
     user = get_user_by_token(user_token) if user_token else None
     if not user:
         await ws.close(code=4001, reason="Недействительный токен пользователя")
