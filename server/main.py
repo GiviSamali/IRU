@@ -122,7 +122,10 @@ pre { background: #0f1520; border: 1px solid #1e293b; border-radius: 8px; paddin
 .step-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; background: #00d4ff20; border: 1px solid #00d4ff33; border-radius: 50%; font-size: 12px; color: #00d4ff; margin-right: 8px; }
 a { color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; }
 a:hover { border-bottom-style: solid; }
-.footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #1e293b; color: #64748b; font-size: 11px; text-align: center; }
+.footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #1e293b; font-size: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+.footer-brand { color: #94a3b8; }
+.footer-link { color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; font-size: 13px; }
+.footer-link:hover { border-bottom-style: solid; }
 </style>
 </head>
 <body>
@@ -211,7 +214,10 @@ python agent.py</pre>
 <h3>Кракозябры в выводе</h3>
 <p>ИРУ автоматически обрабатывает кодировку, но если проблема остаётся — укажите это в чате, ИРУ попробует другой подход.</p>
 
-<div class="footer">ИРУ v3.4 — Интеллектуальный Режим Управления</div>
+<div class="footer">
+<span class="footer-brand">ИРУ v3.4 — Интеллектуальный Режим Управления</span>
+<a href="/" class="footer-link">← Вернуться в ИРУ</a>
+</div>
 </div>
 </body>
 </html>"""
