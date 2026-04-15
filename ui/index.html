@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ИРУ v3.4 — Интеллектуальный Режим Управления</title>
+<link rel="icon" type="image/x-icon" href="/static/IruIcon.ico">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -52,7 +53,7 @@ html, body {
   border-radius: var(--radius-lg); text-align: center;
 }
 .auth-logo { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 24px; }
-.auth-logo svg { width: 36px; height: 36px; }
+.auth-logo img { height: 40px; width: auto; }
 .auth-logo-text { font-size: 22px; font-weight: 700; letter-spacing: 3px; color: var(--accent); }
 .auth-logo-ver { font-size: 10px; color: var(--text-muted); }
 .auth-desc { font-size: 11px; color: var(--text-muted); margin-bottom: 24px; }
@@ -94,7 +95,7 @@ html, body {
   min-height: 48px;
 }
 .sidebar-logo { display: flex; align-items: center; gap: 8px; }
-.sidebar-logo svg { width: 22px; height: 22px; }
+.sidebar-logo img { height: 24px; width: auto; }
 .sidebar-logo-text { font-size: 14px; font-weight: 700; letter-spacing: 2px; color: var(--accent); }
 .sidebar-logo-ver { font-size: 9px; color: var(--text-muted); letter-spacing: 1px; }
 
@@ -213,7 +214,7 @@ html, body {
   flex: 1; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 12px; opacity: 0.7;
 }
-.chat-welcome svg { width: 48px; height: 48px; color: var(--accent); opacity: 0.4; }
+.chat-welcome img { height: 64px; width: auto; opacity: 0.8; }
 .chat-welcome h2 { font-size: 16px; font-weight: 600; }
 .chat-welcome p { font-size: 11px; color: var(--text-muted); max-width: 380px; text-align: center; }
 .hints { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 6px; }
@@ -588,14 +589,8 @@ html, body {
 <div class="auth-screen" id="authScreen">
   <div class="auth-box">
     <div class="auth-logo">
-      <svg viewBox="0 0 32 32" fill="none">
-        <rect x="2" y="2" width="28" height="28" rx="6" stroke="var(--accent)" stroke-width="1.5"/>
-        <circle cx="16" cy="13" r="5" stroke="var(--accent)" stroke-width="1.5"/>
-        <path d="M10 24 C10 20 22 20 22 24" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"/>
-        <circle cx="16" cy="13" r="1.5" fill="var(--accent)"/>
-      </svg>
+      <img src="/static/iru_logo.png" alt="ИРУ">
       <div>
-        <div class="auth-logo-text">ИРУ</div>
         <div class="auth-logo-ver">v3.4</div>
       </div>
     </div>
@@ -613,16 +608,8 @@ html, body {
   <aside class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-logo">
-        <svg viewBox="0 0 32 32" fill="none">
-          <rect x="2" y="2" width="28" height="28" rx="6" stroke="var(--accent)" stroke-width="1.5"/>
-          <circle cx="16" cy="13" r="5" stroke="var(--accent)" stroke-width="1.5"/>
-          <path d="M10 24 C10 20 22 20 22 24" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"/>
-          <circle cx="16" cy="13" r="1.5" fill="var(--accent)"/>
-        </svg>
-        <div>
-          <div class="sidebar-logo-text">ИРУ</div>
-          <div class="sidebar-logo-ver">v3.4</div>
-        </div>
+        <img src="/static/iru_logo.png" alt="ИРУ">
+        <div class="sidebar-logo-ver">v3.4</div>
       </div>
       <button class="btn-new-chat" onclick="createNewChat()" title="Новый чат">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
@@ -1005,12 +992,8 @@ function renderMessages() {
   if (state.messages.length === 0) {
     container.innerHTML = `
       <div class="chat-welcome">
-        <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="1.5">
-          <rect x="4" y="4" width="56" height="56" rx="12"/>
-          <circle cx="32" cy="26" r="10"/>
-          <path d="M18 50 C18 40 46 40 46 50" stroke-linecap="round"/>
-        </svg>
-        <h2>ИРУ — Интеллектуальный Режим Управления</h2>
+        <img src="/static/iru_logo.png" alt="ИРУ">
+        <h2>Интеллектуальный Режим Управления</h2>
         <p>Опиши задачу на естественном языке — ИРУ выполнит на твоём устройстве.</p>
         <div class="hints">
           <div class="hint-chip" onclick="sendHint(this)">Открой браузер</div>
