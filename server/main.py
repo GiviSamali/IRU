@@ -918,6 +918,7 @@ async def admin_training_data(request: Request, limit: int = 100, offset: int = 
 async def get_devices_api(request: Request):
     user = get_current_user(request)
     user_devs = get_user_devices(user["id"])
+    print(f"[api/devices] user_id={user['id']}, user_devs={list(user_devs.keys())}")
     result = {}
     for did, dev in user_devs.items():
         result[did] = {
@@ -1009,6 +1010,12 @@ async def nl_command(cmd: NLCommand, request: Request):
     # Определить целевые устройства
     user_devs = get_user_devices(user["id"])
 
+    # Диагностика: логируем состояние устройств при каждом запросе
+    print(f"[nl_command] user_id={user['id']}, user='{user['name']}', "
+          f"cmd.device_id='{cmd.device_id}', "
+          f"user_devs={list(user_devs.keys())}, "
+          f"all_devices_keys={list(devices.keys())}")
+
     # Создать/определить чат
     chat_id = cmd.chat_id
     if not chat_id:
@@ -1023,8 +1030,9 @@ async def nl_command(cmd: NLCommand, request: Request):
     # Сохранить сообщение пользователя
     add_message(chat_id, "user", cmd.message)
 
-    # Режим без устройств (onboarding)
-    if not user_devs:
+    # Режим без устройств (onboarding) — только если реально нет устройств
+    # И пользователь не указал конкретное устройство
+    if not user_devs and not cmd.device_id:
         task_id = str(uuid.uuid4())[:12]
         tasks[task_id] = {
             "task_id": task_id,
@@ -1225,7 +1233,7 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
         return
 
     await ws.accept()
-    print(f"[ws] agent connected: {device_id} (user: {user['name']})")
+    print(f"[ws] agent connected: device_id='{device_id}', user_id={user['id']}, user='{user['name']}'")
 
     devices[device_id] = {
         "ws": ws,
@@ -1233,6 +1241,7 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
         "pending": {},
         "user_id": user["id"],
     }
+    print(f"[ws] devices after connect: {list(devices.keys())}")
 
     try:
         while True:
@@ -1255,11 +1264,12 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
                         future.set_result({"error": payload.get("error", "Неизвестная ошибка")})
 
     except WebSocketDisconnect:
-        print(f"[ws] agent disconnected: {device_id}")
+        print(f"[ws] agent disconnected: device_id='{device_id}', user_id={user['id']}")
     except Exception as e:
         print(f"[ws] error for {device_id}: {e}")
     finally:
         devices.pop(device_id, None)
+        print(f"[ws] devices after disconnect: {list(devices.keys())}")
 
 
 # ── Запуск ───────────────────────────────────────────────────────────────
