@@ -256,22 +256,22 @@ html, body {
 .msg-body a:hover { border-bottom-style: solid; }
 
 /* Compact command log */
-.cmd-log { margin-top: 6px; }
-.cmd-entry {
+.-log { margin-top: 6px; }
+.-entry {
   margin-bottom: 4px; border-left: 2px solid var(--border);
   padding-left: 8px; cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
-.cmd-entry:hover { border-left-color: var(--accent-dim); }
-.cmd-summary {
+.-entry:hover { border-left-color: var(--accent-dim); }
+.-summary {
   display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-muted);
 }
 .cmd-summary .cmd-icon { font-size: 8px; transition: transform 0.15s; }
 .cmd-entry.open .cmd-icon { transform: rotate(90deg); }
 .cmd-summary .cmd-text {
-  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent-dim);
+  flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--accent-dim);
 }
 .cmd-summary .cmd-device {
   font-size: 9px; color: var(--text-muted); background: var(--bg-primary);
