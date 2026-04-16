@@ -262,7 +262,8 @@ function renderMessages() {
   }
 
   let html = '';
-  for (const m of state.messages) {
+  for (let mi = 0; mi < state.messages.length; mi++) {
+    const m = state.messages[mi];
     const roleLabel = m.role === 'user' ? 'вы' : 'иру';
     let bodyHTML = linkify(escapeHTML(m.content || m.text || ''));
 
@@ -280,7 +281,7 @@ function renderMessages() {
         const statusCls = isOk ? 'ok' : 'err';
         const statusTxt = isOk ? '\u2713' : '\u2717';
         const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
-        const cmdText = c.command.startsWith('[') ? c.command : escapeHTML(c.command);
+        const cmdText = escapeHTML(c.command || '');
         bodyHTML += `
           <div class="cmd-entry" onclick="this.classList.toggle('open')">
             <div class="cmd-summary">
@@ -298,8 +299,8 @@ function renderMessages() {
     let confirmBtns = '';
     if (m.confirmTaskId) {
       confirmBtns = `<div class="confirm-actions">
-        <button class="btn-confirm-yes" onclick="confirmTask('${m.confirmTaskId}', ${i})">\u2713 Выполнить</button>
-        <button class="btn-confirm-no" onclick="denyTask('${m.confirmTaskId}', ${i})">✗ Отменить</button>
+        <button class="btn-confirm-yes" onclick="confirmTask('${m.confirmTaskId}', ${mi})">\u2713 Выполнить</button>
+        <button class="btn-confirm-no" onclick="denyTask('${m.confirmTaskId}', ${mi})">✗ Отменить</button>
       </div>`;
     }
 
@@ -381,7 +382,9 @@ async function sendMessage() {
 async function pollTask(taskId, msgIndex) {
   const startTime = Date.now();
   const MAX_POLL_MS = 120000; // 2 минуты макс
+  let stopped = false;
   const poll = async () => {
+    if (stopped) return;
     if (Date.now() - startTime > MAX_POLL_MS) {
       state.messages[msgIndex] = { role: 'assistant', content: 'Истекло время ожидания ответа.' };
       state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
@@ -391,7 +394,7 @@ async function pollTask(taskId, msgIndex) {
     try {
       const r = await fetch(`${API}/api/tasks/${taskId}`, { headers: authHeaders() });
       if (!r.ok) {
-        // 404 или другая ошибка — прекратить поллинг
+        stopped = true;
         state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена.' };
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
         renderMessages();
@@ -399,11 +402,9 @@ async function pollTask(taskId, msgIndex) {
       }
       const data = await r.json();
       const task = data.task;
-      console.log('[poll]', taskId, 'status=', task.status, 'confirm_data=', task.confirm_data);
 
       if (task.status === 'confirm') {
-        // Команда требует подтверждения
-        console.log('[poll] CONFIRM detected! msgIndex=', msgIndex, 'messages.length=', state.messages.length);
+        stopped = true;
         const cd = task.confirm_data || {};
         const cmdText = cd.command || '';
         state.messages[msgIndex] = {
@@ -412,12 +413,11 @@ async function pollTask(taskId, msgIndex) {
           commands: task.commands,
           confirmTaskId: taskId,
         };
-        console.log('[poll] message set:', JSON.stringify(state.messages[msgIndex]).substring(0, 200));
         renderMessages();
         return;
       }
       if (task.status === 'done' || task.status === 'error') {
-        // Задача завершена
+        stopped = true;
         state.messages[msgIndex] = {
           role: 'assistant',
           content: task.answer || 'Готово.',
@@ -429,12 +429,13 @@ async function pollTask(taskId, msgIndex) {
         return;
       }
       // Ещё выполняется — повторить через 1с
-      setTimeout(poll, 1000);
+      if (!stopped) setTimeout(poll, 1000);
     } catch (e) {
-      // Ошибка сети — попробовать ещё (макс 30 попыток)
+      if (stopped) return;
       if (!poll._retries) poll._retries = 0;
       poll._retries++;
       if (poll._retries > 30) {
+        stopped = true;
         state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена или истекла.' };
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
         renderMessages();
