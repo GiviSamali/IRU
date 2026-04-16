@@ -399,9 +399,11 @@ async function pollTask(taskId, msgIndex) {
       }
       const data = await r.json();
       const task = data.task;
+      console.log('[poll]', taskId, 'status=', task.status, 'confirm_data=', task.confirm_data);
 
       if (task.status === 'confirm') {
         // Команда требует подтверждения
+        console.log('[poll] CONFIRM detected! msgIndex=', msgIndex, 'messages.length=', state.messages.length);
         const cd = task.confirm_data || {};
         const cmdText = cd.command || '';
         state.messages[msgIndex] = {
@@ -410,6 +412,7 @@ async function pollTask(taskId, msgIndex) {
           commands: task.commands,
           confirmTaskId: taskId,
         };
+        console.log('[poll] message set:', JSON.stringify(state.messages[msgIndex]).substring(0, 200));
         renderMessages();
         return;
       }
