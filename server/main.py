@@ -576,9 +576,11 @@ async def send_command_to_agent(device_id: str, action: str, params: dict,
             )
         # ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ (можно пропустить после подтверждения)
         if not skip_confirm and needs_confirmation(cmd_text):
+            print(f"[security] CONFIRM_REQUIRED: {cmd_text[:80]}")
             raise RuntimeError(
                 f"CONFIRM_REQUIRED: Команда требует подтверждения пользователя."
             )
+        print(f"[cmd] executing: {cmd_text[:80]}")
 
     dev = devices.get(device_id)
     if not dev:
