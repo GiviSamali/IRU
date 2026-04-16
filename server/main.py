@@ -156,7 +156,7 @@ a:hover { border-bottom-style: solid; }
 <p>Откройте <code>config.json</code> и заполните:</p>
 <pre>{
   "device_id": "МОЙ_ПК",
-  "server_url": "ws://ВАШ_СЕРВЕР:8000",
+  "server_url": "wss://irumode.ru",
   "user_token": "ваш-токен"
 }</pre>
 <ul>
@@ -172,7 +172,7 @@ python agent.py</pre>
 <p>Или используйте готовый EXE-файл (если предоставлен):</p>
 <pre>agent.exe</pre>
 <p>Вы увидите сообщение о подключении:</p>
-<pre>[agent] device=МОЙ_ПК, connecting to ws://...
+<pre>[agent] device=МОЙ_ПК, connecting to wss://irumode.ru...
 [agent] connected</pre>
 
 <h2>Шаг 5: Войдите в интерфейс</h2>
@@ -201,7 +201,7 @@ python agent.py</pre>
 <h3>Агент не подключается</h3>
 <ul>
 <li>Проверьте адрес сервера в <code>config.json</code></li>
-<li>Убедитесь, что используете <code>ws://</code> (или <code>wss://</code> для HTTPS)</li>
+<li>Убедитесь, что используете <code>wss://irumode.ru</code></li>
 <li>Проверьте интернет-соединение</li>
 </ul>
 
