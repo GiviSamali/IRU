@@ -687,6 +687,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 "commands": result.get("commands", []),
             }
         except ConfirmationRequired as cr:
+            print(f"[run_on_device] ConfirmationRequired caught! cmd={cr.command[:60]}")
             return {
                 "device_id": device_id,
                 "status": "confirm",
@@ -699,6 +700,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 },
             }
         except httpx.HTTPStatusError as e:
+            print(f"[run_on_device] HTTPStatusError: {e.response.status_code}")
             return {
                 "device_id": device_id,
                 "status": "error",
@@ -706,6 +708,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 "commands": [],
             }
         except Exception as e:
+            print(f"[run_on_device] Exception: {type(e).__name__}: {str(e)[:100]}")
             return {
                 "device_id": device_id,
                 "status": "error",
@@ -793,6 +796,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
         else:
             # Одно устройство: стандартная логика
             result = await run_on_device(device_ids[0])
+            print(f"[run_nl_task] result status={result.get('status')}, answer={str(result.get('answer', ''))[:80]}")
             task["results"][device_ids[0]] = result
 
             # Проверка: команда требует подтверждения
@@ -803,6 +807,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 task["confirm_data"] = result.get("confirm_data", {})
                 task["confirm_data"]["chat_id"] = chat_id
                 task["confirm_data"]["user_id"] = user_id
+                print(f"[run_nl_task] task status set to CONFIRM, confirm_data={task['confirm_data']}")
                 return  # ждём подтверждения от UI
 
             combined_answer = result.get("answer", "")
@@ -1193,7 +1198,10 @@ async def api_get_task(task_id: str, request: Request):
     user = get_current_user(request)
     task = tasks.get(task_id)
     if not task or task["user_id"] != user["id"]:
+        print(f"[api_get_task] 404: task_id={task_id}, found={task_id in tasks}, user={user['id']}")
         raise HTTPException(status_code=404, detail="Задача не найдена")
+    if task["status"] in ("confirm", "done", "error"):
+        print(f"[api_get_task] task={task_id[:8]} status={task['status']}")
     return {
         "status": "ok",
         "task": {
