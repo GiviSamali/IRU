@@ -174,9 +174,15 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
     try:
         is_windows = platform.system() == "Windows"
 
+        ps_prefix = (
+            "chcp 65001 > $null; "
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+            "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
+            "$OutputEncoding = [System.Text.Encoding]::UTF8; "
+        )
+
         if shell == "auto":
             if is_windows:
-                ps_prefix = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
                 shell_cmd = [
                     "powershell", "-NoProfile", "-NonInteractive",
                     "-Command", ps_prefix + command
@@ -184,7 +190,6 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
             else:
                 shell_cmd = ["bash", "-c", command]
         elif shell == "powershell":
-            ps_prefix = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
             shell_cmd = [
                 "powershell", "-NoProfile", "-NonInteractive",
                 "-Command", ps_prefix + command
