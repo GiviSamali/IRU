@@ -40,41 +40,57 @@ def save_config(data: dict):
     )
 
 
-def ask_token_gui() -> str:
-    """Показать окно ввода токена при первом запуске."""
+def ask_setup_gui(need_token: bool = True, need_device: bool = True) -> dict | None:
+    """
+    Окно первоначальной настройки: токен + имя устройства.
+    Возвращает {"token": ..., "device_id": ...} или None (закрыли окно).
+    """
     import tkinter as tk
+    import re
 
-    token_result = [None]
+    result = [None]
 
     root = tk.Tk()
     root.title("ИРУ — Первый запуск")
     root.configure(bg="#0a0e17")
     root.resizable(False, False)
 
-    # Размер и центрирование
-    w, h = 420, 250
+    w, h = 420, 340
     x = (root.winfo_screenwidth() - w) // 2
     y = (root.winfo_screenheight() - h) // 2
     root.geometry(f"{w}x{h}+{x}+{y}")
 
-    tk.Label(
-        root, text="ИРУ — Интеллектуальный Режим Управления",
-        fg="#00d4ff", bg="#0a0e17", font=("Segoe UI", 11, "bold"),
-    ).pack(pady=(20, 4))
-
-    tk.Label(
-        root, text="Введите токен доступа, полученный от администратора:",
-        fg="#94a3b8", bg="#0a0e17", font=("Segoe UI", 9),
-    ).pack(pady=(0, 10))
-
-    entry = tk.Entry(
-        root, font=("Consolas", 12), width=36,
+    entry_style = dict(
+        font=("Consolas", 12), width=36,
         bg="#141b2a", fg="#e2e8f0", insertbackground="#00d4ff",
         relief="flat", bd=0, highlightthickness=1,
         highlightbackground="#1e293b", highlightcolor="#00d4ff",
     )
-    entry.pack(pady=5, ipady=6)
-    entry.focus_set()
+
+    tk.Label(
+        root, text="ИРУ — Интеллектуальный Режим Управления",
+        fg="#00d4ff", bg="#0a0e17", font=("Segoe UI", 11, "bold"),
+    ).pack(pady=(20, 12))
+
+    # ── Имя устройства ──
+    tk.Label(
+        root, text="Имя устройства (латиница, без пробелов):",
+        fg="#94a3b8", bg="#0a0e17", font=("Segoe UI", 9),
+    ).pack(anchor="w", padx=40)
+
+    device_entry = tk.Entry(root, **entry_style)
+    device_entry.insert(0, platform.node())  # hostname по умолчанию
+    device_entry.pack(pady=(2, 8), ipady=5)
+    device_entry.focus_set()
+
+    # ── Токен ──
+    tk.Label(
+        root, text="Токен доступа (получить у администратора):",
+        fg="#94a3b8", bg="#0a0e17", font=("Segoe UI", 9),
+    ).pack(anchor="w", padx=40)
+
+    token_entry = tk.Entry(root, **entry_style)
+    token_entry.pack(pady=(2, 4), ipady=5)
 
     error_label = tk.Label(
         root, text="", fg="#ef4444", bg="#0a0e17", font=("Segoe UI", 9),
@@ -82,11 +98,21 @@ def ask_token_gui() -> str:
     error_label.pack()
 
     def on_submit(event=None):
-        val = entry.get().strip()
-        if not val:
-            error_label.config(text="Токен не может быть пустым")
+        dev = device_entry.get().strip()
+        tok = token_entry.get().strip()
+
+        if not dev:
+            error_label.config(text="Введите имя устройства")
             return
-        token_result[0] = val
+        # Только латиница, цифры, дефис, подчёркивание
+        if not re.match(r'^[A-Za-z0-9_\-]+$', dev):
+            error_label.config(text="Имя: только латиница, цифры, - и _")
+            return
+        if not tok:
+            error_label.config(text="Введите токен доступа")
+            return
+
+        result[0] = {"token": tok, "device_id": dev}
         root.destroy()
 
     def on_close():
@@ -98,13 +124,13 @@ def ask_token_gui() -> str:
         activebackground="#00b8d4", activeforeground="#0a0e17",
         relief="flat", cursor="hand2", padx=20, pady=4,
     )
-    btn.pack(pady=10)
+    btn.pack(pady=8)
 
     root.bind("<Return>", on_submit)
     root.protocol("WM_DELETE_WINDOW", on_close)
     root.mainloop()
 
-    return token_result[0]
+    return result[0]
 
 
 def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
@@ -244,16 +270,18 @@ async def run_agent():
     server_url = cfg["server_url"]
     user_token = cfg.get("user_token", "")
 
-    # Первый запуск: токен не задан — показать окно ввода
+    # Первый запуск: токен не задан — показать окно настройки
     if not user_token:
-        token = ask_token_gui()
-        if not token:
-            print("[agent] токен не введён, выход")
+        setup = ask_setup_gui()
+        if not setup:
+            print("[agent] настройка отменена, выход")
             return
-        cfg["user_token"] = token
+        cfg["user_token"] = setup["token"]
+        cfg["device_id"] = setup["device_id"]
         save_config(cfg)
-        user_token = token
-        print(f"[agent] токен сохранён в {CONFIG_PATH}")
+        user_token = setup["token"]
+        device_id = setup["device_id"]
+        print(f"[agent] настройки сохранены в {CONFIG_PATH}")
 
     # Добавить токен в URL
     ws_url = f"{server_url}/ws/{device_id}?user_token={user_token}"
