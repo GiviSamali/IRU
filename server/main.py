@@ -646,6 +646,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
     """
     task = tasks[task_id]
     is_broadcast = len(device_ids) > 1
+    print(f"[run_nl_task] START task={task_id[:8]}, user={user_id}, devices={device_ids}")
 
     async def run_on_device(device_id: str):
         """Выполнить задачу на одном устройстве через LLM."""

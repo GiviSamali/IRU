@@ -323,8 +323,10 @@ async def process_nl_command(
 
     commands_log = []
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    _timeout = httpx.Timeout(30.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=_timeout) as client:
         for iteration in range(MAX_ITERATIONS):
+            print(f"[llm] iteration {iteration+1}/{MAX_ITERATIONS}")
             resp = await client.post(
                 f"{cfg['base_url']}/chat/completions",
                 headers={
