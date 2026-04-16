@@ -248,9 +248,9 @@ function renderMessages() {
           <div class="hint-chip" onclick="sendHint(this)">Покажи IP адрес</div>
           <div class="hint-chip" onclick="sendHint(this)">Свободное место на диске</div>
           <div class="hint-chip" onclick="sendHint(this)">Запущенные процессы</div>`
-      : `<div class="hint-chip" onclick="sendHint(this)">Как подключить компьютер?</div>
-          <div class="hint-chip" onclick="sendHint(this)">Что ты умеешь?</div>
-          <div class="hint-chip" onclick="sendHint(this)">Где взять агент?</div>`;
+      : `<div class="hint-chip" onclick="downloadAgent()">⬇ Скачать агент</div>
+          <div class="hint-chip" onclick="sendHint(this)">Как подключить компьютер?</div>
+          <div class="hint-chip" onclick="sendHint(this)">Что ты умеешь?</div>`;
     container.innerHTML = `
       <div class="chat-welcome">
         <img src="/static/IruIcon.ico" alt="ИРУ">
@@ -475,6 +475,17 @@ function renderInputDeviceSelector() {
 function sendHint(el) {
   document.getElementById('chatInput').value = el.textContent;
   sendMessage();
+}
+
+function downloadAgent() {
+  const token = state.user?.token || '';
+  if (!token) { showToast('Сначала войдите в систему', true); return; }
+  const a = document.createElement('a');
+  a.href = `${API}/api/download_agent?token=${encodeURIComponent(token)}`;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 function handleInputKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
 function autoGrow(el) { el.style.height = '18px'; el.style.height = Math.min(el.scrollHeight, 100) + 'px'; }

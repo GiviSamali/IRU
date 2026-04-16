@@ -44,7 +44,7 @@ from io import BytesIO
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Query
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
@@ -1182,6 +1182,37 @@ async def download_request(body: dict, request: Request):
 
     token = create_download_token(device_id, file_path)
     return {"status": "ok", "url": f"/api/download/{token}"}
+
+
+# ── Скачивание агента ─────────────────────────────────────────────────────
+
+AGENT_DOWNLOAD_DIR = Path("/opt/iru/app/exe")
+
+@app.get("/api/download_agent")
+async def download_agent(request: Request):
+    """Скачать архив агента (только авторизованным)."""
+    user = get_current_user(request)
+
+    # Ищем первый .zip или .exe в папке
+    if not AGENT_DOWNLOAD_DIR.exists():
+        raise HTTPException(status_code=404, detail="Файл агента не найден")
+
+    # Приоритет: .zip > .exe
+    archive = None
+    for ext in ("*.zip", "*.exe"):
+        files = sorted(AGENT_DOWNLOAD_DIR.glob(ext), key=lambda f: f.stat().st_mtime, reverse=True)
+        if files:
+            archive = files[0]
+            break
+
+    if not archive:
+        raise HTTPException(status_code=404, detail="Файл агента не найден")
+
+    return FileResponse(
+        path=str(archive),
+        filename=archive.name,
+        media_type="application/octet-stream",
+    )
 
 
 # ── WebSocket для агентов ────────────────────────────────────────────────
