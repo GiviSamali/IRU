@@ -379,6 +379,7 @@ async def process_nl_command(
                         err_str = str(e)
                         if "CONFIRM_REQUIRED" in err_str:
                             # Команда требует подтверждения — останавливаем LLM-цикл
+                            print(f"[controller] CONFIRM_REQUIRED caught, raising ConfirmationRequired")
                             raise ConfirmationRequired(
                                 command=fn_args.get("command", ""),
                                 device_id=target_device,
@@ -386,6 +387,8 @@ async def process_nl_command(
                                 answer=f"Команда требует подтверждения",
                                 commands_log=commands_log,
                             )
+                        if "BLOCKED" in err_str:
+                            print(f"[controller] BLOCKED caught, feeding error to LLM")
                         tool_result = {"error": err_str}
 
                     commands_log.append({
