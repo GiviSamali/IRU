@@ -151,6 +151,31 @@ TOOLS = [
 MAX_ITERATIONS = 8
 
 
+# ── Промпт для режима без устройств (помощник по настройке) ─────────────────
+
+ONBOARDING_PROMPT = """\
+Ты — ИРУ (Интеллектуальный Режим Управления), ИИ-ассистент для управления \
+компьютером через естественный язык.
+
+Сейчас у пользователя НЕТ подключённых устройств. Твоя главная задача — помочь \
+ему подключить первое устройство.
+
+## Инструкция по подключению
+
+{instruction_text}
+
+## Правила
+1. Отвечай на русском языке, коротко и по делу.
+2. Если пользователь просит выполнить команду на компьютере — объясни, что сначала \
+нужно подключить устройство, и помоги это сделать.
+3. Если пользователь задаёт общий вопрос (что ты умеешь, как работаешь) — ответь и напомни, \
+что для полноценной работы нужно подключить устройство.
+4. НИКОГДА не используй Markdown-разметку в ответах: никаких **, *, #, ```, - и т.д. \
+Отвечай чистым текстом без форматирования.
+5. Будь дружелюбным и терпеливым — это может быть первое знакомство пользователя с системой.
+"""
+
+
 # ── Построение блока устройств ───────────────────────────────────────────
 
 def build_devices_block(all_devices: dict) -> str:
@@ -338,3 +363,69 @@ async def process_nl_command(
         "commands": commands_log,
         "training_context": training_context,
     }
+
+
+# ── Режим без устройств (onboarding) ────────────────────────────
+
+# Текст инструкции для пользователя (чистый текст, без HTML)
+INSTRUCTION_TEXT = """\
+Что понадобится:
+- Компьютер на Windows 10/11
+- Python 3.10+ (https://python.org/downloads)
+- Токен доступа (получить у администратора)
+- Файлы агента: agent.py + config.json
+
+Шаг 1: Установить Python с python.org. При установке обязательно отметить "Add Python to PATH".
+
+Шаг 2: Открыть терминал (Win+R, cmd) и выполнить:
+  pip install websockets
+
+Шаг 3: Открыть config.json и вставить свой токен в поле user_token.
+
+Шаг 4: Запустить агент:
+  python agent.py
+Или двойной клик по agent.exe (если есть).
+
+После запуска агента устройство появится в интерфейсе автоматически.
+"""
+
+
+async def process_onboarding_message(
+    user_message: str,
+    chat_history: list[dict] | None = None,
+) -> dict:
+    """
+    Режим без устройств: простой чат с LLM без tools.
+    Помогает пользователю подключить первое устройство.
+    """
+    cfg = load_llm_config()
+
+    system_msg = ONBOARDING_PROMPT.format(instruction_text=INSTRUCTION_TEXT)
+
+    messages = [{"role": "system", "content": system_msg}]
+
+    if chat_history:
+        history_msgs = build_chat_messages(chat_history[:-1])
+        messages.extend(history_msgs)
+
+    messages.append({"role": "user", "content": user_message})
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            f"{cfg['base_url']}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {cfg['api_key']}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": cfg["model"],
+                "messages": messages,
+                "max_tokens": cfg.get("max_tokens", 1024),
+                "temperature": cfg.get("temperature", 0.0),
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    answer = data["choices"][0]["message"].get("content", "")
+    return {"answer": answer, "commands": []}

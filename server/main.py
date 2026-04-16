@@ -50,7 +50,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from collections import defaultdict
-from controller import process_nl_command
+from controller import process_nl_command, process_onboarding_message
 
 # ── RATE LIMITING ───────────────────────────────────────────
 # Ограничение: макс 30 NL-команд в минуту на пользователя
@@ -515,7 +515,7 @@ class DirectCommand(BaseModel):
     params: dict = {}
 
 class NLCommand(BaseModel):
-    device_id: str
+    device_id: str = ""  # пустая строка допустима (онбординг без устройств)
     message: str
     chat_id: int | None = None
     broadcast: bool = False  # отправить на все устройства
@@ -799,6 +799,32 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
         add_message(chat_id, "assistant", task["answer"])
 
 
+# ── Onboarding task (без устройств) ──────────────────────────────────────
+
+async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id: int):
+    """
+    Фоновая задача для онбординг-режима (нет устройств).
+    Простой чат с LLM без tool-вызовов.
+    """
+    task = tasks[task_id]
+    try:
+        chat_history = get_messages(chat_id, limit=50)
+        result = await process_onboarding_message(
+            user_message=message,
+            chat_history=chat_history,
+        )
+        answer = result.get("answer", "")
+        task["status"] = "done"
+        task["answer"] = answer
+        task["commands"] = []
+        add_message(chat_id, "assistant", answer)
+    except Exception as e:
+        task["status"] = "error"
+        task["answer"] = f"Ошибка: {str(e)}"
+        task["commands"] = []
+        add_message(chat_id, "assistant", task["answer"])
+
+
 # ── HTML ─────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -1006,6 +1032,43 @@ async def nl_command(cmd: NLCommand, request: Request):
     # Определить целевые устройства
     user_devs = get_user_devices(user["id"])
 
+    # Создать/определить чат
+    chat_id = cmd.chat_id
+    if not chat_id:
+        title = cmd.message[:50].strip() or "Новый чат"
+        chat = create_chat(user["id"], title)
+        chat_id = chat["id"]
+    else:
+        chat = get_chat(chat_id, user["id"])
+        if not chat:
+            return {"status": "error", "error": "Чат не найден"}
+
+    # Сохранить сообщение пользователя
+    add_message(chat_id, "user", cmd.message)
+
+    # Режим без устройств (onboarding)
+    if not user_devs:
+        task_id = str(uuid.uuid4())[:12]
+        tasks[task_id] = {
+            "task_id": task_id,
+            "user_id": user["id"],
+            "chat_id": chat_id,
+            "message": cmd.message,
+            "device_ids": [],
+            "status": "running",
+            "results": {},
+            "answer": None,
+            "commands": None,
+            "created_at": time.time(),
+        }
+        asyncio.create_task(run_onboarding_task(task_id, user["id"], cmd.message, chat_id))
+        return {
+            "status": "ok",
+            "task_id": task_id,
+            "chat_id": chat_id,
+            "device_ids": [],
+        }
+
     if cmd.broadcast:
         # Все устройства пользователя
         target_ids = list(user_devs.keys())
@@ -1020,20 +1083,6 @@ async def nl_command(cmd: NLCommand, request: Request):
 
     if not target_ids:
         return {"status": "error", "error": "Нет доступных устройств"}
-
-    # Создать/определить чат
-    chat_id = cmd.chat_id
-    if not chat_id:
-        title = cmd.message[:50].strip() or "Новый чат"
-        chat = create_chat(user["id"], title)
-        chat_id = chat["id"]
-    else:
-        chat = get_chat(chat_id, user["id"])
-        if not chat:
-            return {"status": "error", "error": "Чат не найден"}
-
-    # Сохранить сообщение пользователя
-    add_message(chat_id, "user", cmd.message)
 
     # Создать задачу
     task_id = str(uuid.uuid4())[:12]

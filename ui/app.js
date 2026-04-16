@@ -239,17 +239,24 @@ function renderMessages() {
   const container = document.getElementById('chatMessages');
 
   if (state.messages.length === 0) {
+    const hasDevices = Object.keys(state.devices).length > 0;
+    const subtitle = hasDevices
+      ? 'Опиши задачу на естественном языке — ИРУ выполнит на твоём устройстве.'
+      : 'Нет подключённых устройств. Напиши сообщение — я помогу настроить подключение.';
+    const hints = hasDevices
+      ? `<div class="hint-chip" onclick="sendHint(this)">Открой браузер</div>
+          <div class="hint-chip" onclick="sendHint(this)">Покажи IP адрес</div>
+          <div class="hint-chip" onclick="sendHint(this)">Свободное место на диске</div>
+          <div class="hint-chip" onclick="sendHint(this)">Запущенные процессы</div>`
+      : `<div class="hint-chip" onclick="sendHint(this)">Как подключить компьютер?</div>
+          <div class="hint-chip" onclick="sendHint(this)">Что ты умеешь?</div>
+          <div class="hint-chip" onclick="sendHint(this)">Где взять агент?</div>`;
     container.innerHTML = `
       <div class="chat-welcome">
         <img src="/static/IruIcon.ico" alt="ИРУ">
         <h2>ИРУ — Интеллектуальный Режим Управления</h2>
-        <p>Опиши задачу на естественном языке — ИРУ выполнит на твоём устройстве.</p>
-        <div class="hints">
-          <div class="hint-chip" onclick="sendHint(this)">Открой браузер</div>
-          <div class="hint-chip" onclick="sendHint(this)">Покажи IP адрес</div>
-          <div class="hint-chip" onclick="sendHint(this)">Свободное место на диске</div>
-          <div class="hint-chip" onclick="sendHint(this)">Запущенные процессы</div>
-        </div>
+        <p>${subtitle}</p>
+        <div class="hints">${hints}</div>
       </div>`;
     return;
   }
@@ -303,9 +310,7 @@ async function sendMessage() {
   const text = input.value.trim();
   if (!text) return;
   const ids = Object.keys(state.devices);
-  if (ids.length === 0) {
-    showToast('Нет подключённых устройств', true); return;
-  }
+  const isOnboarding = ids.length === 0;
 
   input.value = '';
   autoGrow(input);
@@ -318,9 +323,9 @@ async function sendMessage() {
   renderMessages();
 
   try {
-    const isBroadcast = state.sendTarget === 'all';
+    const isBroadcast = !isOnboarding && state.sendTarget === 'all';
     const body = {
-      device_id: state.selectedDevice || ids[0],
+      device_id: isOnboarding ? '' : (state.selectedDevice || ids[0]),
       message: text,
       chat_id: state.currentChatId,
       broadcast: isBroadcast,
@@ -426,6 +431,9 @@ function renderInputDeviceSelector() {
     dot.style.boxShadow = 'none';
     label.textContent = 'Нет устройств';
     dropdown.innerHTML = '<div class="input-device-dropdown-item" style="color:var(--text-muted);cursor:default">Ожидание подключения...</div>';
+    // Онбординг-плейсхолдер
+    const chatInput = document.getElementById('chatInput');
+    if (chatInput) chatInput.placeholder = 'Спроси, как подключить устройство...';
     return;
   }
 
