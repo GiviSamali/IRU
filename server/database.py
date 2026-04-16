@@ -134,7 +134,8 @@ def list_users() -> list[dict]:
 def delete_user(user_id: int) -> bool:
     """Удалить пользователя и все его данные."""
     with get_db() as conn:
-        # Удалить сообщения из чатов пользователя
+        # Удалить training_data, сообщения, чаты
+        conn.execute("DELETE FROM training_data WHERE user_id = ?", (user_id,))
         chat_ids = [r["id"] for r in conn.execute(
             "SELECT id FROM chats WHERE user_id = ?", (user_id,)
         ).fetchall()]
@@ -191,8 +192,9 @@ def update_chat_title(chat_id: int, user_id: int, title: str) -> bool:
 
 
 def delete_chat(chat_id: int, user_id: int) -> bool:
-    """Удалить чат и все его сообщения."""
+    """Удалить чат и все связанные данные."""
     with get_db() as conn:
+        conn.execute("DELETE FROM training_data WHERE chat_id = ?", (chat_id,))
         conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
         cursor = conn.execute(
             "DELETE FROM chats WHERE id = ? AND user_id = ?",

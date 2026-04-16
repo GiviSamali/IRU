@@ -87,6 +87,21 @@ Hostname: {current_hostname}
 Используй контекст разговора для более точных ответов.
 12. НИКОГДА не используй Markdown-разметку в ответах: никаких **, *, #, ```, - и т.д. \
 Отвечай чистым текстом без форматирования.
+13. Для работы с приложениями используй программные интерфейсы (COM, WMI), а не эмуляцию клавиш. \
+Примеры:
+  - Открыть Word и вставить текст: $w = New-Object -ComObject Word.Application; $w.Visible = $true; \
+$d = $w.Documents.Add(); $d.Content.Text = 'текст'
+  - Открыть Excel: $xl = New-Object -ComObject Excel.Application; $xl.Visible = $true; \
+$wb = $xl.Workbooks.Add()
+  - Открыть Notepad и вставить: Start-Process notepad; Start-Sleep 1; \
+(Get-Process notepad).MainWindowTitle для проверки. Для записи в Notepad — сохрани текст в файл \
+и открой его: Set-Content -Path $env:TEMP\\text.txt -Value 'текст'; \
+Start-Process notepad $env:TEMP\\text.txt
+  - Получить активное окно: Add-Type -Name W -Namespace U -Member \
+'[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); \
+[DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, \
+System.Text.StringBuilder t, int m);'; $h=[U.W]::GetForegroundWindow(); \
+$sb=New-Object System.Text.StringBuilder 256; [U.W]::GetWindowText($h,$sb,256); $sb.ToString()
 """
 
 
@@ -195,17 +210,42 @@ def build_devices_block(all_devices: dict) -> str:
 
 # ── Построение истории чата для LLM ──────────────────────────────────────
 
-def build_chat_messages(chat_history: list[dict]) -> list[dict]:
+# Маркеры онбординговых ответов (фильтруем из истории, когда устройства уже подключены)
+ONBOARDING_MARKERS = [
+    "нет подключённых устройств",
+    "нет подключенных устройств",
+    "подключить устройство",
+    "запустить agent.exe",
+    "скачать agent",
+    "список доступных устройств пуст",
+]
+
+
+def _is_onboarding_message(content: str) -> bool:
+    """Проверить, является ли сообщение онбординговым."""
+    lower = content.lower()
+    return sum(1 for m in ONBOARDING_MARKERS if m in lower) >= 2
+
+
+def build_chat_messages(chat_history: list[dict], filter_onboarding: bool = False) -> list[dict]:
     """
     Конвертировать историю чата в формат messages для API.
     Только role='user' и role='assistant', без tool-вызовов из прошлых сессий.
+    Если filter_onboarding=True, пропускает онбординговые ответы и вопросы к ним.
     """
     messages = []
+    skip_next_user = False
     for msg in chat_history:
         role = msg.get("role", "user")
         content = msg.get("content", "")
-        if role in ("user", "assistant") and content:
-            messages.append({"role": role, "content": content})
+        if not content or role not in ("user", "assistant"):
+            continue
+        if filter_onboarding and role == "assistant" and _is_onboarding_message(content):
+            # Пропустить этот ответ и предыдущее сообщение user (если есть)
+            if messages and messages[-1]["role"] == "user":
+                messages.pop()
+            continue
+        messages.append({"role": role, "content": content})
     return messages
 
 
@@ -260,8 +300,8 @@ async def process_nl_command(
 
     if chat_history:
         # История уже содержит текущее сообщение user (оно было сохранено до вызова)
-        # Берём все сообщения кроме последнего (это текущий user message)
-        history_msgs = build_chat_messages(chat_history[:-1])
+        # Берём все сообщения кроме последнего, фильтруя онбординговые ответы
+        history_msgs = build_chat_messages(chat_history[:-1], filter_onboarding=True)
         messages.extend(history_msgs)
 
     messages.append({"role": "user", "content": user_message})

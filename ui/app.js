@@ -305,10 +305,16 @@ function renderMessages() {
   container.scrollTop = container.scrollHeight;
 }
 
+const MAX_INPUT_LENGTH = 500;
+
 async function sendMessage() {
   const input = document.getElementById('chatInput');
   const text = input.value.trim();
   if (!text) return;
+  if (text.length > MAX_INPUT_LENGTH) {
+    showToast(`Максимум ${MAX_INPUT_LENGTH} символов`, true);
+    return;
+  }
   const ids = Object.keys(state.devices);
   const isOnboarding = ids.length === 0;
 
@@ -489,6 +495,14 @@ function downloadAgent() {
 }
 function handleInputKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
 function autoGrow(el) { el.style.height = '18px'; el.style.height = Math.min(el.scrollHeight, 100) + 'px'; }
+function updateCharCount() {
+  const input = document.getElementById('chatInput');
+  const counter = document.getElementById('charCount');
+  if (!counter) return;
+  const len = input.value.length;
+  counter.textContent = `${len}/${MAX_INPUT_LENGTH}`;
+  counter.classList.toggle('over', len > MAX_INPUT_LENGTH);
+}
 
 // ── EXPLORER ─────────────────────────────────────────
 function toggleExplorer() {

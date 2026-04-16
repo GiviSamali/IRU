@@ -127,8 +127,9 @@
               </button>
               <div class="input-device-dropdown" id="inputDeviceDropdown"></div>
             </div>
-            <textarea class="chat-input" id="chatInput" placeholder="Опиши задачу..." rows="1"
-              onkeydown="handleInputKey(event)" oninput="autoGrow(this)"></textarea>
+            <textarea class="chat-input" id="chatInput" placeholder="Опиши задачу..." rows="1" maxlength="500"
+              onkeydown="handleInputKey(event)" oninput="autoGrow(this); updateCharCount()"></textarea>
+            <span class="char-count" id="charCount">0/500</span>
             <button class="btn-send" id="btnSend" onclick="sendMessage()" title="Отправить">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
             </button>

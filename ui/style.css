@@ -260,9 +260,6 @@ html, body {
 .-entry {
   margin-bottom: 4px; border-left: 2px solid var(--border);
   padding-left: 8px; cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
 }
 .-entry:hover { border-left-color: var(--accent-dim); }
 .-summary {
@@ -323,6 +320,11 @@ html, body {
   resize: none; max-height: 100px; min-height: 18px;
 }
 .chat-input::placeholder { color: var(--text-muted); }
+.char-count {
+  font-size: 9px; color: var(--text-muted); align-self: flex-end;
+  padding: 0 4px 8px 0; white-space: nowrap; flex-shrink: 0;
+}
+.char-count.over { color: var(--error); }
 .btn-send {
   display: flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; background: var(--accent);
