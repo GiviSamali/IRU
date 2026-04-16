@@ -71,10 +71,11 @@ def check_rate_limit(user_id: str) -> bool:
 
 # ── ЧЁРНЫЙ СПИСОК ОПАСНЫХ КОМАНД ───────────────────────────
 # Команды, которые агент НИКОГДА не должен выполнять
+# Команды, которые ЗАПРЕЩЕНЫ полностью (никогда не выполняются)
 DANGEROUS_PATTERNS = [
     # Форматирование / удаление дисков
     r"format\s+[a-z]:", r"diskpart",
-    # Рекурсивное удаление
+    # Рекурсивное удаление системных папок
     r"rm\s+-rf\s+/", r"rmdir\s+/s\s+/q\s+[a-z]:\\\\",
     r"del\s+/[sfq].*\\windows",
     # Реестр — удаление критических веток
@@ -92,15 +93,42 @@ DANGEROUS_PATTERNS = [
     # Шифрование (ransomware pattern)
     r"cipher\s+/e",
 ]
+
+# Команды, которые требуют подтверждения пользователя
+CONFIRM_PATTERNS = [
+    r"remove-item",
+    r"del\s+",
+    r"rd\s+",
+    r"rmdir\s+",
+    r"stop-process",
+    r"kill\s+",
+    r"taskkill",
+    r"shutdown",
+    r"restart-computer",
+    r"move-item.*-force",
+    r"clear-content",
+    r"set-content",       # перезапись файла
+    r"out-file",          # перезапись файла
+    r"uninstall",
+]
+
 import re as _re
 _dangerous_re = [_re.compile(p, _re.IGNORECASE) for p in DANGEROUS_PATTERNS]
+_confirm_re = [_re.compile(p, _re.IGNORECASE) for p in CONFIRM_PATTERNS]
 
 def is_command_safe(command: str) -> bool:
-    """Проверяет команду на наличие опасных паттернов."""
+    """Проверяет команду на наличие ЗАПРЕЩЁННЫХ паттернов."""
     for pattern in _dangerous_re:
         if pattern.search(command):
             return False
     return True
+
+def needs_confirmation(command: str) -> bool:
+    """Проверяет, требует ли команда подтверждения пользователя."""
+    for pattern in _confirm_re:
+        if pattern.search(command):
+            return True
+    return False
 from database import (
     init_db, get_user_by_token, create_user, list_users, delete_user,
     create_chat, list_chats, get_chat, update_chat_title, delete_chat,
@@ -531,13 +559,30 @@ def get_user_devices(user_id: int) -> dict:
 
 # ── Утилиты ──────────────────────────────────────────────────────────────
 
-async def send_command_to_agent(device_id: str, action: str, params: dict) -> dict:
+# Ожидающие подтверждения: {user_id: {"command": str, "device_id": str, "params": dict}}
+_pending_confirmations: dict[int, dict] = {}
+
+async def send_command_to_agent(device_id: str, action: str, params: dict,
+                                user_id: int | None = None) -> dict:
     """Отправить команду конкретному агенту и дождаться ответа."""
-    # Проверка безопасности: блокируем опасные команды на самом низком уровне
     if action == "execute_cmd":
         cmd_text = params.get("command", "")
+        # ЗАПРЕЩЕНО полностью
         if not is_command_safe(cmd_text):
             raise RuntimeError(f"Команда заблокирована системой безопасности: {cmd_text[:80]}")
+        # ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ
+        if needs_confirmation(cmd_text):
+            if user_id is not None:
+                _pending_confirmations[user_id] = {
+                    "command": cmd_text,
+                    "device_id": device_id,
+                    "params": params,
+                }
+            raise RuntimeError(
+                f"CONFIRM_REQUIRED: Команда требует подтверждения пользователя. "
+                f"Спроси пользователя: '{cmd_text[:100]}' — выполнить? "
+                f"НЕ выполняй эту команду, пока пользователь не подтвердит."
+            )
 
     dev = devices.get(device_id)
     if not dev:
@@ -624,7 +669,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             target_dev = devices.get(target_device_id)
             if not target_dev or target_dev.get("user_id") != user_id:
                 raise RuntimeError(f"Нет доступа к устройству '{target_device_id}'")
-            return await send_command_to_agent(target_device_id, action, params)
+            return await send_command_to_agent(target_device_id, action, params, user_id=user_id)
 
         try:
             result = await process_nl_command(
@@ -676,7 +721,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             try:
                 result = await send_command_to_agent(
                     device_id, "execute_cmd",
-                    {"command": cmd_text, "timeout": 30}
+                    {"command": cmd_text, "timeout": 30},
+                    user_id=user_id,
                 )
                 results.append({
                     "command": cmd_text,
