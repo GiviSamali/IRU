@@ -29,7 +29,82 @@ CONFIG_PATH = BASE_DIR / "config.json"
 def load_config():
     """Загрузить конфигурацию агента."""
     data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    return data["device_id"], data["server_url"], data.get("user_token", "")
+    return data
+
+
+def save_config(data: dict):
+    """Сохранить конфигурацию агента."""
+    CONFIG_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def ask_token_gui() -> str:
+    """Показать окно ввода токена при первом запуске."""
+    import tkinter as tk
+
+    token_result = [None]
+
+    root = tk.Tk()
+    root.title("ИРУ — Первый запуск")
+    root.configure(bg="#0a0e17")
+    root.resizable(False, False)
+
+    # Размер и центрирование
+    w, h = 420, 250
+    x = (root.winfo_screenwidth() - w) // 2
+    y = (root.winfo_screenheight() - h) // 2
+    root.geometry(f"{w}x{h}+{x}+{y}")
+
+    tk.Label(
+        root, text="ИРУ — Интеллектуальный Режим Управления",
+        fg="#00d4ff", bg="#0a0e17", font=("Segoe UI", 11, "bold"),
+    ).pack(pady=(20, 4))
+
+    tk.Label(
+        root, text="Введите токен доступа, полученный от администратора:",
+        fg="#94a3b8", bg="#0a0e17", font=("Segoe UI", 9),
+    ).pack(pady=(0, 10))
+
+    entry = tk.Entry(
+        root, font=("Consolas", 12), width=36,
+        bg="#141b2a", fg="#e2e8f0", insertbackground="#00d4ff",
+        relief="flat", bd=0, highlightthickness=1,
+        highlightbackground="#1e293b", highlightcolor="#00d4ff",
+    )
+    entry.pack(pady=5, ipady=6)
+    entry.focus_set()
+
+    error_label = tk.Label(
+        root, text="", fg="#ef4444", bg="#0a0e17", font=("Segoe UI", 9),
+    )
+    error_label.pack()
+
+    def on_submit(event=None):
+        val = entry.get().strip()
+        if not val:
+            error_label.config(text="Токен не может быть пустым")
+            return
+        token_result[0] = val
+        root.destroy()
+
+    def on_close():
+        root.destroy()
+
+    btn = tk.Button(
+        root, text="Подключиться", command=on_submit,
+        bg="#00d4ff", fg="#0a0e17", font=("Segoe UI", 10, "bold"),
+        activebackground="#00b8d4", activeforeground="#0a0e17",
+        relief="flat", cursor="hand2", padx=20, pady=4,
+    )
+    btn.pack(pady=10)
+
+    root.bind("<Return>", on_submit)
+    root.protocol("WM_DELETE_WINDOW", on_close)
+    root.mainloop()
+
+    return token_result[0]
 
 
 def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
@@ -164,7 +239,21 @@ ACTIONS = {
 
 async def run_agent():
     """Основной цикл агента: подключение к серверу и обработка команд."""
-    device_id, server_url, user_token = load_config()
+    cfg = load_config()
+    device_id = cfg["device_id"]
+    server_url = cfg["server_url"]
+    user_token = cfg.get("user_token", "")
+
+    # Первый запуск: токен не задан — показать окно ввода
+    if not user_token:
+        token = ask_token_gui()
+        if not token:
+            print("[agent] токен не введён, выход")
+            return
+        cfg["user_token"] = token
+        save_config(cfg)
+        user_token = token
+        print(f"[agent] токен сохранён в {CONFIG_PATH}")
 
     # Добавить токен в URL
     ws_url = f"{server_url}/ws/{device_id}?user_token={user_token}"

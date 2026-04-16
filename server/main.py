@@ -190,48 +190,25 @@ a:hover { border-bottom-style: solid; }
 <h2>Что вам понадобится</h2>
 <ul>
 <li>Компьютер на <strong>Windows 10/11</strong></li>
-<li>Установленный <strong>Python 3.10+</strong> (<a href="https://python.org/downloads" target="_blank">скачать</a>)</li>
 <li><strong>Токен доступа</strong> — получите у администратора</li>
-<li>Файлы агента: <code>agent.py</code> + <code>config.json</code></li>
+<li>Файл <code>agent.exe</code></li>
 </ul>
 
-<h2>Шаг 1: Установите Python</h2>
-<p>Скачайте Python с <a href="https://python.org/downloads" target="_blank">python.org</a>. При установке обязательно отметьте <code>Add Python to PATH</code>.</p>
+<h2>Шаг 1: Скачайте agent.exe</h2>
+<p>Получите файл <code>agent.exe</code> от администратора. Установка не требуется.</p>
 
-<h2>Шаг 2: Установите зависимость</h2>
-<p>Откройте терминал (Win+R → <code>cmd</code>) и выполните:</p>
-<pre>pip install websockets</pre>
+<h2>Шаг 2: Запустите agent.exe</h2>
+<p>Двойной клик по <code>agent.exe</code>. При первом запуске откроется окно ввода токена.</p>
+<p>Вставьте токен доступа и нажмите <strong>«Подключиться»</strong>. Токен сохранится автоматически — при следующих запусках вводить не нужно.</p>
+<p>Вы увидите окно консоли с сообщением о подключении:</p>
+<pre>[agent] connected</pre>
 
-<h2>Шаг 3: Настройте агент</h2>
-<p>Создайте папку (например, <code>C:\\IRU</code>) и поместите туда файлы <code>agent.py</code> и <code>config.json</code>.</p>
-<p>Откройте <code>config.json</code> и заполните:</p>
-<pre>{
-  "device_id": "МОЙ_ПК",
-  "server_url": "wss://irumode.ru",
-  "user_token": "ваш-токен"
-}</pre>
-<ul>
-<li><code>device_id</code> — любое имя для вашего ПК (латиница, без пробелов)</li>
-<li><code>server_url</code> — адрес сервера (получите у администратора)</li>
-<li><code>user_token</code> — ваш токен доступа</li>
-</ul>
-
-<h2>Шаг 4: Запустите агент</h2>
-<p>В терминале перейдите в папку с агентом и запустите:</p>
-<pre>cd C:\\IRU
-python agent.py</pre>
-<p>Или используйте готовый EXE-файл (если предоставлен):</p>
-<pre>agent.exe</pre>
-<p>Вы увидите сообщение о подключении:</p>
-<pre>[agent] device=МОЙ_ПК, connecting to wss://irumode.ru...
-[agent] connected</pre>
-
-<h2>Шаг 5: Войдите в интерфейс</h2>
+<h2>Шаг 3: Войдите в интерфейс</h2>
 <ol>
-<li>Откройте браузер и перейдите по адресу сервера</li>
-<li>Введите ваш токен доступа</li>
-<li>Выберите устройство в правом верхнем углу</li>
-<li>Создайте новый чат и начните общение</li>
+<li>Откройте браузер: <a href="https://irumode.ru" target="_blank">irumode.ru</a></li>
+<li>Введите тот же токен доступа</li>
+<li>Ваше устройство появится автоматически</li>
+<li>Создайте чат и начните общение</li>
 </ol>
 
 <h2>Примеры команд</h2>
@@ -251,15 +228,15 @@ python agent.py</pre>
 <h2>Частые проблемы</h2>
 <h3>Агент не подключается</h3>
 <ul>
-<li>Проверьте адрес сервера в <code>config.json</code></li>
-<li>Убедитесь, что используете <code>wss://irumode.ru</code></li>
 <li>Проверьте интернет-соединение</li>
+<li>Убедитесь, что токен введён правильно</li>
+<li>Попробуйте удалить <code>config.json</code> рядом с exe и запустить заново — окно ввода токена появится снова</li>
 </ul>
 
 <h3>Устройство не появляется в UI</h3>
 <ul>
 <li>Убедитесь, что агент запущен и показывает <code>[agent] connected</code></li>
-<li>Проверьте, что токен в <code>config.json</code> совпадает с вашим токеном для UI</li>
+<li>Убедитесь, что в UI вы вошли с тем же токеном</li>
 </ul>
 
 <h3>Кракозябры в выводе</h3>
