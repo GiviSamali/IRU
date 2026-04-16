@@ -126,7 +126,7 @@ def ask_setup_gui(need_token: bool = True, need_device: bool = True) -> dict | N
     )
     btn.pack(pady=8)
 
-    # Явные биндинги Ctrl+V/C/A (на любой раскладке)
+    # Явные биндинги Ctrl+V/C/A + перехват для русской раскладки
     def _paste(e):
         try:
             e.widget.event_generate('<<Paste>>')
@@ -145,16 +145,19 @@ def ask_setup_gui(need_token: bool = True, need_device: bool = True) -> dict | N
         e.widget.select_range(0, tk.END)
         return 'break'
 
+    def _key_handler(e):
+        """Перехват Ctrl+клавиша на любой раскладке через keycode."""
+        # keycode 86=V, 67=C, 65=A (одинаково на любой раскладке)
+        if e.state & 0x4:  # Ctrl зажат
+            if e.keycode == 86:  # V
+                return _paste(e)
+            elif e.keycode == 67:  # C
+                return _copy(e)
+            elif e.keycode == 65:  # A
+                return _select_all(e)
+
     for entry_w in (device_entry, token_entry):
-        entry_w.bind('<Control-v>', _paste)
-        entry_w.bind('<Control-V>', _paste)
-        entry_w.bind('<Control-м>', _paste)  # русская В
-        entry_w.bind('<Control-c>', _copy)
-        entry_w.bind('<Control-C>', _copy)
-        entry_w.bind('<Control-с>', _copy)   # русская С
-        entry_w.bind('<Control-a>', _select_all)
-        entry_w.bind('<Control-A>', _select_all)
-        entry_w.bind('<Control-ф>', _select_all)  # русская Ф
+        entry_w.bind('<Key>', _key_handler)
 
     root.bind("<Return>", on_submit)
     root.protocol("WM_DELETE_WINDOW", on_close)
@@ -300,8 +303,8 @@ async def run_agent():
     server_url = cfg["server_url"]
     user_token = cfg.get("user_token", "")
 
-    # Первый запуск: токен не задан — показать окно настройки
-    if not user_token:
+    # Первый запуск: токен или device_id пустые — показать окно настройки
+    if not user_token or not device_id:
         setup = ask_setup_gui()
         if not setup:
             print("[agent] настройка отменена, выход")
