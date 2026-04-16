@@ -1513,7 +1513,7 @@ function renderAdminUsers(users) {
     return `<div class="admin-user-item">
       <div class="admin-user-info">
         <div class="admin-user-name">${escapeHTML(u.name)}${badge}</div>
-        <div class="admin-user-token" onclick="copyToken('${escapeAttr(u.token)}')" title="Нажмите чтобы скопировать токен">${u.token}</div>
+        <div class="admin-user-token" title="Токен скрыт">${u.token}</div>
       </div>
       ${deleteBtn}
     </div>`;
@@ -1533,7 +1533,11 @@ async function adminCreateUser() {
     const data = await r.json();
     if (data.status === 'ok') {
       input.value = '';
+      const tok = data.user.token || '';
       showToast(`Создан: ${data.user.name}`);
+      if (tok) {
+        prompt('Токен для ' + data.user.name + ' (скопируйте, показывается один раз):', tok);
+      }
       loadAdminUsers();
     } else {
       showToast(data.detail || 'Ошибка', true);

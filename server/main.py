@@ -871,6 +871,10 @@ async def admin_list_users(request: Request):
     if user["name"] != "admin":
         raise HTTPException(status_code=403, detail="Только для администратора")
     users = list_users()
+    # Маскируем токены: показываем только первые 8 символов
+    for u in users:
+        if u.get("token"):
+            u["token"] = u["token"][:8] + "•" * 8
     return {"status": "ok", "users": users}
 
 
