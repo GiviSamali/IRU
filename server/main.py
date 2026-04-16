@@ -50,7 +50,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from collections import defaultdict
-from controller import process_nl_command, process_onboarding_message
+from controller import process_nl_command, process_onboarding_message, ConfirmationRequired
 
 # ── RATE LIMITING ───────────────────────────────────────────
 # Ограничение: макс 30 NL-команд в минуту на пользователя
@@ -563,25 +563,21 @@ def get_user_devices(user_id: int) -> dict:
 _pending_confirmations: dict[int, dict] = {}
 
 async def send_command_to_agent(device_id: str, action: str, params: dict,
-                                user_id: int | None = None) -> dict:
+                                user_id: int | None = None,
+                                skip_confirm: bool = False) -> dict:
     """Отправить команду конкретному агенту и дождаться ответа."""
     if action == "execute_cmd":
         cmd_text = params.get("command", "")
-        # ЗАПРЕЩЕНО полностью
+        # ЗАПРЕЩЕНО полностью (всегда блокируем)
         if not is_command_safe(cmd_text):
-            raise RuntimeError(f"Команда заблокирована системой безопасности: {cmd_text[:80]}")
-        # ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ
-        if needs_confirmation(cmd_text):
-            if user_id is not None:
-                _pending_confirmations[user_id] = {
-                    "command": cmd_text,
-                    "device_id": device_id,
-                    "params": params,
-                }
             raise RuntimeError(
-                f"CONFIRM_REQUIRED: Команда требует подтверждения пользователя. "
-                f"Спроси пользователя: '{cmd_text[:100]}' — выполнить? "
-                f"НЕ выполняй эту команду, пока пользователь не подтвердит."
+                f"BLOCKED: Команда запрещена на этапе бета-тестирования. "
+                f"Сообщи пользователю, что эта команда недоступна в бета-версии."
+            )
+        # ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ (можно пропустить после подтверждения)
+        if not skip_confirm and needs_confirmation(cmd_text):
+            raise RuntimeError(
+                f"CONFIRM_REQUIRED: Команда требует подтверждения пользователя."
             )
 
     dev = devices.get(device_id)
@@ -687,6 +683,18 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 "answer": result.get("answer", ""),
                 "commands": result.get("commands", []),
             }
+        except ConfirmationRequired as cr:
+            return {
+                "device_id": device_id,
+                "status": "confirm",
+                "answer": cr.answer,
+                "commands": cr.commands_log,
+                "confirm_data": {
+                    "command": cr.command,
+                    "device_id": cr.device_id,
+                    "params": cr.params,
+                },
+            }
         except httpx.HTTPStatusError as e:
             return {
                 "device_id": device_id,
@@ -783,6 +791,17 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             # Одно устройство: стандартная логика
             result = await run_on_device(device_ids[0])
             task["results"][device_ids[0]] = result
+
+            # Проверка: команда требует подтверждения
+            if result.get("status") == "confirm":
+                task["status"] = "confirm"
+                task["answer"] = result.get("answer", "")
+                task["commands"] = result.get("commands", [])
+                task["confirm_data"] = result.get("confirm_data", {})
+                task["confirm_data"]["chat_id"] = chat_id
+                task["confirm_data"]["user_id"] = user_id
+                return  # ждём подтверждения от UI
+
             combined_answer = result.get("answer", "")
             combined_commands = result.get("commands", [])
 
@@ -1183,9 +1202,71 @@ async def api_get_task(task_id: str, request: Request):
             "answer": task.get("answer"),
             "commands": task.get("commands"),
             "results": task.get("results", {}),
+            "confirm_data": task.get("confirm_data"),
             "created_at": task["created_at"],
         }
     }
+
+
+@app.post("/api/tasks/{task_id}/confirm")
+async def api_confirm_task(task_id: str, request: Request):
+    """Пользователь подтвердил опасную команду."""
+    user = get_current_user(request)
+    task = tasks.get(task_id)
+    if not task or task["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if task["status"] != "confirm":
+        raise HTTPException(status_code=400, detail="Задача не ожидает подтверждения")
+
+    cd = task.get("confirm_data", {})
+    device_id = cd.get("device_id", "")
+    params = cd.get("params", {})
+    chat_id = cd.get("chat_id", task.get("chat_id"))
+
+    task["status"] = "running"
+
+    async def execute_confirmed():
+        try:
+            result = await send_command_to_agent(
+                device_id, "execute_cmd", params, skip_confirm=True
+            )
+            cmd_entry = {
+                "command": cd.get("command", ""),
+                "device_id": device_id,
+                "result": result,
+            }
+            existing_cmds = task.get("commands", []) or []
+            existing_cmds.append(cmd_entry)
+            task["commands"] = existing_cmds
+
+            ok = not result.get("error")
+            task["answer"] = "Выполнено." if ok else f"Ошибка: {result.get('error', '')}"
+            task["status"] = "done"
+            add_message(chat_id, "assistant", task["answer"], task["commands"])
+        except Exception as e:
+            task["status"] = "error"
+            task["answer"] = f"Ошибка: {str(e)}"
+            add_message(chat_id, "assistant", task["answer"])
+
+    asyncio.create_task(execute_confirmed())
+    return {"status": "ok"}
+
+
+@app.post("/api/tasks/{task_id}/deny")
+async def api_deny_task(task_id: str, request: Request):
+    """Пользователь отклонил опасную команду."""
+    user = get_current_user(request)
+    task = tasks.get(task_id)
+    if not task or task["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if task["status"] != "confirm":
+        raise HTTPException(status_code=400, detail="Задача не ожидает подтверждения")
+
+    chat_id = task.get("confirm_data", {}).get("chat_id", task.get("chat_id"))
+    task["status"] = "done"
+    task["answer"] = "Команда отменена пользователем."
+    add_message(chat_id, "assistant", task["answer"], task.get("commands", []))
+    return {"status": "ok"}
 
 
 # ── DOWNLOAD API ─────────────────────────────────────────────────────────

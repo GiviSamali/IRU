@@ -286,6 +286,23 @@ html, body {
 }
 .cmd-entry.open .cmd-details { display: block; }
 
+/* Confirm actions */
+.confirm-actions {
+  display: flex; gap: 8px; margin-top: 10px;
+}
+.btn-confirm-yes, .btn-confirm-no {
+  padding: 6px 16px; border: none; border-radius: var(--radius);
+  font-size: 12px; font-family: var(--font); cursor: pointer;
+  transition: opacity 0.15s;
+}
+.btn-confirm-yes {
+  background: var(--success); color: var(--bg-primary);
+}
+.btn-confirm-no {
+  background: var(--error); color: #fff;
+}
+.btn-confirm-yes:hover, .btn-confirm-no:hover { opacity: 0.85; }
+
 /* Typing */
 .typing {
   align-self: flex-start; display: flex; gap: 4px;

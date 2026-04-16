@@ -18,6 +18,18 @@ controller.py — LLM-планировщик ИРУ v3.4
 
 import json
 import os
+
+
+class ConfirmationRequired(Exception):
+    """Команда требует подтверждения пользователя."""
+    def __init__(self, command: str, device_id: str, params: dict,
+                 answer: str, commands_log: list):
+        self.command = command
+        self.device_id = device_id
+        self.params = params
+        self.answer = answer          # LLM-ответ до момента подтверждения
+        self.commands_log = commands_log  # уже выполненные команды
+        super().__init__(f"Подтверждение: {command[:80]}")
 import asyncio
 import httpx
 from pathlib import Path
@@ -77,9 +89,8 @@ Hostname: {current_hostname}
 4. Анализируй результат каждой команды перед следующим шагом.
 5. Если команда завершилась ошибкой — попробуй другой подход (макс. 8 итераций).
 6. По завершении — дай короткий понятный ответ на русском языке.
-7. Если получишь ошибку CONFIRM_REQUIRED — НЕ повторяй команду. \
-Остановись и спроси пользователя, хочет ли он выполнить эту команду (удаление, остановка процесса и т.д.). \
-НИКОГДА не пытайся обойти подтверждение, переформулировав команду.
+7. Если получишь ошибку BLOCKED — сообщи пользователю, что эта команда недоступна в бета-тестировании. \
+Если получишь CONFIRM_REQUIRED — ОСТАНОВИСЬ, не повторяй команду и не пытайся её переформулировать.
 8. Если задача не связана с компьютером — просто ответь текстом.
 9. Если пользователь просит скачать/передать файл — используй get_file_link.
 10. Кодировка: ВСЕГДА добавляй в начало КАЖДОЙ команды PowerShell: \
@@ -363,7 +374,17 @@ async def process_nl_command(
                             target_device, "execute_cmd", fn_args,
                         )
                     except Exception as e:
-                        tool_result = {"error": str(e)}
+                        err_str = str(e)
+                        if "CONFIRM_REQUIRED" in err_str:
+                            # Команда требует подтверждения — останавливаем LLM-цикл
+                            raise ConfirmationRequired(
+                                command=fn_args.get("command", ""),
+                                device_id=target_device,
+                                params=fn_args,
+                                answer=f"Команда требует подтверждения",
+                                commands_log=commands_log,
+                            )
+                        tool_result = {"error": err_str}
 
                     commands_log.append({
                         "command": fn_args.get("command", ""),

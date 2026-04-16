@@ -294,10 +294,19 @@ function renderMessages() {
       }
       bodyHTML += '</div>';
     }
+    // Кнопки подтверждения
+    let confirmBtns = '';
+    if (m.confirmTaskId) {
+      confirmBtns = `<div class="confirm-actions">
+        <button class="btn-confirm-yes" onclick="confirmTask('${m.confirmTaskId}', ${i})">\u2713 Выполнить</button>
+        <button class="btn-confirm-no" onclick="denyTask('${m.confirmTaskId}', ${i})">✗ Отменить</button>
+      </div>`;
+    }
+
     if (m.loading) {
       html += `<div class="msg assistant"><div class="msg-role">иру</div><div class="msg-body"><div class="typing"><span></span><span></span><span></span></div></div></div>`;
     } else {
-      html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}</div></div>`;
+      html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}${confirmBtns}</div></div>`;
     }
   }
 
@@ -376,6 +385,19 @@ async function pollTask(taskId, msgIndex) {
       const data = await r.json();
       const task = data.task;
 
+      if (task.status === 'confirm') {
+        // Команда требует подтверждения
+        const cd = task.confirm_data || {};
+        const cmdText = cd.command || '';
+        state.messages[msgIndex] = {
+          role: 'assistant',
+          content: `Команда требует подтверждения:\n${cmdText}`,
+          commands: task.commands,
+          confirmTaskId: taskId,
+        };
+        renderMessages();
+        return;
+      }
       if (task.status === 'done' || task.status === 'error') {
         // Задача завершена
         state.messages[msgIndex] = {
@@ -493,6 +515,34 @@ function downloadAgent() {
   a.click();
   a.remove();
 }
+// ── CONFIRM / DENY ───────────────────────────────────────────
+async function confirmTask(taskId, msgIndex) {
+  try {
+    await fetch(`${API}/api/tasks/${taskId}/confirm`, {
+      method: 'POST', headers: authHeaders(),
+    });
+    // Убираем кнопки, показываем лоадер
+    state.messages[msgIndex].confirmTaskId = null;
+    state.messages[msgIndex].loading = true;
+    state.messages[msgIndex].content = '';
+    renderMessages();
+    // Поллим задачу до завершения
+    pollTask(taskId, msgIndex);
+  } catch (e) { showToast('Ошибка подтверждения', true); }
+}
+
+async function denyTask(taskId, msgIndex) {
+  try {
+    await fetch(`${API}/api/tasks/${taskId}/deny`, {
+      method: 'POST', headers: authHeaders(),
+    });
+    state.messages[msgIndex].confirmTaskId = null;
+    state.messages[msgIndex].content = 'Команда отменена.';
+    state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+    renderMessages();
+  } catch (e) { showToast('Ошибка', true); }
+}
+
 function handleInputKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
 function autoGrow(el) { el.style.height = '18px'; el.style.height = Math.min(el.scrollHeight, 100) + 'px'; }
 function updateCharCount() {
