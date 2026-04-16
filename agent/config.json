@@ -1,5 +1,5 @@
 {
   "device_id": "PC_HOME",
-  "server_url": "ws://45.150.38.99",
-  "user_token": "3641cb18-6262-4de6-80d8-ba52fa6bc2e8"
+  "server_url": "wss://irumode.ru",
+  "user_token": "ВСТАВЬ_СВОЙ_ТОКЕН"
 }

@@ -17,6 +17,7 @@ controller.py — LLM-планировщик ИРУ v3.4
 """
 
 import json
+import os
 import asyncio
 import httpx
 from pathlib import Path
@@ -27,8 +28,15 @@ CONFIG_PATH = Path(__file__).parent / "llm_config.json"
 # ── Конфигурация LLM ────────────────────────────────────────────────────
 
 def load_llm_config() -> dict:
-    """Загрузить конфиг LLM из llm_config.json."""
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    """Загрузить конфиг LLM из llm_config.json.
+    API key берётся из переменной окружения DEEPSEEK_API_KEY (приоритет)
+    или из поля api_key в llm_config.json (фоллбэк).
+    """
+    cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    env_key = os.environ.get("DEEPSEEK_API_KEY")
+    if env_key:
+        cfg["api_key"] = env_key
+    return cfg
 
 
 # ── Системный промпт (шаблон) ───────────────────────────────────────────

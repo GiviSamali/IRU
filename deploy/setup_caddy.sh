@@ -13,24 +13,16 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /
 apt update
 apt install -y caddy
 
-# Конфигурация: reverse proxy на порт 8000
-# Для IP-адреса без домена — HTTP mode на порту 80
+# Конфигурация: reverse proxy с автоматическим HTTPS
 cat > /etc/caddy/Caddyfile << 'EOF'
-:80 {
+irumode.ru, www.irumode.ru {
     reverse_proxy localhost:8000
 }
 EOF
 
 echo ""
 echo "=== Caddy установлен ==="
-echo "Текущий конфиг: HTTP на порту 80 → localhost:8000"
-echo ""
-echo "Если у вас есть домен, замените Caddyfile:"
-echo "  nano /etc/caddy/Caddyfile"
-echo ""
-echo "  ваш-домен.ru {"
-echo "      reverse_proxy localhost:8000"
-echo "  }"
+echo "Домен: irumode.ru (HTTPS автоматически через Let's Encrypt)"
 echo ""
 
 systemctl enable caddy
