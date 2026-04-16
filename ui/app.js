@@ -379,9 +379,24 @@ async function sendMessage() {
 }
 
 async function pollTask(taskId, msgIndex) {
+  const startTime = Date.now();
+  const MAX_POLL_MS = 120000; // 2 минуты макс
   const poll = async () => {
+    if (Date.now() - startTime > MAX_POLL_MS) {
+      state.messages[msgIndex] = { role: 'assistant', content: 'Истекло время ожидания ответа.' };
+      state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+      renderMessages();
+      return;
+    }
     try {
       const r = await fetch(`${API}/api/tasks/${taskId}`, { headers: authHeaders() });
+      if (!r.ok) {
+        // 404 или другая ошибка — прекратить поллинг
+        state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена.' };
+        state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+        renderMessages();
+        return;
+      }
       const data = await r.json();
       const task = data.task;
 
@@ -413,7 +428,15 @@ async function pollTask(taskId, msgIndex) {
       // Ещё выполняется — повторить через 1с
       setTimeout(poll, 1000);
     } catch (e) {
-      // Ошибка сети — попробовать ещё
+      // Ошибка сети — попробовать ещё (макс 30 попыток)
+      if (!poll._retries) poll._retries = 0;
+      poll._retries++;
+      if (poll._retries > 30) {
+        state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена или истекла.' };
+        state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+        renderMessages();
+        return;
+      }
       setTimeout(poll, 2000);
     }
   };
