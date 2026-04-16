@@ -588,8 +588,9 @@ html, body {
   }
   .sidebar-overlay.show { display: block; }
   
-  .header { padding: 0 10px; }
-  .header-title { max-width: 140px; font-size: 11px; }
+  .header { padding: 0 8px; gap: 6px; }
+  .header-title { display: none; }
+  .header-right { gap: 6px; }
   .btn-header-link { display: none; }
   .sidebar-mobile-links { display: flex; }
   
