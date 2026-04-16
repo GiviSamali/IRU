@@ -49,7 +49,58 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 
+from collections import defaultdict
 from controller import process_nl_command
+
+# ── RATE LIMITING ───────────────────────────────────────────
+# Ограничение: макс 30 NL-команд в минуту на пользователя
+RATE_LIMIT = 30  # команд
+RATE_WINDOW = 60  # секунд
+rate_counters: dict[str, list[float]] = defaultdict(list)
+
+def check_rate_limit(user_id: str) -> bool:
+    """Возвращает True если лимит НЕ превышен."""
+    now = time.time()
+    window_start = now - RATE_WINDOW
+    # Очистить старые записи
+    rate_counters[user_id] = [t for t in rate_counters[user_id] if t > window_start]
+    if len(rate_counters[user_id]) >= RATE_LIMIT:
+        return False
+    rate_counters[user_id].append(now)
+    return True
+
+# ── ЧЁРНЫЙ СПИСОК ОПАСНЫХ КОМАНД ───────────────────────────
+# Команды, которые агент НИКОГДА не должен выполнять
+DANGEROUS_PATTERNS = [
+    # Форматирование / удаление дисков
+    r"format\s+[a-z]:", r"diskpart",
+    # Рекурсивное удаление
+    r"rm\s+-rf\s+/", r"rmdir\s+/s\s+/q\s+[a-z]:\\\\",
+    r"del\s+/[sfq].*\\windows",
+    # Реестр — удаление критических веток
+    r"reg\s+delete\s+hklm",
+    # Остановка критических сервисов
+    r"net\s+stop\s+(windefend|mpssvc|wuauserv)",
+    # Загрузка и выполнение из интернета
+    r"powershell.*downloadstring", r"powershell.*downloadfile.*\|.*iex",
+    r"certutil.*-urlcache.*-split",
+    r"bitsadmin.*transfer",
+    # Создание пользователей (эскалация)
+    r"net\s+user\s+.*\s+/add", r"net\s+localgroup\s+administrators",
+    # Отключение firewall
+    r"netsh\s+advfirewall\s+set.*state\s+off",
+    # Шифрование (ransomware pattern)
+    r"cipher\s+/e",
+]
+import re as _re
+_dangerous_re = [_re.compile(p, _re.IGNORECASE) for p in DANGEROUS_PATTERNS]
+
+def is_command_safe(command: str) -> bool:
+    """Проверяет команду на наличие опасных паттернов."""
+    for pattern in _dangerous_re:
+        if pattern.search(command):
+            return False
+    return True
 from database import (
     init_db, get_user_by_token, create_user, list_users, delete_user,
     create_chat, list_chats, get_chat, update_chat_title, delete_chat,
@@ -409,6 +460,12 @@ def get_user_devices(user_id: int) -> dict:
 
 async def send_command_to_agent(device_id: str, action: str, params: dict) -> dict:
     """Отправить команду конкретному агенту и дождаться ответа."""
+    # Проверка безопасности: блокируем опасные команды на самом низком уровне
+    if action == "execute_cmd":
+        cmd_text = params.get("command", "")
+        if not is_command_safe(cmd_text):
+            raise RuntimeError(f"Команда заблокирована системой безопасности: {cmd_text[:80]}")
+
     dev = devices.get(device_id)
     if not dev:
         raise RuntimeError(f"Устройство '{device_id}' не подключено")
@@ -811,6 +868,11 @@ async def api_delete_chat(chat_id: int, request: Request):
 async def direct_command(cmd: DirectCommand, request: Request):
     """Прямая команда агенту (без LLM). Синхронная."""
     user = get_current_user(request)
+
+    # Rate limiting
+    if not check_rate_limit(str(user["id"])):
+        return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
+
     dev = devices.get(cmd.device_id)
     if not dev or dev.get("user_id") != user["id"]:
         return {"status": "error", "error": "Устройство не найдено или нет доступа"}
@@ -830,6 +892,10 @@ async def nl_command(cmd: NLCommand, request: Request):
     """
     user = get_current_user(request)
     cleanup_old_tasks()
+
+    # Rate limiting
+    if not check_rate_limit(str(user["id"])):
+        return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
     # Определить целевые устройства
     user_devs = get_user_devices(user["id"])
