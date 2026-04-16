@@ -260,6 +260,9 @@ html, body {
 .cmd-entry {
   margin-bottom: 4px; border-left: 2px solid var(--border);
   padding-left: 8px; cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 .cmd-entry:hover { border-left-color: var(--accent-dim); }
 .cmd-summary {
