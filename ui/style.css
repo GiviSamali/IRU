@@ -554,6 +554,27 @@ html, body {
 }
 .admin-user-delete:hover { color: var(--error); border-color: var(--error); background: rgba(239,68,68,0.1); }
 .admin-user-delete svg { width: 12px; height: 12px; }
+.admin-user-meta {
+  display: flex; align-items: center; gap: 8px; margin-top: 2px;
+}
+.admin-plan-select {
+  font-family: 'JetBrains Mono', monospace; font-size: 9px;
+  padding: 1px 4px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg-primary); color: var(--text-muted); cursor: pointer;
+  outline: none;
+}
+.admin-plan-select:focus { border-color: var(--accent); }
+.admin-plan-badge {
+  font-size: 9px; padding: 1px 6px; border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.plan-free { color: var(--text-muted); }
+.plan-pro { color: var(--accent); border-color: var(--accent); }
+.plan-business { color: #a78bfa; border-color: #a78bfa; }
+.admin-plan-select.plan-pro { color: var(--accent); border-color: rgba(0,212,255,0.3); }
+.admin-plan-select.plan-business { color: #a78bfa; border-color: rgba(167,139,250,0.3); }
+.admin-plan-badge.plan-pro { background: rgba(0,212,255,0.1); }
+.admin-plan-badge.plan-business { background: rgba(167,139,250,0.1); }
 .admin-empty { padding: 20px 14px; text-align: center; color: var(--text-muted); font-size: 11px; }
 .admin-stats {
   padding: 8px 14px; border-top: 1px solid var(--border);

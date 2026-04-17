@@ -814,15 +814,43 @@ function renderAdminUsers(users) {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>`;
     const badge = isAdmin ? '<span class="admin-badge">admin</span>' : '';
+    const plan = u.plan || 'free';
+    const planClass = 'plan-' + plan;
+    const planSelect = isAdmin ? `<span class="admin-plan-badge ${planClass}">${plan}</span>` : `
+      <select class="admin-plan-select ${planClass}" onchange="adminSetPlan(${u.id}, this.value)">
+        <option value="free"${plan === 'free' ? ' selected' : ''}>free</option>
+        <option value="pro"${plan === 'pro' ? ' selected' : ''}>pro</option>
+        <option value="business"${plan === 'business' ? ' selected' : ''}>business</option>
+      </select>`;
     return `<div class="admin-user-item">
       <div class="admin-user-info">
         <div class="admin-user-name">${escapeHTML(u.name)}${badge}</div>
-        <div class="admin-user-token" title="Токен скрыт">${u.token}</div>
+        <div class="admin-user-meta">
+          <span class="admin-user-token" title="Токен скрыт">${u.token}</span>
+          ${planSelect}
+        </div>
       </div>
       ${deleteBtn}
     </div>`;
   }).join('');
   document.getElementById('adminStats').textContent = `Всего пользователей: ${users.length}`;
+}
+
+async function adminSetPlan(userId, plan) {
+  try {
+    const r = await fetch(`${API}/api/admin/users/${userId}/plan`, {
+      method: 'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ plan }),
+    });
+    const data = await r.json();
+    if (data.status === 'ok') {
+      showToast(`План изменён: ${plan}`);
+      loadAdminUsers();
+    } else {
+      showToast(data.error || 'Ошибка', true);
+      loadAdminUsers();
+    }
+  } catch (e) { showToast('Ошибка: ' + e.message, true); }
 }
 
 async function adminCreateUser() {

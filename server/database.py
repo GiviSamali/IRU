@@ -135,7 +135,7 @@ def create_user(name: str) -> dict:
 def list_users() -> list[dict]:
     """Список всех пользователей."""
     with get_db() as conn:
-        rows = conn.execute("SELECT id, token, name, created_at FROM users ORDER BY id").fetchall()
+        rows = conn.execute("SELECT id, token, name, created_at, plan FROM users ORDER BY id").fetchall()
         return [dict(r) for r in rows]
 
 
