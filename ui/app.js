@@ -816,7 +816,7 @@ function renderAdminUsers(users) {
     const badge = isAdmin ? '<span class="admin-badge">admin</span>' : '';
     const plan = u.plan || 'free';
     const planClass = 'plan-' + plan;
-    const planSelect = isAdmin ? `<span class="admin-plan-badge ${planClass}">${plan}</span>` : `
+    const planSelect = isAdmin ? '' : `
       <select class="admin-plan-select ${planClass}" onchange="adminSetPlan(${u.id}, this.value)">
         <option value="free"${plan === 'free' ? ' selected' : ''}>free</option>
         <option value="pro"${plan === 'pro' ? ' selected' : ''}>pro</option>
