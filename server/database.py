@@ -1,8 +1,8 @@
 """
-database.py — SQLite база данных ИРУ v3.3
+database.py — SQLite база данных ИРУ v3.5
 
 Таблицы:
-  users         — пользователи (token, имя, дата создания, согласие на сбор данных)
+  users         — пользователи (token, имя, plan, лимиты, согласие, terms)
   chats         — чаты пользователей (title, user_id, timestamps)
   messages      — сообщения в чатах (role, content, commands_json)
   training_data — записи для обучения модели (input, команды, контекст ОС)
@@ -85,11 +85,19 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_training_user ON training_data(user_id);
         """)
 
-        # Миграция: добавить data_consent если нет
-        try:
-            conn.execute("ALTER TABLE users ADD COLUMN data_consent INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass  # Колонка уже существует
+        # Миграции: добавить новые колонки если их нет
+        migrations = [
+            "ALTER TABLE users ADD COLUMN data_consent INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN plan TEXT DEFAULT 'free'",
+            "ALTER TABLE users ADD COLUMN daily_commands_count INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN daily_commands_date TEXT DEFAULT ''",
+            "ALTER TABLE users ADD COLUMN accepted_terms_at REAL DEFAULT NULL",
+        ]
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # Колонка уже существует
 
         # Создать admin-пользователя, если его нет
         admin = conn.execute("SELECT id FROM users WHERE name = 'admin'").fetchone()
@@ -335,3 +343,116 @@ def set_user_consent(user_id: int, consent: bool) -> bool:
             (1 if consent else 0, user_id)
         )
         return cursor.rowcount > 0
+
+
+# ── Plans & Limits ──────────────────────────────────────────────────
+
+# Конфигурация тарифных планов
+PLAN_LIMITS = {
+    "free":     {"max_devices": 1,    "max_commands_per_day": 30,   "dev_mode": False},
+    "pro":      {"max_devices": 9999, "max_commands_per_day": 9999, "dev_mode": True},
+    "business": {"max_devices": 9999, "max_commands_per_day": 9999, "dev_mode": True},
+}
+
+
+def get_user_plan(user_id: int) -> str:
+    """Получить план пользователя."""
+    with get_db() as conn:
+        row = conn.execute("SELECT plan FROM users WHERE id = ?", (user_id,)).fetchone()
+        return row["plan"] if row and row["plan"] else "free"
+
+
+def set_user_plan(user_id: int, plan: str) -> bool:
+    """Установить план пользователя."""
+    if plan not in PLAN_LIMITS:
+        return False
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE users SET plan = ? WHERE id = ?",
+            (plan, user_id)
+        )
+        return cursor.rowcount > 0
+
+
+def check_daily_command_limit(user_id: int) -> dict:
+    """
+    Проверить дневной лимит команд.
+    Возвращает {"allowed": bool, "used": int, "limit": int}.
+    Автоматически сбрасывает счётчик при смене дня.
+    """
+    import datetime
+    today = datetime.date.today().isoformat()
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT plan, daily_commands_count, daily_commands_date FROM users WHERE id = ?",
+            (user_id,)
+        ).fetchone()
+        if not row:
+            return {"allowed": False, "used": 0, "limit": 0}
+
+        plan = row["plan"] or "free"
+        limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+        count = row["daily_commands_count"] or 0
+        last_date = row["daily_commands_date"] or ""
+
+        # Сброс счётчика при смене дня
+        if last_date != today:
+            count = 0
+            conn.execute(
+                "UPDATE users SET daily_commands_count = 0, daily_commands_date = ? WHERE id = ?",
+                (today, user_id)
+            )
+
+        return {
+            "allowed": count < limits["max_commands_per_day"],
+            "used": count,
+            "limit": limits["max_commands_per_day"],
+        }
+
+
+def increment_daily_commands(user_id: int):
+    """Увеличить счётчик дневных команд на 1."""
+    import datetime
+    today = datetime.date.today().isoformat()
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE users SET daily_commands_count = daily_commands_count + 1, daily_commands_date = ? WHERE id = ?",
+            (today, user_id)
+        )
+
+
+def check_device_limit(user_id: int, current_device_count: int) -> dict:
+    """
+    Проверить лимит устройств.
+    Возвращает {"allowed": bool, "current": int, "limit": int}.
+    """
+    with get_db() as conn:
+        row = conn.execute("SELECT plan FROM users WHERE id = ?", (user_id,)).fetchone()
+        plan = (row["plan"] if row and row["plan"] else "free")
+        limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+        return {
+            "allowed": current_device_count < limits["max_devices"],
+            "current": current_device_count,
+            "limit": limits["max_devices"],
+        }
+
+
+def accept_terms(user_id: int) -> bool:
+    """Принять пользовательское соглашение."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE users SET accepted_terms_at = ? WHERE id = ?",
+            (time.time(), user_id)
+        )
+        return cursor.rowcount > 0
+
+
+def has_accepted_terms(user_id: int) -> bool:
+    """Проверить, принял ли пользователь соглашение."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT accepted_terms_at FROM users WHERE id = ?",
+            (user_id,)
+        ).fetchone()
+        return bool(row and row["accepted_terms_at"])

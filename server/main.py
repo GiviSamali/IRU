@@ -1,5 +1,5 @@
 """
-main.py — FastAPI-сервер ИРУ v3.4
+main.py — FastAPI-сервер ИРУ v3.5
 
 Новое в v3.4:
   - Параллельное выполнение: задачи выполняются в фоне, UI не блокируется
@@ -135,6 +135,9 @@ from database import (
     add_message, get_messages,
     add_training_record, get_training_data, get_training_count,
     set_user_consent,
+    PLAN_LIMITS, get_user_plan, set_user_plan,
+    check_daily_command_limit, increment_daily_commands,
+    check_device_limit, accept_terms, has_accepted_terms,
 )
 
 # ── Хранение подключённых устройств ───────────────────────────────────────
@@ -1049,6 +1052,17 @@ async def direct_command(cmd: DirectCommand, request: Request):
     if not check_rate_limit(str(user["id"])):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
+    # Проверка дневного лимита команд (тарифный план)
+    cmd_limit = check_daily_command_limit(user["id"])
+    if not cmd_limit["allowed"]:
+        return {
+            "status": "error",
+            "error": f"Дневной лимит команд исчерпан ({cmd_limit['used']}/{cmd_limit['limit']}). Обновите тариф для снятия ограничений."
+        }
+
+    # Увеличить счётчик команд
+    increment_daily_commands(user["id"])
+
     dev = devices.get(cmd.device_id)
     if not dev or dev.get("user_id") != user["id"]:
         return {"status": "error", "error": "Устройство не найдено или нет доступа"}
@@ -1072,6 +1086,15 @@ async def nl_command(cmd: NLCommand, request: Request):
     # Rate limiting
     if not check_rate_limit(str(user["id"])):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
+
+    # Проверка дневного лимита команд (тарифный план)
+    cmd_limit = check_daily_command_limit(user["id"])
+    if not cmd_limit["allowed"]:
+        return {
+            "status": "error",
+            "error": f"Дневной лимит команд исчерпан ({cmd_limit['used']}/{cmd_limit['limit']}). Обновите тариф для снятия ограничений."
+        }
+    increment_daily_commands(user["id"])
 
     # Определить целевые устройства
     user_devs = get_user_devices(user["id"])
@@ -1351,6 +1374,136 @@ async def download_agent(request: Request):
     )
 
 
+# ── USER INFO & PLANS ────────────────────────────────────────────────────
+
+@app.get("/api/user_info")
+async def api_user_info(request: Request):
+    """Информация о пользователе: план, лимиты, статус соглашения."""
+    user = get_current_user(request)
+    plan = get_user_plan(user["id"])
+    limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+    cmd_usage = check_daily_command_limit(user["id"])
+    dev_count = len(get_user_devices(user["id"]))
+    return {
+        "status": "ok",
+        "user": {
+            "id": user["id"],
+            "name": user["name"],
+            "plan": plan,
+            "limits": limits,
+            "commands_today": cmd_usage["used"],
+            "commands_limit": cmd_usage["limit"],
+            "devices_count": dev_count,
+            "devices_limit": limits["max_devices"],
+            "terms_accepted": has_accepted_terms(user["id"]),
+        }
+    }
+
+
+@app.post("/api/accept_terms")
+async def api_accept_terms(request: Request):
+    """Принять пользовательское соглашение."""
+    user = get_current_user(request)
+    accept_terms(user["id"])
+    return {"status": "ok"}
+
+
+@app.get("/api/terms_status")
+async def api_terms_status(request: Request):
+    """Проверить, принял ли пользователь соглашение."""
+    user = get_current_user(request)
+    return {"status": "ok", "accepted": has_accepted_terms(user["id"])}
+
+
+class SetPlanRequest(BaseModel):
+    plan: str
+
+@app.patch("/api/admin/users/{user_id}/plan")
+async def api_admin_set_plan(user_id: int, body: SetPlanRequest, request: Request):
+    """Изменить план пользователя (только admin)."""
+    admin = get_current_user(request)
+    if admin["name"] != "admin":
+        raise HTTPException(status_code=403, detail="Только администратор")
+    if body.plan not in PLAN_LIMITS:
+        return {"status": "error", "error": f"Неизвестный план: {body.plan}. Доступны: free, pro, business"}
+    ok = set_user_plan(user_id, body.plan)
+    if not ok:
+        return {"status": "error", "error": "Пользователь не найден"}
+    return {"status": "ok", "user_id": user_id, "plan": body.plan}
+
+
+# ── РЕЖИМ РАЗРАБОТЧИКА (RAW CMD) ────────────────────────────────────────
+
+class RawCommand(BaseModel):
+    command: str
+    device_id: str = ""       # конкретное устройство
+    broadcast: bool = False   # на все устройства
+
+@app.post("/api/raw_command")
+async def api_raw_command(cmd: RawCommand, request: Request):
+    """
+    Режим разработчика: прямая отправка CMD/PowerShell-команды на устройство.
+    Требует plan=pro или business.
+    Поддерживает broadcast (на все устройства).
+    История не сохраняется.
+    """
+    user = get_current_user(request)
+
+    # Проверка плана
+    plan = get_user_plan(user["id"])
+    limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+    if not limits.get("dev_mode"):
+        return {"status": "error", "error": "Режим разработчика доступен только на тарифе Pro или Business."}
+
+    # Rate limiting
+    if not check_rate_limit(str(user["id"])):
+        return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
+
+    if not cmd.command.strip():
+        return {"status": "error", "error": "Команда не может быть пустой"}
+
+    user_devs = get_user_devices(user["id"])
+    if not user_devs:
+        return {"status": "error", "error": "Нет подключённых устройств"}
+
+    # Определить целевые устройства
+    if cmd.broadcast:
+        target_ids = list(user_devs.keys())
+    else:
+        if cmd.device_id not in user_devs:
+            return {"status": "error", "error": f"Устройство '{cmd.device_id}' не найдено"}
+        target_ids = [cmd.device_id]
+
+    # Выполнить на каждом устройстве
+    results = {}
+    async def exec_on_device(did):
+        try:
+            result = await send_command_to_agent(
+                did, "execute_cmd", {"command": cmd.command},
+                user_id=user["id"]
+            )
+            results[did] = {"status": "ok", "result": result}
+        except Exception as e:
+            error_str = str(e)
+            if "CONFIRM_REQUIRED" in error_str:
+                results[did] = {"status": "confirm_required", "command": cmd.command, "error": error_str}
+            elif "BLOCKED" in error_str:
+                results[did] = {"status": "blocked", "error": error_str}
+            else:
+                results[did] = {"status": "error", "error": error_str}
+
+    await asyncio.gather(*[exec_on_device(did) for did in target_ids])
+
+    return {
+        "status": "ok",
+        "results": results,
+        "broadcast": cmd.broadcast,
+        "device_count": len(target_ids),
+    }
+
+
+
+
 # ── WebSocket для агентов ────────────────────────────────────────────────
 
 @app.websocket("/ws/{device_id}")
@@ -1358,6 +1511,13 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
     user = get_user_by_token(user_token) if user_token else None
     if not user:
         await ws.close(code=4001, reason="Недействительный токен пользователя")
+        return
+
+    # Проверка лимита устройств (тарифный план)
+    current_count = len(get_user_devices(user["id"]))
+    dev_limit = check_device_limit(user["id"], current_count)
+    if not dev_limit["allowed"] and device_id not in devices:
+        await ws.close(code=4003, reason=f"Лимит устройств исчерпан ({dev_limit['current']}/{dev_limit['limit']})")
         return
 
     await ws.accept()

@@ -10,7 +10,9 @@ const state = {
   explorerOpen: false,
   explorerPath: null,
   explorerHistory: [],
-  pendingTasks: [],  // [{task_id, msgIndex}] — задачи в процессе
+  pendingTasks: [],  // [{task_id, msgIndex}]
+  devModeOpen: false,
+  userPlan: 'free',
 };
 
 const API = window.location.origin;
@@ -83,6 +85,8 @@ function showApp() {
   fetchDevices();
   setInterval(fetchDevices, 5000);
   checkConsent();
+  checkTermsStatus();
+  fetchUserInfo();
   // Показать кнопку админки для admin-пользователя
   if (state.user.name === 'admin') {
     document.getElementById('btnAdmin').style.display = 'flex';
@@ -869,6 +873,158 @@ function copyToken(token) {
     ta.select(); document.execCommand('copy'); ta.remove();
     showToast('Токен скопирован');
   });
+}
+
+// ── TERMS AGREEMENT ─────────────────────────────────────────
+async function checkTermsStatus() {
+  try {
+    const r = await fetch(`${API}/api/terms_status`, { headers: authHeaders() });
+    const data = await r.json();
+    if (data.status === 'ok' && !data.accepted) {
+      document.getElementById('termsModal').classList.add('show');
+    }
+  } catch (e) { console.error('checkTermsStatus:', e); }
+}
+
+async function acceptTerms() {
+  try {
+    await fetch(`${API}/api/accept_terms`, {
+      method: 'POST', headers: authHeaders(),
+    });
+  } catch (e) { console.error('acceptTerms:', e); }
+  document.getElementById('termsModal').classList.remove('show');
+}
+
+// ── USER INFO & DEV MODE ────────────────────────────────────
+async function fetchUserInfo() {
+  try {
+    const r = await fetch(`${API}/api/user_info`, { headers: authHeaders() });
+    const data = await r.json();
+    if (data.status === 'ok') {
+      state.userPlan = data.user.plan || 'free';
+      const limits = data.user.limits || {};
+      if (limits.dev_mode) {
+        document.getElementById('devModeToggle').style.display = 'flex';
+      }
+    }
+  } catch (e) { console.error('fetchUserInfo:', e); }
+}
+
+function toggleDevMode() {
+  state.devModeOpen = !state.devModeOpen;
+  const panel = document.getElementById('devModePanel');
+  panel.classList.toggle('open', state.devModeOpen);
+  document.getElementById('devModeToggle').classList.toggle('active', state.devModeOpen);
+  if (state.devModeOpen) {
+    if (state.explorerOpen) toggleExplorer();
+    updateDevModeDevices();
+    document.getElementById('devModeInput').focus();
+  }
+}
+
+function updateDevModeDevices() {
+  const sel = document.getElementById('devModeDeviceSelect');
+  const ids = Object.keys(state.devices);
+  sel.innerHTML = '';
+  if (ids.length === 0) {
+    sel.innerHTML = '<option value="">Нет устройств</option>';
+    return;
+  }
+  for (const id of ids) {
+    const d = state.devices[id];
+    const name = d.info?.hostname || id;
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  if (state.selectedDevice && state.devices[state.selectedDevice]) {
+    sel.value = state.selectedDevice;
+  }
+}
+
+function toggleDevBroadcast() {
+  const cb = document.getElementById('devModeBroadcast');
+  const sel = document.getElementById('devModeDeviceSelect');
+  sel.disabled = cb.checked;
+}
+
+async function sendDevCommand() {
+  const input = document.getElementById('devModeInput');
+  const cmd = input.value.trim();
+  if (!cmd) return;
+
+  const output = document.getElementById('devModeOutput');
+  const isBroadcast = document.getElementById('devModeBroadcast').checked;
+  const deviceId = document.getElementById('devModeDeviceSelect').value;
+
+  if (!isBroadcast && !deviceId) {
+    appendDevOutput('> ' + cmd, 'Ошибка: выберите устройство', true);
+    return;
+  }
+
+  input.value = '';
+  autoGrow(input);
+  appendDevOutput('> ' + cmd, 'Выполняется...', false);
+
+  try {
+    const r = await fetch(`${API}/api/raw_command`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ command: cmd, device_id: deviceId, broadcast: isBroadcast }),
+    });
+    const data = await r.json();
+
+    if (data.status === 'error') {
+      replaceLastDevOutput(data.error, true);
+      return;
+    }
+
+    const results = data.results || {};
+    let text = '';
+    for (const [did, res] of Object.entries(results)) {
+      const devName = state.devices[did]?.info?.hostname || did;
+      if (Object.keys(results).length > 1) text += '[' + devName + ']\n';
+      if (res.status === 'ok') {
+        const r = res.result || {};
+        text += r.stdout || r.stderr || r.error || '(нет вывода)';
+      } else {
+        text += 'Ошибка: ' + (res.error || 'неизвестная ошибка');
+      }
+      text += '\n';
+    }
+    replaceLastDevOutput(text.trim(), false);
+  } catch (e) {
+    replaceLastDevOutput('Ошибка сети: ' + e.message, true);
+  }
+}
+
+function appendDevOutput(cmdLine, result, isError) {
+  const output = document.getElementById('devModeOutput');
+  const placeholder = output.querySelector('.devmode-placeholder');
+  if (placeholder) placeholder.remove();
+  const entry = document.createElement('div');
+  entry.className = 'devmode-entry';
+  entry.innerHTML = '<div class="devmode-cmd">' + escapeHTML(cmdLine) + '</div>' +
+    '<div class="devmode-result' + (isError ? ' error' : '') + '">' + escapeHTML(result) + '</div>';
+  output.appendChild(entry);
+  output.scrollTop = output.scrollHeight;
+}
+
+function replaceLastDevOutput(text, isError) {
+  const output = document.getElementById('devModeOutput');
+  const last = output.querySelector('.devmode-entry:last-child .devmode-result');
+  if (last) {
+    last.textContent = text;
+    last.className = 'devmode-result' + (isError ? ' error' : '');
+  }
+  output.scrollTop = output.scrollHeight;
+}
+
+function handleDevModeKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendDevCommand();
+  }
 }
 
 // ── INIT ───────────────────────────────────────────────────

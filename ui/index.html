@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
-<title>ИРУ v3.4 — Интеллектуальный Режим Управления</title>
+<title>ИРУ v3.5 — Интеллектуальный Режим Управления</title>
 <link rel="icon" type="image/x-icon" href="/static/IruIcon.ico">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -18,7 +18,7 @@
       <img src="/static/IruIcon.ico" alt="ИРУ">
       <div>
         <div class="auth-logo-text">ИРУ</div>
-        <div class="auth-logo-ver">v3.4</div>
+        <div class="auth-logo-ver">v3.5</div>
       </div>
     </div>
     <div class="auth-desc">Введите токен доступа для входа в систему</div>
@@ -38,7 +38,7 @@
         <img src="/static/IruIcon.ico" alt="ИРУ">
         <div>
           <div class="sidebar-logo-text">ИРУ</div>
-          <div class="sidebar-logo-ver">v3.4</div>
+          <div class="sidebar-logo-ver">v3.5</div>
         </div>
       </div>
       <button class="btn-new-chat" onclick="createNewChat()" title="Новый чат">
@@ -108,6 +108,9 @@
             <div id="deviceList"></div>
           </div>
         </div>
+        <button class="btn-icon" id="devModeToggle" onclick="toggleDevMode()" title="Режим разработчика" style="display:none">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        </button>
         <button class="btn-icon" id="explorerToggle" onclick="toggleExplorer()" title="Проводник">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
         </button>
@@ -161,6 +164,35 @@
         </div>
       </div>
 
+      <!-- DEV MODE PANEL -->
+      <div class="devmode-panel" id="devModePanel">
+        <div class="devmode-header">
+          <h3>CMD</h3>
+          <div class="devmode-target">
+            <select class="devmode-device-select" id="devModeDeviceSelect">
+              <option value="">-- Устройство --</option>
+            </select>
+            <label class="devmode-broadcast">
+              <input type="checkbox" id="devModeBroadcast" onchange="toggleDevBroadcast()">
+              <span>Все устройства</span>
+            </label>
+          </div>
+          <button class="btn-icon" onclick="toggleDevMode()" title="Закрыть" style="width:24px;height:24px">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="devmode-output" id="devModeOutput">
+          <div class="devmode-placeholder">Введите команду ниже</div>
+        </div>
+        <div class="devmode-input-area">
+          <textarea class="devmode-input" id="devModeInput" placeholder="ipconfig /all" rows="1"
+            onkeydown="handleDevModeKey(event)" oninput="autoGrow(this)"></textarea>
+          <button class="btn-send" onclick="sendDevCommand()" title="Выполнить">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+          </button>
+        </div>
+      </div>
+
       <!-- ADMIN PANEL -->
       <div class="admin-panel" id="adminPanel">
         <div class="admin-header">
@@ -178,6 +210,38 @@
         </div>
         <div class="admin-stats" id="adminStats"></div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- TERMS MODAL -->
+<div class="terms-modal" id="termsModal">
+  <div class="terms-box">
+    <div class="terms-icon">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.5">
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <line x1="16" y1="13" x2="8" y2="13"/>
+        <line x1="16" y1="17" x2="8" y2="17"/>
+      </svg>
+    </div>
+    <h3 class="terms-title">Пользовательское соглашение</h3>
+    <div class="terms-content" id="termsContent">
+      <p>1. Общие положения</p>
+      <p>ИРУ (Интеллектуальный Режим Управления) — система удалённого управления компьютерами через естественный язык. Используя сервис, вы принимаете условия настоящего соглашения.</p>
+      <p>2. Ответственность</p>
+      <p>Пользователь несёт полную ответственность за команды, отправленные на свои устройства. Система выполняет команды от имени пользователя. Разработчик не несёт ответственности за последствия выполнения команд.</p>
+      <p>3. Безопасность</p>
+      <p>Токен доступа является ключом к вашим устройствам. Не передавайте его третьим лицам. При компрометации токена немедленно сообщите администратору.</p>
+      <p>4. Обработка данных</p>
+      <p>Мы храним: email, имя пользователя, историю команд. Мы НЕ передаём ваши персональные данные третьим лицам. При согласии на сбор данных обучения, команды используются для улучшения ИИ-модели. Вы можете запросить удаление своих данных.</p>
+      <p>5. Отказ от гарантий</p>
+      <p>Сервис предоставляется «как есть» (as is). Это бета-версия. Возможны ошибки и перерывы в работе. Разработчик не гарантирует бесперебойную работу.</p>
+      <p>6. Ограничения</p>
+      <p>Запрещено использовать систему для: несанкционированного доступа к чужим устройствам, распространения вредоносного ПО, нарушения законодательства РФ.</p>
+    </div>
+    <div class="terms-buttons">
+      <button class="terms-btn terms-btn-accept" onclick="acceptTerms()">Принимаю</button>
     </div>
   </div>
 </div>
