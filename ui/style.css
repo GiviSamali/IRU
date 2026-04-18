@@ -839,3 +839,22 @@ html, body {
     width: 100%; position: fixed; right: 0; top: 0; bottom: 0; z-index: 201;
   }
 }
+
+
+/* ===== Logo Glow Animation ===== */
+@keyframes logoGlow {
+  0%, 100% {
+    filter: drop-shadow(0 0 4px rgba(0, 212, 255, 0.4)) drop-shadow(0 0 8px rgba(0, 212, 255, 0.2));
+  }
+  50% {
+    filter: drop-shadow(0 0 10px rgba(0, 212, 255, 0.8)) drop-shadow(0 0 20px rgba(0, 212, 255, 0.5));
+  }
+}
+
+.auth-logo img,
+.sidebar-logo img,
+.app-logo img,
+img[src*="IruIcon"],
+img[src*="iru_logo"] {
+  animation: logoGlow 3s ease-in-out infinite;
+}
