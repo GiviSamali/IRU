@@ -1052,16 +1052,17 @@ async def direct_command(cmd: DirectCommand, request: Request):
     if not check_rate_limit(str(user["id"])):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
-    # Проверка дневного лимита команд (тарифный план)
-    cmd_limit = check_daily_command_limit(user["id"])
-    if not cmd_limit["allowed"]:
-        return {
-            "status": "error",
-            "error": f"Дневной лимит команд исчерпан ({cmd_limit['used']}/{cmd_limit['limit']}). Обновите тариф для снятия ограничений."
-        }
+    # Проверка дневного лимита команд (тарифный план, admin без ограничений)
+    if user["name"] != "admin":
+        cmd_limit = check_daily_command_limit(user["id"])
+        if not cmd_limit["allowed"]:
+            return {
+                "status": "error",
+                "error": f"Дневной лимит команд исчерпан ({cmd_limit['used']}/{cmd_limit['limit']}). Обновите тариф для снятия ограничений."
+            }
 
-    # Увеличить счётчик команд
-    increment_daily_commands(user["id"])
+        # Увеличить счётчик команд
+        increment_daily_commands(user["id"])
 
     dev = devices.get(cmd.device_id)
     if not dev or dev.get("user_id") != user["id"]:
@@ -1087,14 +1088,15 @@ async def nl_command(cmd: NLCommand, request: Request):
     if not check_rate_limit(str(user["id"])):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
-    # Проверка дневного лимита команд (тарифный план)
-    cmd_limit = check_daily_command_limit(user["id"])
-    if not cmd_limit["allowed"]:
-        return {
-            "status": "error",
-            "error": f"Дневной лимит команд исчерпан ({cmd_limit['used']}/{cmd_limit['limit']}). Обновите тариф для снятия ограничений."
-        }
-    increment_daily_commands(user["id"])
+    # Проверка дневного лимита команд (тарифный план, admin без ограничений)
+    if user["name"] != "admin":
+        cmd_limit = check_daily_command_limit(user["id"])
+        if not cmd_limit["allowed"]:
+            return {
+                "status": "error",
+                "error": f"Дневной лимит команд исчерпан ({cmd_limit['used']}/{cmd_limit['limit']}). Обновите тариф для снятия ограничений."
+            }
+        increment_daily_commands(user["id"])
 
     # Определить целевые устройства
     user_devs = get_user_devices(user["id"])
@@ -1449,13 +1451,14 @@ async def api_raw_command(cmd: RawCommand, request: Request):
     """
     user = get_current_user(request)
 
-    # Проверка плана
-    plan = get_user_plan(user["id"])
-    limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
-    if not limits.get("dev_mode"):
-        return {"status": "error", "error": "Режим разработчика доступен только на тарифе Pro или Business."}
+    # Проверка плана (admin без ограничений)
+    if user["name"] != "admin":
+        plan = get_user_plan(user["id"])
+        limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+        if not limits.get("dev_mode"):
+            return {"status": "error", "error": "Режим разработчика доступен только на тарифе Pro или Business."}
 
-    # Rate limiting
+        # Rate limiting
     if not check_rate_limit(str(user["id"])):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
