@@ -1,0 +1,435 @@
+/* Сброс отступов и базовый фон */
+body {
+    margin: 0;
+    padding: 0;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: #ffffff;
+    background: radial-gradient(circle at top, #141726 0%, #05060a 55%, #020308 100%);
+}
+.hero {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 24px;
+
+    background-image: url("assets/IRU_FON.png");
+    background-size: 110% 110%; /* чуть больше, чтобы при движении не было краёв */
+    background-position: 0% 50%;
+    background-repeat: no-repeat;
+    position: relative;
+
+    animation: hero-bg-drift 45s linear infinite; /* очень медленное движение */
+}
+.hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at top, rgba(10, 20, 60, 0.85), rgba(0, 0, 0, 0.9));
+}
+.hero-content {
+    max-width: 640px;
+    position: relative;
+    z-index: 1;
+}
+.hero-content h1 {
+    font-size: clamp(32px, 4.5vw, 52px);
+    line-height: 1.1;
+    letter-spacing: 0.03em;
+    margin-bottom: 18px;
+}
+
+.hero-content p {
+    font-size: 18px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.78);
+    margin-bottom: 28px;
+}
+
+.hero-cta {
+    padding: 12px 32px;
+    font-size: 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(0, 212, 255, 0.5);
+    background: rgba(10, 16, 30, 0.9);
+
+    color: #eaf8ff;
+    cursor: pointer;
+    transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
+}
+
+.hero-cta:hover {
+    background: rgba(0, 212, 255, 0.12);
+    box-shadow: 0 0 24px rgba(0, 212, 255, 0.35);
+    transform: translateY(-1px);
+}
+
+.hero-actions {
+    display: flex;
+    justify-content: center;
+    margin-top: 8px;
+}
+
+.hero-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 24px;
+}
+
+.hero-logo {
+    width: 300px;
+    height: 300px;
+    border-radius: 16px; /* если хочешь мягче */
+    flex-shrink: 0;
+}
+
+.hero-text {
+    position: relative;
+    top: -10px; /* поиграйся значением: -4px, -8px, -12px */
+}
+.hero-content {
+    max-width: 640px;
+    position: relative;
+    z-index: 1;
+
+    opacity: 0;
+    transform: translateY(12px);
+    animation: hero-fade-in 1.5s ease-out forwards;
+    animation-delay: 0.1s;
+}
+
+@keyframes hero-fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+@keyframes hero-bg-drift {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
+}
+.benefits {
+    padding: 80px 24px 80px; /* чуть меньше нижний отступ, чтобы блоки визуально ближе были */
+    background: radial-gradient(circle at top, #040612 0%, #020308 50%, #010103 100%);
+    color: #ffffff;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04); /* лёгкий разделитель */
+}
+
+.benefits-inner {
+    max-width: 1100px;
+    margin: 0 auto;
+}
+
+.benefits-title {
+    font-size: 28px;
+    margin-bottom: 32px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.benefits-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 24px;
+}
+
+.benefit-card {
+    padding: 24px 20px;
+    border-radius: 20px;
+    background: radial-gradient(circle at top left, rgba(0, 212, 255, 0.12), rgba(5, 8, 20, 0.95));
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+}
+
+.benefit-card h3 {
+    font-size: 20px;
+    margin-bottom: 10px;
+}
+
+.benefit-card p {
+    font-size: 15px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.78);
+}
+
+
+/* Плавающий фон со словами */
+.audience {
+    position: relative;
+    overflow: hidden;
+    padding: 60px 24px 120px; /* чуть меньше верхний паддинг */
+    background: linear-gradient(to bottom, #020308 0%, #010103 60%, #000000 100%);
+    color: #ffffff;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.audience-background span {
+    font-size: 22px;
+    text-transform: uppercase;
+    letter-spacing: 0.25em;
+}
+
+/* плавное движение в одну сторону */
+@keyframes audience-scroll {
+    0% {
+        transform: translateX(0);
+    }
+    100% {
+        transform: translateX(-50%);
+    }
+}
+
+
+.audience-inner {
+    position: relative;
+    z-index: 2;
+    max-width: 1100px;
+    margin: 0 auto 40px;
+}
+
+.audience-title {
+    font-size: 28px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+/* Общий стиль для бегущих строк */
+.audience-marquee {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    gap: 40px;
+    white-space: nowrap;
+    opacity: 0.50;
+    font-size: 18px;
+    text-transform: uppercase;
+    letter-spacing: 0.25em;
+    pointer-events: none;
+}
+
+/* Позиционируем три линии */
+.audience-marquee--top {
+    margin-bottom: 24px;
+    animation: marquee-right 50s linear infinite;
+}
+
+.audience-marquee--middle {
+    margin-bottom: 24px;
+    animation: marquee-left 60s linear infinite;
+}
+
+.audience-marquee--bottom {
+    animation: marquee-right 55s linear infinite;
+}
+
+/* Вправо */
+@keyframes marquee-right {
+    0% {
+        transform: translateX(-50%);
+    }
+    100% {
+        transform: translateX(0%);
+    }
+}
+
+/* Влево */
+@keyframes marquee-left {
+    0% {
+        transform: translateX(0%);
+    }
+    100% {
+        transform: translateX(-50%);
+    }
+}
+.how-it-works {
+    padding: 80px 24px 100px;
+    background: #010103;
+    color: #ffffff;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.how-inner {
+    max-width: 1100px;
+    margin: 0 auto;
+}
+
+.how-title {
+    font-size: 28px;
+    margin-bottom: 32px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.how-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 24px;
+}
+
+.how-card {
+    padding: 24px 20px;
+    border-radius: 20px;
+    background: radial-gradient(circle at top left, rgba(0, 212, 255, 0.10), rgba(5, 8, 20, 0.96));
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+}
+
+.how-card h3 {
+    font-size: 20px;
+    margin-bottom: 10px;
+}
+
+.how-card p {
+    font-size: 15px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.78);
+}
+.cta-bottom {
+    padding: 80px 24px 100px;
+    background: #000000;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    color: #ffffff;
+}
+
+.cta-inner {
+    max-width: 800px;
+    margin: 0 auto;
+    text-align: center;
+}
+
+.cta-title {
+    font-size: 26px;
+    margin-bottom: 16px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.cta-text {
+    font-size: 16px;
+    margin-bottom: 24px;
+    color: rgba(255, 255, 255, 0.75);
+}
+
+.cta-button {
+    padding: 12px 32px;
+    font-size: 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(0, 212, 255, 0.5);
+    background: rgba(10, 16, 30, 0.9);
+    color: #eaf8ff;
+    cursor: pointer;
+    transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
+}
+
+.cta-button:hover {
+    background: rgba(0, 212, 255, 0.12);
+    box-shadow: 0 0 24px rgba(0, 212, 255, 0.35);
+    transform: translateY(-1px);
+}
+
+.security {
+    padding: 80px 24px 100px;
+    background: #010103;
+    color: #ffffff;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);;
+}
+
+.security-inner {
+    max-width: 1100px;
+    margin: 0 auto;
+}
+
+.security-title {
+    font-size: 28px;
+    margin-bottom: 32px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.security-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 24px;
+}
+
+.security-item {
+    padding: 20px 20px;
+    border-radius: 18px;
+    background: radial-gradient(circle at top left, rgba(0, 212, 255, 0.08), rgba(5, 7, 18, 0.96));
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.security-item h3 {
+    font-size: 20px;
+    margin-bottom: 10px;
+}
+
+.security-item p {
+    font-size: 15px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.8);
+}
+.founder {
+    padding: 20px 24px 40px;
+    background: #020f22;
+    color: #ffffff;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.founder-inner {
+    max-width: 700px;
+    margin: 0 auto;
+    text-align: left;
+}
+
+.founder-title {
+    font-size: 26px;
+    margin-bottom: 16px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.founder-text {
+    font-size: 15px;
+    line-height: 1.7;
+    color: rgba(255, 255, 255, 0.8);
+    margin-bottom: 10px;
+    text-align: center;
+}
+
+.founder a {
+    color: #00d4ff;
+    text-decoration: none;
+}
+
+.founder a:hover {
+    text-decoration: underline;
+}
+.contacts {
+    display: flex;
+    justify-content: space-between; /* слева/справа */
+    gap: 10px; /* расстояние между ними, если сожмётся */
+}
+.contact-item {
+    white-space: nowrap; /* чтобы не переносилось на две строки */
+}
