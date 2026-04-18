@@ -69,7 +69,7 @@ html, body {
 .auth-logo img { height: 200px; width: 200px; }
 .auth-logo img {
   filter: drop-shadow(0 0 4px rgba(0, 212, 255, 0.18));
-  animation: iruIconGlow 3.2s ease-in-out infinite;
+  animation: iruIconGlow 30s ease-in-out infinite;
 }
 .auth-logo-text {
   display: flex;
@@ -86,8 +86,9 @@ html, body {
   color: var(--accent);
   text-shadow: 0 0 8px rgba(0, 212, 255, 0.32);
 }
-.auth-logo-ver { font-size: 10px; color: var(--text-muted); }
-.auth-desc { font-size: 12px; color: var(--text-muted); margin-bottom: 24px; }
+.auth-logo-ver { font-size: 10px; color: var(--text-muted); text-align: left; }
+.auth-desc { font-size: 14px; color: var(--text-muted); margin-bottom: 24px; }
+.auth-contact { font-size: 14px; color: var(--text-muted); margin-top: 24px; }
 .auth-input {
   width: 100%; padding: 10px 14px;
   background: var(--bg-input); border: 1px solid var(--border);
@@ -99,11 +100,21 @@ html, body {
 .auth-input::placeholder { color: var(--text-muted); }
 .auth-btn {
   width: 100%; margin-top: 14px; padding: 10px;
-  background: var(--accent); border: none; border-radius: var(--radius);
-  color: var(--bg-primary); font-family: var(--font); font-size: 14px;
-  font-weight: 600; cursor: pointer; transition: filter 0.15s;
+  font-weight: 600; cursor: pointer; 
+  font-size: 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 212, 255, 0.5);
+  background: rgba(10, 16, 60, 0.9);
+  color: #eaf8ff;
+  cursor: pointer;
+  transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
+  text-decoration: none;
+  display: inline-block;
 }
-.auth-btn:hover { filter: brightness(1.15); }
+.auth-btn:hover { 
+  background: rgba(0, 212, 255, 0.12);
+  box-shadow: 0 0 24px rgba(0, 212, 255, 0.35);
+  transform: translateY(-1px); }
 .auth-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .auth-error {
   margin-top: 12px; font-size: 11px; color: var(--error);
@@ -895,6 +906,4 @@ html, body {
 .sidebar-logo img,
 .app-logo img,
 img[src*="IruIcon"],
-img[src*="iru_logo"] {
-  animation: logoGlow 3s ease-in-out infinite;
-}
+img[src*="iru_logo"]

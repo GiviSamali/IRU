@@ -33,7 +33,7 @@ body {
     z-index: 1;
 }
 .hero-content h1 {
-    font-size: clamp(32px, 4.5vw, 52px);
+    font-size: clamp(32px, 4.5vw, 50px);
     line-height: 1.1;
     letter-spacing: 0.03em;
     margin-bottom: 18px;
@@ -89,6 +89,10 @@ body {
 .hero-text {
     position: relative;
     top: -10px; /* поиграйся значением: -4px, -8px, -12px */
+}
+.hero-top-text{
+    font-size: 30px;
+    bottom: -10px;
 }
 .hero-content {
     max-width: 640px;
