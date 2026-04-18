@@ -665,7 +665,7 @@ html, body {
     z-index: 199; backdrop-filter: blur(2px);
   }
   .sidebar-overlay.show { display: block; }
-  .auth-logo img { height: 44px; width: 44px; }
+  .auth-logo img { height: 66px; width: 66px; }
   .header { padding: 0 8px; gap: 6px; }
   .header-title { display: none; }
   .header-right { gap: 6px; }
@@ -698,7 +698,6 @@ html, body {
   .chat-welcome p { font-size: 11px; }
   .hints { gap: 4px; }
   .hint-chip { font-size: 9px; padding: 4px 8px; }
-  
   /* Admin panel mobile */
   .admin-panel.open {
     width: 100%; position: fixed; right: 0; top: 0; bottom: 0; z-index: 201;
