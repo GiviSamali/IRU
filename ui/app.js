@@ -990,13 +990,15 @@ async function sendDevCommand() {
   const deviceId = document.getElementById('devModeDeviceSelect').value;
 
   if (!isBroadcast && !deviceId) {
-    appendDevOutput('> ' + cmd, 'Ошибка: выберите устройство', true);
+    appendDevEntry(cmd, [{ device: '---', text: 'Выберите устройство', status: 'error' }]);
     return;
   }
 
   input.value = '';
   autoGrow(input);
-  appendDevOutput('> ' + cmd, 'Выполняется...', false);
+
+  // Placeholder entry while loading
+  const entryEl = appendDevEntry(cmd, null);
 
   try {
     const r = await fetch(`${API}/api/raw_command`, {
@@ -1006,48 +1008,88 @@ async function sendDevCommand() {
     const data = await r.json();
 
     if (data.status === 'error') {
-      replaceLastDevOutput(data.error, true);
+      fillDevEntry(entryEl, [{ device: '---', text: data.error, status: 'error' }]);
       return;
     }
 
     const results = data.results || {};
-    let text = '';
+    const items = [];
     for (const [did, res] of Object.entries(results)) {
       const devName = state.devices[did]?.info?.hostname || did;
-      if (Object.keys(results).length > 1) text += '[' + devName + ']\n';
+      let text, status;
       if (res.status === 'ok') {
         const r = res.result || {};
-        text += r.stdout || r.stderr || r.error || '(нет вывода)';
+        text = r.stdout || r.stderr || r.error || '(нет вывода)';
+        status = (r.returncode === 0 || r.returncode == null) ? 'ok' : 'err';
+      } else if (res.status === 'blocked') {
+        text = res.error || 'Заблокировано';
+        status = 'blocked';
+      } else if (res.status === 'confirm_required') {
+        text = res.error || 'Требуется подтверждение';
+        status = 'confirm';
       } else {
-        text += 'Ошибка: ' + (res.error || 'неизвестная ошибка');
+        text = res.error || 'Неизвестная ошибка';
+        status = 'error';
       }
-      text += '\n';
+      items.push({ device: devName, text: text.trim(), status });
     }
-    replaceLastDevOutput(text.trim(), false);
+    fillDevEntry(entryEl, items);
   } catch (e) {
-    replaceLastDevOutput('Ошибка сети: ' + e.message, true);
+    fillDevEntry(entryEl, [{ device: '---', text: 'Ошибка сети: ' + e.message, status: 'error' }]);
   }
 }
 
-function appendDevOutput(cmdLine, result, isError) {
+function appendDevEntry(cmd, items) {
   const output = document.getElementById('devModeOutput');
   const placeholder = output.querySelector('.devmode-placeholder');
   if (placeholder) placeholder.remove();
+
   const entry = document.createElement('div');
   entry.className = 'devmode-entry';
-  entry.innerHTML = '<div class="devmode-cmd">' + escapeHTML(cmdLine) + '</div>' +
-    '<div class="devmode-result' + (isError ? ' error' : '') + '">' + escapeHTML(result) + '</div>';
+  entry.innerHTML = '<div class="devmode-cmd">' + escapeHTML('> ' + cmd) + '</div>' +
+    '<div class="devmode-devices"></div>';
+
+  if (items) {
+    fillDevEntry(entry, items);
+  } else {
+    entry.querySelector('.devmode-devices').innerHTML =
+      '<div class="devmode-loading">Выполняется...</div>';
+  }
+
   output.appendChild(entry);
   output.scrollTop = output.scrollHeight;
+  return entry;
 }
 
-function replaceLastDevOutput(text, isError) {
-  const output = document.getElementById('devModeOutput');
-  const last = output.querySelector('.devmode-entry:last-child .devmode-result');
-  if (last) {
-    last.textContent = text;
-    last.className = 'devmode-result' + (isError ? ' error' : '');
+function fillDevEntry(entryEl, items) {
+  const container = entryEl.querySelector('.devmode-devices');
+  container.innerHTML = '';
+  for (const item of items) {
+    const statusIcon = item.status === 'ok' ? '\u2713' :
+      item.status === 'blocked' ? '\u26D4' :
+      item.status === 'confirm' ? '\u26A0' : '\u2717';
+    const statusCls = item.status === 'ok' ? 'status-ok' :
+      item.status === 'blocked' ? 'status-blocked' :
+      item.status === 'confirm' ? 'status-confirm' : 'status-err';
+    const acc = document.createElement('div');
+    acc.className = 'devmode-accordion';
+    acc.innerHTML =
+      '<div class="devmode-accordion-head">' +
+        '<span class="devmode-accordion-name">' + escapeHTML(item.device) + '</span>' +
+        '<span class="devmode-accordion-status ' + statusCls + '">' + statusIcon + '</span>' +
+        '<button class="devmode-accordion-toggle" onclick="this.closest(\'.devmode-accordion\').classList.toggle(\'.open\')">' +
+          '<svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3.5L5 6.5L8 3.5"/></svg>' +
+        '</button>' +
+      '</div>' +
+      '<div class="devmode-accordion-body">' + escapeHTML(item.text) + '</div>';
+    // Toggle on button click
+    acc.querySelector('.devmode-accordion-toggle').onclick = function(e) {
+      e.stopPropagation();
+      acc.classList.toggle('open');
+    };
+    container.appendChild(acc);
   }
+  const output = document.getElementById('devModeOutput');
   output.scrollTop = output.scrollHeight;
 }
 

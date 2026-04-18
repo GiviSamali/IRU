@@ -1477,12 +1477,15 @@ async def api_raw_command(cmd: RawCommand, request: Request):
             return {"status": "error", "error": f"Устройство '{cmd.device_id}' не найдено"}
         target_ids = [cmd.device_id]
 
+    # Обернуть команду в chcp 65001 для UTF-8 вывода
+    raw_cmd = f"chcp 65001 >nul && {cmd.command}"
+
     # Выполнить на каждом устройстве
     results = {}
     async def exec_on_device(did):
         try:
             result = await send_command_to_agent(
-                did, "execute_cmd", {"command": cmd.command},
+                did, "execute_cmd", {"command": raw_cmd},
                 user_id=user["id"]
             )
             results[did] = {"status": "ok", "result": result}
