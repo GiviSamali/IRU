@@ -727,15 +727,19 @@ html, body {
   .admin-panel.open {
     width: 100%; position: fixed; right: 0; top: 0; bottom: 0; z-index: 201;
   }
+  /* Dev mode panel mobile */
+  .devmode-panel.open {
+    width: 100%; position: fixed; right: 0; top: 0; bottom: 0; z-index: 201;
+  }
 }
 
 /* ── DEV MODE PANEL ──────────────────────────────────────────────── */
 .devmode-panel {
-  display: none; position: absolute; right: 0; top: 0; bottom: 0;
-  width: 420px; background: var(--bg-secondary); border-left: 1px solid var(--border);
-  flex-direction: column; z-index: 50;
+  width: 0; overflow: hidden; border-left: 1px solid var(--border);
+  background: var(--bg-secondary); transition: width 0.25s ease;
+  display: flex; flex-direction: column;
 }
-.devmode-panel.open { display: flex; }
+.devmode-panel.open { width: 420px; }
 .devmode-header {
   display: flex; align-items: center; gap: 10px;
   padding: 12px 14px; border-bottom: 1px solid var(--border);
