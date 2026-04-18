@@ -1,7 +1,7 @@
 """
 main.py — FastAPI-сервер ИРУ v3.5
 
-Новое в v3.4:
+Новое в v3.5:
   - Параллельное выполнение: задачи выполняются в фоне, UI не блокируется
   - Broadcast: одна команда на все/выбранные устройства одновременно
   - GET /api/tasks — список активных/завершённых задач
@@ -167,12 +167,12 @@ TASK_TTL = 3600  # хранить задачи 1 час
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    print("[server] ИРУ v3.4 запущен")
+    print("[server] ИРУ v3.5 запущен")
     yield
-    print("[server] ИРУ v3.4 остановлен")
+    print("[server] ИРУ v3.5 остановлен")
 
 
-app = FastAPI(title="ИРУ v3.4", lifespan=lifespan)
+app = FastAPI(title="ИРУ v3.5", lifespan=lifespan)
 
 # Статические файлы (UI)
 STATIC_DIR = Path(__file__).parent.parent / "ui"
@@ -186,10 +186,11 @@ INSTRUCTION_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ИРУ — Инструкция для тестера</title>
+<link rel="icon" type="image/x-icon" href="/static/IruIcon.ico">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #0a0e17; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.7; padding: 40px 20px; }
+body { background: #020308; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.7; padding: 40px 20px; }
 .container { max-width: 700px; margin: 0 auto; }
 h1 { color: #00d4ff; font-size: 24px; margin-bottom: 8px; }
 .subtitle { color: #64748b; font-size: 12px; margin-bottom: 32px; }
@@ -198,9 +199,10 @@ h3 { color: #94a3b8; font-size: 14px; margin: 20px 0 8px; }
 p { margin-bottom: 12px; color: #94a3b8; }
 ol, ul { padding-left: 20px; margin-bottom: 16px; color: #94a3b8; }
 li { margin-bottom: 8px; }
-code { background: #141b2a; border: 1px solid #1e293b; border-radius: 4px; padding: 2px 6px; font-size: 13px; color: #00d4ff; }
-pre { background: #0f1520; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; margin: 12px 0; overflow-x: auto; font-size: 12px; color: #e2e8f0; }
+code { background: #0a0e17; border: 1px solid #1e293b; border-radius: 4px; padding: 2px 6px; font-size: 13px; color: #00d4ff; }
+pre { background: #0a0e17; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; margin: 12px 0; overflow-x: auto; font-size: 12px; color: #e2e8f0; }
 .warning { background: #1a1500; border: 1px solid #f59e0b33; border-radius: 8px; padding: 12px 16px; margin: 16px 0; color: #f59e0b; font-size: 12px; }
+.info { background: #001a2e; border: 1px solid #00d4ff33; border-radius: 8px; padding: 12px 16px; margin: 16px 0; color: #00d4ff; font-size: 12px; }
 .step-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; background: #00d4ff20; border: 1px solid #00d4ff33; border-radius: 50%; font-size: 12px; color: #00d4ff; margin-right: 8px; }
 a { color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; }
 a:hover { border-bottom-style: solid; }
@@ -213,7 +215,7 @@ a:hover { border-bottom-style: solid; }
 <body>
 <div class="container">
 <h1>ИРУ — Инструкция для тестера</h1>
-<div class="subtitle">Интеллектуальный Режим Управления v3.4</div>
+<div class="subtitle">Интеллектуальный Режим Управления v3.5</div>
 
 <h2>Что такое ИРУ?</h2>
 <p>ИРУ — система удалённого управления компьютером через естественный язык. Вы описываете задачу текстом, ИИ переводит её в команды и выполняет на вашем ПК.</p>
@@ -230,6 +232,11 @@ a:hover { border-bottom-style: solid; }
 
 <h2>Шаг 2: Запустите agent.exe</h2>
 <p>Двойной клик по <code>agent.exe</code>. При первом запуске откроется окно ввода токена.</p>
+
+<div class="info">
+Windows SmartScreen может показать предупреждение при первом запуске. Нажмите <strong>«Подробнее»</strong>, затем <strong>«Выполнить в любом случае»</strong>. Это стандартное поведение для файлов, загруженных из интернета.
+</div>
+
 <p>Вставьте токен доступа и нажмите <strong>«Подключиться»</strong>. Токен сохранится автоматически — при следующих запусках вводить не нужно.</p>
 <p>Вы увидите окно консоли с сообщением о подключении:</p>
 <pre>[agent] connected</pre>
@@ -253,8 +260,16 @@ a:hover { border-bottom-style: solid; }
 </ul>
 
 <div class="warning">
-⚠️ <strong>Важно:</strong> Агент выполняет команды от имени вашего пользователя Windows. Не запрашивайте удаление системных файлов или форматирование дисков. ИРУ отклонит опасные команды, но будьте аккуратны.
+Важно: Агент выполняет команды от имени вашего пользователя Windows. Не запрашивайте удаление системных файлов или форматирование дисков. ИРУ отклонит опасные команды, но будьте аккуратны.
 </div>
+
+<h2>Тарифные планы</h2>
+<p>Во время бета-тестирования все участники получают план <strong>Pro</strong> бесплатно.</p>
+<ul>
+<li><strong>Free</strong> — 1 устройство, 30 команд/день</li>
+<li><strong>Pro</strong> — безлимитные устройства и команды, файловый проводник, DEV MODE</li>
+<li><strong>Business</strong> — мультипользовательская админка, аудит-логи, API</li>
+</ul>
 
 <h2>Частые проблемы</h2>
 <h3>Агент не подключается</h3>
@@ -264,6 +279,9 @@ a:hover { border-bottom-style: solid; }
 <li>Попробуйте удалить <code>config.json</code> рядом с exe и запустить заново — окно ввода токена появится снова</li>
 </ul>
 
+<h3>SmartScreen блокирует запуск</h3>
+<p>Нажмите «Подробнее» и «Выполнить в любом случае». Файл безопасен, предупреждение связано с отсутствием цифровой подписи.</p>
+
 <h3>Устройство не появляется в UI</h3>
 <ul>
 <li>Убедитесь, что агент запущен и показывает <code>[agent] connected</code></li>
@@ -271,10 +289,10 @@ a:hover { border-bottom-style: solid; }
 </ul>
 
 <h3>Кракозябры в выводе</h3>
-<p>ИРУ автоматически обрабатывает кодировку, но если проблема остаётся — укажите это в чате, ИРУ попробует другой подход.</p>
+<p>ИРУ автоматически обрабатывает кодировку (UTF-8), но если проблема остаётся — укажите это в чате, ИРУ попробует другой подход.</p>
 
 <div class="footer">
-<span class="footer-brand">ИРУ v3.4 — Интеллектуальный Режим Управления</span>
+<span class="footer-brand">ИРУ v3.5 — Интеллектуальный Режим Управления</span>
 <a href="/" class="footer-link">← Вернуться в ИРУ</a>
 </div>
 </div>
@@ -293,7 +311,7 @@ TERMS_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #0a0e17; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.7; padding: 40px 20px; }
+body { background: #020308; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.7; padding: 40px 20px; }
 .container { max-width: 700px; margin: 0 auto; }
 h1 { color: #00d4ff; font-size: 24px; margin-bottom: 8px; }
 .subtitle { color: #64748b; font-size: 12px; margin-bottom: 32px; }
@@ -313,7 +331,7 @@ a:hover { border-bottom-style: solid; }
 <body>
 <div class="container">
 <h1>Пользовательское соглашение</h1>
-<div class="subtitle">ИРУ — Интеллектуальный Режим Управления | Редакция от 16.04.2026</div>
+<div class="subtitle">ИРУ — Интеллектуальный Режим Управления | Редакция от 18.04.2026</div>
 
 <h2>1. Общие положения</h2>
 <p>1.1. Настоящее Пользовательское соглашение (далее — «Соглашение») регулирует порядок использования системы ИРУ (далее — «Сервис»).</p>
@@ -370,7 +388,7 @@ a:hover { border-bottom-style: solid; }
 <p>По всем вопросам: <a href="mailto:russaygushkin@gmail.com">russaygushkin@gmail.com</a></p>
 
 <div class="footer">
-<span class="footer-brand">ИРУ v3.4 — Интеллектуальный Режим Управления</span>
+<span class="footer-brand">ИРУ v3.5 — Интеллектуальный Режим Управления</span>
 <a class="footer-link" href="/">Вернуться</a>
 </div>
 </div>
@@ -388,7 +406,7 @@ ABOUT_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #0a0e17; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 15px; line-height: 1.75; padding: 48px 20px; }
+body { background: #020308; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 15px; line-height: 1.75; padding: 48px 20px; }
 .container { max-width: 760px; margin: 0 auto; }
 .page-header { margin-bottom: 40px; }
 h1 { color: #00d4ff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 10px; }
@@ -396,14 +414,16 @@ h1 { color: #00d4ff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; 
 h2 { color: #00d4ff; font-size: 20px; font-weight: 600; margin: 36px 0 14px; padding-bottom: 8px; border-bottom: 1px solid #1e293b; }
 p { margin-bottom: 14px; color: #ffffff; opacity: 0.9; }
 strong { color: #ffffff; font-weight: 600; }
+ul { padding-left: 20px; margin-bottom: 16px; color: #ffffff; opacity: 0.9; }
+li { margin-bottom: 8px; }
 a { color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; }
 a:hover { border-bottom-style: solid; }
 
 /* Philosophy block */
-.philosophy { background: #0f1725; border: 1px solid #1e3a5f; border-left: 4px solid #00d4ff; border-radius: 0 10px 10px 0; padding: 18px 22px; margin: 18px 0 28px; }
+.philosophy { background: #0a0e17; border: 1px solid #1e3a5f; border-left: 4px solid #00d4ff; border-radius: 0 10px 10px 0; padding: 18px 22px; margin: 18px 0 28px; }
 .philosophy p { color: #ffffff; font-style: italic; margin: 0 0 10px; }
 .philosophy p:last-child { margin: 0; }
-.philosophy .no-emu { color: #e2e8f0; font-size: 13px; margin: 0; }
+.philosophy .no-emu { color: #e2e8f0; font-size: 13px; margin: 0; font-style: normal; }
 
 /* Architecture image */
 .arch-img-wrap { margin: 18px 0 28px; }
@@ -411,7 +431,7 @@ a:hover { border-bottom-style: solid; }
 
 /* Roadmap stage cards */
 .stages { display: flex; flex-direction: column; gap: 12px; margin: 18px 0 28px; }
-.stage-card { background: #0f1725; border: 1px solid #1e293b; border-radius: 10px; padding: 16px 20px; display: flex; align-items: flex-start; gap: 16px; }
+.stage-card { background: #0a0e17; border: 1px solid #1e293b; border-radius: 10px; padding: 16px 20px; display: flex; align-items: flex-start; gap: 16px; }
 .stage-card.done { border-left: 3px solid #00d4ff; }
 .stage-card.coming { border-left: 3px solid #f59e0b; }
 .stage-badge { flex-shrink: 0; font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 6px; white-space: nowrap; }
@@ -421,6 +441,14 @@ a:hover { border-bottom-style: solid; }
 .stage-title { color: #ffffff; font-weight: 600; font-size: 15px; margin-bottom: 2px; }
 .stage-desc { color: #e2e8f0; font-size: 13px; opacity: 0.85; }
 
+/* Plan cards */
+.plans { display: flex; flex-direction: column; gap: 10px; margin: 18px 0 28px; }
+.plan-card { background: #0a0e17; border: 1px solid #1e293b; border-radius: 10px; padding: 14px 20px; display: flex; align-items: center; gap: 16px; }
+.plan-card.active { border-color: #00d4ff40; }
+.plan-name { color: #00d4ff; font-weight: 600; font-size: 15px; min-width: 80px; }
+.plan-desc { color: #e2e8f0; font-size: 13px; opacity: 0.85; }
+.plan-beta { font-size: 11px; color: #f59e0b; background: #f59e0b18; border: 1px solid #f59e0b40; padding: 2px 8px; border-radius: 4px; margin-left: auto; white-space: nowrap; }
+
 /* Tech stack table */
 .tech-table { width: 100%; border-collapse: collapse; margin: 18px 0 28px; }
 .tech-table tr { border-bottom: 1px solid #1e293b; }
@@ -428,7 +456,7 @@ a:hover { border-bottom-style: solid; }
 .tech-table td { padding: 10px 14px; font-size: 14px; }
 .tech-table td:first-child { color: #00d4ff; font-weight: 600; width: 42%; }
 .tech-table td:last-child { color: #ffffff; }
-.tech-table tr:nth-child(even) { background: #0f1725; }
+.tech-table tr:nth-child(even) { background: #0a0e17; }
 
 /* Footer */
 .footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
@@ -449,13 +477,40 @@ a:hover { border-bottom-style: solid; }
 <p>ИРУ — система, в которой пользователь описывает задачу на естественном языке, языковая модель (LLM) переводит её в команды CMD/PowerShell, а агент выполняет их непосредственно на устройстве.</p>
 <div class="philosophy">
 <p>Философия: «научить машину быть машиной»</p>
-<p class="no-emu">Никакой эмуляции действий пользователя — никаких скриншотов, кликов и pyautogui. Только прямые программные вызовы: COM-объекты, WMI, UI Automation API, DevTools Protocol. Машина управляется как машина.</p>
+<p class="no-emu">Никакой эмуляции действий пользователя. Никаких скриншотов, кликов или pyautogui. Только прямые программные вызовы: COM-объекты, WMI, UI Automation API, DevTools Protocol. Машина управляется как машина.</p>
 </div>
 
 <h2>Архитектура системы</h2>
 <div class="arch-img-wrap">
 <img src="/static/architecture.jpg" alt="Архитектура ИРУ">
 </div>
+
+<h2>Тарифные планы</h2>
+<p>Во время бета-тестирования все участники получают план Pro бесплатно.</p>
+<div class="plans">
+<div class="plan-card">
+<span class="plan-name">Free</span>
+<span class="plan-desc">1 устройство, 30 команд/день, 7 дней история</span>
+</div>
+<div class="plan-card active">
+<span class="plan-name">Pro</span>
+<span class="plan-desc">Безлимитные устройства и команды, проводник, DEV MODE</span>
+<span class="plan-beta">БЕТА</span>
+</div>
+<div class="plan-card">
+<span class="plan-name">Business</span>
+<span class="plan-desc">Мультипользовательская админка, аудит-логи, API, приоритетная поддержка</span>
+</div>
+</div>
+
+<h2>DEV MODE</h2>
+<p>Прямой доступ к командной строке устройства без участия LLM. Команды отправляются напрямую в PowerShell/CMD агента. Доступен на плане Pro и выше.</p>
+<ul>
+<li>Аккордеон-вывод с группировкой по устройствам</li>
+<li>Автоматическая UTF-8 кодировка вывода</li>
+<li>Кнопка рядом с проводником в интерфейсе</li>
+<li>Чат не сохраняется на сервере</li>
+</ul>
 
 <h2>Этапы разработки</h2>
 <div class="stages">
@@ -497,16 +552,21 @@ a:hover { border-bottom-style: solid; }
 <h2>Технологический стек</h2>
 <table class="tech-table">
 <tr><td>Сервер</td><td>FastAPI + Uvicorn</td></tr>
-<tr><td>LLM</td><td>DeepSeek API</td></tr>
-<tr><td>Агент</td><td>Python (WebSocket client)</td></tr>
-<tr><td>Фронтенд</td><td>Vanilla JS, единый HTML-файл</td></tr>
+<tr><td>LLM</td><td>DeepSeek API (deepseek-chat)</td></tr>
+<tr><td>Агент</td><td>Python (WebSocket client, .exe)</td></tr>
+<tr><td>Фронтенд</td><td>Vanilla JS + HTML + CSS</td></tr>
 <tr><td>База данных</td><td>SQLite</td></tr>
-<tr><td>Протокол</td><td>WebSocket (двунаправленный, реального времени)</td></tr>
-<tr><td>ОС агента</td><td>Windows (PowerShell / CMD)</td></tr>
+<tr><td>Протокол</td><td>WebSocket (двунаправленный, реальное время)</td></tr>
+<tr><td>ОС агента</td><td>Windows 10/11 (PowerShell / CMD)</td></tr>
+<tr><td>Хостинг</td><td>VPS + Caddy (HTTPS)</td></tr>
 </table>
 
+<h2>Контакты</h2>
+<p>Сайт: <a href="https://irumode.online" target="_blank">irumode.online</a></p>
+<p>Почта: <a href="mailto:russaygushkin@gmail.com">russaygushkin@gmail.com</a></p>
+
 <div class="footer">
-<span class="footer-brand">ИРУ v3.4 — Интеллектуальный Режим Управления</span>
+<span class="footer-brand">ИРУ v3.5 — Интеллектуальный Режим Управления</span>
 <a href="/" class="footer-link">← Вернуться в ИРУ</a>
 </div>
 
@@ -878,7 +938,7 @@ async def root():
     index = Path(__file__).parent.parent / "ui" / "index.html"
     if index.exists():
         return HTMLResponse(index.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>ИРУ v3.4 — UI не найден</h1>")
+    return HTMLResponse("<h1>ИРУ v3.5 — UI не найден</h1>")
 
 
 @app.get("/instruction", response_class=HTMLResponse)
