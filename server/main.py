@@ -1477,8 +1477,8 @@ async def api_raw_command(cmd: RawCommand, request: Request):
             return {"status": "error", "error": f"Устройство '{cmd.device_id}' не найдено"}
         target_ids = [cmd.device_id]
 
-    # Обернуть команду в chcp 65001 для UTF-8 вывода
-    raw_cmd = f"chcp 65001 >nul && {cmd.command}"
+    # UTF-8 вывод (PowerShell-совместимый)
+    raw_cmd = f"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; {cmd.command}"
 
     # Выполнить на каждом устройстве
     results = {}
