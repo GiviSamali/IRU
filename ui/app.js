@@ -590,7 +590,10 @@ function toggleExplorer() {
   state.explorerOpen = !state.explorerOpen;
   document.getElementById('explorerPanel').classList.toggle('open', state.explorerOpen);
   document.getElementById('explorerToggle').classList.toggle('active', state.explorerOpen);
-  if (state.explorerOpen && state.selectedDevice) explorerNavigate(state.explorerPath);
+  if (state.explorerOpen) {
+    if (state.devModeOpen) toggleDevMode();
+    if (state.selectedDevice) explorerNavigate(state.explorerPath);
+  }
 }
 
 async function explorerNavigate(path) {
