@@ -1560,6 +1560,10 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
         print(f"[ws] devices after disconnect: {list(devices.keys())}")
 
 
+# Раздача статики из ui/ по корневому пути (для относительных путей в index.html)
+if STATIC_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(STATIC_DIR)), name="ui_root")
+
 # ── Запуск ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
