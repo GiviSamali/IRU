@@ -662,7 +662,7 @@ html, body {
     z-index: 199; backdrop-filter: blur(2px);
   }
   .sidebar-overlay.show { display: block; }
-  
+  .auth-logo img { height: 44px; width: 44px; }
   .header { padding: 0 8px; gap: 6px; }
   .header-title { display: none; }
   .header-right { gap: 6px; }
