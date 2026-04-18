@@ -10,7 +10,9 @@ const state = {
   explorerOpen: false,
   explorerPath: null,
   explorerHistory: [],
-  pendingTasks: [],  // [{task_id, msgIndex}] — задачи в процессе
+  pendingTasks: [],  // [{task_id, msgIndex}]
+  devModeOpen: false,
+  userPlan: 'free',
 };
 
 const API = window.location.origin;
@@ -83,6 +85,8 @@ function showApp() {
   fetchDevices();
   setInterval(fetchDevices, 5000);
   checkConsent();
+  checkTermsStatus();
+  fetchUserInfo();
   // Показать кнопку админки для admin-пользователя
   if (state.user.name === 'admin') {
     document.getElementById('btnAdmin').style.display = 'flex';
@@ -248,9 +252,9 @@ function renderMessages() {
           <div class="hint-chip" onclick="sendHint(this)">Покажи IP адрес</div>
           <div class="hint-chip" onclick="sendHint(this)">Свободное место на диске</div>
           <div class="hint-chip" onclick="sendHint(this)">Запущенные процессы</div>`
-      : `<div class="hint-chip" onclick="sendHint(this)">Как подключить компьютер?</div>
-          <div class="hint-chip" onclick="sendHint(this)">Что ты умеешь?</div>
-          <div class="hint-chip" onclick="sendHint(this)">Где взять агент?</div>`;
+      : `<div class="hint-chip" onclick="downloadAgent()">⬇ Скачать агент</div>
+          <div class="hint-chip" onclick="sendHint(this)">Как подключить компьютер?</div>
+          <div class="hint-chip" onclick="sendHint(this)">Что ты умеешь?</div>`;
     container.innerHTML = `
       <div class="chat-welcome">
         <img src="/static/IruIcon.ico" alt="ИРУ">
@@ -262,7 +266,8 @@ function renderMessages() {
   }
 
   let html = '';
-  for (const m of state.messages) {
+  for (let mi = 0; mi < state.messages.length; mi++) {
+    const m = state.messages[mi];
     const roleLabel = m.role === 'user' ? 'вы' : 'иру';
     let bodyHTML = linkify(escapeHTML(m.content || m.text || ''));
 
@@ -280,7 +285,7 @@ function renderMessages() {
         const statusCls = isOk ? 'ok' : 'err';
         const statusTxt = isOk ? '\u2713' : '\u2717';
         const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
-        const cmdText = c.command.startsWith('[') ? c.command : escapeHTML(c.command);
+        const cmdText = escapeHTML(c.command || '');
         bodyHTML += `
           <div class="cmd-entry" onclick="this.classList.toggle('open')">
             <div class="cmd-summary">
@@ -294,10 +299,19 @@ function renderMessages() {
       }
       bodyHTML += '</div>';
     }
+    // Кнопки подтверждения
+    let confirmBtns = '';
+    if (m.confirmTaskId) {
+      confirmBtns = `<div class="confirm-actions">
+        <button class="btn-confirm-yes" onclick="confirmTask('${m.confirmTaskId}', ${mi})">\u2713 Выполнить</button>
+        <button class="btn-confirm-no" onclick="denyTask('${m.confirmTaskId}', ${mi})">✗ Отменить</button>
+      </div>`;
+    }
+
     if (m.loading) {
       html += `<div class="msg assistant"><div class="msg-role">иру</div><div class="msg-body"><div class="typing"><span></span><span></span><span></span></div></div></div>`;
     } else {
-      html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}</div></div>`;
+      html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}${confirmBtns}</div></div>`;
     }
   }
 
@@ -305,10 +319,16 @@ function renderMessages() {
   container.scrollTop = container.scrollHeight;
 }
 
+const MAX_INPUT_LENGTH = 500;
+
 async function sendMessage() {
   const input = document.getElementById('chatInput');
   const text = input.value.trim();
   if (!text) return;
+  if (text.length > MAX_INPUT_LENGTH) {
+    showToast(`Максимум ${MAX_INPUT_LENGTH} символов`, true);
+    return;
+  }
   const ids = Object.keys(state.devices);
   const isOnboarding = ids.length === 0;
 
@@ -364,14 +384,44 @@ async function sendMessage() {
 }
 
 async function pollTask(taskId, msgIndex) {
+  const startTime = Date.now();
+  const MAX_POLL_MS = 120000; // 2 минуты макс
+  let stopped = false;
   const poll = async () => {
+    if (stopped) return;
+    if (Date.now() - startTime > MAX_POLL_MS) {
+      state.messages[msgIndex] = { role: 'assistant', content: 'Истекло время ожидания ответа.' };
+      state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+      renderMessages();
+      return;
+    }
     try {
       const r = await fetch(`${API}/api/tasks/${taskId}`, { headers: authHeaders() });
+      if (!r.ok) {
+        stopped = true;
+        state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена.' };
+        state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+        renderMessages();
+        return;
+      }
       const data = await r.json();
       const task = data.task;
 
+      if (task.status === 'confirm') {
+        stopped = true;
+        const cd = task.confirm_data || {};
+        const cmdText = cd.command || '';
+        state.messages[msgIndex] = {
+          role: 'assistant',
+          content: `Команда требует подтверждения:\n${cmdText}`,
+          commands: task.commands,
+          confirmTaskId: taskId,
+        };
+        renderMessages();
+        return;
+      }
       if (task.status === 'done' || task.status === 'error') {
-        // Задача завершена
+        stopped = true;
         state.messages[msgIndex] = {
           role: 'assistant',
           content: task.answer || 'Готово.',
@@ -383,9 +433,18 @@ async function pollTask(taskId, msgIndex) {
         return;
       }
       // Ещё выполняется — повторить через 1с
-      setTimeout(poll, 1000);
+      if (!stopped) setTimeout(poll, 1000);
     } catch (e) {
-      // Ошибка сети — попробовать ещё
+      if (stopped) return;
+      if (!poll._retries) poll._retries = 0;
+      poll._retries++;
+      if (poll._retries > 30) {
+        stopped = true;
+        state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена или истекла.' };
+        state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+        renderMessages();
+        return;
+      }
       setTimeout(poll, 2000);
     }
   };
@@ -476,8 +535,55 @@ function sendHint(el) {
   document.getElementById('chatInput').value = el.textContent;
   sendMessage();
 }
+
+function downloadAgent() {
+  const token = state.user?.token || '';
+  if (!token) { showToast('Сначала войдите в систему', true); return; }
+  const a = document.createElement('a');
+  a.href = `${API}/api/download_agent?token=${encodeURIComponent(token)}`;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+// ── CONFIRM / DENY ───────────────────────────────────────────
+async function confirmTask(taskId, msgIndex) {
+  try {
+    await fetch(`${API}/api/tasks/${taskId}/confirm`, {
+      method: 'POST', headers: authHeaders(),
+    });
+    // Убираем кнопки, показываем лоадер
+    state.messages[msgIndex].confirmTaskId = null;
+    state.messages[msgIndex].loading = true;
+    state.messages[msgIndex].content = '';
+    renderMessages();
+    // Поллим задачу до завершения
+    pollTask(taskId, msgIndex);
+  } catch (e) { showToast('Ошибка подтверждения', true); }
+}
+
+async function denyTask(taskId, msgIndex) {
+  try {
+    await fetch(`${API}/api/tasks/${taskId}/deny`, {
+      method: 'POST', headers: authHeaders(),
+    });
+    state.messages[msgIndex].confirmTaskId = null;
+    state.messages[msgIndex].content = 'Команда отменена.';
+    state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+    renderMessages();
+  } catch (e) { showToast('Ошибка', true); }
+}
+
 function handleInputKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
 function autoGrow(el) { el.style.height = '18px'; el.style.height = Math.min(el.scrollHeight, 100) + 'px'; }
+function updateCharCount() {
+  const input = document.getElementById('chatInput');
+  const counter = document.getElementById('charCount');
+  if (!counter) return;
+  const len = input.value.length;
+  counter.textContent = `${len}/${MAX_INPUT_LENGTH}`;
+  counter.classList.toggle('over', len > MAX_INPUT_LENGTH);
+}
 
 // ── EXPLORER ─────────────────────────────────────────
 function toggleExplorer() {
@@ -708,15 +814,43 @@ function renderAdminUsers(users) {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>`;
     const badge = isAdmin ? '<span class="admin-badge">admin</span>' : '';
+    const plan = u.plan || 'free';
+    const planClass = 'plan-' + plan;
+    const planSelect = isAdmin ? '' : `
+      <select class="admin-plan-select ${planClass}" onchange="adminSetPlan(${u.id}, this.value)">
+        <option value="free"${plan === 'free' ? ' selected' : ''}>free</option>
+        <option value="pro"${plan === 'pro' ? ' selected' : ''}>pro</option>
+        <option value="business"${plan === 'business' ? ' selected' : ''}>business</option>
+      </select>`;
     return `<div class="admin-user-item">
       <div class="admin-user-info">
         <div class="admin-user-name">${escapeHTML(u.name)}${badge}</div>
-        <div class="admin-user-token" title="Токен скрыт">${u.token}</div>
+        <div class="admin-user-meta">
+          <span class="admin-user-token" title="Токен скрыт">${u.token}</span>
+          ${planSelect}
+        </div>
       </div>
       ${deleteBtn}
     </div>`;
   }).join('');
   document.getElementById('adminStats').textContent = `Всего пользователей: ${users.length}`;
+}
+
+async function adminSetPlan(userId, plan) {
+  try {
+    const r = await fetch(`${API}/api/admin/users/${userId}/plan`, {
+      method: 'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ plan }),
+    });
+    const data = await r.json();
+    if (data.status === 'ok') {
+      showToast(`План изменён: ${plan}`);
+      loadAdminUsers();
+    } else {
+      showToast(data.error || 'Ошибка', true);
+      loadAdminUsers();
+    }
+  } catch (e) { showToast('Ошибка: ' + e.message, true); }
 }
 
 async function adminCreateUser() {
@@ -767,6 +901,158 @@ function copyToken(token) {
     ta.select(); document.execCommand('copy'); ta.remove();
     showToast('Токен скопирован');
   });
+}
+
+// ── TERMS AGREEMENT ─────────────────────────────────────────
+async function checkTermsStatus() {
+  try {
+    const r = await fetch(`${API}/api/terms_status`, { headers: authHeaders() });
+    const data = await r.json();
+    if (data.status === 'ok' && !data.accepted) {
+      document.getElementById('termsModal').classList.add('show');
+    }
+  } catch (e) { console.error('checkTermsStatus:', e); }
+}
+
+async function acceptTerms() {
+  try {
+    await fetch(`${API}/api/accept_terms`, {
+      method: 'POST', headers: authHeaders(),
+    });
+  } catch (e) { console.error('acceptTerms:', e); }
+  document.getElementById('termsModal').classList.remove('show');
+}
+
+// ── USER INFO & DEV MODE ────────────────────────────────────
+async function fetchUserInfo() {
+  try {
+    const r = await fetch(`${API}/api/user_info`, { headers: authHeaders() });
+    const data = await r.json();
+    if (data.status === 'ok') {
+      state.userPlan = data.user.plan || 'free';
+      const limits = data.user.limits || {};
+      if (limits.dev_mode) {
+        document.getElementById('devModeToggle').style.display = 'flex';
+      }
+    }
+  } catch (e) { console.error('fetchUserInfo:', e); }
+}
+
+function toggleDevMode() {
+  state.devModeOpen = !state.devModeOpen;
+  const panel = document.getElementById('devModePanel');
+  panel.classList.toggle('open', state.devModeOpen);
+  document.getElementById('devModeToggle').classList.toggle('active', state.devModeOpen);
+  if (state.devModeOpen) {
+    if (state.explorerOpen) toggleExplorer();
+    updateDevModeDevices();
+    document.getElementById('devModeInput').focus();
+  }
+}
+
+function updateDevModeDevices() {
+  const sel = document.getElementById('devModeDeviceSelect');
+  const ids = Object.keys(state.devices);
+  sel.innerHTML = '';
+  if (ids.length === 0) {
+    sel.innerHTML = '<option value="">Нет устройств</option>';
+    return;
+  }
+  for (const id of ids) {
+    const d = state.devices[id];
+    const name = d.info?.hostname || id;
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  if (state.selectedDevice && state.devices[state.selectedDevice]) {
+    sel.value = state.selectedDevice;
+  }
+}
+
+function toggleDevBroadcast() {
+  const cb = document.getElementById('devModeBroadcast');
+  const sel = document.getElementById('devModeDeviceSelect');
+  sel.disabled = cb.checked;
+}
+
+async function sendDevCommand() {
+  const input = document.getElementById('devModeInput');
+  const cmd = input.value.trim();
+  if (!cmd) return;
+
+  const output = document.getElementById('devModeOutput');
+  const isBroadcast = document.getElementById('devModeBroadcast').checked;
+  const deviceId = document.getElementById('devModeDeviceSelect').value;
+
+  if (!isBroadcast && !deviceId) {
+    appendDevOutput('> ' + cmd, 'Ошибка: выберите устройство', true);
+    return;
+  }
+
+  input.value = '';
+  autoGrow(input);
+  appendDevOutput('> ' + cmd, 'Выполняется...', false);
+
+  try {
+    const r = await fetch(`${API}/api/raw_command`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ command: cmd, device_id: deviceId, broadcast: isBroadcast }),
+    });
+    const data = await r.json();
+
+    if (data.status === 'error') {
+      replaceLastDevOutput(data.error, true);
+      return;
+    }
+
+    const results = data.results || {};
+    let text = '';
+    for (const [did, res] of Object.entries(results)) {
+      const devName = state.devices[did]?.info?.hostname || did;
+      if (Object.keys(results).length > 1) text += '[' + devName + ']\n';
+      if (res.status === 'ok') {
+        const r = res.result || {};
+        text += r.stdout || r.stderr || r.error || '(нет вывода)';
+      } else {
+        text += 'Ошибка: ' + (res.error || 'неизвестная ошибка');
+      }
+      text += '\n';
+    }
+    replaceLastDevOutput(text.trim(), false);
+  } catch (e) {
+    replaceLastDevOutput('Ошибка сети: ' + e.message, true);
+  }
+}
+
+function appendDevOutput(cmdLine, result, isError) {
+  const output = document.getElementById('devModeOutput');
+  const placeholder = output.querySelector('.devmode-placeholder');
+  if (placeholder) placeholder.remove();
+  const entry = document.createElement('div');
+  entry.className = 'devmode-entry';
+  entry.innerHTML = '<div class="devmode-cmd">' + escapeHTML(cmdLine) + '</div>' +
+    '<div class="devmode-result' + (isError ? ' error' : '') + '">' + escapeHTML(result) + '</div>';
+  output.appendChild(entry);
+  output.scrollTop = output.scrollHeight;
+}
+
+function replaceLastDevOutput(text, isError) {
+  const output = document.getElementById('devModeOutput');
+  const last = output.querySelector('.devmode-entry:last-child .devmode-result');
+  if (last) {
+    last.textContent = text;
+    last.className = 'devmode-result' + (isError ? ' error' : '');
+  }
+  output.scrollTop = output.scrollHeight;
+}
+
+function handleDevModeKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendDevCommand();
+  }
 }
 
 // ── INIT ───────────────────────────────────────────────────

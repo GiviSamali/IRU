@@ -1,5 +1,5 @@
 """
-main.py — FastAPI-сервер ИРУ v3.4
+main.py — FastAPI-сервер ИРУ v3.5
 
 Новое в v3.4:
   - Параллельное выполнение: задачи выполняются в фоне, UI не блокируется
@@ -44,13 +44,13 @@ from io import BytesIO
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Query
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 
 from collections import defaultdict
-from controller import process_nl_command, process_onboarding_message
+from controller import process_nl_command, process_onboarding_message, ConfirmationRequired
 
 # ── RATE LIMITING ───────────────────────────────────────────
 # Ограничение: макс 30 NL-команд в минуту на пользователя
@@ -71,10 +71,11 @@ def check_rate_limit(user_id: str) -> bool:
 
 # ── ЧЁРНЫЙ СПИСОК ОПАСНЫХ КОМАНД ───────────────────────────
 # Команды, которые агент НИКОГДА не должен выполнять
+# Команды, которые ЗАПРЕЩЕНЫ полностью (никогда не выполняются)
 DANGEROUS_PATTERNS = [
     # Форматирование / удаление дисков
     r"format\s+[a-z]:", r"diskpart",
-    # Рекурсивное удаление
+    # Рекурсивное удаление системных папок
     r"rm\s+-rf\s+/", r"rmdir\s+/s\s+/q\s+[a-z]:\\\\",
     r"del\s+/[sfq].*\\windows",
     # Реестр — удаление критических веток
@@ -92,21 +93,51 @@ DANGEROUS_PATTERNS = [
     # Шифрование (ransomware pattern)
     r"cipher\s+/e",
 ]
+
+# Команды, которые требуют подтверждения пользователя
+CONFIRM_PATTERNS = [
+    r"remove-item",
+    r"del\s+",
+    r"rd\s+",
+    r"rmdir\s+",
+    r"stop-process",
+    r"kill\s+",
+    r"taskkill",
+    r"shutdown",
+    r"restart-computer",
+    r"move-item.*-force",
+    r"clear-content",
+    r"set-content",       # перезапись файла
+    r"out-file",          # перезапись файла
+    r"uninstall",
+]
+
 import re as _re
 _dangerous_re = [_re.compile(p, _re.IGNORECASE) for p in DANGEROUS_PATTERNS]
+_confirm_re = [_re.compile(p, _re.IGNORECASE) for p in CONFIRM_PATTERNS]
 
 def is_command_safe(command: str) -> bool:
-    """Проверяет команду на наличие опасных паттернов."""
+    """Проверяет команду на наличие ЗАПРЕЩЁННЫХ паттернов."""
     for pattern in _dangerous_re:
         if pattern.search(command):
             return False
     return True
+
+def needs_confirmation(command: str) -> bool:
+    """Проверяет, требует ли команда подтверждения пользователя."""
+    for pattern in _confirm_re:
+        if pattern.search(command):
+            return True
+    return False
 from database import (
     init_db, get_user_by_token, create_user, list_users, delete_user,
     create_chat, list_chats, get_chat, update_chat_title, delete_chat,
     add_message, get_messages,
     add_training_record, get_training_data, get_training_count,
     set_user_consent,
+    PLAN_LIMITS, get_user_plan, set_user_plan,
+    check_daily_command_limit, increment_daily_commands,
+    check_device_limit, accept_terms, has_accepted_terms,
 )
 
 # ── Хранение подключённых устройств ───────────────────────────────────────
@@ -190,48 +221,25 @@ a:hover { border-bottom-style: solid; }
 <h2>Что вам понадобится</h2>
 <ul>
 <li>Компьютер на <strong>Windows 10/11</strong></li>
-<li>Установленный <strong>Python 3.10+</strong> (<a href="https://python.org/downloads" target="_blank">скачать</a>)</li>
 <li><strong>Токен доступа</strong> — получите у администратора</li>
-<li>Файлы агента: <code>agent.py</code> + <code>config.json</code></li>
+<li>Файл <code>agent.exe</code></li>
 </ul>
 
-<h2>Шаг 1: Установите Python</h2>
-<p>Скачайте Python с <a href="https://python.org/downloads" target="_blank">python.org</a>. При установке обязательно отметьте <code>Add Python to PATH</code>.</p>
+<h2>Шаг 1: Скачайте agent.exe</h2>
+<p>Получите файл <code>agent.exe</code> от администратора. Установка не требуется.</p>
 
-<h2>Шаг 2: Установите зависимость</h2>
-<p>Откройте терминал (Win+R → <code>cmd</code>) и выполните:</p>
-<pre>pip install websockets</pre>
+<h2>Шаг 2: Запустите agent.exe</h2>
+<p>Двойной клик по <code>agent.exe</code>. При первом запуске откроется окно ввода токена.</p>
+<p>Вставьте токен доступа и нажмите <strong>«Подключиться»</strong>. Токен сохранится автоматически — при следующих запусках вводить не нужно.</p>
+<p>Вы увидите окно консоли с сообщением о подключении:</p>
+<pre>[agent] connected</pre>
 
-<h2>Шаг 3: Настройте агент</h2>
-<p>Создайте папку (например, <code>C:\\IRU</code>) и поместите туда файлы <code>agent.py</code> и <code>config.json</code>.</p>
-<p>Откройте <code>config.json</code> и заполните:</p>
-<pre>{
-  "device_id": "МОЙ_ПК",
-  "server_url": "wss://irumode.ru",
-  "user_token": "ваш-токен"
-}</pre>
-<ul>
-<li><code>device_id</code> — любое имя для вашего ПК (латиница, без пробелов)</li>
-<li><code>server_url</code> — адрес сервера (получите у администратора)</li>
-<li><code>user_token</code> — ваш токен доступа</li>
-</ul>
-
-<h2>Шаг 4: Запустите агент</h2>
-<p>В терминале перейдите в папку с агентом и запустите:</p>
-<pre>cd C:\\IRU
-python agent.py</pre>
-<p>Или используйте готовый EXE-файл (если предоставлен):</p>
-<pre>agent.exe</pre>
-<p>Вы увидите сообщение о подключении:</p>
-<pre>[agent] device=МОЙ_ПК, connecting to wss://irumode.ru...
-[agent] connected</pre>
-
-<h2>Шаг 5: Войдите в интерфейс</h2>
+<h2>Шаг 3: Войдите в интерфейс</h2>
 <ol>
-<li>Откройте браузер и перейдите по адресу сервера</li>
-<li>Введите ваш токен доступа</li>
-<li>Выберите устройство в правом верхнем углу</li>
-<li>Создайте новый чат и начните общение</li>
+<li>Откройте браузер: <a href="https://irumode.ru" target="_blank">irumode.ru</a></li>
+<li>Введите тот же токен доступа</li>
+<li>Ваше устройство появится автоматически</li>
+<li>Создайте чат и начните общение</li>
 </ol>
 
 <h2>Примеры команд</h2>
@@ -251,15 +259,15 @@ python agent.py</pre>
 <h2>Частые проблемы</h2>
 <h3>Агент не подключается</h3>
 <ul>
-<li>Проверьте адрес сервера в <code>config.json</code></li>
-<li>Убедитесь, что используете <code>wss://irumode.ru</code></li>
 <li>Проверьте интернет-соединение</li>
+<li>Убедитесь, что токен введён правильно</li>
+<li>Попробуйте удалить <code>config.json</code> рядом с exe и запустить заново — окно ввода токена появится снова</li>
 </ul>
 
 <h3>Устройство не появляется в UI</h3>
 <ul>
 <li>Убедитесь, что агент запущен и показывает <code>[agent] connected</code></li>
-<li>Проверьте, что токен в <code>config.json</code> совпадает с вашим токеном для UI</li>
+<li>Убедитесь, что в UI вы вошли с тем же токеном</li>
 </ul>
 
 <h3>Кракозябры в выводе</h3>
@@ -554,13 +562,26 @@ def get_user_devices(user_id: int) -> dict:
 
 # ── Утилиты ──────────────────────────────────────────────────────────────
 
-async def send_command_to_agent(device_id: str, action: str, params: dict) -> dict:
+
+async def send_command_to_agent(device_id: str, action: str, params: dict,
+                                user_id: int | None = None,
+                                skip_confirm: bool = False) -> dict:
     """Отправить команду конкретному агенту и дождаться ответа."""
-    # Проверка безопасности: блокируем опасные команды на самом низком уровне
     if action == "execute_cmd":
         cmd_text = params.get("command", "")
+        # ЗАПРЕЩЕНО полностью (всегда блокируем)
         if not is_command_safe(cmd_text):
-            raise RuntimeError(f"Команда заблокирована системой безопасности: {cmd_text[:80]}")
+            raise RuntimeError(
+                f"BLOCKED: Команда запрещена на этапе бета-тестирования. "
+                f"Сообщи пользователю, что эта команда недоступна в бета-версии."
+            )
+        # ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ (можно пропустить после подтверждения)
+        if not skip_confirm and needs_confirmation(cmd_text):
+            print(f"[security] CONFIRM_REQUIRED: {cmd_text[:80]}")
+            raise RuntimeError(
+                f"CONFIRM_REQUIRED: Команда требует подтверждения пользователя."
+            )
+        print(f"[cmd] executing: {cmd_text[:80]}")
 
     dev = devices.get(device_id)
     if not dev:
@@ -626,6 +647,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
     """
     task = tasks[task_id]
     is_broadcast = len(device_ids) > 1
+    print(f"[run_nl_task] START task={task_id[:8]}, user={user_id}, devices={device_ids}")
 
     async def run_on_device(device_id: str):
         """Выполнить задачу на одном устройстве через LLM."""
@@ -647,7 +669,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             target_dev = devices.get(target_device_id)
             if not target_dev or target_dev.get("user_id") != user_id:
                 raise RuntimeError(f"Нет доступа к устройству '{target_device_id}'")
-            return await send_command_to_agent(target_device_id, action, params)
+            return await send_command_to_agent(target_device_id, action, params, user_id=user_id)
 
         try:
             result = await process_nl_command(
@@ -664,6 +686,18 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 "status": "ok",
                 "answer": result.get("answer", ""),
                 "commands": result.get("commands", []),
+            }
+        except ConfirmationRequired as cr:
+            return {
+                "device_id": device_id,
+                "status": "confirm",
+                "answer": cr.answer,
+                "commands": cr.commands_log,
+                "confirm_data": {
+                    "command": cr.command,
+                    "device_id": cr.device_id,
+                    "params": cr.params,
+                },
             }
         except httpx.HTTPStatusError as e:
             return {
@@ -699,7 +733,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             try:
                 result = await send_command_to_agent(
                     device_id, "execute_cmd",
-                    {"command": cmd_text, "timeout": 30}
+                    {"command": cmd_text, "timeout": 30},
+                    user_id=user_id,
                 )
                 results.append({
                     "command": cmd_text,
@@ -760,6 +795,17 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             # Одно устройство: стандартная логика
             result = await run_on_device(device_ids[0])
             task["results"][device_ids[0]] = result
+
+            # Проверка: команда требует подтверждения
+            if result.get("status") == "confirm":
+                task["status"] = "confirm"
+                task["answer"] = result.get("answer", "")
+                task["commands"] = result.get("commands", [])
+                task["confirm_data"] = result.get("confirm_data", {})
+                task["confirm_data"]["chat_id"] = chat_id
+                task["confirm_data"]["user_id"] = user_id
+                return  # ждём подтверждения от UI
+
             combined_answer = result.get("answer", "")
             combined_commands = result.get("commands", [])
 
@@ -941,6 +987,7 @@ async def admin_training_data(request: Request, limit: int = 100, offset: int = 
 async def get_devices_api(request: Request):
     user = get_current_user(request)
     user_devs = get_user_devices(user["id"])
+    print(f"[api/devices] user_id={user['id']}, user_devs={list(user_devs.keys())}")
     result = {}
     for did, dev in user_devs.items():
         result[did] = {
@@ -1005,6 +1052,17 @@ async def direct_command(cmd: DirectCommand, request: Request):
     if not check_rate_limit(str(user["id"])):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
+    # Проверка дневного лимита команд (тарифный план)
+    cmd_limit = check_daily_command_limit(user["id"])
+    if not cmd_limit["allowed"]:
+        return {
+            "status": "error",
+            "error": f"Дневной лимит команд исчерпан ({cmd_limit['used']}/{cmd_limit['limit']}). Обновите тариф для снятия ограничений."
+        }
+
+    # Увеличить счётчик команд
+    increment_daily_commands(user["id"])
+
     dev = devices.get(cmd.device_id)
     if not dev or dev.get("user_id") != user["id"]:
         return {"status": "error", "error": "Устройство не найдено или нет доступа"}
@@ -1029,8 +1087,23 @@ async def nl_command(cmd: NLCommand, request: Request):
     if not check_rate_limit(str(user["id"])):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
+    # Проверка дневного лимита команд (тарифный план)
+    cmd_limit = check_daily_command_limit(user["id"])
+    if not cmd_limit["allowed"]:
+        return {
+            "status": "error",
+            "error": f"Дневной лимит команд исчерпан ({cmd_limit['used']}/{cmd_limit['limit']}). Обновите тариф для снятия ограничений."
+        }
+    increment_daily_commands(user["id"])
+
     # Определить целевые устройства
     user_devs = get_user_devices(user["id"])
+
+    # Диагностика: логируем состояние устройств при каждом запросе
+    print(f"[nl_command] user_id={user['id']}, user='{user['name']}', "
+          f"cmd.device_id='{cmd.device_id}', "
+          f"user_devs={list(user_devs.keys())}, "
+          f"all_devices_keys={list(devices.keys())}")
 
     # Создать/определить чат
     chat_id = cmd.chat_id
@@ -1046,8 +1119,9 @@ async def nl_command(cmd: NLCommand, request: Request):
     # Сохранить сообщение пользователя
     add_message(chat_id, "user", cmd.message)
 
-    # Режим без устройств (onboarding)
-    if not user_devs:
+    # Режим без устройств (onboarding) — только если реально нет устройств
+    # И пользователь не указал конкретное устройство
+    if not user_devs and not cmd.device_id:
         task_id = str(uuid.uuid4())[:12]
         tasks[task_id] = {
             "task_id": task_id,
@@ -1152,9 +1226,71 @@ async def api_get_task(task_id: str, request: Request):
             "answer": task.get("answer"),
             "commands": task.get("commands"),
             "results": task.get("results", {}),
+            "confirm_data": task.get("confirm_data"),
             "created_at": task["created_at"],
         }
     }
+
+
+@app.post("/api/tasks/{task_id}/confirm")
+async def api_confirm_task(task_id: str, request: Request):
+    """Пользователь подтвердил опасную команду."""
+    user = get_current_user(request)
+    task = tasks.get(task_id)
+    if not task or task["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if task["status"] != "confirm":
+        raise HTTPException(status_code=400, detail="Задача не ожидает подтверждения")
+
+    cd = task.get("confirm_data", {})
+    device_id = cd.get("device_id", "")
+    params = cd.get("params", {})
+    chat_id = cd.get("chat_id", task.get("chat_id"))
+
+    task["status"] = "running"
+
+    async def execute_confirmed():
+        try:
+            result = await send_command_to_agent(
+                device_id, "execute_cmd", params, skip_confirm=True
+            )
+            cmd_entry = {
+                "command": cd.get("command", ""),
+                "device_id": device_id,
+                "result": result,
+            }
+            existing_cmds = task.get("commands", []) or []
+            existing_cmds.append(cmd_entry)
+            task["commands"] = existing_cmds
+
+            ok = not result.get("error")
+            task["answer"] = "Выполнено." if ok else f"Ошибка: {result.get('error', '')}"
+            task["status"] = "done"
+            add_message(chat_id, "assistant", task["answer"], task["commands"])
+        except Exception as e:
+            task["status"] = "error"
+            task["answer"] = f"Ошибка: {str(e)}"
+            add_message(chat_id, "assistant", task["answer"])
+
+    asyncio.create_task(execute_confirmed())
+    return {"status": "ok"}
+
+
+@app.post("/api/tasks/{task_id}/deny")
+async def api_deny_task(task_id: str, request: Request):
+    """Пользователь отклонил опасную команду."""
+    user = get_current_user(request)
+    task = tasks.get(task_id)
+    if not task or task["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if task["status"] != "confirm":
+        raise HTTPException(status_code=400, detail="Задача не ожидает подтверждения")
+
+    chat_id = task.get("confirm_data", {}).get("chat_id", task.get("chat_id"))
+    task["status"] = "done"
+    task["answer"] = "Команда отменена пользователем."
+    add_message(chat_id, "assistant", task["answer"], task.get("commands", []))
+    return {"status": "ok"}
 
 
 # ── DOWNLOAD API ─────────────────────────────────────────────────────────
@@ -1207,6 +1343,167 @@ async def download_request(body: dict, request: Request):
     return {"status": "ok", "url": f"/api/download/{token}"}
 
 
+# ── Скачивание агента ─────────────────────────────────────────────────────
+
+AGENT_DOWNLOAD_DIR = Path("/opt/iru/app/exe")
+
+@app.get("/api/download_agent")
+async def download_agent(request: Request):
+    """Скачать архив агента (только авторизованным)."""
+    user = get_current_user(request)
+
+    # Ищем первый .zip или .exe в папке
+    if not AGENT_DOWNLOAD_DIR.exists():
+        raise HTTPException(status_code=404, detail="Файл агента не найден")
+
+    # Приоритет: .zip > .exe
+    archive = None
+    for ext in ("*.zip", "*.exe"):
+        files = sorted(AGENT_DOWNLOAD_DIR.glob(ext), key=lambda f: f.stat().st_mtime, reverse=True)
+        if files:
+            archive = files[0]
+            break
+
+    if not archive:
+        raise HTTPException(status_code=404, detail="Файл агента не найден")
+
+    return FileResponse(
+        path=str(archive),
+        filename=archive.name,
+        media_type="application/octet-stream",
+    )
+
+
+# ── USER INFO & PLANS ────────────────────────────────────────────────────
+
+@app.get("/api/user_info")
+async def api_user_info(request: Request):
+    """Информация о пользователе: план, лимиты, статус соглашения."""
+    user = get_current_user(request)
+    plan = get_user_plan(user["id"])
+    limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+    cmd_usage = check_daily_command_limit(user["id"])
+    dev_count = len(get_user_devices(user["id"]))
+    return {
+        "status": "ok",
+        "user": {
+            "id": user["id"],
+            "name": user["name"],
+            "plan": plan,
+            "limits": limits,
+            "commands_today": cmd_usage["used"],
+            "commands_limit": cmd_usage["limit"],
+            "devices_count": dev_count,
+            "devices_limit": limits["max_devices"],
+            "terms_accepted": has_accepted_terms(user["id"]),
+        }
+    }
+
+
+@app.post("/api/accept_terms")
+async def api_accept_terms(request: Request):
+    """Принять пользовательское соглашение."""
+    user = get_current_user(request)
+    accept_terms(user["id"])
+    return {"status": "ok"}
+
+
+@app.get("/api/terms_status")
+async def api_terms_status(request: Request):
+    """Проверить, принял ли пользователь соглашение."""
+    user = get_current_user(request)
+    return {"status": "ok", "accepted": has_accepted_terms(user["id"])}
+
+
+class SetPlanRequest(BaseModel):
+    plan: str
+
+@app.patch("/api/admin/users/{user_id}/plan")
+async def api_admin_set_plan(user_id: int, body: SetPlanRequest, request: Request):
+    """Изменить план пользователя (только admin)."""
+    admin = get_current_user(request)
+    if admin["name"] != "admin":
+        raise HTTPException(status_code=403, detail="Только администратор")
+    if body.plan not in PLAN_LIMITS:
+        return {"status": "error", "error": f"Неизвестный план: {body.plan}. Доступны: free, pro, business"}
+    ok = set_user_plan(user_id, body.plan)
+    if not ok:
+        return {"status": "error", "error": "Пользователь не найден"}
+    return {"status": "ok", "user_id": user_id, "plan": body.plan}
+
+
+# ── РЕЖИМ РАЗРАБОТЧИКА (RAW CMD) ────────────────────────────────────────
+
+class RawCommand(BaseModel):
+    command: str
+    device_id: str = ""       # конкретное устройство
+    broadcast: bool = False   # на все устройства
+
+@app.post("/api/raw_command")
+async def api_raw_command(cmd: RawCommand, request: Request):
+    """
+    Режим разработчика: прямая отправка CMD/PowerShell-команды на устройство.
+    Требует plan=pro или business.
+    Поддерживает broadcast (на все устройства).
+    История не сохраняется.
+    """
+    user = get_current_user(request)
+
+    # Проверка плана
+    plan = get_user_plan(user["id"])
+    limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+    if not limits.get("dev_mode"):
+        return {"status": "error", "error": "Режим разработчика доступен только на тарифе Pro или Business."}
+
+    # Rate limiting
+    if not check_rate_limit(str(user["id"])):
+        return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
+
+    if not cmd.command.strip():
+        return {"status": "error", "error": "Команда не может быть пустой"}
+
+    user_devs = get_user_devices(user["id"])
+    if not user_devs:
+        return {"status": "error", "error": "Нет подключённых устройств"}
+
+    # Определить целевые устройства
+    if cmd.broadcast:
+        target_ids = list(user_devs.keys())
+    else:
+        if cmd.device_id not in user_devs:
+            return {"status": "error", "error": f"Устройство '{cmd.device_id}' не найдено"}
+        target_ids = [cmd.device_id]
+
+    # Выполнить на каждом устройстве
+    results = {}
+    async def exec_on_device(did):
+        try:
+            result = await send_command_to_agent(
+                did, "execute_cmd", {"command": cmd.command},
+                user_id=user["id"]
+            )
+            results[did] = {"status": "ok", "result": result}
+        except Exception as e:
+            error_str = str(e)
+            if "CONFIRM_REQUIRED" in error_str:
+                results[did] = {"status": "confirm_required", "command": cmd.command, "error": error_str}
+            elif "BLOCKED" in error_str:
+                results[did] = {"status": "blocked", "error": error_str}
+            else:
+                results[did] = {"status": "error", "error": error_str}
+
+    await asyncio.gather(*[exec_on_device(did) for did in target_ids])
+
+    return {
+        "status": "ok",
+        "results": results,
+        "broadcast": cmd.broadcast,
+        "device_count": len(target_ids),
+    }
+
+
+
+
 # ── WebSocket для агентов ────────────────────────────────────────────────
 
 @app.websocket("/ws/{device_id}")
@@ -1216,8 +1513,15 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
         await ws.close(code=4001, reason="Недействительный токен пользователя")
         return
 
+    # Проверка лимита устройств (тарифный план)
+    current_count = len(get_user_devices(user["id"]))
+    dev_limit = check_device_limit(user["id"], current_count)
+    if not dev_limit["allowed"] and device_id not in devices:
+        await ws.close(code=4003, reason=f"Лимит устройств исчерпан ({dev_limit['current']}/{dev_limit['limit']})")
+        return
+
     await ws.accept()
-    print(f"[ws] agent connected: {device_id} (user: {user['name']})")
+    print(f"[ws] agent connected: device_id='{device_id}', user_id={user['id']}, user='{user['name']}'")
 
     devices[device_id] = {
         "ws": ws,
@@ -1225,6 +1529,7 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
         "pending": {},
         "user_id": user["id"],
     }
+    print(f"[ws] devices after connect: {list(devices.keys())}")
 
     try:
         while True:
@@ -1247,11 +1552,12 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
                         future.set_result({"error": payload.get("error", "Неизвестная ошибка")})
 
     except WebSocketDisconnect:
-        print(f"[ws] agent disconnected: {device_id}")
+        print(f"[ws] agent disconnected: device_id='{device_id}', user_id={user['id']}")
     except Exception as e:
         print(f"[ws] error for {device_id}: {e}")
     finally:
         devices.pop(device_id, None)
+        print(f"[ws] devices after disconnect: {list(devices.keys())}")
 
 
 # ── Запуск ───────────────────────────────────────────────────────────────

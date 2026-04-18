@@ -13,11 +13,23 @@ controller.py — LLM-планировщик ИРУ v3.4
   - Мультиустройства (LLM знает все подключённые устройства пользователя)
   - Память чатов (последние 50 сообщений подаются в контекст)
 
-Макс 8 итераций (tool-call loop).
+Макс 5 итераций (tool-call loop).
 """
 
 import json
 import os
+
+
+class ConfirmationRequired(Exception):
+    """Команда требует подтверждения пользователя."""
+    def __init__(self, command: str, device_id: str, params: dict,
+                 answer: str, commands_log: list):
+        self.command = command
+        self.device_id = device_id
+        self.params = params
+        self.answer = answer          # LLM-ответ до момента подтверждения
+        self.commands_log = commands_log  # уже выполненные команды
+        super().__init__(f"Подтверждение: {command[:80]}")
 import asyncio
 import httpx
 from pathlib import Path
@@ -77,16 +89,34 @@ Hostname: {current_hostname}
 4. Анализируй результат каждой команды перед следующим шагом.
 5. Если команда завершилась ошибкой — попробуй другой подход (макс. 8 итераций).
 6. По завершении — дай короткий понятный ответ на русском языке.
-7. НИКОГДА не выполняй опасные команды (форматирование дисков, удаление \
-системных файлов, отключение антивируса) без явного подтверждения.
+7. Если получишь ошибку BLOCKED — сообщи пользователю, что эта команда недоступна в бета-тестировании. \
+Если получишь CONFIRM_REQUIRED — ОСТАНОВИСЬ, не повторяй команду и не пытайся её переформулировать.
 8. Если задача не связана с компьютером — просто ответь текстом.
 9. Если пользователь просит скачать/передать файл — используй get_file_link.
-10. Кодировка вывода: если получаешь кракозябры — попробуй добавить \
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8 перед командой.
+10. Кодировка: ВСЕГДА добавляй в начало КАЖДОЙ команды PowerShell: \
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; \
+Это обязательно для корректного отображения русского текста. \
+При чтении/записи файлов явно указывай кодировку: \
+Get-Content -Path file -Encoding UTF8; Set-Content -Path file -Encoding UTF8 -Value $text.
 11. У тебя есть память — ты помнишь предыдущие сообщения в этом чате. \
 Используй контекст разговора для более точных ответов.
 12. НИКОГДА не используй Markdown-разметку в ответах: никаких **, *, #, ```, - и т.д. \
 Отвечай чистым текстом без форматирования.
+13. Для работы с приложениями используй программные интерфейсы (COM, WMI), а не эмуляцию клавиш. \
+Примеры:
+  - Открыть Word и вставить текст: $w = New-Object -ComObject Word.Application; $w.Visible = $true; \
+$d = $w.Documents.Add(); $d.Content.Text = 'текст'
+  - Открыть Excel: $xl = New-Object -ComObject Excel.Application; $xl.Visible = $true; \
+$wb = $xl.Workbooks.Add()
+  - Открыть Notepad и вставить: Start-Process notepad; Start-Sleep 1; \
+(Get-Process notepad).MainWindowTitle для проверки. Для записи в Notepad — сохрани текст в файл \
+и открой его: Set-Content -Path $env:TEMP\\text.txt -Value 'текст'; \
+Start-Process notepad $env:TEMP\\text.txt
+  - Получить активное окно: Add-Type -Name W -Namespace U -Member \
+'[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); \
+[DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, \
+System.Text.StringBuilder t, int m);'; $h=[U.W]::GetForegroundWindow(); \
+$sb=New-Object System.Text.StringBuilder 256; [U.W]::GetWindowText($h,$sb,256); $sb.ToString()
 """
 
 
@@ -148,7 +178,7 @@ TOOLS = [
     }
 ]
 
-MAX_ITERATIONS = 8
+MAX_ITERATIONS = 5
 
 
 # ── Промпт для режима без устройств (помощник по настройке) ─────────────────
@@ -195,17 +225,42 @@ def build_devices_block(all_devices: dict) -> str:
 
 # ── Построение истории чата для LLM ──────────────────────────────────────
 
-def build_chat_messages(chat_history: list[dict]) -> list[dict]:
+# Маркеры онбординговых ответов (фильтруем из истории, когда устройства уже подключены)
+ONBOARDING_MARKERS = [
+    "нет подключённых устройств",
+    "нет подключенных устройств",
+    "подключить устройство",
+    "запустить agent.exe",
+    "скачать agent",
+    "список доступных устройств пуст",
+]
+
+
+def _is_onboarding_message(content: str) -> bool:
+    """Проверить, является ли сообщение онбординговым."""
+    lower = content.lower()
+    return sum(1 for m in ONBOARDING_MARKERS if m in lower) >= 2
+
+
+def build_chat_messages(chat_history: list[dict], filter_onboarding: bool = False) -> list[dict]:
     """
     Конвертировать историю чата в формат messages для API.
     Только role='user' и role='assistant', без tool-вызовов из прошлых сессий.
+    Если filter_onboarding=True, пропускает онбординговые ответы и вопросы к ним.
     """
     messages = []
+    skip_next_user = False
     for msg in chat_history:
         role = msg.get("role", "user")
         content = msg.get("content", "")
-        if role in ("user", "assistant") and content:
-            messages.append({"role": role, "content": content})
+        if not content or role not in ("user", "assistant"):
+            continue
+        if filter_onboarding and role == "assistant" and _is_onboarding_message(content):
+            # Пропустить этот ответ и предыдущее сообщение user (если есть)
+            if messages and messages[-1]["role"] == "user":
+                messages.pop()
+            continue
+        messages.append({"role": role, "content": content})
     return messages
 
 
@@ -260,16 +315,18 @@ async def process_nl_command(
 
     if chat_history:
         # История уже содержит текущее сообщение user (оно было сохранено до вызова)
-        # Берём все сообщения кроме последнего (это текущий user message)
-        history_msgs = build_chat_messages(chat_history[:-1])
+        # Берём все сообщения кроме последнего, фильтруя онбординговые ответы
+        history_msgs = build_chat_messages(chat_history[:-1], filter_onboarding=True)
         messages.extend(history_msgs)
 
     messages.append({"role": "user", "content": user_message})
 
     commands_log = []
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    _timeout = httpx.Timeout(30.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=_timeout) as client:
         for iteration in range(MAX_ITERATIONS):
+            print(f"[llm] iteration {iteration+1}/{MAX_ITERATIONS}")
             resp = await client.post(
                 f"{cfg['base_url']}/chat/completions",
                 headers={
@@ -319,7 +376,16 @@ async def process_nl_command(
                             target_device, "execute_cmd", fn_args,
                         )
                     except Exception as e:
-                        tool_result = {"error": str(e)}
+                        err_str = str(e)
+                        if "CONFIRM_REQUIRED" in err_str:
+                            raise ConfirmationRequired(
+                                command=fn_args.get("command", ""),
+                                device_id=target_device,
+                                params=fn_args,
+                                answer=f"Команда требует подтверждения",
+                                commands_log=commands_log,
+                            )
+                        tool_result = {"error": err_str}
 
                     commands_log.append({
                         "command": fn_args.get("command", ""),
@@ -371,22 +437,16 @@ async def process_nl_command(
 INSTRUCTION_TEXT = """\
 Что понадобится:
 - Компьютер на Windows 10/11
-- Python 3.10+ (https://python.org/downloads)
 - Токен доступа (получить у администратора)
-- Файлы агента: agent.py + config.json
+- Файл agent.exe
 
-Шаг 1: Установить Python с python.org. При установке обязательно отметить "Add Python to PATH".
+Шаг 1: Скачать agent.exe.
 
-Шаг 2: Открыть терминал (Win+R, cmd) и выполнить:
-  pip install websockets
+Шаг 2: Запустить agent.exe двойным кликом.
+При первом запуске откроется окно — вставьте туда токен доступа и нажмите "Подключиться".
+Токен сохранится автоматически — при следующих запусках вводить не нужно.
 
-Шаг 3: Открыть config.json и вставить свой токен в поле user_token.
-
-Шаг 4: Запустить агент:
-  python agent.py
-Или двойной клик по agent.exe (если есть).
-
-После запуска агента устройство появится в интерфейсе автоматически.
+После подключения устройство появится в интерфейсе автоматически.
 """
 
 

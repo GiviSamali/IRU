@@ -29,7 +29,141 @@ CONFIG_PATH = BASE_DIR / "config.json"
 def load_config():
     """Загрузить конфигурацию агента."""
     data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    return data["device_id"], data["server_url"], data.get("user_token", "")
+    return data
+
+
+def save_config(data: dict):
+    """Сохранить конфигурацию агента."""
+    CONFIG_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def ask_setup_gui(need_token: bool = True, need_device: bool = True) -> dict | None:
+    """
+    Окно первоначальной настройки: токен + имя устройства.
+    Возвращает {"token": ..., "device_id": ...} или None (закрыли окно).
+    """
+    import tkinter as tk
+    import re
+
+    result = [None]
+
+    root = tk.Tk()
+    root.title("ИРУ — Первый запуск")
+    root.configure(bg="#0a0e17")
+    root.resizable(False, False)
+
+    w, h = 420, 340
+    x = (root.winfo_screenwidth() - w) // 2
+    y = (root.winfo_screenheight() - h) // 2
+    root.geometry(f"{w}x{h}+{x}+{y}")
+
+    entry_style = dict(
+        font=("Consolas", 12), width=36,
+        bg="#141b2a", fg="#e2e8f0", insertbackground="#00d4ff",
+        relief="flat", bd=0, highlightthickness=1,
+        highlightbackground="#1e293b", highlightcolor="#00d4ff",
+    )
+
+    tk.Label(
+        root, text="ИРУ — Интеллектуальный Режим Управления",
+        fg="#00d4ff", bg="#0a0e17", font=("Segoe UI", 11, "bold"),
+    ).pack(pady=(20, 12))
+
+    # ── Имя устройства ──
+    tk.Label(
+        root, text="Имя устройства (латиница, без пробелов):",
+        fg="#94a3b8", bg="#0a0e17", font=("Segoe UI", 9),
+    ).pack(anchor="w", padx=40)
+
+    device_entry = tk.Entry(root, **entry_style)
+    device_entry.insert(0, platform.node())  # hostname по умолчанию
+    device_entry.pack(pady=(2, 8), ipady=5)
+    device_entry.focus_set()
+
+    # ── Токен ──
+    tk.Label(
+        root, text="Токен доступа (получить у администратора):",
+        fg="#94a3b8", bg="#0a0e17", font=("Segoe UI", 9),
+    ).pack(anchor="w", padx=40)
+
+    token_entry = tk.Entry(root, **entry_style)
+    token_entry.pack(pady=(2, 4), ipady=5)
+
+    error_label = tk.Label(
+        root, text="", fg="#ef4444", bg="#0a0e17", font=("Segoe UI", 9),
+    )
+    error_label.pack()
+
+    def on_submit(event=None):
+        dev = device_entry.get().strip()
+        tok = token_entry.get().strip()
+
+        if not dev:
+            error_label.config(text="Введите имя устройства")
+            return
+        # Только латиница, цифры, дефис, подчёркивание
+        if not re.match(r'^[A-Za-z0-9_\-]+$', dev):
+            error_label.config(text="Имя: только латиница, цифры, - и _")
+            return
+        if not tok:
+            error_label.config(text="Введите токен доступа")
+            return
+
+        result[0] = {"token": tok, "device_id": dev}
+        root.destroy()
+
+    def on_close():
+        root.destroy()
+
+    btn = tk.Button(
+        root, text="Подключиться", command=on_submit,
+        bg="#00d4ff", fg="#0a0e17", font=("Segoe UI", 10, "bold"),
+        activebackground="#00b8d4", activeforeground="#0a0e17",
+        relief="flat", cursor="hand2", padx=20, pady=4,
+    )
+    btn.pack(pady=8)
+
+    # Явные биндинги Ctrl+V/C/A + перехват для русской раскладки
+    def _paste(e):
+        try:
+            e.widget.event_generate('<<Paste>>')
+        except Exception:
+            pass
+        return 'break'
+
+    def _copy(e):
+        try:
+            e.widget.event_generate('<<Copy>>')
+        except Exception:
+            pass
+        return 'break'
+
+    def _select_all(e):
+        e.widget.select_range(0, tk.END)
+        return 'break'
+
+    def _key_handler(e):
+        """Перехват Ctrl+клавиша на любой раскладке через keycode."""
+        # keycode 86=V, 67=C, 65=A (одинаково на любой раскладке)
+        if e.state & 0x4:  # Ctrl зажат
+            if e.keycode == 86:  # V
+                return _paste(e)
+            elif e.keycode == 67:  # C
+                return _copy(e)
+            elif e.keycode == 65:  # A
+                return _select_all(e)
+
+    for entry_w in (device_entry, token_entry):
+        entry_w.bind('<Key>', _key_handler)
+
+    root.bind("<Return>", on_submit)
+    root.protocol("WM_DELETE_WINDOW", on_close)
+    root.mainloop()
+
+    return result[0]
 
 
 def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
@@ -40,9 +174,15 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
     try:
         is_windows = platform.system() == "Windows"
 
+        ps_prefix = (
+            "chcp 65001 > $null; "
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+            "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
+            "$OutputEncoding = [System.Text.Encoding]::UTF8; "
+        )
+
         if shell == "auto":
             if is_windows:
-                ps_prefix = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
                 shell_cmd = [
                     "powershell", "-NoProfile", "-NonInteractive",
                     "-Command", ps_prefix + command
@@ -50,7 +190,6 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
             else:
                 shell_cmd = ["bash", "-c", command]
         elif shell == "powershell":
-            ps_prefix = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
             shell_cmd = [
                 "powershell", "-NoProfile", "-NonInteractive",
                 "-Command", ps_prefix + command
@@ -164,7 +303,23 @@ ACTIONS = {
 
 async def run_agent():
     """Основной цикл агента: подключение к серверу и обработка команд."""
-    device_id, server_url, user_token = load_config()
+    cfg = load_config()
+    device_id = cfg["device_id"]
+    server_url = cfg["server_url"]
+    user_token = cfg.get("user_token", "")
+
+    # Первый запуск: токен или device_id пустые — показать окно настройки
+    if not user_token or not device_id:
+        setup = ask_setup_gui()
+        if not setup:
+            print("[agent] настройка отменена, выход")
+            return
+        cfg["user_token"] = setup["token"]
+        cfg["device_id"] = setup["device_id"]
+        save_config(cfg)
+        user_token = setup["token"]
+        device_id = setup["device_id"]
+        print(f"[agent] настройки сохранены в {CONFIG_PATH}")
 
     # Добавить токен в URL
     ws_url = f"{server_url}/ws/{device_id}?user_token={user_token}"
