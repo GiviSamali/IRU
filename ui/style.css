@@ -36,7 +36,29 @@ html, body {
 /* ── AUTH SCREEN ─────────────────────────────── */
 .auth-screen {
   display: flex; align-items: center; justify-content: center;
-  height: 100vh; height: 100dvh; background: radial-gradient(circle at top, #141726 0%, #05060a 55%, #020308 100%);
+  height: 100vh; height: 100dvh;
+  background-image: url('IRU_FON.png');
+  background-size: 110% 110%;
+  background-position: 0% 50%;
+  background-repeat: no-repeat;
+  position: relative;
+  animation: auth-bg-drift 45s linear infinite;
+}
+.auth-screen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at top, rgba(10, 20, 60, 0.85), rgba(0, 0, 0, 0.92));
+  z-index: 0;
+}
+.auth-screen > * {
+  position: relative;
+  z-index: 1;
+}
+@keyframes auth-bg-drift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
 }
 .auth-box {
   width: 700px; padding: 40px 32px;
