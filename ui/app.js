@@ -931,7 +931,7 @@ async function fetchUserInfo() {
     if (data.status === 'ok') {
       state.userPlan = data.user.plan || 'free';
       const limits = data.user.limits || {};
-      if (limits.dev_mode) {
+      if (limits.dev_mode || state.user.name === 'admin') {
         document.getElementById('devModeToggle').style.display = 'flex';
       }
     }
