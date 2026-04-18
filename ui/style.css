@@ -1,7 +1,7 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
   --bg-primary: #020308;
-  --bg-secondary: #05060a;
+  --bg-secondary: #05060a9c;
   --bg-tertiary: #0a0e17;
   --bg-hover: #141726;
   --bg-input: #080b14;
@@ -127,12 +127,12 @@ html, body {
 }
 .sidebar-logo { display: flex; align-items: center; gap: 8px; }
 .sidebar-logo img {
-  height: 22px;
-  width: 22px;
+  height: 44px;
+  width: 44px;
   filter: drop-shadow(0 0 3px rgba(0, 212, 255, 0.16));
   animation: iruIconGlow 3.2s ease-in-out infinite;
 }
-.sidebar-logo-text { font-size: 15px; font-weight: 700; letter-spacing: 2px; color: var(--accent); }
+.sidebar-logo-text { font-size: 22px; font-weight: 700; letter-spacing: 2px; color: var(--accent); }
 .sidebar-logo-ver { font-size: 10px; color: var(--text-muted); letter-spacing: 1px; }
 
 .btn-new-chat {
@@ -216,13 +216,13 @@ html, body {
 /* HEADER */
 .header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0 16px; height: 48px; min-height: 48px;
+  padding: 0 16px; height: 68px; min-height: 68px;
   background: var(--bg-secondary); border-bottom: 1px solid var(--border);
   z-index: 100;
 }
 .header-left { display: flex; align-items: center; gap: 10px; }
 .header-title {
-  font-size: 13px; font-weight: 500; color: var(--text-primary);
+  font-size: 15px; font-weight: 500; color: var(--text-primary);
   max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .header-right { display: flex; align-items: center; gap: 8px; }
@@ -444,7 +444,7 @@ html, body {
   padding: 4px 10px; background: var(--bg-tertiary);
   border: 1px solid var(--border); border-radius: var(--radius);
   color: var(--text-secondary); cursor: pointer; transition: all 0.15s;
-  font-family: var(--font); font-size: 11px; text-decoration: none; white-space: nowrap;
+  font-family: var(--font); font-size: 13px; text-decoration: none; white-space: nowrap;
 }
 .btn-header-link:hover { border-color: var(--accent-dim); color: var(--accent); background: var(--accent-glow); }
 .btn-header-link svg { width: 14px; height: 14px; flex-shrink: 0; }
