@@ -305,33 +305,40 @@ html, body {
 .cmd-entry {
   margin-bottom: 4px; border-left: 2px solid var(--border);
   padding-left: 8px; cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: flex; flex-direction: column;
 }
 .cmd-entry:hover { border-left-color: var(--accent-dim); }
 .cmd-summary {
   display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-muted);
+  min-width: 0;
 }
-.cmd-summary .cmd-icon { font-size: 8px; transition: transform 0.15s; }
+.cmd-summary .cmd-icon { font-size: 8px; transition: transform 0.15s; flex-shrink: 0; }
 .cmd-entry.open .cmd-icon { transform: rotate(90deg); }
 .cmd-summary .cmd-text {
-  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent-dim);
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--accent-dim);
+  font-family: 'JetBrains Mono', monospace;
+}
+.cmd-entry.open .cmd-text {
+  white-space: pre-wrap; word-break: break-word; overflow: visible;
 }
 .cmd-summary .cmd-device {
   font-size: 9px; color: var(--text-muted); background: var(--bg-primary);
-  padding: 1px 5px; border-radius: 3px;
+  padding: 1px 5px; border-radius: 3px; flex-shrink: 0;
 }
-.cmd-summary .cmd-status { font-size: 9px; }
+.cmd-summary .cmd-status { font-size: 9px; flex-shrink: 0; }
 .cmd-status.ok { color: var(--success); }
 .cmd-status.err { color: var(--error); }
 .cmd-details {
-  display: none; margin-top: 4px; font-size: 11px;
+  display: none; margin-top: 6px; font-size: 11px;
   background: var(--bg-primary); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); padding: 6px 8px;
-  max-height: 100px; overflow-y: auto; color: var(--text-secondary);
-  white-space: pre-wrap; word-break: break-all;
+  border-radius: var(--radius-sm); padding: 8px 10px;
+  max-height: 200px; overflow-y: auto; color: var(--text-secondary);
+  white-space: pre-wrap; word-break: break-word;
+  font-family: 'JetBrains Mono', monospace; line-height: 1.5;
 }
+.cmd-details::-webkit-scrollbar { width: 4px; }
+.cmd-details::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .cmd-entry.open .cmd-details { display: block; }
 
 /* Confirm actions */
