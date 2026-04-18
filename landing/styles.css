@@ -56,6 +56,8 @@ body {
     color: #eaf8ff;
     cursor: pointer;
     transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
+    text-decoration: none;
+    display: inline-block;        
 }
 
 .hero-cta:hover {
