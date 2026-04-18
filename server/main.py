@@ -1513,12 +1513,13 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
         await ws.close(code=4001, reason="Недействительный токен пользователя")
         return
 
-    # Проверка лимита устройств (тарифный план)
-    current_count = len(get_user_devices(user["id"]))
-    dev_limit = check_device_limit(user["id"], current_count)
-    if not dev_limit["allowed"] and device_id not in devices:
-        await ws.close(code=4003, reason=f"Лимит устройств исчерпан ({dev_limit['current']}/{dev_limit['limit']})")
-        return
+    # Проверка лимита устройств (тарифный план, admin без ограничений)
+    if user["name"] != "admin":
+        current_count = len(get_user_devices(user["id"]))
+        dev_limit = check_device_limit(user["id"], current_count)
+        if not dev_limit["allowed"] and device_id not in devices:
+            await ws.close(code=4003, reason=f"Лимит устройств исчерпан ({dev_limit['current']}/{dev_limit['limit']})")
+            return
 
     await ws.accept()
     print(f"[ws] agent connected: device_id='{device_id}', user_id={user['id']}, user='{user['name']}'")
