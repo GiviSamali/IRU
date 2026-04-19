@@ -2,10 +2,11 @@
 database.py — SQLite база данных ИРУ v3.5
 
 Таблицы:
-  users         — пользователи (token, имя, plan, лимиты, согласие, terms)
-  chats         — чаты пользователей (title, user_id, timestamps)
-  messages      — сообщения в чатах (role, content, commands_json)
-  training_data — записи для обучения модели (input, команды, контекст ОС)
+  users          — пользователи (token, имя, plan, лимиты, согласие, terms)
+  chats          — чаты пользователей (title, user_id, timestamps)
+  messages       — сообщения в чатах (role, content, commands_json)
+  training_data  — записи для обучения модели (input, команды, контекст ОС)
+  refresh_tokens — JWT refresh-токены (для logout + ротации)
 
 Файл БД создаётся рядом с main.py при первом запуске.
 При старте автоматически создаётся администратор (admin).
@@ -20,11 +21,11 @@ from contextlib import contextmanager
 
 DB_PATH = Path(__file__).parent / "iru.db"
 
-# ── Подключение ──────────────────────────────────────────────────────────
+# ── Подключение ───────────────────────────────────────────────────────────────
 
 @contextmanager
 def get_db():
-    """Получить соединение с БД (context manager)."""
+    """Get DB connection (context manager)."""
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -36,10 +37,10 @@ def get_db():
         conn.close()
 
 
-# ── Инициализация ────────────────────────────────────────────────────────
+# ── Инициализация ───────────────────────────────────────────────────────────────
 
 def init_db():
-    """Создать таблицы, если не существуют. Создать admin-пользователя."""
+    """Create tables if not exist. Create admin user."""
     with get_db() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS users (
@@ -80,9 +81,19 @@ def init_db():
                 created_at  REAL    NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS idx_chats_user ON chats(user_id);
-            CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
-            CREATE INDEX IF NOT EXISTS idx_training_user ON training_data(user_id);
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                token       TEXT    UNIQUE NOT NULL,
+                user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                expires_at  REAL    NOT NULL,
+                created_at  REAL    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chats_user        ON chats(user_id);
+            CREATE INDEX IF NOT EXISTS idx_messages_chat     ON messages(chat_id);
+            CREATE INDEX IF NOT EXISTS idx_training_user     ON training_data(user_id);
+            CREATE INDEX IF NOT EXISTS idx_refresh_token     ON refresh_tokens(token);
+            CREATE INDEX IF NOT EXISTS idx_refresh_user      ON refresh_tokens(user_id);
         """)
 
         # Миграции: добавить новые колонки если их нет
@@ -110,17 +121,24 @@ def init_db():
             print(f"[db] Создан admin-пользователь. Токен: {admin_token}")
 
 
-# ── Users ────────────────────────────────────────────────────────────────
+# ── Users ───────────────────────────────────────────────────────────────────────
 
 def get_user_by_token(token: str) -> dict | None:
-    """Найти пользователя по токену. Возвращает dict или None."""
+    """Find user by static token. Returns dict or None."""
     with get_db() as conn:
         row = conn.execute("SELECT * FROM users WHERE token = ?", (token,)).fetchone()
         return dict(row) if row else None
 
 
+def get_user_by_id(user_id: int) -> dict | None:
+    """Find user by ID. Returns dict or None."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+
 def create_user(name: str) -> dict:
-    """Создать нового пользователя. Возвращает dict с токеном."""
+    """Create new user. Returns dict with token."""
     token = str(uuid.uuid4())
     now = time.time()
     with get_db() as conn:
@@ -133,16 +151,15 @@ def create_user(name: str) -> dict:
 
 
 def list_users() -> list[dict]:
-    """Список всех пользователей."""
+    """List all users."""
     with get_db() as conn:
         rows = conn.execute("SELECT id, token, name, created_at, plan FROM users ORDER BY id").fetchall()
         return [dict(r) for r in rows]
 
 
 def delete_user(user_id: int) -> bool:
-    """Удалить пользователя и все его данные."""
+    """Delete user and all related data."""
     with get_db() as conn:
-        # Удалить training_data, сообщения, чаты
         conn.execute("DELETE FROM training_data WHERE user_id = ?", (user_id,))
         chat_ids = [r["id"] for r in conn.execute(
             "SELECT id FROM chats WHERE user_id = ?", (user_id,)
@@ -150,14 +167,62 @@ def delete_user(user_id: int) -> bool:
         for cid in chat_ids:
             conn.execute("DELETE FROM messages WHERE chat_id = ?", (cid,))
         conn.execute("DELETE FROM chats WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM refresh_tokens WHERE user_id = ?", (user_id,))
         cursor = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         return cursor.rowcount > 0
 
 
-# ── Chats ────────────────────────────────────────────────────────────────
+# ── Refresh Tokens ───────────────────────────────────────────────────────────
+
+def store_refresh_token(user_id: int, token: str, ttl: int) -> None:
+    """Save refresh token to DB."""
+    now = time.time()
+    with get_db() as conn:
+        # Ограничим количество активных refresh-токенов на пользователя (max 5)
+        conn.execute(
+            """DELETE FROM refresh_tokens WHERE user_id = ? AND id NOT IN (
+               SELECT id FROM refresh_tokens WHERE user_id = ?
+               ORDER BY created_at DESC LIMIT 4)""",
+            (user_id, user_id)
+        )
+        conn.execute(
+            "INSERT INTO refresh_tokens (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+            (token, user_id, now + ttl, now)
+        )
+
+
+def get_refresh_token(token: str) -> dict | None:
+    """Get refresh token record if valid (not expired). Returns dict or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM refresh_tokens WHERE token = ? AND expires_at > ?",
+            (token, time.time())
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def revoke_refresh_token(token: str) -> bool:
+    """Revoke (delete) a refresh token."""
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM refresh_tokens WHERE token = ?", (token,))
+        return cursor.rowcount > 0
+
+
+def revoke_all_refresh_tokens(user_id: int) -> None:
+    """Revoke all refresh tokens for a user (logout from all devices)."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM refresh_tokens WHERE user_id = ?", (user_id,))
+
+
+def cleanup_expired_refresh_tokens() -> None:
+    """Delete all expired refresh tokens. Call periodically."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM refresh_tokens WHERE expires_at < ?", (time.time(),))
+
+
+# ── Chats ───────────────────────────────────────────────────────────────────────
 
 def create_chat(user_id: int, title: str = "Новый чат") -> dict:
-    """Создать новый чат для пользователя."""
     now = time.time()
     with get_db() as conn:
         cursor = conn.execute(
@@ -170,7 +235,6 @@ def create_chat(user_id: int, title: str = "Новый чат") -> dict:
 
 
 def list_chats(user_id: int) -> list[dict]:
-    """Список чатов пользователя (новые сверху)."""
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM chats WHERE user_id = ? ORDER BY updated_at DESC",
@@ -180,7 +244,6 @@ def list_chats(user_id: int) -> list[dict]:
 
 
 def get_chat(chat_id: int, user_id: int) -> dict | None:
-    """Получить чат, только если принадлежит пользователю."""
     with get_db() as conn:
         row = conn.execute(
             "SELECT * FROM chats WHERE id = ? AND user_id = ?",
@@ -190,7 +253,6 @@ def get_chat(chat_id: int, user_id: int) -> dict | None:
 
 
 def update_chat_title(chat_id: int, user_id: int, title: str) -> bool:
-    """Обновить название чата."""
     with get_db() as conn:
         cursor = conn.execute(
             "UPDATE chats SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?",
@@ -200,7 +262,6 @@ def update_chat_title(chat_id: int, user_id: int, title: str) -> bool:
 
 
 def delete_chat(chat_id: int, user_id: int) -> bool:
-    """Удалить чат и все связанные данные."""
     with get_db() as conn:
         conn.execute("DELETE FROM training_data WHERE chat_id = ?", (chat_id,))
         conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
@@ -212,7 +273,6 @@ def delete_chat(chat_id: int, user_id: int) -> bool:
 
 
 def touch_chat(chat_id: int):
-    """Обновить updated_at чата (вызывать при новом сообщении)."""
     with get_db() as conn:
         conn.execute(
             "UPDATE chats SET updated_at = ? WHERE id = ?",
@@ -220,10 +280,9 @@ def touch_chat(chat_id: int):
         )
 
 
-# ── Messages ─────────────────────────────────────────────────────────────
+# ── Messages ───────────────────────────────────────────────────────────────────
 
 def add_message(chat_id: int, role: str, content: str, commands: list | None = None) -> dict:
-    """Добавить сообщение в чат."""
     now = time.time()
     commands_json = json.dumps(commands, ensure_ascii=False) if commands else None
     with get_db() as conn:
@@ -231,7 +290,6 @@ def add_message(chat_id: int, role: str, content: str, commands: list | None = N
             "INSERT INTO messages (chat_id, role, content, commands, created_at) VALUES (?, ?, ?, ?, ?)",
             (chat_id, role, content, commands_json, now)
         )
-        # Обновить время чата
         conn.execute("UPDATE chats SET updated_at = ? WHERE id = ?", (now, chat_id))
         msg_id = cursor.lastrowid
         row = conn.execute("SELECT * FROM messages WHERE id = ?", (msg_id,)).fetchone()
@@ -241,38 +299,31 @@ def add_message(chat_id: int, role: str, content: str, commands: list | None = N
 
 
 def get_messages(chat_id: int, limit: int = 50) -> list[dict]:
-    """
-    Получить последние N сообщений чата (скользящее окно).
-    Возвращает в хронологическом порядке (старые → новые).
-    """
     with get_db() as conn:
         rows = conn.execute(
             """SELECT * FROM messages WHERE chat_id = ?
                ORDER BY created_at DESC LIMIT ?""",
             (chat_id, limit)
         ).fetchall()
-
         messages = []
-        for row in reversed(rows):  # Хронологический порядок
+        for row in reversed(rows):
             msg = dict(row)
             if msg["commands"]:
                 try:
                     msg["commands"] = json.loads(msg["commands"])
                 except json.JSONDecodeError:
                     msg["commands"] = None
-            return_msg = {
-                "id": msg["id"],
-                "role": msg["role"],
-                "content": msg["content"],
-                "commands": msg["commands"],
+            messages.append({
+                "id":         msg["id"],
+                "role":       msg["role"],
+                "content":    msg["content"],
+                "commands":   msg["commands"],
                 "created_at": msg["created_at"],
-            }
-            messages.append(return_msg)
+            })
         return messages
 
 
 def get_message_count(chat_id: int) -> int:
-    """Количество сообщений в чате."""
     with get_db() as conn:
         row = conn.execute(
             "SELECT COUNT(*) as cnt FROM messages WHERE chat_id = ?",
@@ -281,13 +332,12 @@ def get_message_count(chat_id: int) -> int:
         return row["cnt"]
 
 
-# ── Training Data ───────────────────────────────────────────────────
+# ── Training Data ──────────────────────────────────────────────────────────────
 
 def add_training_record(user_id: int, chat_id: int, input_text: str,
                         os_info: str, hostname: str, method: str,
                         running_processes: list, commands: list,
                         success: bool) -> dict:
-    """Сохранить запись для обучения модели."""
     now = time.time()
     with get_db() as conn:
         cursor = conn.execute(
@@ -303,7 +353,6 @@ def add_training_record(user_id: int, chat_id: int, input_text: str,
 
 
 def get_training_data(limit: int = 100, offset: int = 0) -> list[dict]:
-    """Получить записи обучения (для админа)."""
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM training_data ORDER BY created_at DESC LIMIT ? OFFSET ?",
@@ -312,31 +361,25 @@ def get_training_data(limit: int = 100, offset: int = 0) -> list[dict]:
         result = []
         for row in rows:
             d = dict(row)
-            if d.get("running_processes"):
-                try:
-                    d["running_processes"] = json.loads(d["running_processes"])
-                except Exception:
-                    pass
-            if d.get("commands"):
-                try:
-                    d["commands"] = json.loads(d["commands"])
-                except Exception:
-                    pass
+            for field in ("running_processes", "commands"):
+                if d.get(field):
+                    try:
+                        d[field] = json.loads(d[field])
+                    except Exception:
+                        pass
             result.append(d)
         return result
 
 
 def get_training_count() -> int:
-    """Количество записей обучения."""
     with get_db() as conn:
         row = conn.execute("SELECT COUNT(*) as cnt FROM training_data").fetchone()
         return row["cnt"]
 
 
-# ── Согласие пользователя ──────────────────────────────────────────
+# ── Согласие пользователя ────────────────────────────────────────────────────────
 
 def set_user_consent(user_id: int, consent: bool) -> bool:
-    """Установить согласие пользователя на сбор данных."""
     with get_db() as conn:
         cursor = conn.execute(
             "UPDATE users SET data_consent = ? WHERE id = ?",
@@ -345,9 +388,8 @@ def set_user_consent(user_id: int, consent: bool) -> bool:
         return cursor.rowcount > 0
 
 
-# ── Plans & Limits ──────────────────────────────────────────────────
+# ── Plans & Limits ──────────────────────────────────────────────────────────────
 
-# Конфигурация тарифных планов
 PLAN_LIMITS = {
     "free":     {"max_devices": 1,    "max_commands_per_day": 30,   "dev_mode": False},
     "pro":      {"max_devices": 9999, "max_commands_per_day": 9999, "dev_mode": True},
@@ -356,14 +398,12 @@ PLAN_LIMITS = {
 
 
 def get_user_plan(user_id: int) -> str:
-    """Получить план пользователя."""
     with get_db() as conn:
         row = conn.execute("SELECT plan FROM users WHERE id = ?", (user_id,)).fetchone()
         return row["plan"] if row and row["plan"] else "free"
 
 
 def set_user_plan(user_id: int, plan: str) -> bool:
-    """Установить план пользователя."""
     if plan not in PLAN_LIMITS:
         return False
     with get_db() as conn:
@@ -375,14 +415,8 @@ def set_user_plan(user_id: int, plan: str) -> bool:
 
 
 def check_daily_command_limit(user_id: int) -> dict:
-    """
-    Проверить дневной лимит команд.
-    Возвращает {"allowed": bool, "used": int, "limit": int}.
-    Автоматически сбрасывает счётчик при смене дня.
-    """
     import datetime
     today = datetime.date.today().isoformat()
-
     with get_db() as conn:
         row = conn.execute(
             "SELECT plan, daily_commands_count, daily_commands_date FROM users WHERE id = ?",
@@ -390,29 +424,23 @@ def check_daily_command_limit(user_id: int) -> dict:
         ).fetchone()
         if not row:
             return {"allowed": False, "used": 0, "limit": 0}
-
-        plan = row["plan"] or "free"
+        plan   = row["plan"] or "free"
         limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
-        count = row["daily_commands_count"] or 0
-        last_date = row["daily_commands_date"] or ""
-
-        # Сброс счётчика при смене дня
-        if last_date != today:
+        count  = row["daily_commands_count"] or 0
+        if row["daily_commands_date"] != today:
             count = 0
             conn.execute(
                 "UPDATE users SET daily_commands_count = 0, daily_commands_date = ? WHERE id = ?",
                 (today, user_id)
             )
-
         return {
             "allowed": count < limits["max_commands_per_day"],
-            "used": count,
-            "limit": limits["max_commands_per_day"],
+            "used":    count,
+            "limit":   limits["max_commands_per_day"],
         }
 
 
 def increment_daily_commands(user_id: int):
-    """Увеличить счётчик дневных команд на 1."""
     import datetime
     today = datetime.date.today().isoformat()
     with get_db() as conn:
@@ -423,23 +451,18 @@ def increment_daily_commands(user_id: int):
 
 
 def check_device_limit(user_id: int, current_device_count: int) -> dict:
-    """
-    Проверить лимит устройств.
-    Возвращает {"allowed": bool, "current": int, "limit": int}.
-    """
     with get_db() as conn:
         row = conn.execute("SELECT plan FROM users WHERE id = ?", (user_id,)).fetchone()
-        plan = (row["plan"] if row and row["plan"] else "free")
+        plan   = (row["plan"] if row and row["plan"] else "free")
         limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
         return {
             "allowed": current_device_count < limits["max_devices"],
             "current": current_device_count,
-            "limit": limits["max_devices"],
+            "limit":   limits["max_devices"],
         }
 
 
 def accept_terms(user_id: int) -> bool:
-    """Принять пользовательское соглашение."""
     with get_db() as conn:
         cursor = conn.execute(
             "UPDATE users SET accepted_terms_at = ? WHERE id = ?",
@@ -449,7 +472,6 @@ def accept_terms(user_id: int) -> bool:
 
 
 def has_accepted_terms(user_id: int) -> bool:
-    """Проверить, принял ли пользователь соглашение."""
     with get_db() as conn:
         row = conn.execute(
             "SELECT accepted_terms_at FROM users WHERE id = ?",
