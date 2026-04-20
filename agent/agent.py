@@ -1,5 +1,5 @@
 """
-agent.py — универсальный агент-исполнитель ИРУ v3.3
+agent.py — универсальный агент-исполнитель ИРУ v3.5
 
 Подключается к серверу по WebSocket с токеном пользователя и выполняет команды:
 - execute_cmd: выполнить команду в PowerShell/bash (с корректной кириллицей)
@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
-AGENT_VERSION = "3.3"
+AGENT_VERSION = "3.5"
 
 # Для PyInstaller: определяем путь к exe, а не к временной папке
 if getattr(sys, 'frozen', False):
