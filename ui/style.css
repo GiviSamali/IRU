@@ -444,8 +444,10 @@ html, body {
   position: absolute; bottom: calc(100% + 6px); left: 0;
   min-width: 200px; background: var(--bg-tertiary);
   border: 1px solid var(--border); border-radius: var(--radius);
-  box-shadow: 0 -8px 24px rgba(0,0,0,0.4); z-index: 200; display: none; overflow: hidden;
+  box-shadow: 0 -8px 24px rgba(0,0,0,0.4); z-index: 200; display: none; overflow-y: auto; max-height: 200px;
 }
+.input-device-dropdown::-webkit-scrollbar { width: 4px; }
+.input-device-dropdown::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .input-device-dropdown.show { display: block; }
 .input-device-dropdown-item {
   display: flex; align-items: center; gap: 8px;
@@ -481,7 +483,7 @@ html, body {
 
 /* EXPLORER PANEL */
 .explorer-panel {
-  width: 0; overflow: hidden; border-left: 1px solid var(--border);
+  width: 0; overflow: hidden; border-left: 1px solid var(--border); min-height: 0;
   background: var(--bg-secondary); transition: width 0.25s ease;
   display: flex; flex-direction: column;
 }
@@ -549,10 +551,12 @@ html, body {
 .device-select { position: relative; }
 .device-dropdown {
   position: absolute; top: calc(100% + 4px); right: 0;
-  min-width: 200px; background: var(--bg-tertiary);
+  min-width: 200px; max-height: 300px; background: var(--bg-tertiary);
   border: 1px solid var(--border); border-radius: var(--radius);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 200; display: none; overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 200; display: none; overflow-y: auto;
 }
+.device-dropdown::-webkit-scrollbar { width: 4px; }
+.device-dropdown::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .device-dropdown.show { display: block; }
 .device-dropdown-item {
   display: flex; align-items: center; gap: 8px;
@@ -579,7 +583,7 @@ html, body {
 .admin-panel {
   width: 0; overflow: hidden; border-left: 1px solid var(--border);
   background: var(--bg-secondary); transition: width 0.25s ease;
-  display: flex; flex-direction: column;
+  display: flex; flex-direction: column; min-height: 0;
 }
 .admin-panel.open { width: 340px; }
 .admin-header {
@@ -836,7 +840,7 @@ html, body {
 .devmode-panel {
   width: 0; overflow: hidden; border-left: 1px solid var(--border);
   background: var(--bg-secondary); transition: width 0.25s ease;
-  display: flex; flex-direction: column;
+  display: flex; flex-direction: column; min-height: 0;
 }
 .devmode-panel.open { width: 420px; }
 .devmode-header {
