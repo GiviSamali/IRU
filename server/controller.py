@@ -64,7 +64,7 @@ SYSTEM_PROMPT_TEMPLATE = """\
 ID: {current_device_id}
 Hostname: {current_hostname}
 ОС: {current_os} ({current_os_version})
-
+{device_profile_block}
 ## Доступные инструменты
 
 ### 1. execute_cmd
@@ -223,6 +223,42 @@ def build_devices_block(all_devices: dict) -> str:
     return "\n".join(lines)
 
 
+def build_device_profile_block(profile: dict | None) -> str:
+    """Сформировать блок профиля устройства для промпта.
+    Содержит информацию о железе, путях, пользователе."""
+    if not profile:
+        return ""
+
+    lines = ["\n## Профиль устройства"]
+
+    if profile.get("username"):
+        lines.append(f"Пользователь Windows: {profile['username']}")
+    if profile.get("desktop_path"):
+        lines.append(f"Рабочий стол: {profile['desktop_path']}")
+    if profile.get("cpu"):
+        lines.append(f"Процессор: {profile['cpu']}")
+    if profile.get("gpu"):
+        lines.append(f"Видеокарта: {profile['gpu']}")
+    if profile.get("ram_gb"):
+        lines.append(f"Оперативная память: {profile['ram_gb']} ГБ")
+
+    disks = profile.get("disks")
+    if disks and isinstance(disks, list):
+        disk_lines = []
+        for d in disks:
+            drive = d.get("drive", "?")
+            total = d.get("total_gb", 0)
+            free = d.get("free_gb", 0)
+            disk_lines.append(f"{drive} {total} ГБ всего, {free} ГБ свободно")
+        lines.append(f"Диски: {'; '.join(disk_lines)}")
+
+    # Вернуть пустую строку если только заголовок
+    if len(lines) <= 1:
+        return ""
+
+    return "\n".join(lines)
+
+
 # ── Построение истории чата для LLM ──────────────────────────────────────
 
 # Маркеры онбординговых ответов (фильтруем из истории, когда устройства уже подключены)
@@ -276,6 +312,7 @@ async def process_nl_command(
     chat_history: list[dict] | None = None,
     user_id: int = None,
     chat_id: int = None,
+    device_profile: dict | None = None,
 ) -> dict:
     """
     Обработка команды на естественном языке.
@@ -302,12 +339,15 @@ async def process_nl_command(
     hostname = device_info.get("hostname", "unknown")
     os_version = device_info.get("os_version", "")
 
+    profile_block = build_device_profile_block(device_profile)
+
     system_msg = SYSTEM_PROMPT_TEMPLATE.format(
         devices_block=devices_block,
         current_device_id=device_id,
         current_hostname=hostname,
         current_os=os_info,
         current_os_version=os_version,
+        device_profile_block=profile_block,
     )
 
     # Формируем messages: system + история чата (без текущего сообщения) + текущее

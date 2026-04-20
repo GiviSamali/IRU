@@ -141,6 +141,7 @@ from database import (
     store_refresh_token, get_refresh_token, revoke_refresh_token,
     revoke_all_refresh_tokens, cleanup_expired_refresh_tokens,
     add_audit_log, get_audit_log, get_audit_log_count,
+    upsert_device_profile, get_device_profile, get_user_device_profiles,
 )
 from auth import (
     create_access_token, verify_access_token, create_refresh_token,
@@ -771,6 +772,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
         user_devs = get_user_devices(user_id)
         all_devices_info = {did: {"info": d.get("info", {})} for did, d in user_devs.items()}
         chat_history = get_messages(chat_id, limit=50)
+        # Получить сохранённый профиль устройства из БД
+        device_profile = get_device_profile(device_id)
 
         async def send_fn(target_device_id, action, params):
             target_dev = devices.get(target_device_id)
@@ -787,6 +790,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 send_command_fn=send_fn,
                 get_file_link_fn=get_file_link_fn,
                 chat_history=chat_history,
+                device_profile=device_profile,
             )
             return {
                 "device_id": device_id,
@@ -1623,6 +1627,47 @@ async def api_admin_audit(request: Request,
     return {"status": "ok", "logs": logs, "total": total}
 
 
+# ── Device Profiles API ───────────────────────────────────────────────
+
+@app.get("/api/device_profiles")
+async def api_device_profiles(request: Request):
+    """Получить профили устройств текущего пользователя. Admin видит все."""
+    user = get_current_user(request)
+    if user["name"] == "admin":
+        # Admin: можно фильтровать по user_id, иначе все профили
+        from database import get_db
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM device_profiles ORDER BY updated_at DESC"
+            ).fetchall()
+            profiles = []
+            for row in rows:
+                d = dict(row)
+                if d.get("disks"):
+                    try:
+                        import json as _json
+                        d["disks"] = _json.loads(d["disks"])
+                    except Exception:
+                        pass
+                profiles.append(d)
+    else:
+        profiles = get_user_device_profiles(user["id"])
+    return {"status": "ok", "profiles": profiles}
+
+
+@app.get("/api/device_profiles/{device_id}")
+async def api_device_profile(device_id: str, request: Request):
+    """Получить профиль конкретного устройства."""
+    user = get_current_user(request)
+    profile = get_device_profile(device_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профиль устройства не найден")
+    # Проверка доступа: владелец или admin
+    if user["name"] != "admin" and profile.get("user_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    return {"status": "ok", "profile": profile}
+
+
 # ── РЕЖИМ РАЗРАБОТЧИКА (RAW CMD) ────────────────────────────────────────
 
 class RawCommand(BaseModel):
@@ -1739,7 +1784,14 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
             msg_type = data.get("type")
 
             if msg_type == "register":
-                devices[device_id]["info"] = data.get("payload", {})
+                payload = data.get("payload", {})
+                devices[device_id]["info"] = payload
+                # Сохранить device profile в БД
+                try:
+                    upsert_device_profile(device_id, user["id"], payload)
+                    print(f"[ws] device profile saved: {device_id}")
+                except Exception as e:
+                    print(f"[ws] failed to save device profile: {e}")
                 print(f"[ws] registered: {device_id} — {data.get('payload', {})}")
 
             elif msg_type == "result":

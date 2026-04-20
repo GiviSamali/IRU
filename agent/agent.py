@@ -293,6 +293,106 @@ def get_file_content(path: str, max_size: int = 50_000_000) -> dict:
         return {"error": str(e)}
 
 
+def collect_system_info() -> dict:
+    """Собрать информацию о системе для device profile.
+    Выполняется один раз при запуске агента."""
+    info = {
+        "device_id": "",   # заполняется позже
+        "os": platform.system(),
+        "os_version": platform.version(),
+        "hostname": platform.node(),
+        "username": "",
+        "desktop_path": "",
+        "cpu": "",
+        "gpu": "",
+        "ram_gb": 0,
+        "disks": [],
+        "machine_guid": "",
+    }
+
+    is_windows = platform.system() == "Windows"
+
+    # Имя пользователя
+    info["username"] = os.environ.get("USERNAME", "") if is_windows else os.environ.get("USER", "")
+
+    # Путь к рабочему столу
+    desktop = Path.home() / "Desktop"
+    if not desktop.exists():
+        desktop = Path.home() / "Рабочий стол"
+    info["desktop_path"] = str(desktop) if desktop.exists() else str(Path.home())
+
+    if is_windows:
+        # CPU через PowerShell (WMI)
+        try:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-CimInstance Win32_Processor).Name"],
+                capture_output=True, encoding="utf-8", errors="replace", timeout=10
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                info["cpu"] = r.stdout.strip()
+        except Exception:
+            pass
+
+        # GPU
+        try:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-CimInstance Win32_VideoController).Name -join '; '"],
+                capture_output=True, encoding="utf-8", errors="replace", timeout=10
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                info["gpu"] = r.stdout.strip()
+        except Exception:
+            pass
+
+        # RAM (ГБ)
+        try:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)"],
+                capture_output=True, encoding="utf-8", errors="replace", timeout=10
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                info["ram_gb"] = float(r.stdout.strip())
+        except Exception:
+            pass
+
+        # Диски
+        try:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" | "
+                 "ForEach-Object { $_.DeviceID + '|' + [math]::Round($_.Size/1GB,1).ToString() + '|' + [math]::Round($_.FreeSpace/1GB,1).ToString() }"],
+                capture_output=True, encoding="utf-8", errors="replace", timeout=10
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                for line in r.stdout.strip().splitlines():
+                    parts = line.strip().split("|")
+                    if len(parts) == 3:
+                        info["disks"].append({
+                            "drive": parts[0],
+                            "total_gb": float(parts[1]),
+                            "free_gb": float(parts[2]),
+                        })
+        except Exception:
+            pass
+
+        # Machine GUID
+        try:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography' -Name MachineGuid).MachineGuid"],
+                capture_output=True, encoding="utf-8", errors="replace", timeout=10
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                info["machine_guid"] = r.stdout.strip()
+        except Exception:
+            pass
+
+    return info
+
+
 # Реестр доступных действий
 ACTIONS = {
     "execute_cmd": lambda **p: execute_cmd(**p),
@@ -325,18 +425,20 @@ async def run_agent():
     ws_url = f"{server_url}/ws/{device_id}?user_token={user_token}"
     print(f"[agent] device={device_id}, connecting to {server_url}/ws/{device_id}")
 
+    # Собрать системную информацию один раз перед подключением
+    print("[agent] collecting system info...")
+    sys_info = collect_system_info()
+    sys_info["device_id"] = device_id
+    print(f"[agent] system info collected: cpu={sys_info.get('cpu', '?')}, "
+          f"ram={sys_info.get('ram_gb', '?')}GB, disks={len(sys_info.get('disks', []))}")
+
     async for ws in websockets.connect(ws_url):
         try:
             print(f"[agent] connected")
-            # Отправить информацию об устройстве
+            # Отправить полный профиль устройства
             await ws.send(json.dumps({
                 "type": "register",
-                "payload": {
-                    "device_id": device_id,
-                    "os": platform.system(),
-                    "os_version": platform.version(),
-                    "hostname": platform.node(),
-                }
+                "payload": sys_info
             }))
 
             while True:

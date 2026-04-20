@@ -102,6 +102,25 @@ def init_db():
                 created_at  REAL    NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS device_profiles (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id   TEXT    UNIQUE NOT NULL,
+                user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                hostname    TEXT,
+                os          TEXT,
+                os_version  TEXT,
+                username    TEXT,
+                desktop_path TEXT,
+                cpu         TEXT,
+                gpu         TEXT,
+                ram_gb      REAL,
+                disks       TEXT,
+                machine_guid TEXT,
+                updated_at  REAL    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_device_profiles_device ON device_profiles(device_id);
+            CREATE INDEX IF NOT EXISTS idx_device_profiles_user   ON device_profiles(user_id);
             CREATE INDEX IF NOT EXISTS idx_refresh_token     ON refresh_tokens(token);
             CREATE INDEX IF NOT EXISTS idx_refresh_user      ON refresh_tokens(user_id);
             CREATE INDEX IF NOT EXISTS idx_audit_user        ON audit_log(user_id);
@@ -535,3 +554,99 @@ def get_audit_log_count(user_id: int | None = None) -> int:
         else:
             row = conn.execute("SELECT COUNT(*) as cnt FROM audit_log").fetchone()
         return row["cnt"]
+
+
+# ── Device Profiles ─────────────────────────────────────────────────────────
+
+def upsert_device_profile(device_id: str, user_id: int, profile: dict) -> None:
+    """Insert or update device profile. profile — dict с полями hostname, os, etc."""
+    now = time.time()
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM device_profiles WHERE device_id = ?", (device_id,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """UPDATE device_profiles SET
+                    user_id = ?, hostname = ?, os = ?, os_version = ?,
+                    username = ?, desktop_path = ?, cpu = ?, gpu = ?,
+                    ram_gb = ?, disks = ?, machine_guid = ?, updated_at = ?
+                   WHERE device_id = ?""",
+                (user_id,
+                 profile.get("hostname"),
+                 profile.get("os"),
+                 profile.get("os_version"),
+                 profile.get("username"),
+                 profile.get("desktop_path"),
+                 profile.get("cpu"),
+                 profile.get("gpu"),
+                 profile.get("ram_gb"),
+                 json.dumps(profile.get("disks"), ensure_ascii=False) if profile.get("disks") else None,
+                 profile.get("machine_guid"),
+                 now,
+                 device_id)
+            )
+        else:
+            conn.execute(
+                """INSERT INTO device_profiles
+                   (device_id, user_id, hostname, os, os_version,
+                    username, desktop_path, cpu, gpu, ram_gb, disks, machine_guid, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (device_id, user_id,
+                 profile.get("hostname"),
+                 profile.get("os"),
+                 profile.get("os_version"),
+                 profile.get("username"),
+                 profile.get("desktop_path"),
+                 profile.get("cpu"),
+                 profile.get("gpu"),
+                 profile.get("ram_gb"),
+                 json.dumps(profile.get("disks"), ensure_ascii=False) if profile.get("disks") else None,
+                 profile.get("machine_guid"),
+                 now)
+            )
+
+
+def get_device_profile(device_id: str) -> dict | None:
+    """Get device profile by device_id. Returns dict or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM device_profiles WHERE device_id = ?", (device_id,)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        if d.get("disks"):
+            try:
+                d["disks"] = json.loads(d["disks"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return d
+
+
+def get_user_device_profiles(user_id: int) -> list[dict]:
+    """Get all device profiles for a user."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM device_profiles WHERE user_id = ? ORDER BY updated_at DESC",
+            (user_id,)
+        ).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            if d.get("disks"):
+                try:
+                    d["disks"] = json.loads(d["disks"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            result.append(d)
+        return result
+
+
+def delete_device_profile(device_id: str) -> bool:
+    """Delete device profile."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM device_profiles WHERE device_id = ?", (device_id,)
+        )
+        return cursor.rowcount > 0
