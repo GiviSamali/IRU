@@ -89,6 +89,20 @@ def check_rate_limit(user_id: str) -> bool:
     rate_counters[user_id].append(now)
     return True
 
+# Ограничение по IP: 10 запросов/мин (защита от спама вкладками)
+IP_RATE_LIMIT = 10
+IP_RATE_WINDOW = 60
+ip_rate_counters: dict[str, list[float]] = defaultdict(list)
+
+def check_ip_rate_limit(ip: str) -> bool:
+    now = time.time()
+    window_start = now - IP_RATE_WINDOW
+    ip_rate_counters[ip] = [t for t in ip_rate_counters[ip] if t > window_start]
+    if len(ip_rate_counters[ip]) >= IP_RATE_LIMIT:
+        return False
+    ip_rate_counters[ip].append(now)
+    return True
+
 # ── ЧЁРНЫЙ СПИСОК ОПАСНЫХ КОМАНД ───────────────────────────
 # Команды, которые агент НИКОГДА не должен выполнять
 # Команды, которые ЗАПРЕЩЕНЫ полностью (никогда не выполняются)
@@ -1259,6 +1273,9 @@ async def direct_command(cmd: DirectCommand, request: Request):
     user = get_current_user(request)
 
     # Rate limiting
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_ip_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="IP rate limit: 10 req/min")
     if not check_rate_limit(str(user["id"])):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
@@ -1296,6 +1313,9 @@ async def nl_command(cmd: NLCommand, request: Request):
     cleanup_old_tasks()
 
     # Rate limiting
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_ip_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="IP rate limit: 10 req/min")
     if not check_rate_limit(str(user["id"])):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
@@ -1736,6 +1756,9 @@ async def api_raw_command(cmd: RawCommand, request: Request):
             return {"status": "error", "error": "Режим разработчика доступен только на тарифе Pro или Business."}
 
         # Rate limiting
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_ip_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="IP rate limit: 10 req/min")
     if not check_rate_limit(str(user["id"])):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
