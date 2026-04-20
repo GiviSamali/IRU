@@ -661,6 +661,55 @@ html, body {
   font-size: 9px; color: var(--accent); margin-left: 4px;
 }
 
+/* ── ADMIN TABS ─────────────────────────────── */
+.admin-tabs {
+  display: flex; gap: 2px;
+}
+.admin-tab {
+  padding: 4px 10px; background: none; border: 1px solid transparent;
+  border-radius: var(--radius-sm); cursor: pointer;
+  font-family: var(--font); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.5px; text-transform: uppercase;
+  color: var(--text-muted); transition: all 0.15s;
+}
+.admin-tab:hover { color: var(--text-secondary); }
+.admin-tab.active {
+  color: var(--accent); border-color: var(--accent-dim);
+  background: var(--accent-glow);
+}
+
+/* ── AUDIT LOG ───────────────────────────────── */
+.audit-log-list {
+  padding: 6px; overflow-y: auto; max-height: calc(100vh - 120px);
+}
+.audit-row {
+  display: grid; grid-template-columns: 90px 100px 60px 1fr 80px;
+  gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--border);
+  font-size: 10px; align-items: center;
+}
+.audit-row:hover { background: var(--accent-glow); }
+.audit-ts { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.audit-action {
+  color: var(--accent); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.audit-who { color: var(--text-secondary); }
+.audit-detail {
+  color: var(--text-muted); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audit-ip { color: var(--text-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.audit-nav {
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px; padding: 8px; font-size: 10px; color: var(--text-muted);
+}
+.audit-nav button {
+  padding: 3px 8px; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--accent); cursor: pointer;
+  font-family: var(--font); font-size: 10px;
+}
+.audit-nav button:hover { background: var(--accent-glow); }
+
 /* ── CONSENT MODAL ──────────────────────────── */
 .consent-modal {
   display: none; position: fixed; inset: 0; z-index: 500;

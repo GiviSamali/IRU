@@ -17,8 +17,89 @@ const state = {
 
 const API = window.location.origin;
 
+// ── JWT TOKEN MANAGEMENT ────────────────────────────────
+
+let _accessToken = localStorage.getItem('iru_access_token') || '';
+let _refreshToken = localStorage.getItem('iru_refresh_token') || '';
+let _refreshTimer = null;
+
+function _saveTokens(access, refresh) {
+  _accessToken = access || '';
+  _refreshToken = refresh || '';
+  if (access) localStorage.setItem('iru_access_token', access);
+  else localStorage.removeItem('iru_access_token');
+  if (refresh) localStorage.setItem('iru_refresh_token', refresh);
+  else localStorage.removeItem('iru_refresh_token');
+  _scheduleRefresh();
+}
+
+function _clearTokens() {
+  _accessToken = '';
+  _refreshToken = '';
+  localStorage.removeItem('iru_access_token');
+  localStorage.removeItem('iru_refresh_token');
+  localStorage.removeItem('iru_token');
+  if (_refreshTimer) { clearTimeout(_refreshTimer); _refreshTimer = null; }
+}
+
+function _scheduleRefresh() {
+  if (_refreshTimer) clearTimeout(_refreshTimer);
+  if (!_accessToken) return;
+  // Обновляем за 5 минут до истечения (access = 8ч, обновляем каждые 7ч4мин55с)
+  try {
+    const payload = JSON.parse(atob(_accessToken.split('.')[1]));
+    const expiresIn = (payload.exp * 1000) - Date.now() - 300000; // 5 мин запас
+    if (expiresIn > 0) {
+      _refreshTimer = setTimeout(_doRefresh, expiresIn);
+    } else {
+      _doRefresh();
+    }
+  } catch { /* невалидный токен */ }
+}
+
+async function _doRefresh() {
+  if (!_refreshToken) return false;
+  try {
+    const r = await fetch(`${API}/api/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: _refreshToken }),
+    });
+    const data = await r.json();
+    if (data.status === 'ok' && data.access_token) {
+      _accessToken = data.access_token;
+      localStorage.setItem('iru_access_token', data.access_token);
+      _scheduleRefresh();
+      return true;
+    }
+  } catch {}
+  // Refresh не удался — вылогинить
+  doLogout();
+  return false;
+}
+
 function authHeaders() {
-  return { 'Content-Type': 'application/json', 'X-Token': state.user?.token || '' };
+  const h = { 'Content-Type': 'application/json' };
+  if (_accessToken) {
+    h['Authorization'] = 'Bearer ' + _accessToken;
+  } else if (state.user?.token) {
+    h['X-Token'] = state.user.token;  // fallback для обратной совместимости
+  }
+  return h;
+}
+
+// Обёртка fetch с автообновлением токена
+async function apiFetch(url, opts = {}) {
+  if (!opts.headers) opts.headers = authHeaders();
+  let r = await fetch(url, opts);
+  if (r.status === 401 && _refreshToken) {
+    const ok = await _doRefresh();
+    if (ok) {
+      opts.headers = authHeaders();
+      r = await fetch(url, opts);
+    }
+  }
+  return r;
 }
 
 // ── AUTH ─────────────────────────────────────────────
@@ -40,6 +121,7 @@ async function doAuth() {
     if (data.status === 'ok') {
       state.user = data.user;
       localStorage.setItem('iru_token', token);
+      _saveTokens(data.access_token, data.refresh_token);
       showApp();
     } else {
       document.getElementById('authError').textContent = data.error || 'Ошибка авторизации';
@@ -51,7 +133,15 @@ async function doAuth() {
 }
 
 function doLogout() {
-  localStorage.removeItem('iru_token');
+  // Отзыв refresh token на сервере
+  if (_refreshToken) {
+    fetch(`${API}/api/logout`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ refresh_token: _refreshToken }),
+    }).catch(() => {});
+  }
+  _clearTokens();
   state.user = null;
   state.chats = [];
   state.currentChatId = null;
@@ -61,6 +151,20 @@ function doLogout() {
 }
 
 async function tryAutoLogin() {
+  // Сначала пробуем JWT refresh
+  if (_refreshToken) {
+    const ok = await _doRefresh();
+    if (ok && _accessToken) {
+      // Получим user info из токена
+      try {
+        const payload = JSON.parse(atob(_accessToken.split('.')[1]));
+        state.user = { id: parseInt(payload.sub), name: payload.name, token: localStorage.getItem('iru_token') || '' };
+        showApp();
+        return;
+      } catch {}
+    }
+  }
+  // Fallback: старый токен
   const token = localStorage.getItem('iru_token');
   if (!token) return;
   try {
@@ -72,6 +176,7 @@ async function tryAutoLogin() {
     const data = await r.json();
     if (data.status === 'ok') {
       state.user = data.user;
+      _saveTokens(data.access_token, data.refresh_token);
       showApp();
     }
   } catch {}
@@ -96,7 +201,7 @@ function showApp() {
 // ── CHATS ────────────────────────────────────────────
 async function loadChats() {
   try {
-    const r = await fetch(`${API}/api/chats`, { headers: authHeaders() });
+    const r = await apiFetch(`${API}/api/chats`, { headers: authHeaders() });
     const data = await r.json();
     state.chats = data.chats || [];
     renderChatList();
@@ -115,7 +220,7 @@ async function loadChats() {
 
 async function createNewChat() {
   try {
-    const r = await fetch(`${API}/api/chats`, {
+    const r = await apiFetch(`${API}/api/chats`, {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({ title: '' }),
     });
@@ -137,7 +242,7 @@ async function openChat(chatId) {
 
   // Загрузить сообщения
   try {
-    const r = await fetch(`${API}/api/chats/${chatId}/messages`, { headers: authHeaders() });
+    const r = await apiFetch(`${API}/api/chats/${chatId}/messages`, { headers: authHeaders() });
     const data = await r.json();
     state.messages = data.messages || [];
     renderMessages();
@@ -150,7 +255,7 @@ async function openChat(chatId) {
 async function deleteChat(chatId, event) {
   event.stopPropagation();
   try {
-    await fetch(`${API}/api/chats/${chatId}`, { method: 'DELETE', headers: authHeaders() });
+    await apiFetch(`${API}/api/chats/${chatId}`, { method: 'DELETE', headers: authHeaders() });
     if (state.currentChatId === chatId) {
       state.currentChatId = null;
       state.messages = [];
@@ -182,7 +287,7 @@ function renderChatList() {
 async function fetchDevices() {
   if (!state.user) return;
   try {
-    const r = await fetch(`${API}/api/devices`, { headers: authHeaders() });
+    const r = await apiFetch(`${API}/api/devices`, { headers: authHeaders() });
     const data = await r.json();
     state.devices = data.devices || {};
     renderDevices();
@@ -396,7 +501,7 @@ async function pollTask(taskId, msgIndex) {
       return;
     }
     try {
-      const r = await fetch(`${API}/api/tasks/${taskId}`, { headers: authHeaders() });
+      const r = await apiFetch(`${API}/api/tasks/${taskId}`, { headers: authHeaders() });
       if (!r.ok) {
         stopped = true;
         state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена.' };
@@ -549,7 +654,7 @@ function downloadAgent() {
 // ── CONFIRM / DENY ───────────────────────────────────────────
 async function confirmTask(taskId, msgIndex) {
   try {
-    await fetch(`${API}/api/tasks/${taskId}/confirm`, {
+    await apiFetch(`${API}/api/tasks/${taskId}/confirm`, {
       method: 'POST', headers: authHeaders(),
     });
     // Убираем кнопки, показываем лоадер
@@ -564,7 +669,7 @@ async function confirmTask(taskId, msgIndex) {
 
 async function denyTask(taskId, msgIndex) {
   try {
-    await fetch(`${API}/api/tasks/${taskId}/deny`, {
+    await apiFetch(`${API}/api/tasks/${taskId}/deny`, {
       method: 'POST', headers: authHeaders(),
     });
     state.messages[msgIndex].confirmTaskId = null;
@@ -603,7 +708,7 @@ async function explorerNavigate(path) {
   }
   try {
     const params = path ? { path } : {};
-    const r = await fetch(`${API}/command`, {
+    const r = await apiFetch(`${API}/command`, {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({ device_id: state.selectedDevice, action: 'list_dir', params }),
     });
@@ -701,7 +806,7 @@ function explorerRefresh() { explorerNavigate(state.explorerPath); }
 async function openOnDevice(filePath) {
   if (!state.selectedDevice) return;
   try {
-    await fetch(`${API}/command`, {
+    await apiFetch(`${API}/command`, {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({
         device_id: state.selectedDevice,
@@ -717,7 +822,7 @@ async function downloadFile(filePath) {
   if (!state.selectedDevice) return;
   showToast('Подготовка к скачиванию...');
   try {
-    const r = await fetch(`${API}/api/download_request`, {
+    const r = await apiFetch(`${API}/api/download_request`, {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({ device_id: state.selectedDevice, file_path: filePath }),
     });
@@ -776,7 +881,7 @@ function checkConsent() {
 
 async function setConsent(value) {
   try {
-    await fetch(`${API}/api/consent`, {
+    await apiFetch(`${API}/api/consent`, {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({ consent: value }),
     });
@@ -797,7 +902,7 @@ function toggleAdmin() {
 
 async function loadAdminUsers() {
   try {
-    const r = await fetch(`${API}/api/admin/users`, { headers: authHeaders() });
+    const r = await apiFetch(`${API}/api/admin/users`, { headers: authHeaders() });
     const data = await r.json();
     if (data.status !== 'ok') return;
     renderAdminUsers(data.users);
@@ -841,7 +946,7 @@ function renderAdminUsers(users) {
 
 async function adminSetPlan(userId, plan) {
   try {
-    const r = await fetch(`${API}/api/admin/users/${userId}/plan`, {
+    const r = await apiFetch(`${API}/api/admin/users/${userId}/plan`, {
       method: 'PATCH', headers: authHeaders(),
       body: JSON.stringify({ plan }),
     });
@@ -861,7 +966,7 @@ async function adminCreateUser() {
   const name = input.value.trim();
   if (!name) return;
   try {
-    const r = await fetch(`${API}/api/admin/users`, {
+    const r = await apiFetch(`${API}/api/admin/users`, {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({ name }),
     });
@@ -883,7 +988,7 @@ async function adminCreateUser() {
 async function adminDeleteUser(userId, userName) {
   if (!confirm(`Удалить пользователя "${userName}"? Все его чаты и данные будут удалены.`)) return;
   try {
-    const r = await fetch(`${API}/api/admin/users/${userId}`, {
+    const r = await apiFetch(`${API}/api/admin/users/${userId}`, {
       method: 'DELETE', headers: authHeaders(),
     });
     const data = await r.json();
@@ -892,6 +997,67 @@ async function adminDeleteUser(userId, userName) {
       loadAdminUsers();
     }
   } catch (e) { showToast('Ошибка: ' + e.message, true); }
+}
+
+// ── AUDIT LOG (ADMIN) ─────────────────────────────────
+async function loadAuditLog(offset = 0) {
+  try {
+    const r = await apiFetch(`${API}/api/admin/audit?limit=50&offset=${offset}`, { headers: authHeaders() });
+    const data = await r.json();
+    if (data.status !== 'ok') return;
+    renderAuditLog(data.logs, data.total, offset);
+  } catch (e) { console.error('loadAuditLog:', e); }
+}
+
+function renderAuditLog(logs, total, offset) {
+  const container = document.getElementById('auditLogList');
+  if (!container) return;
+  if (!logs || logs.length === 0) {
+    container.innerHTML = '<div class="admin-empty">Нет записей</div>';
+    return;
+  }
+  const rows = logs.map(l => {
+    const dt = new Date(l.created_at * 1000);
+    const ts = dt.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const action = escapeHTML(l.action);
+    const who = escapeHTML(l.user_name || '?');
+    const detail = l.detail ? escapeHTML(l.detail.substring(0, 80)) : '';
+    const ip = l.ip ? escapeHTML(l.ip) : '';
+    return `<div class="audit-row">
+      <span class="audit-ts">${ts}</span>
+      <span class="audit-action">${action}</span>
+      <span class="audit-who">${who}</span>
+      <span class="audit-detail" title="${escapeAttr(l.detail || '')}">${detail}</span>
+      <span class="audit-ip">${ip}</span>
+    </div>`;
+  }).join('');
+  let nav = '';
+  if (offset > 0 || offset + 50 < total) {
+    const prevBtn = offset > 0 ? `<button onclick="loadAuditLog(${Math.max(0, offset - 50)})">&larr;</button>` : '';
+    const nextBtn = offset + 50 < total ? `<button onclick="loadAuditLog(${offset + 50})">&rarr;</button>` : '';
+    nav = `<div class="audit-nav">${prevBtn} <span>${offset + 1}-${Math.min(offset + 50, total)} / ${total}</span> ${nextBtn}</div>`;
+  }
+  container.innerHTML = rows + nav;
+}
+
+function toggleAuditTab(tab) {
+  const usersTab = document.getElementById('adminUsersTab');
+  const auditTab = document.getElementById('adminAuditTab');
+  const btnUsers = document.getElementById('tabBtnUsers');
+  const btnAudit = document.getElementById('tabBtnAudit');
+  if (!usersTab || !auditTab) return;
+  if (tab === 'audit') {
+    usersTab.style.display = 'none';
+    auditTab.style.display = 'block';
+    btnUsers.classList.remove('active');
+    btnAudit.classList.add('active');
+    loadAuditLog();
+  } else {
+    usersTab.style.display = 'block';
+    auditTab.style.display = 'none';
+    btnUsers.classList.add('active');
+    btnAudit.classList.remove('active');
+  }
 }
 
 function copyToken(token) {
@@ -909,7 +1075,7 @@ function copyToken(token) {
 // ── TERMS AGREEMENT ─────────────────────────────────────────
 async function checkTermsStatus() {
   try {
-    const r = await fetch(`${API}/api/terms_status`, { headers: authHeaders() });
+    const r = await apiFetch(`${API}/api/terms_status`, { headers: authHeaders() });
     const data = await r.json();
     if (data.status === 'ok' && !data.accepted) {
       document.getElementById('termsModal').classList.add('show');
@@ -919,7 +1085,7 @@ async function checkTermsStatus() {
 
 async function acceptTerms() {
   try {
-    await fetch(`${API}/api/accept_terms`, {
+    await apiFetch(`${API}/api/accept_terms`, {
       method: 'POST', headers: authHeaders(),
     });
   } catch (e) { console.error('acceptTerms:', e); }
@@ -929,7 +1095,7 @@ async function acceptTerms() {
 // ── USER INFO & DEV MODE ────────────────────────────────────
 async function fetchUserInfo() {
   try {
-    const r = await fetch(`${API}/api/user_info`, { headers: authHeaders() });
+    const r = await apiFetch(`${API}/api/user_info`, { headers: authHeaders() });
     const data = await r.json();
     if (data.status === 'ok') {
       state.userPlan = data.user.plan || 'free';
@@ -1001,7 +1167,7 @@ async function sendDevCommand() {
   const entryEl = appendDevEntry(cmd, null);
 
   try {
-    const r = await fetch(`${API}/api/raw_command`, {
+    const r = await apiFetch(`${API}/api/raw_command`, {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({ command: cmd, device_id: deviceId, broadcast: isBroadcast }),
     });

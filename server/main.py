@@ -130,7 +130,7 @@ def needs_confirmation(command: str) -> bool:
             return True
     return False
 from database import (
-    init_db, get_user_by_token, create_user, list_users, delete_user,
+    init_db, get_user_by_token, get_user_by_id, create_user, list_users, delete_user,
     create_chat, list_chats, get_chat, update_chat_title, delete_chat,
     add_message, get_messages,
     add_training_record, get_training_data, get_training_count,
@@ -138,6 +138,13 @@ from database import (
     PLAN_LIMITS, get_user_plan, set_user_plan,
     check_daily_command_limit, increment_daily_commands,
     check_device_limit, accept_terms, has_accepted_terms,
+    store_refresh_token, get_refresh_token, revoke_refresh_token,
+    revoke_all_refresh_tokens, cleanup_expired_refresh_tokens,
+    add_audit_log, get_audit_log, get_audit_log_count,
+)
+from auth import (
+    create_access_token, verify_access_token, create_refresh_token,
+    is_jwt, ACCESS_TTL, REFRESH_TTL,
 )
 
 # ── Хранение подключённых устройств ───────────────────────────────────────
@@ -164,11 +171,23 @@ TASK_TTL = 3600  # хранить задачи 1 час
 
 # ── Lifespan ─────────────────────────────────────────────────────────────
 
+async def _cleanup_tokens_loop():
+    """Periodically clean up expired refresh tokens."""
+    while True:
+        await asyncio.sleep(3600)  # every hour
+        try:
+            cleanup_expired_refresh_tokens()
+        except Exception:
+            pass
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    cleanup_expired_refresh_tokens()  # clean on startup
+    task = asyncio.create_task(_cleanup_tokens_loop())
     print("[server] ИРУ v3.5 запущен")
     yield
+    task.cancel()
     print("[server] ИРУ v3.5 остановлен")
 
 
@@ -592,6 +611,12 @@ class NLCommand(BaseModel):
 class AuthRequest(BaseModel):
     token: str
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+class LogoutRequest(BaseModel):
+    refresh_token: str
+
 class CreateChatRequest(BaseModel):
     title: str = ""
 
@@ -605,10 +630,32 @@ class CreateUserRequest(BaseModel):
 # ── Авторизация ──────────────────────────────────────────────────────────
 
 def get_current_user(request: Request) -> dict:
-    """Извлечь пользователя из заголовка X-Token или query ?token=."""
-    token = request.headers.get("X-Token") or request.query_params.get("token")
+    """
+    Извлечь пользователя из:
+      1. Authorization: Bearer <jwt>  (новый формат)
+      2. X-Token: <jwt_or_uuid>       (совместимость)
+      3. ?token=<uuid>                 (query, только старый формат)
+    """
+    token = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    if not token:
+        token = request.headers.get("X-Token") or request.query_params.get("token")
     if not token:
         raise HTTPException(status_code=401, detail="Требуется токен авторизации")
+
+    # JWT access token
+    if is_jwt(token):
+        payload = verify_access_token(token)
+        if not payload:
+            raise HTTPException(status_code=401, detail="Токен истёк или недействителен")
+        user = get_user_by_id(int(payload["sub"]))
+        if not user:
+            raise HTTPException(status_code=401, detail="Пользователь не найден")
+        return user
+
+    # Старый статичный UUID-токен (обратная совместимость)
     user = get_user_by_token(token)
     if not user:
         raise HTTPException(status_code=401, detail="Недействительный токен")
@@ -961,15 +1008,34 @@ async def terms_page():
 
 # ── AUTH API ─────────────────────────────────────────────────────────────
 
+def _client_ip(request: Request) -> str:
+    """Get client IP (supports X-Forwarded-For behind Caddy)."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 @app.post("/api/auth")
-async def auth(body: AuthRequest):
-    """Авторизация по токену."""
+async def auth(body: AuthRequest, request: Request):
+    """
+    Авторизация по статичному токену.
+    Возвращает JWT access + refresh токены.
+    Старый формат ответа сохранён для совместимости (user.token доступен).
+    """
     user = get_user_by_token(body.token)
     if not user:
+        add_audit_log(None, None, "login_failed",
+                      f"token={body.token[:8]}...", _client_ip(request))
         return JSONResponse(
             status_code=401,
             content={"status": "error", "error": "Недействительный токен"}
         )
+    plan = user.get("plan") or "free"
+    access  = create_access_token(user["id"], user["name"], plan)
+    refresh = create_refresh_token()
+    store_refresh_token(user["id"], refresh, REFRESH_TTL)
+    add_audit_log(user["id"], user["name"], "login", None, _client_ip(request))
     return {
         "status": "ok",
         "user": {
@@ -978,7 +1044,49 @@ async def auth(body: AuthRequest):
             "token": user["token"],
             "data_consent": bool(user.get("data_consent", 0)),
         },
+        "access_token":  access,
+        "refresh_token": refresh,
+        "expires_in":    ACCESS_TTL,
     }
+
+
+@app.post("/api/refresh")
+async def refresh_token_endpoint(body: RefreshRequest, request: Request):
+    """Обновить access token по refresh token."""
+    rt = get_refresh_token(body.refresh_token)
+    if not rt:
+        return JSONResponse(
+            status_code=401,
+            content={"status": "error", "error": "Refresh token недействителен или истёк"}
+        )
+    user = get_user_by_id(rt["user_id"])
+    if not user:
+        revoke_refresh_token(body.refresh_token)
+        return JSONResponse(
+            status_code=401,
+            content={"status": "error", "error": "Пользователь не найден"}
+        )
+    plan = user.get("plan") or "free"
+    access = create_access_token(user["id"], user["name"], plan)
+    add_audit_log(user["id"], user["name"], "token_refresh", None, _client_ip(request))
+    return {
+        "status": "ok",
+        "access_token": access,
+        "expires_in":   ACCESS_TTL,
+    }
+
+
+@app.post("/api/logout")
+async def logout(body: LogoutRequest, request: Request):
+    """Выход — отзыв refresh token."""
+    revoke_refresh_token(body.refresh_token)
+    # Попробуем идентифицировать пользователя для лога
+    try:
+        user = get_current_user(request)
+        add_audit_log(user["id"], user["name"], "logout", None, _client_ip(request))
+    except Exception:
+        add_audit_log(None, None, "logout", None, _client_ip(request))
+    return {"status": "ok"}
 
 
 # ── CONSENT API ─────────────────────────────────────────────────
@@ -1016,6 +1124,8 @@ async def admin_create_user(body: CreateUserRequest, request: Request):
     if user["name"] != "admin":
         raise HTTPException(status_code=403, detail="Только для администратора")
     new_user = create_user(body.name)
+    add_audit_log(user["id"], user["name"], "admin_create_user",
+                  f"new_user={body.name} id={new_user['id']}", _client_ip(request))
     return {"status": "ok", "user": new_user}
 
 
@@ -1027,6 +1137,9 @@ async def admin_delete_user(user_id: int, request: Request):
     if user["id"] == user_id:
         raise HTTPException(status_code=400, detail="Нельзя удалить самого себя")
     ok = delete_user(user_id)
+    if ok:
+        add_audit_log(user["id"], user["name"], "admin_delete_user",
+                      f"deleted_user_id={user_id}", _client_ip(request))
     return {"status": "ok" if ok else "error", "deleted": ok}
 
 
@@ -1491,7 +1604,23 @@ async def api_admin_set_plan(user_id: int, body: SetPlanRequest, request: Reques
     ok = set_user_plan(user_id, body.plan)
     if not ok:
         return {"status": "error", "error": "Пользователь не найден"}
+    add_audit_log(admin["id"], admin["name"], "admin_set_plan",
+                  f"user_id={user_id} plan={body.plan}", _client_ip(request))
     return {"status": "ok", "user_id": user_id, "plan": body.plan}
+
+
+@app.get("/api/admin/audit")
+async def api_admin_audit(request: Request,
+                          limit: int = Query(100, ge=1, le=500),
+                          offset: int = Query(0, ge=0),
+                          user_id: Optional[int] = Query(None)):
+    """Аудит-лог (только admin)."""
+    admin = get_current_user(request)
+    if admin["name"] != "admin":
+        raise HTTPException(status_code=403, detail="Только для администратора")
+    logs = get_audit_log(limit=limit, offset=offset, user_id=user_id)
+    total = get_audit_log_count(user_id=user_id)
+    return {"status": "ok", "logs": logs, "total": total}
 
 
 # ── РЕЖИМ РАЗРАБОТЧИКА (RAW CMD) ────────────────────────────────────────
@@ -1560,6 +1689,9 @@ async def api_raw_command(cmd: RawCommand, request: Request):
 
     await asyncio.gather(*[exec_on_device(did) for did in target_ids])
 
+    add_audit_log(user["id"], user["name"], "raw_command",
+                  f"cmd={cmd.command[:120]} devices={target_ids}", _client_ip(request))
+
     return {
         "status": "ok",
         "results": results,
@@ -1589,6 +1721,8 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
 
     await ws.accept()
     print(f"[ws] agent connected: device_id='{device_id}', user_id={user['id']}, user='{user['name']}'")
+    add_audit_log(user["id"], user["name"], "agent_connect",
+                  f"device={device_id}", None)
 
     devices[device_id] = {
         "ws": ws,
@@ -1625,6 +1759,8 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
     finally:
         devices.pop(device_id, None)
         print(f"[ws] devices after disconnect: {list(devices.keys())}")
+        add_audit_log(user["id"], user["name"], "agent_disconnect",
+                      f"device={device_id}", None)
 
 
 # Раздача статики из ui/ по корневому пути (для относительных путей в index.html)

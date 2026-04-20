@@ -92,8 +92,20 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_chats_user        ON chats(user_id);
             CREATE INDEX IF NOT EXISTS idx_messages_chat     ON messages(chat_id);
             CREATE INDEX IF NOT EXISTS idx_training_user     ON training_data(user_id);
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                user_name   TEXT,
+                action      TEXT    NOT NULL,
+                detail      TEXT,
+                ip          TEXT,
+                created_at  REAL    NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_refresh_token     ON refresh_tokens(token);
             CREATE INDEX IF NOT EXISTS idx_refresh_user      ON refresh_tokens(user_id);
+            CREATE INDEX IF NOT EXISTS idx_audit_user        ON audit_log(user_id);
+            CREATE INDEX IF NOT EXISTS idx_audit_created     ON audit_log(created_at);
         """)
 
         # Миграции: добавить новые колонки если их нет
@@ -478,3 +490,48 @@ def has_accepted_terms(user_id: int) -> bool:
             (user_id,)
         ).fetchone()
         return bool(row and row["accepted_terms_at"])
+
+
+# ── Audit Log ───────────────────────────────────────────────────────────────────────
+
+def add_audit_log(user_id: int | None, user_name: str | None,
+                  action: str, detail: str | None = None,
+                  ip: str | None = None) -> None:
+    """Write an audit log entry."""
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO audit_log (user_id, user_name, action, detail, ip, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (user_id, user_name, action, detail, ip, time.time())
+        )
+
+
+def get_audit_log(limit: int = 100, offset: int = 0,
+                  user_id: int | None = None) -> list[dict]:
+    """Return audit log entries, newest first."""
+    with get_db() as conn:
+        if user_id is not None:
+            rows = conn.execute(
+                """SELECT * FROM audit_log WHERE user_id = ?
+                   ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+                (user_id, limit, offset)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_audit_log_count(user_id: int | None = None) -> int:
+    """Return total audit log entries count."""
+    with get_db() as conn:
+        if user_id is not None:
+            row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM audit_log WHERE user_id = ?",
+                (user_id,)
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT COUNT(*) as cnt FROM audit_log").fetchone()
+        return row["cnt"]
