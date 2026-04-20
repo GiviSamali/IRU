@@ -366,27 +366,41 @@ async def process_nl_command(
     _timeout = httpx.Timeout(30.0, connect=10.0)
     async with httpx.AsyncClient(timeout=_timeout) as client:
         for iteration in range(MAX_ITERATIONS):
-            print(f"[llm] iteration {iteration+1}/{MAX_ITERATIONS}")
-            resp = await client.post(
-                f"{cfg['base_url']}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {cfg['api_key']}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": cfg["model"],
-                    "messages": messages,
-                    "tools": TOOLS,
-                    "tool_choice": "auto",
-                    "max_tokens": cfg.get("max_tokens", 1024),
-                    "temperature": cfg.get("temperature", 0.0),
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            print(f"[llm] iteration {iteration+1}/{MAX_ITERATIONS}, messages={len(messages)}")
+            try:
+                resp = await client.post(
+                    f"{cfg['base_url']}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {cfg['api_key']}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": cfg["model"],
+                        "messages": messages,
+                        "tools": TOOLS,
+                        "tool_choice": "auto",
+                        "max_tokens": cfg.get("max_tokens", 1024),
+                        "temperature": cfg.get("temperature", 0.0),
+                    },
+                )
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                print(f"[llm] HTTP error: {e.response.status_code} {e.response.text[:500]}")
+                raise
+            except Exception as e:
+                print(f"[llm] request error: {type(e).__name__}: {e}")
+                raise
 
+            data = resp.json()
             choice = data["choices"][0]
+            finish_reason = choice.get("finish_reason", "?")
             assistant_msg = choice["message"]
+            content_preview = (assistant_msg.get("content") or "")[:200]
+            tool_calls = assistant_msg.get("tool_calls")
+            print(f"[llm] response: finish_reason={finish_reason}, "
+                  f"has_content={'yes' if content_preview else 'no'}, "
+                  f"tool_calls={len(tool_calls) if tool_calls else 0}, "
+                  f"content_preview={content_preview[:100]!r}")
             messages.append(assistant_msg)
 
             tool_calls = assistant_msg.get("tool_calls")
@@ -405,18 +419,27 @@ async def process_nl_command(
 
             for tc in tool_calls:
                 fn_name = tc["function"]["name"]
-                fn_args = json.loads(tc["function"]["arguments"])
+                try:
+                    fn_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError as e:
+                    print(f"[llm] BAD JSON in tool args: {e}, raw={tc['function']['arguments'][:300]}")
+                    fn_args = {}
 
                 # Определить целевое устройство
                 target_device = fn_args.pop("device_id", None) or device_id
+                print(f"[llm] tool_call: {fn_name}({json.dumps(fn_args, ensure_ascii=False)[:300]}) -> device={target_device}")
 
                 if fn_name == "execute_cmd":
                     try:
                         tool_result = await send_command_fn(
                             target_device, "execute_cmd", fn_args,
                         )
+                        print(f"[llm] cmd result: returncode={tool_result.get('returncode')}, "
+                              f"stdout={tool_result.get('stdout', '')[:100]!r}, "
+                              f"stderr={tool_result.get('stderr', '')[:100]!r}")
                     except Exception as e:
                         err_str = str(e)
+                        print(f"[llm] cmd EXCEPTION: {type(e).__name__}: {err_str[:200]}")
                         if "CONFIRM_REQUIRED" in err_str:
                             raise ConfirmationRequired(
                                 command=fn_args.get("command", ""),

@@ -811,6 +811,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 },
             }
         except httpx.HTTPStatusError as e:
+            print(f"[run_nl_task] LLM HTTP error on device={device_id}: {e.response.status_code}")
             return {
                 "device_id": device_id,
                 "status": "error",
@@ -818,10 +819,14 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 "commands": [],
             }
         except Exception as e:
+            import traceback
+            print(f"[run_nl_task] ERROR on device={device_id}: {type(e).__name__}: {e}")
+            traceback.print_exc()
+            err_text = str(e) or type(e).__name__
             return {
                 "device_id": device_id,
                 "status": "error",
-                "answer": f"Ошибка: {str(e)}",
+                "answer": f"Ошибка: {err_text}",
                 "commands": [],
             }
 
@@ -950,8 +955,12 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
         task["commands"] = combined_commands
 
     except Exception as e:
+        import traceback
+        print(f"[run_nl_task] FATAL task={task_id[:8]}: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        err_text = str(e) or type(e).__name__
         task["status"] = "error"
-        task["answer"] = f"Ошибка: {str(e)}"
+        task["answer"] = f"Ошибка: {err_text}"
         task["commands"] = []
         add_message(chat_id, "assistant", task["answer"])
 
