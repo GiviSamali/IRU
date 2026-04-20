@@ -375,7 +375,7 @@ async def process_nl_command(
 
     commands_log = []
 
-    _timeout = httpx.Timeout(30.0, connect=10.0)
+    _timeout = httpx.Timeout(120.0, connect=10.0)
     async with httpx.AsyncClient(timeout=_timeout) as client:
         for iteration in range(MAX_ITERATIONS):
             print(f"[llm] iteration {iteration+1}/{MAX_ITERATIONS}, messages={len(messages)}")
@@ -590,7 +590,7 @@ async def process_onboarding_message(
 
     messages.append({"role": "user", "content": user_message})
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
         resp = await client.post(
             f"{cfg['base_url']}/chat/completions",
             headers={
