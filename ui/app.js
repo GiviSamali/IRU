@@ -907,39 +907,72 @@ async function loadAdminUsers() {
   } catch (e) { console.error('loadAdminUsers:', e); }
 }
 
+let _allAdminUsers = [];
+
 function renderAdminUsers(users) {
+  _allAdminUsers = users || [];
+  filterAdminUsers();
+}
+
+function filterAdminUsers() {
+  const query = (document.getElementById('adminSearch') || {}).value || '';
+  const q = query.toLowerCase().trim();
+  const filtered = q ? _allAdminUsers.filter(u => u.name.toLowerCase().includes(q) || (u.token || '').toLowerCase().includes(q)) : _allAdminUsers;
+
   const list = document.getElementById('adminList');
-  if (!users || users.length === 0) {
-    list.innerHTML = '<div class="admin-empty">Нет пользователей</div>';
+  if (!filtered.length) {
+    list.innerHTML = '<div class="admin-empty">' + (q ? 'Ничего не найдено' : 'Нет пользователей') + '</div>';
+    document.getElementById('adminStats').textContent = '';
     return;
   }
-  list.innerHTML = users.map(u => {
-    const isAdmin = u.name === 'admin';
-    const deleteBtn = isAdmin ? '' : `
-      <button class="admin-user-delete" onclick="adminDeleteUser(${u.id}, '${escapeAttr(u.name)}')" title="Удалить">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </button>`;
-    const badge = isAdmin ? '<span class="admin-badge">admin</span>' : '';
+
+  // Группировка по планам
+  const groups = { pro: [], business: [], free: [] };
+  filtered.forEach(u => {
     const plan = u.plan || 'free';
-    const planClass = 'plan-' + plan;
-    const planSelect = isAdmin ? '' : `
-      <select class="admin-plan-select ${planClass}" onchange="adminSetPlan(${u.id}, this.value)">
-        <option value="free"${plan === 'free' ? ' selected' : ''}>free</option>
-        <option value="pro"${plan === 'pro' ? ' selected' : ''}>pro</option>
-        <option value="business"${plan === 'business' ? ' selected' : ''}>business</option>
-      </select>`;
-    return `<div class="admin-user-item">
-      <div class="admin-user-info">
-        <div class="admin-user-name">${escapeHTML(u.name)}${badge}</div>
-        <div class="admin-user-meta">
-          <span class="admin-user-token" title="Нажмите чтобы скопировать" onclick="navigator.clipboard.writeText('${escapeAttr(u.token)}');showToast('Токен скопирован')">${u.token}</span>
-          ${planSelect}
-        </div>
+    if (!groups[plan]) groups[plan] = [];
+    groups[plan].push(u);
+  });
+
+  const planLabels = { pro: 'Pro', business: 'Business', free: 'Free' };
+  let html = '';
+
+  for (const plan of ['pro', 'business', 'free']) {
+    const arr = groups[plan];
+    if (!arr || !arr.length) continue;
+    html += '<div class="admin-group-header plan-' + plan + '">' + planLabels[plan] + ' <span class="admin-group-count">' + arr.length + '</span></div>';
+    html += arr.map(u => renderAdminUserItem(u)).join('');
+  }
+
+  list.innerHTML = html;
+  document.getElementById('adminStats').textContent = 'Всего: ' + _allAdminUsers.length + (q ? ' (показано: ' + filtered.length + ')' : '');
+}
+
+function renderAdminUserItem(u) {
+  const isAdmin = u.id === 1;
+  const deleteBtn = isAdmin ? '' : `
+    <button class="admin-user-delete" onclick="adminDeleteUser(${u.id}, '${escapeAttr(u.name)}')" title="Удалить">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>`;
+  const badge = isAdmin ? '<span class="admin-badge">admin</span>' : '';
+  const plan = u.plan || 'free';
+  const planClass = 'plan-' + plan;
+  const planSelect = isAdmin ? '' : `
+    <select class="admin-plan-select ${planClass}" onchange="adminSetPlan(${u.id}, this.value)">
+      <option value="free"${plan === 'free' ? ' selected' : ''}>free</option>
+      <option value="pro"${plan === 'pro' ? ' selected' : ''}>pro</option>
+      <option value="business"${plan === 'business' ? ' selected' : ''}>business</option>
+    </select>`;
+  return `<div class="admin-user-item">
+    <div class="admin-user-info">
+      <div class="admin-user-name">${escapeHTML(u.name)}${badge}</div>
+      <div class="admin-user-meta">
+        <span class="admin-user-token" title="Нажмите чтобы скопировать" onclick="navigator.clipboard.writeText('${escapeAttr(u.token)}');showToast('Токен скопирован')">${u.token}</span>
+        ${planSelect}
       </div>
-      ${deleteBtn}
-    </div>`;
-  }).join('');
-  document.getElementById('adminStats').textContent = `Всего пользователей: ${users.length}`;
+    </div>
+    ${deleteBtn}
+  </div>`;
 }
 
 async function adminSetPlan(userId, plan) {

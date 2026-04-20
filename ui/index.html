@@ -211,6 +211,9 @@
           </button>
         </div>
         <div id="adminUsersTab">
+          <div class="admin-search">
+            <input type="text" class="admin-input" id="adminSearch" placeholder="Поиск..." oninput="filterAdminUsers()">
+          </div>
           <div class="admin-create">
             <input type="text" class="admin-input" id="adminNewName" placeholder="Имя нового пользователя..." onkeydown="if(event.key==='Enter')adminCreateUser()">
             <button class="admin-create-btn" onclick="adminCreateUser()">Создать</button>
