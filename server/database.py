@@ -116,11 +116,20 @@ def init_db():
                 ram_gb      REAL,
                 disks       TEXT,
                 machine_guid TEXT,
+                agent_version TEXT,
                 updated_at  REAL    NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_device_profiles_device ON device_profiles(device_id);
             CREATE INDEX IF NOT EXISTS idx_device_profiles_user   ON device_profiles(user_id);
+
+            -- миграция: добавить agent_version если не существует
+        """)
+        try:
+            conn.execute("ALTER TABLE device_profiles ADD COLUMN agent_version TEXT")
+        except Exception:
+            pass  # уже существует
+        conn.executescript("""
             CREATE INDEX IF NOT EXISTS idx_refresh_token     ON refresh_tokens(token);
             CREATE INDEX IF NOT EXISTS idx_refresh_user      ON refresh_tokens(user_id);
             CREATE INDEX IF NOT EXISTS idx_audit_user        ON audit_log(user_id);
@@ -565,45 +574,38 @@ def upsert_device_profile(device_id: str, user_id: int, profile: dict) -> None:
         existing = conn.execute(
             "SELECT id FROM device_profiles WHERE device_id = ?", (device_id,)
         ).fetchone()
+        disks_json = json.dumps(profile.get("disks"), ensure_ascii=False) if profile.get("disks") else None
+        vals = (
+            user_id,
+            profile.get("hostname"),
+            profile.get("os"),
+            profile.get("os_version"),
+            profile.get("username"),
+            profile.get("desktop_path"),
+            profile.get("cpu"),
+            profile.get("gpu"),
+            profile.get("ram_gb"),
+            disks_json,
+            profile.get("machine_guid"),
+            profile.get("agent_version"),
+            now,
+        )
         if existing:
             conn.execute(
                 """UPDATE device_profiles SET
                     user_id = ?, hostname = ?, os = ?, os_version = ?,
                     username = ?, desktop_path = ?, cpu = ?, gpu = ?,
-                    ram_gb = ?, disks = ?, machine_guid = ?, updated_at = ?
+                    ram_gb = ?, disks = ?, machine_guid = ?, agent_version = ?, updated_at = ?
                    WHERE device_id = ?""",
-                (user_id,
-                 profile.get("hostname"),
-                 profile.get("os"),
-                 profile.get("os_version"),
-                 profile.get("username"),
-                 profile.get("desktop_path"),
-                 profile.get("cpu"),
-                 profile.get("gpu"),
-                 profile.get("ram_gb"),
-                 json.dumps(profile.get("disks"), ensure_ascii=False) if profile.get("disks") else None,
-                 profile.get("machine_guid"),
-                 now,
-                 device_id)
+                vals + (device_id,)
             )
         else:
             conn.execute(
                 """INSERT INTO device_profiles
                    (device_id, user_id, hostname, os, os_version,
-                    username, desktop_path, cpu, gpu, ram_gb, disks, machine_guid, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (device_id, user_id,
-                 profile.get("hostname"),
-                 profile.get("os"),
-                 profile.get("os_version"),
-                 profile.get("username"),
-                 profile.get("desktop_path"),
-                 profile.get("cpu"),
-                 profile.get("gpu"),
-                 profile.get("ram_gb"),
-                 json.dumps(profile.get("disks"), ensure_ascii=False) if profile.get("disks") else None,
-                 profile.get("machine_guid"),
-                 now)
+                    username, desktop_path, cpu, gpu, ram_gb, disks, machine_guid, agent_version, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (device_id,) + vals
             )
 
 

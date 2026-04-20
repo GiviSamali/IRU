@@ -1014,18 +1014,25 @@ function renderAuditLog(logs, total, offset) {
     container.innerHTML = '<div class="admin-empty">Нет записей</div>';
     return;
   }
+  const actionColors = {
+    login: '#4caf50', login_failed: '#f44336', logout: '#ff9800',
+    token_refresh: '#607d8b', agent_connect: '#00d4ff', agent_disconnect: '#ff5722',
+    raw_command: '#ab47bc', admin_create_user: '#2196f3', admin_delete_user: '#f44336',
+    admin_set_plan: '#ff9800', agent_upload: '#00bcd4',
+  };
   const rows = logs.map(l => {
     const dt = new Date(l.created_at * 1000);
     const ts = dt.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const action = escapeHTML(l.action);
+    const color = actionColors[l.action] || 'var(--text-muted)';
     const who = escapeHTML(l.user_name || '?');
-    const detail = l.detail ? escapeHTML(l.detail.substring(0, 80)) : '';
+    const detail = l.detail ? escapeHTML(l.detail) : '';
     const ip = l.ip ? escapeHTML(l.ip) : '';
     return `<div class="audit-row">
       <span class="audit-ts">${ts}</span>
-      <span class="audit-action">${action}</span>
+      <span class="audit-action" style="color:${color}">${action}</span>
       <span class="audit-who">${who}</span>
-      <span class="audit-detail" title="${escapeAttr(l.detail || '')}">${detail}</span>
+      <span class="audit-detail">${detail}</span>
       <span class="audit-ip">${ip}</span>
     </div>`;
   }).join('');
@@ -1038,24 +1045,76 @@ function renderAuditLog(logs, total, offset) {
   container.innerHTML = rows + nav;
 }
 
-function toggleAuditTab(tab) {
-  const usersTab = document.getElementById('adminUsersTab');
-  const auditTab = document.getElementById('adminAuditTab');
-  const btnUsers = document.getElementById('tabBtnUsers');
-  const btnAudit = document.getElementById('tabBtnAudit');
-  if (!usersTab || !auditTab) return;
-  if (tab === 'audit') {
-    usersTab.style.display = 'none';
-    auditTab.style.display = 'block';
-    btnUsers.classList.remove('active');
-    btnAudit.classList.add('active');
-    loadAuditLog();
-  } else {
-    usersTab.style.display = 'block';
-    auditTab.style.display = 'none';
-    btnUsers.classList.add('active');
-    btnAudit.classList.remove('active');
+function switchAdminTab(tab) {
+  const tabs = {
+    users: { el: document.getElementById('adminUsersTab'), btn: document.getElementById('tabBtnUsers') },
+    devices: { el: document.getElementById('adminDevicesTab'), btn: document.getElementById('tabBtnDevices') },
+    audit: { el: document.getElementById('adminAuditTab'), btn: document.getElementById('tabBtnAudit') },
+  };
+  for (const [key, t] of Object.entries(tabs)) {
+    if (!t.el || !t.btn) continue;
+    if (key === tab) {
+      t.el.style.display = 'block';
+      t.btn.classList.add('active');
+    } else {
+      t.el.style.display = 'none';
+      t.btn.classList.remove('active');
+    }
   }
+  if (tab === 'audit') loadAuditLog();
+  if (tab === 'devices') loadDeviceProfiles();
+}
+
+// compat alias
+function toggleAuditTab(tab) { switchAdminTab(tab); }
+
+// ── DEVICE PROFILES (ADMIN) ───────────────────────────────
+
+async function loadDeviceProfiles() {
+  try {
+    const r = await apiFetch(`${API}/api/device_profiles`, { headers: authHeaders() });
+    const data = await r.json();
+    if (data.status !== 'ok') return;
+    renderDeviceProfiles(data.profiles);
+  } catch (e) { console.error('loadDeviceProfiles:', e); }
+}
+
+function renderDeviceProfiles(profiles) {
+  const container = document.getElementById('adminDevicesList');
+  if (!container) return;
+  if (!profiles || profiles.length === 0) {
+    container.innerHTML = '<div class="admin-empty">Нет профилей устройств</div>';
+    return;
+  }
+  const cards = profiles.map(p => {
+    const updated = p.updated_at ? new Date(p.updated_at * 1000).toLocaleString('ru-RU', {
+      day: '2-digit', month: '2-digit', year: '2-digit',
+      hour: '2-digit', minute: '2-digit'
+    }) : '?';
+    const disks = (p.disks && Array.isArray(p.disks)) ? p.disks.map(d =>
+      `${d.drive || '?'} ${d.total_gb || 0}ГБ / ${d.free_gb || 0}ГБ своб.`
+    ).join(', ') : '—';
+    const ver = p.agent_version ? `v${escapeHTML(p.agent_version)}` : '?';
+    return `<div class="device-card">
+      <div class="device-card-header">
+        <span class="device-card-name">${escapeHTML(p.hostname || '?')}</span>
+        <span class="device-card-ver">${ver}</span>
+      </div>
+      <div class="device-card-id" title="Нажмите чтобы скопировать" onclick="navigator.clipboard.writeText('${escapeAttr(p.device_id || '')}');showToast('ID скопирован')">${escapeHTML(p.device_id || '?')}</div>
+      <div class="device-card-grid">
+        <div class="device-card-label">ОС</div><div class="device-card-value">${escapeHTML(p.os || '?')} ${escapeHTML(p.os_version || '')}</div>
+        <div class="device-card-label">Пользователь</div><div class="device-card-value">${escapeHTML(p.username || '—')}</div>
+        <div class="device-card-label">Раб. стол</div><div class="device-card-value">${escapeHTML(p.desktop_path || '—')}</div>
+        <div class="device-card-label">CPU</div><div class="device-card-value">${escapeHTML(p.cpu || '—')}</div>
+        <div class="device-card-label">GPU</div><div class="device-card-value">${escapeHTML(p.gpu || '—')}</div>
+        <div class="device-card-label">RAM</div><div class="device-card-value">${p.ram_gb ? p.ram_gb + ' ГБ' : '—'}</div>
+        <div class="device-card-label">Диски</div><div class="device-card-value">${escapeHTML(disks)}</div>
+        <div class="device-card-label">GUID</div><div class="device-card-value device-card-guid">${escapeHTML(p.machine_guid || '—')}</div>
+      </div>
+      <div class="device-card-footer">Обновлено: ${updated}</div>
+    </div>`;
+  }).join('');
+  container.innerHTML = `<div class="device-cards-grid">${cards}</div>`;
 }
 
 function copyToken(token) {
