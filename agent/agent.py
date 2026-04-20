@@ -33,8 +33,18 @@ else:
 CONFIG_PATH = BASE_DIR / "config.json"
 
 
+DEFAULT_CONFIG = {
+    "device_id": "",
+    "server_url": "wss://irumode.ru",
+    "user_token": "",
+}
+
+
 def load_config():
-    """Загрузить конфигурацию агента."""
+    """Загрузить конфигурацию агента. Если файла нет — создать дефолтный."""
+    if not CONFIG_PATH.exists():
+        save_config(DEFAULT_CONFIG)
+        return dict(DEFAULT_CONFIG)
     data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     return data
 
