@@ -245,10 +245,7 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
 def list_dir(path: str = None) -> dict:
     """Содержимое директории для проводника UI."""
     if not path:
-        desktop = Path.home() / "Desktop"
-        if not desktop.exists():
-            desktop = Path.home() / "Рабочий стол"
-        path = str(desktop) if desktop.exists() else str(Path.home())
+        path = _get_desktop_path()
 
     target = Path(path)
     if not target.exists():
@@ -310,6 +307,40 @@ def get_file_content(path: str, max_size: int = 50_000_000) -> dict:
         return {"error": str(e)}
 
 
+
+def _get_desktop_path() -> str:
+    """Определить путь к рабочему столу.
+    Каскад: winreg (Shell Folders) -> OneDrive/Desktop -> Desktop -> Home.
+    Корректно работает при перемещении Desktop в OneDrive."""
+    home = str(Path.home())
+
+    # 1. Реестр Windows — самый надёжный источник
+    if platform.system() == "Windows":
+        try:
+            import winreg
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
+            ) as key:
+                desktop_reg = winreg.QueryValueEx(key, "Desktop")[0]
+                if desktop_reg and Path(desktop_reg).exists():
+                    return desktop_reg
+        except Exception:
+            pass
+
+    # 2. Fallback каскад путей
+    candidates = [
+        Path(home) / "OneDrive" / "Desktop",
+        Path(home) / "OneDrive" / "Рабочий стол",
+        Path(home) / "Desktop",
+        Path(home) / "Рабочий стол",
+    ]
+    for path in candidates:
+        if path.exists():
+            return str(path)
+
+    return home
+
 def collect_system_info() -> dict:
     """Собрать информацию о системе для device profile.
     Выполняется один раз при запуске агента."""
@@ -332,11 +363,8 @@ def collect_system_info() -> dict:
     # Имя пользователя
     info["username"] = os.environ.get("USERNAME", "") if is_windows else os.environ.get("USER", "")
 
-    # Путь к рабочему столу
-    desktop = Path.home() / "Desktop"
-    if not desktop.exists():
-        desktop = Path.home() / "Рабочий стол"
-    info["desktop_path"] = str(desktop) if desktop.exists() else str(Path.home())
+    # Путь к рабочему столу (winreg + fallback)
+    info["desktop_path"] = _get_desktop_path()
 
     if is_windows:
         # CPU через PowerShell (WMI)
