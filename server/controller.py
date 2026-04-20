@@ -1,5 +1,5 @@
 """
-controller.py — LLM-планировщик ИРУ v3.4
+controller.py — LLM-планировщик ИРУ v3.5
 
 Принимает текстовую задачу пользователя, через DeepSeek переводит в
 последовательность команд PowerShell/cmd, отправляет агенту на выполнение,
@@ -117,6 +117,18 @@ Start-Process notepad $env:TEMP\\text.txt
 [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, \
 System.Text.StringBuilder t, int m);'; $h=[U.W]::GetForegroundWindow(); \
 $sb=New-Object System.Text.StringBuilder 256; [U.W]::GetWindowText($h,$sb,256); $sb.ToString()
+14. ЗАПРЕЩЕНО использовать here-string синтаксис (@'...'@ или @"..."@) в командах. \
+Here-string требует переноса строки после открывающего маркера, а команды передаются \
+одной строкой — это всегда вызывает ошибку. Вместо этого:
+  - Для многострочного текста: используй Set-Content с экранированными строками, \
+например: Set-Content -Path file.txt -Value ("строка1`nстрока2`nстрока3") -Encoding UTF8
+  - Для длинных строк: используй конкатенацию через +, или переменные.
+  - Для JSON: формируй строку напрямую, например: $json = '{"key": "value"}'; \
+Set-Content -Path file.json -Value $json -Encoding UTF8
+15. Для путей к рабочему столу и папкам пользователя — ВСЕГДА используй путь из \
+профиля устройства (раздел "Профиль устройства" выше), а не $env:USERPROFILE\\Desktop. \
+На многих машинах рабочий стол перенесён в OneDrive и $env:USERPROFILE\\Desktop не существует. \
+Если в профиле указан "Рабочий стол: C:\\Users\\user\\OneDrive\\Desktop" — используй именно этот путь.
 """
 
 
@@ -379,7 +391,7 @@ async def process_nl_command(
                         "messages": messages,
                         "tools": TOOLS,
                         "tool_choice": "auto",
-                        "max_tokens": cfg.get("max_tokens", 1024),
+                        "max_tokens": cfg.get("max_tokens", 4096),
                         "temperature": cfg.get("temperature", 0.0),
                     },
                 )
@@ -401,6 +413,45 @@ async def process_nl_command(
                   f"has_content={'yes' if content_preview else 'no'}, "
                   f"tool_calls={len(tool_calls) if tool_calls else 0}, "
                   f"content_preview={content_preview[:100]!r}")
+
+            # ── Обработка обрезанного ответа (finish_reason=length) ──
+            if finish_reason == "length":
+                print(f"[llm] WARNING: response truncated (finish_reason=length)")
+                if tool_calls:
+                    # tool_call JSON скорее всего обрезан — повторяем
+                    # с укороченным контекстом (убираем tool results старше 2 итераций)
+                    if iteration < MAX_ITERATIONS - 1:
+                        # Попробуем ещё раз: добавим подсказку и продолжим
+                        messages.append({
+                            "role": "user",
+                            "content": "Предыдущий ответ был обрезан. Используй более короткие команды. Попробуй снова.",
+                        })
+                        print(f"[llm] retrying after truncation (iteration {iteration+1})")
+                        continue
+                    else:
+                        # Последняя итерация — вернуть ошибку
+                        return {
+                            "answer": "Не удалось выполнить задачу: ответ ИИ слишком длинный и был обрезан. Попробуй сформулировать задачу проще или разбить на несколько шагов.",
+                            "commands": commands_log,
+                            "training_context": {
+                                "os": device_info.get("os", ""),
+                                "hostname": device_info.get("hostname", ""),
+                                "method": "powershell" if "windows" in device_info.get("os", "").lower() else "bash",
+                            },
+                        }
+                else:
+                    # Текстовый ответ обрезан — предупредим пользователя
+                    truncated_text = assistant_msg.get("content", "") or ""
+                    return {
+                        "answer": truncated_text + "\n\n[Ответ был обрезан из-за ограничения длины. Попробуй задать более конкретный вопрос.]",
+                        "commands": commands_log,
+                        "training_context": {
+                            "os": device_info.get("os", ""),
+                            "hostname": device_info.get("hostname", ""),
+                            "method": "powershell" if "windows" in device_info.get("os", "").lower() else "bash",
+                        },
+                    }
+
             messages.append(assistant_msg)
 
             tool_calls = assistant_msg.get("tool_calls")
@@ -423,7 +474,13 @@ async def process_nl_command(
                     fn_args = json.loads(tc["function"]["arguments"])
                 except json.JSONDecodeError as e:
                     print(f"[llm] BAD JSON in tool args: {e}, raw={tc['function']['arguments'][:300]}")
-                    fn_args = {}
+                    # Битый JSON — сообщить LLM и продолжить
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": json.dumps({"error": f"Ошибка парсинга аргументов: {e}. Используй более короткую команду."}, ensure_ascii=False),
+                    })
+                    continue
 
                 # Определить целевое устройство
                 target_device = fn_args.pop("device_id", None) or device_id
@@ -543,7 +600,7 @@ async def process_onboarding_message(
             json={
                 "model": cfg["model"],
                 "messages": messages,
-                "max_tokens": cfg.get("max_tokens", 1024),
+                "max_tokens": cfg.get("max_tokens", 4096),
                 "temperature": cfg.get("temperature", 0.0),
             },
         )
