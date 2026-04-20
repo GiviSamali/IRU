@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
-AGENT_VERSION = "3.5"
+AGENT_VERSION = "3.6"
 
 # Для PyInstaller: определяем путь к exe, а не к временной папке
 if getattr(sys, 'frozen', False):
