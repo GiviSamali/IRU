@@ -52,6 +52,26 @@ from typing import Optional
 from collections import defaultdict
 from controller import process_nl_command, process_onboarding_message, ConfirmationRequired
 
+# ── ADMIN CHECK ─────────────────────────────────────────────
+ADMIN_USER_ID = 1  # ID admin-пользователя (создаётся первым в init_db)
+
+def _is_admin(user: dict) -> bool:
+    """Проверка админа по ID, не по имени."""
+    return user.get("id") == ADMIN_USER_ID
+
+
+def _dk(user_id: int, device_id: str) -> str:
+    """Составной ключ для devices dict: изоляция по пользователю."""
+    return f"{user_id}:{device_id}"
+
+
+def _short_did(composite_key: str) -> str:
+    """Извлечь короткий device_id из составного ключа."""
+    return composite_key.split(":", 1)[1] if ":" in composite_key else composite_key
+
+
+
+
 # ── RATE LIMITING ───────────────────────────────────────────
 # Ограничение: макс 30 NL-команд в минуту на пользователя
 RATE_LIMIT = 30  # команд
@@ -714,12 +734,13 @@ async def send_command_to_agent(device_id: str, action: str, params: dict,
     return result
 
 
-def create_download_token(device_id: str, file_path: str) -> str:
+def create_download_token(device_id: str, file_path: str, user_id: int = 0) -> str:
     """Создать временный токен для скачивания файла."""
     token = str(uuid.uuid4())
     download_tokens[token] = {
         "device_id": device_id,
         "file_path": file_path,
+        "user_id": user_id,
         "created": time.time(),
     }
     now = time.time()
@@ -729,9 +750,9 @@ def create_download_token(device_id: str, file_path: str) -> str:
     return token
 
 
-def get_file_link_fn(device_id: str, file_path: str) -> str:
+def get_file_link_fn(device_id: str, file_path: str, user_id: int = 0) -> str:
     """Создать ссылку для скачивания файла (для LLM)."""
-    token = create_download_token(device_id, file_path)
+    token = create_download_token(device_id, file_path, user_id=user_id)
     return f"/api/download/{token}"
 
 
@@ -772,23 +793,29 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
         user_devs = get_user_devices(user_id)
         all_devices_info = {did: {"info": d.get("info", {})} for did, d in user_devs.items()}
         chat_history = get_messages(chat_id, limit=50)
-        # Получить сохранённый профиль устройства из БД
-        device_profile = get_device_profile(device_id)
+        # Получить сохранённый профиль устройства из БД (по короткому device_id)
+        device_profile = get_device_profile(_short_did(device_id))
 
         async def send_fn(target_device_id, action, params):
-            target_dev = devices.get(target_device_id)
+            # LLM передаёт короткий device_id — конвертируем в составной ключ
+            target_dk = _dk(user_id, target_device_id) if ":" not in target_device_id else target_device_id
+            target_dev = devices.get(target_dk)
             if not target_dev or target_dev.get("user_id") != user_id:
                 raise RuntimeError(f"Нет доступа к устройству '{target_device_id}'")
-            return await send_command_to_agent(target_device_id, action, params, user_id=user_id)
+            return await send_command_to_agent(target_dk, action, params, user_id=user_id)
+
+        # Замыкание для get_file_link_fn с user_id контекстом
+        def _file_link_fn(dev_id: str, fpath: str) -> str:
+            return get_file_link_fn(dev_id, fpath, user_id=user_id)
 
         try:
             result = await process_nl_command(
                 user_message=message,
-                device_id=device_id,
+                device_id=_short_did(device_id),
                 device_info=device_info,
-                all_devices=all_devices_info,
+                all_devices={_short_did(k): v for k, v in all_devices_info.items()},
                 send_command_fn=send_fn,
-                get_file_link_fn=get_file_link_fn,
+                get_file_link_fn=_file_link_fn,
                 chat_history=chat_history,
                 device_profile=device_profile,
             )
@@ -1121,7 +1148,7 @@ async def api_set_consent(body: ConsentRequest, request: Request):
 @app.get("/api/admin/users")
 async def admin_list_users(request: Request):
     user = get_current_user(request)
-    if user["name"] != "admin":
+    if not _is_admin(user):
         raise HTTPException(status_code=403, detail="Только для администратора")
     users = list_users()
     # Маскируем токены: показываем только первые 8 символов
@@ -1134,7 +1161,7 @@ async def admin_list_users(request: Request):
 @app.post("/api/admin/users")
 async def admin_create_user(body: CreateUserRequest, request: Request):
     user = get_current_user(request)
-    if user["name"] != "admin":
+    if not _is_admin(user):
         raise HTTPException(status_code=403, detail="Только для администратора")
     new_user = create_user(body.name)
     add_audit_log(user["id"], user["name"], "admin_create_user",
@@ -1145,7 +1172,7 @@ async def admin_create_user(body: CreateUserRequest, request: Request):
 @app.delete("/api/admin/users/{user_id}")
 async def admin_delete_user(user_id: int, request: Request):
     user = get_current_user(request)
-    if user["name"] != "admin":
+    if not _is_admin(user):
         raise HTTPException(status_code=403, detail="Только для администратора")
     if user["id"] == user_id:
         raise HTTPException(status_code=400, detail="Нельзя удалить самого себя")
@@ -1160,7 +1187,7 @@ async def admin_delete_user(user_id: int, request: Request):
 async def admin_training_data(request: Request, limit: int = 100, offset: int = 0):
     """Записи обучения (только для администратора)."""
     user = get_current_user(request)
-    if user["name"] != "admin":
+    if not _is_admin(user):
         raise HTTPException(status_code=403, detail="Только для администратора")
     data = get_training_data(limit, offset)
     count = get_training_count()
@@ -1175,9 +1202,10 @@ async def get_devices_api(request: Request):
     user_devs = get_user_devices(user["id"])
     print(f"[api/devices] user_id={user['id']}, user_devs={list(user_devs.keys())}")
     result = {}
-    for did, dev in user_devs.items():
-        result[did] = {
-            "device_id": did,
+    for dk_key, dev in user_devs.items():
+        short_did = dev.get("short_device_id", _short_did(dk_key))
+        result[short_did] = {
+            "device_id": short_did,
             "info": dev.get("info", {}),
             "connected": True,
         }
@@ -1239,7 +1267,7 @@ async def direct_command(cmd: DirectCommand, request: Request):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
     # Проверка дневного лимита команд (тарифный план, admin без ограничений)
-    if user["name"] != "admin":
+    if not _is_admin(user):
         cmd_limit = check_daily_command_limit(user["id"])
         if not cmd_limit["allowed"]:
             return {
@@ -1250,11 +1278,12 @@ async def direct_command(cmd: DirectCommand, request: Request):
         # Увеличить счётчик команд
         increment_daily_commands(user["id"])
 
-    dev = devices.get(cmd.device_id)
-    if not dev or dev.get("user_id") != user["id"]:
+    cmd_dk = _dk(user["id"], cmd.device_id)
+    dev = devices.get(cmd_dk)
+    if not dev:
         return {"status": "error", "error": "Устройство не найдено или нет доступа"}
     try:
-        result = await send_command_to_agent(cmd.device_id, cmd.action, cmd.params)
+        result = await send_command_to_agent(cmd_dk, cmd.action, cmd.params)
         return {"status": "ok", "result": result}
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -1275,7 +1304,7 @@ async def nl_command(cmd: NLCommand, request: Request):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
     # Проверка дневного лимита команд (тарифный план, admin без ограничений)
-    if user["name"] != "admin":
+    if not _is_admin(user):
         cmd_limit = check_daily_command_limit(user["id"])
         if not cmd_limit["allowed"]:
             return {
@@ -1336,12 +1365,13 @@ async def nl_command(cmd: NLCommand, request: Request):
         target_ids = list(user_devs.keys())
     elif cmd.device_ids:
         # Конкретные устройства
-        target_ids = [did for did in cmd.device_ids if did in user_devs]
+        target_ids = [_dk(user["id"], did) for did in cmd.device_ids if _dk(user["id"], did) in user_devs]
     else:
         # Одно устройство (как раньше)
-        if cmd.device_id not in user_devs:
+        cmd_dk = _dk(user["id"], cmd.device_id)
+        if cmd_dk not in user_devs:
             return {"status": "error", "error": f"Устройство '{cmd.device_id}' не найдено или нет доступа"}
-        target_ids = [cmd.device_id]
+        target_ids = [cmd_dk]
 
     if not target_ids:
         return {"status": "error", "error": "Нет доступных устройств"}
@@ -1431,20 +1461,23 @@ async def api_confirm_task(task_id: str, request: Request):
         raise HTTPException(status_code=400, detail="Задача не ожидает подтверждения")
 
     cd = task.get("confirm_data", {})
-    device_id = cd.get("device_id", "")
+    short_did = cd.get("device_id", "")
     params = cd.get("params", {})
     chat_id = cd.get("chat_id", task.get("chat_id"))
+
+    # Восстановить составной ключ из user_id задачи и короткого device_id
+    confirm_dk = _dk(task["user_id"], short_did) if ":" not in short_did else short_did
 
     task["status"] = "running"
 
     async def execute_confirmed():
         try:
             result = await send_command_to_agent(
-                device_id, "execute_cmd", params, skip_confirm=True
+                confirm_dk, "execute_cmd", params, skip_confirm=True
             )
             cmd_entry = {
                 "command": cd.get("command", ""),
-                "device_id": device_id,
+                "device_id": short_did,
                 "result": result,
             }
             existing_cmds = task.get("commands", []) or []
@@ -1492,12 +1525,16 @@ async def download_file(token: str):
     if time.time() - info["created"] > TOKEN_TTL:
         return {"status": "error", "error": "Ссылка истекла"}
 
-    device_id = info["device_id"]
+    short_did = info["device_id"]
     file_path = info["file_path"]
+    dl_user_id = info.get("user_id", 0)
+
+    # Составной ключ для поиска в devices
+    device_key = _dk(dl_user_id, short_did) if dl_user_id else short_did
 
     try:
         result = await send_command_to_agent(
-            device_id, "get_file_content", {"path": file_path}
+            device_key, "get_file_content", {"path": file_path}
         )
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -1523,11 +1560,12 @@ async def download_request(body: dict, request: Request):
     if not device_id or not file_path:
         return {"status": "error", "error": "device_id и file_path обязательны"}
 
-    dev = devices.get(device_id)
-    if not dev or dev.get("user_id") != user["id"]:
+    dl_dk = _dk(user["id"], device_id)
+    dev = devices.get(dl_dk)
+    if not dev:
         return {"status": "error", "error": "Нет доступа к устройству"}
 
-    token = create_download_token(device_id, file_path)
+    token = create_download_token(device_id, file_path, user_id=user["id"])
     return {"status": "ok", "url": f"/api/download/{token}"}
 
 
@@ -1610,7 +1648,7 @@ class SetPlanRequest(BaseModel):
 async def api_admin_set_plan(user_id: int, body: SetPlanRequest, request: Request):
     """Изменить план пользователя (только admin)."""
     admin = get_current_user(request)
-    if admin["name"] != "admin":
+    if not _is_admin(admin):
         raise HTTPException(status_code=403, detail="Только администратор")
     if body.plan not in PLAN_LIMITS:
         return {"status": "error", "error": f"Неизвестный план: {body.plan}. Доступны: free, pro, business"}
@@ -1629,7 +1667,7 @@ async def api_admin_audit(request: Request,
                           user_id: Optional[int] = Query(None)):
     """Аудит-лог (только admin)."""
     admin = get_current_user(request)
-    if admin["name"] != "admin":
+    if not _is_admin(admin):
         raise HTTPException(status_code=403, detail="Только для администратора")
     logs = get_audit_log(limit=limit, offset=offset, user_id=user_id)
     total = get_audit_log_count(user_id=user_id)
@@ -1642,7 +1680,7 @@ async def api_admin_audit(request: Request,
 async def api_device_profiles(request: Request):
     """Получить профили устройств текущего пользователя. Admin видит все."""
     user = get_current_user(request)
-    if user["name"] == "admin":
+    if _is_admin(user):
         # Admin: можно фильтровать по user_id, иначе все профили
         from database import get_db
         with get_db() as conn:
@@ -1672,7 +1710,7 @@ async def api_device_profile(device_id: str, request: Request):
     if not profile:
         raise HTTPException(status_code=404, detail="Профиль устройства не найден")
     # Проверка доступа: владелец или admin
-    if user["name"] != "admin" and profile.get("user_id") != user["id"]:
+    if not _is_admin(user) and profile.get("user_id") != user["id"]:
         raise HTTPException(status_code=403, detail="Нет доступа")
     return {"status": "ok", "profile": profile}
 
@@ -1695,7 +1733,7 @@ async def api_raw_command(cmd: RawCommand, request: Request):
     user = get_current_user(request)
 
     # Проверка плана (admin без ограничений)
-    if user["name"] != "admin":
+    if not _is_admin(user):
         plan = get_user_plan(user["id"])
         limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
         if not limits.get("dev_mode"):
@@ -1716,9 +1754,10 @@ async def api_raw_command(cmd: RawCommand, request: Request):
     if cmd.broadcast:
         target_ids = list(user_devs.keys())
     else:
-        if cmd.device_id not in user_devs:
+        cmd_dk = _dk(user["id"], cmd.device_id)
+        if cmd_dk not in user_devs:
             return {"status": "error", "error": f"Устройство '{cmd.device_id}' не найдено"}
-        target_ids = [cmd.device_id]
+        target_ids = [cmd_dk]
 
     # UTF-8 вывод (PowerShell-совместимый)
     raw_cmd = f"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; {cmd.command}"
@@ -1793,7 +1832,7 @@ async def api_agent_download():
 async def api_agent_upload(request: Request, version: str = Query(...)):
     """Загрузить новую версию agent.exe. Только admin."""
     user = get_current_user(request)
-    if user["name"] != "admin":
+    if not _is_admin(user):
         raise HTTPException(status_code=403, detail="Только для администратора")
     body = await request.body()
     if len(body) < 1000:
@@ -1834,11 +1873,14 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
         await ws.close(code=4001, reason="Недействительный токен пользователя")
         return
 
-    # Проверка лимита устройств (тарифный план, admin без ограничений)
-    if user["name"] != "admin":
+    # Составной ключ для изоляции устройств между пользователями
+    dk = _dk(user["id"], device_id)
+
+    # Проверка лимита устройств (тарифный план)
+    if not _is_admin(user):
         current_count = len(get_user_devices(user["id"]))
         dev_limit = check_device_limit(user["id"], current_count)
-        if not dev_limit["allowed"] and device_id not in devices:
+        if not dev_limit["allowed"] and dk not in devices:
             await ws.close(code=4003, reason=f"Лимит устройств исчерпан ({dev_limit['current']}/{dev_limit['limit']})")
             return
 
@@ -1847,11 +1889,12 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
     add_audit_log(user["id"], user["name"], "agent_connect",
                   f"device={device_id}", None)
 
-    devices[device_id] = {
+    devices[dk] = {
         "ws": ws,
         "info": {},
         "pending": {},
         "user_id": user["id"],
+        "short_device_id": device_id,
     }
     print(f"[ws] devices after connect: {list(devices.keys())}")
 
@@ -1863,7 +1906,7 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
 
             if msg_type == "register":
                 payload = data.get("payload", {})
-                devices[device_id]["info"] = payload
+                devices[dk]["info"] = payload
                 # Сохранить device profile в БД
                 try:
                     upsert_device_profile(device_id, user["id"], payload)
@@ -1875,7 +1918,7 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
             elif msg_type == "result":
                 payload = data.get("payload", {})
                 cmd_id = payload.get("id")
-                future = devices[device_id]["pending"].pop(cmd_id, None)
+                future = devices[dk]["pending"].pop(cmd_id, None)
                 if future and not future.done():
                     if payload.get("status") == "ok":
                         future.set_result(payload.get("result", {}))
@@ -1887,7 +1930,14 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
     except Exception as e:
         print(f"[ws] error for {device_id}: {e}")
     finally:
-        devices.pop(device_id, None)
+        # Удалять только если ws в devices — это именно наш сокет
+        # (защита от race condition при быстром reconnect)
+        current = devices.get(dk)
+        if current and current.get("ws") is ws:
+            devices.pop(dk, None)
+            print(f"[ws] device removed: {device_id}")
+        else:
+            print(f"[ws] device already reconnected, keeping: {device_id}")
         print(f"[ws] devices after disconnect: {list(devices.keys())}")
         add_audit_log(user["id"], user["name"], "agent_disconnect",
                       f"device={device_id}", None)
