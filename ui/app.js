@@ -934,7 +934,7 @@ function renderAdminUsers(users) {
       <div class="admin-user-info">
         <div class="admin-user-name">${escapeHTML(u.name)}${badge}</div>
         <div class="admin-user-meta">
-          <span class="admin-user-token" title="Токен скрыт">${u.token}</span>
+          <span class="admin-user-token" title="Нажмите чтобы скопировать" onclick="navigator.clipboard.writeText('${escapeAttr(u.token)}');showToast('Токен скопирован')">${u.token}</span>
           ${planSelect}
         </div>
       </div>

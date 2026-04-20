@@ -1,10 +1,11 @@
 """
-agent.py — универсальный агент-исполнитель ИРУ v3.2
+agent.py — универсальный агент-исполнитель ИРУ v3.3
 
 Подключается к серверу по WebSocket с токеном пользователя и выполняет команды:
 - execute_cmd: выполнить команду в PowerShell/bash (с корректной кириллицей)
 - list_dir: показать содержимое директории (для проводника UI)
 - get_file_content: прочитать файл в base64 (для скачивания)
+- автообновление: проверяет версию при запуске, обновляет exe если есть новая версия
 """
 
 import json
@@ -15,7 +16,13 @@ import platform
 import os
 import sys
 import base64
+import time
+import tempfile
 from pathlib import Path
+from urllib.request import urlopen, Request
+from urllib.error import URLError
+
+AGENT_VERSION = "3.3"
 
 # Для PyInstaller: определяем путь к exe, а не к временной папке
 if getattr(sys, 'frozen', False):
@@ -401,6 +408,115 @@ ACTIONS = {
 }
 
 
+def _version_tuple(v: str):
+    """Преобразовать строку версии в кортеж для сравнения."""
+    try:
+        return tuple(int(x) for x in v.strip().split("."))
+    except (ValueError, AttributeError):
+        return (0, 0)
+
+
+def check_for_update(server_url: str) -> bool:
+    """Проверить наличие обновления и выполнить его.
+    Возвращает True если обновление запущено (нужно завершить процесс)."""
+    # Преобразовать wss:// в https:// для HTTP-запросов
+    http_url = server_url.replace("wss://", "https://").replace("ws://", "http://")
+
+    try:
+        print(f"[update] проверка обновлений... (текущая: {AGENT_VERSION})")
+        req = Request(f"{http_url}/api/agent/version", headers={"User-Agent": f"IRU-Agent/{AGENT_VERSION}"})
+        resp = urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        print(f"[update] не удалось проверить: {e}")
+        return False
+
+    server_version = data.get("version", "0.0")
+    download_url = data.get("download_url", "")
+
+    if _version_tuple(server_version) <= _version_tuple(AGENT_VERSION):
+        print(f"[update] актуальная версия ({AGENT_VERSION})")
+        return False
+
+    if not download_url:
+        print(f"[update] новая версия {server_version}, но нет ссылки на скачивание")
+        return False
+
+    # Скачать новую версию
+    print(f"[update] скачиваем {server_version}...")
+    full_url = f"{http_url}{download_url}" if download_url.startswith("/") else download_url
+    try:
+        req = Request(full_url, headers={"User-Agent": f"IRU-Agent/{AGENT_VERSION}"})
+        resp = urlopen(req, timeout=120)
+        new_data = resp.read()
+    except Exception as e:
+        print(f"[update] ошибка скачивания: {e}")
+        return False
+
+    if len(new_data) < 1000:
+        print(f"[update] скачанный файл слишком маленький ({len(new_data)} байт), пропуск")
+        return False
+
+    # Только для скомпилированного exe (PyInstaller)
+    if not getattr(sys, 'frozen', False):
+        print(f"[update] новая версия {server_version} доступна, но автообновление работает только для exe")
+        return False
+
+    exe_path = Path(sys.executable)
+    new_exe = exe_path.parent / "agent_new.exe"
+    old_exe = exe_path.parent / "agent_old.exe"
+
+    # Записать новый файл
+    try:
+        new_exe.write_bytes(new_data)
+    except Exception as e:
+        print(f"[update] ошибка записи: {e}")
+        return False
+
+    print(f"[update] скачано {len(new_data)} байт, запускаем обновление...")
+
+    # Создать bat-скрипт для подмены exe
+    bat_path = exe_path.parent / "_update.bat"
+    pid = os.getpid()
+    bat_content = f"""@echo off
+chcp 65001 >nul
+echo [обновление] Ждём завершения старого процесса...
+:wait_loop
+tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
+if not errorlevel 1 (
+    timeout /t 1 /nobreak >nul
+    goto wait_loop
+)
+echo [обновление] Подменяем файл...
+if exist "{old_exe}" del /f "{old_exe}"
+move /y "{exe_path}" "{old_exe}"
+move /y "{new_exe}" "{exe_path}"
+echo [обновление] Запускаем новую версию...
+start "" "{exe_path}"
+if exist "{old_exe}" del /f "{old_exe}"
+del /f "%~f0"
+"""
+    try:
+        bat_path.write_text(bat_content, encoding="utf-8")
+        # Запустить bat в скрытом окне
+        subprocess.Popen(
+            ["cmd", "/c", str(bat_path)],
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+            close_fds=True,
+        )
+        print(f"[update] обновление запущено, завершаем текущий процесс")
+        return True
+    except Exception as e:
+        print(f"[update] ошибка запуска обновления: {e}")
+        # Очистить
+        try:
+            new_exe.unlink(missing_ok=True)
+            bat_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False
+
+
 async def run_agent():
     """Основной цикл агента: подключение к серверу и обработка команд."""
     cfg = load_config()
@@ -421,6 +537,11 @@ async def run_agent():
         device_id = setup["device_id"]
         print(f"[agent] настройки сохранены в {CONFIG_PATH}")
 
+    # Проверка обновлений перед подключением
+    if check_for_update(server_url):
+        # Обновление запущено, завершаем процесс
+        sys.exit(0)
+
     # Добавить токен в URL
     ws_url = f"{server_url}/ws/{device_id}?user_token={user_token}"
     print(f"[agent] device={device_id}, connecting to {server_url}/ws/{device_id}")
@@ -429,6 +550,7 @@ async def run_agent():
     print("[agent] collecting system info...")
     sys_info = collect_system_info()
     sys_info["device_id"] = device_id
+    sys_info["agent_version"] = AGENT_VERSION
     print(f"[agent] system info collected: cpu={sys_info.get('cpu', '?')}, "
           f"ram={sys_info.get('ram_gb', '?')}GB, disks={len(sys_info.get('disks', []))}")
 

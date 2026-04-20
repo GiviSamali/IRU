@@ -1747,6 +1747,75 @@ async def api_raw_command(cmd: RawCommand, request: Request):
 
 
 
+# ── Автообновление агента ─────────────────────────────────────────────
+
+UPDATES_DIR = Path(__file__).parent / "updates"
+
+@app.get("/api/agent/version")
+async def api_agent_version():
+    """Проверка актуальной версии агента. Не требует авторизации."""
+    version_file = UPDATES_DIR / "version.json"
+    if not version_file.exists():
+        return {"version": "0.0", "min_version": "0.0", "changelog": "", "download_url": ""}
+    data = json.loads(version_file.read_text(encoding="utf-8"))
+    data["download_url"] = "/api/agent/download"
+    return data
+
+
+@app.get("/api/agent/download")
+async def api_agent_download():
+    """Скачать последнюю версию agent.exe. Не требует авторизации."""
+    version_file = UPDATES_DIR / "version.json"
+    if not version_file.exists():
+        raise HTTPException(status_code=404, detail="Файл версии не найден")
+    data = json.loads(version_file.read_text(encoding="utf-8"))
+    exe_name = data.get("filename", "agent.exe")
+    exe_path = UPDATES_DIR / exe_name
+    if not exe_path.exists():
+        raise HTTPException(status_code=404, detail="Файл агента не найден на сервере")
+    return FileResponse(
+        path=str(exe_path),
+        filename=exe_name,
+        media_type="application/octet-stream",
+    )
+
+
+@app.post("/api/agent/upload")
+async def api_agent_upload(request: Request, version: str = Query(...)):
+    """Загрузить новую версию agent.exe. Только admin."""
+    user = get_current_user(request)
+    if user["name"] != "admin":
+        raise HTTPException(status_code=403, detail="Только для администратора")
+    body = await request.body()
+    if len(body) < 1000:
+        raise HTTPException(status_code=400, detail="Файл слишком маленький")
+    if len(body) > 100_000_000:
+        raise HTTPException(status_code=400, detail="Файл слишком большой (>100МБ)")
+    UPDATES_DIR.mkdir(exist_ok=True)
+    exe_path = UPDATES_DIR / "agent.exe"
+    exe_path.write_bytes(body)
+    # Обновить version.json
+    version_data = {
+        "version": version,
+        "min_version": "3.0",
+        "changelog": "",
+        "filename": "agent.exe",
+    }
+    version_file = UPDATES_DIR / "version.json"
+    if version_file.exists():
+        try:
+            old = json.loads(version_file.read_text(encoding="utf-8"))
+            version_data["min_version"] = old.get("min_version", "3.0")
+            version_data["changelog"] = old.get("changelog", "")
+        except Exception:
+            pass
+    version_data["version"] = version
+    version_file.write_text(json.dumps(version_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    add_audit_log(user["id"], user["name"], "agent_upload",
+                  f"version={version}, size={len(body)}", None)
+    return {"status": "ok", "version": version, "size": len(body)}
+
+
 # ── WebSocket для агентов ────────────────────────────────────────────────
 
 @app.websocket("/ws/{device_id}")

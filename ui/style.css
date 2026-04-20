@@ -618,8 +618,8 @@ html, body {
 .admin-user-info { flex: 1; min-width: 0; }
 .admin-user-name { font-size: 12px; font-weight: 500; color: var(--text-primary); }
 .admin-user-token {
-  font-size: 9px; color: var(--text-muted); overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+  font-size: 9px; color: var(--text-muted); cursor: pointer;
+  word-break: break-all; user-select: all;
 }
 .admin-user-token:hover { color: var(--accent); }
 .admin-user-delete {
