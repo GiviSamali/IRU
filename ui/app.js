@@ -39,6 +39,7 @@ function _clearTokens() {
   localStorage.removeItem('iru_access_token');
   localStorage.removeItem('iru_refresh_token');
   localStorage.removeItem('iru_token');
+  localStorage.removeItem('iru_data_consent');
   if (_refreshTimer) { clearTimeout(_refreshTimer); _refreshTimer = null; }
 }
 
@@ -120,6 +121,7 @@ async function doAuth() {
     const data = await r.json();
     if (data.status === 'ok') {
       state.user = data.user;
+        if (data.user && data.user.data_consent) localStorage.setItem('iru_data_consent', '1');
       localStorage.setItem('iru_token', token);
       _saveTokens(data.access_token, data.refresh_token);
       showApp();
@@ -158,7 +160,7 @@ async function tryAutoLogin() {
       // Получим user info из токена
       try {
         const payload = JSON.parse(atob(_accessToken.split('.')[1]));
-        state.user = { id: parseInt(payload.sub), name: payload.name, token: localStorage.getItem('iru_token') || '' };
+        state.user = { id: parseInt(payload.sub), name: payload.name, token: localStorage.getItem('iru_token') || '', data_consent: localStorage.getItem('iru_data_consent') === '1' };
         showApp();
         return;
       } catch {}
@@ -176,6 +178,7 @@ async function tryAutoLogin() {
     const data = await r.json();
     if (data.status === 'ok') {
       state.user = data.user;
+        if (data.user && data.user.data_consent) localStorage.setItem('iru_data_consent', '1');
       _saveTokens(data.access_token, data.refresh_token);
       showApp();
     }
@@ -884,6 +887,7 @@ async function setConsent(value) {
       body: JSON.stringify({ consent: value }),
     });
     state.user.data_consent = value;
+    localStorage.setItem('iru_data_consent', value ? '1' : '0');
   } catch (e) { console.error('consent error:', e); }
   document.getElementById('consentModal').classList.remove('show');
 }
