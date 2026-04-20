@@ -642,11 +642,9 @@ function sendHint(el) {
 }
 
 function downloadAgent() {
-  const token = state.user?.token || '';
-  if (!token) { showToast('Сначала войдите в систему', true); return; }
   const a = document.createElement('a');
-  a.href = `${API}/api/download_agent?token=${encodeURIComponent(token)}`;
-  a.download = '';
+  a.href = `${API}/api/agent/download`;
+  a.download = 'agent.exe';
   document.body.appendChild(a);
   a.click();
   a.remove();
