@@ -1077,6 +1077,9 @@ async def auth(body: AuthRequest, request: Request):
     Возвращает JWT access + refresh токены.
     Старый формат ответа сохранён для совместимости (user.token доступен).
     """
+    client_ip = _client_ip(request)
+    if not check_ip_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Слишком много попыток входа. Подождите минуту.")
     user = get_user_by_token(body.token)
     if not user:
         add_audit_log(None, None, "login_failed",
