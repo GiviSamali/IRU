@@ -22,6 +22,9 @@ from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
+from platforms import get_platform
+platform_mod = get_platform()
+
 AGENT_VERSION = "3.6"
 
 # Для PyInstaller: определяем путь к exe, а не к временной папке
@@ -184,62 +187,8 @@ def ask_setup_gui(need_token: bool = True, need_device: bool = True) -> dict | N
 
 
 def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
-    """
-    Выполняет команду в PowerShell (Windows) или bash (Linux).
-    Кириллица обрабатывается корректно через chcp 65001 и явную кодировку.
-    """
-    try:
-        is_windows = platform.system() == "Windows"
-
-        ps_prefix = (
-            "chcp 65001 > $null; "
-            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
-            "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
-            "$OutputEncoding = [System.Text.Encoding]::UTF8; "
-        )
-
-        if shell == "auto":
-            if is_windows:
-                shell_cmd = [
-                    "powershell", "-NoProfile", "-NonInteractive",
-                    "-Command", ps_prefix + command
-                ]
-            else:
-                shell_cmd = ["bash", "-c", command]
-        elif shell == "powershell":
-            shell_cmd = [
-                "powershell", "-NoProfile", "-NonInteractive",
-                "-Command", ps_prefix + command
-            ]
-        elif shell == "cmd":
-            shell_cmd = ["cmd", "/c", f"chcp 65001 >nul & {command}"]
-        else:
-            shell_cmd = ["bash", "-c", command]
-
-        env = os.environ.copy()
-        if is_windows:
-            env["PYTHONIOENCODING"] = "utf-8"
-
-        result = subprocess.run(
-            shell_cmd,
-            capture_output=True,
-            timeout=timeout,
-            env=env,
-            encoding="utf-8",
-            errors="replace",
-        )
-
-        return {
-            "stdout": result.stdout.strip(),
-            "stderr": result.stderr.strip(),
-            "returncode": result.returncode,
-            "error": None,
-        }
-    except subprocess.TimeoutExpired:
-        return {"stdout": "", "stderr": "", "returncode": -1,
-                "error": f"Таймаут: команда выполнялась дольше {timeout} сек"}
-    except Exception as e:
-        return {"stdout": "", "stderr": "", "returncode": -1, "error": str(e)}
+    """Делегирует выполнение команды платформенному модулю."""
+    return platform_mod.execute_cmd(command, timeout=timeout, shell=shell)
 
 
 def list_dir(path: str = None) -> dict:
@@ -309,131 +258,29 @@ def get_file_content(path: str, max_size: int = 50_000_000) -> dict:
 
 
 def _get_desktop_path() -> str:
-    """Определить путь к рабочему столу.
-    Каскад: winreg (Shell Folders) -> OneDrive/Desktop -> Desktop -> Home.
-    Корректно работает при перемещении Desktop в OneDrive."""
-    home = str(Path.home())
-
-    # 1. Реестр Windows — самый надёжный источник
-    if platform.system() == "Windows":
-        try:
-            import winreg
-            with winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
-            ) as key:
-                desktop_reg = winreg.QueryValueEx(key, "Desktop")[0]
-                if desktop_reg and Path(desktop_reg).exists():
-                    return desktop_reg
-        except Exception:
-            pass
-
-    # 2. Fallback каскад путей
-    candidates = [
-        Path(home) / "OneDrive" / "Desktop",
-        Path(home) / "OneDrive" / "Рабочий стол",
-        Path(home) / "Desktop",
-        Path(home) / "Рабочий стол",
-    ]
-    for path in candidates:
-        if path.exists():
-            return str(path)
-
-    return home
+    """Делегирует определение Desktop платформенному модулю."""
+    return platform_mod.get_desktop_path()
 
 def collect_system_info() -> dict:
     """Собрать информацию о системе для device profile.
-    Выполняется один раз при запуске агента."""
+    Общие поля формируются здесь, платформо-специфичные — через platform_mod."""
     info = {
         "device_id": "",   # заполняется позже
         "os": platform.system(),
         "os_version": platform.version(),
         "hostname": platform.node(),
-        "username": "",
-        "desktop_path": "",
+        "username": platform_mod.get_username(),
+        "desktop_path": platform_mod.get_desktop_path(),
+        "machine_guid": platform_mod.get_machine_guid(),
         "cpu": "",
         "gpu": "",
         "ram_gb": 0,
         "disks": [],
-        "machine_guid": "",
     }
 
-    is_windows = platform.system() == "Windows"
-
-    # Имя пользователя
-    info["username"] = os.environ.get("USERNAME", "") if is_windows else os.environ.get("USER", "")
-
-    # Путь к рабочему столу (winreg + fallback)
-    info["desktop_path"] = _get_desktop_path()
-
-    if is_windows:
-        # CPU через PowerShell (WMI)
-        try:
-            r = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-CimInstance Win32_Processor).Name"],
-                capture_output=True, encoding="utf-8", errors="replace", timeout=10
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                info["cpu"] = r.stdout.strip()
-        except Exception:
-            pass
-
-        # GPU
-        try:
-            r = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-CimInstance Win32_VideoController).Name -join '; '"],
-                capture_output=True, encoding="utf-8", errors="replace", timeout=10
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                info["gpu"] = r.stdout.strip()
-        except Exception:
-            pass
-
-        # RAM (ГБ)
-        try:
-            r = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)"],
-                capture_output=True, encoding="utf-8", errors="replace", timeout=10
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                info["ram_gb"] = float(r.stdout.strip())
-        except Exception:
-            pass
-
-        # Диски
-        try:
-            r = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" | "
-                 "ForEach-Object { $_.DeviceID + '|' + [math]::Round($_.Size/1GB,1).ToString() + '|' + [math]::Round($_.FreeSpace/1GB,1).ToString() }"],
-                capture_output=True, encoding="utf-8", errors="replace", timeout=10
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                for line in r.stdout.strip().splitlines():
-                    parts = line.strip().split("|")
-                    if len(parts) == 3:
-                        info["disks"].append({
-                            "drive": parts[0],
-                            "total_gb": float(parts[1]),
-                            "free_gb": float(parts[2]),
-                        })
-        except Exception:
-            pass
-
-        # Machine GUID
-        try:
-            r = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography' -Name MachineGuid).MachineGuid"],
-                capture_output=True, encoding="utf-8", errors="replace", timeout=10
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                info["machine_guid"] = r.stdout.strip()
-        except Exception:
-            pass
+    # CPU, GPU, RAM, диски — от платформенного модуля
+    sys_info = platform_mod.get_system_info()
+    info.update(sys_info)
 
     return info
 
@@ -495,9 +342,12 @@ def check_for_update(server_url: str) -> bool:
         print(f"[update] скачанный файл слишком маленький ({len(new_data)} байт), пропуск")
         return False
 
-    # Только для скомпилированного exe (PyInstaller)
+    # Только для скомпилированного exe (PyInstaller) на Windows
     if not getattr(sys, 'frozen', False):
         print(f"[update] новая версия {server_version} доступна, но автообновление работает только для exe")
+        return False
+    if platform.system() != "Windows":
+        print(f"[update] авто-обновление пока только для Windows. Обновите бинарник вручную.")
         return False
 
     exe_path = Path(sys.executable)
