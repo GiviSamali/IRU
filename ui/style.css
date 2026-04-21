@@ -1016,3 +1016,86 @@ html, body {
 .app-logo img,
 img[src*="IruIcon"],
 img[src*="iru_logo"]
+
+/* ===== Task Block (конвейер) ===== */
+.task-block {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-dim);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  padding: 10px 12px;
+}
+.task-block.task-completed { border-left-color: var(--success); }
+.task-block.task-failed    { border-left-color: var(--error); }
+.task-block.task-cancelled { border-left-color: var(--text-muted); }
+
+.task-goal {
+  font-size: 12px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.task-goal-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.task-badge {
+  font-size: 9px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  text-transform: lowercase;
+  letter-spacing: 0.3px;
+}
+.task-badge-running   { color: var(--accent); border-color: var(--accent-dim); }
+.task-badge-completed { color: var(--success); border-color: var(--success); }
+.task-badge-failed    { color: var(--error); border-color: var(--error); }
+.task-badge-cancelled { color: var(--text-muted); }
+
+.task-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.task-step .step-icon {
+  font-size: 11px;
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.task-step.step-done    .step-icon { color: var(--success); }
+.task-step.step-failed  .step-icon { color: var(--error); }
+.task-step.step-running .step-icon { color: var(--accent); }
+.task-step.step-done    .step-desc { color: var(--text-secondary); }
+.task-step.step-failed  .step-desc { color: var(--error); }
+.task-step.step-running .step-desc { color: var(--text-primary); font-weight: 500; }
+.task-step.step-pending .step-desc { color: var(--text-muted); }
+.task-step .step-desc { flex: 1; min-width: 0; word-break: break-word; }
+.task-step .step-summary {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  font-family: 'JetBrains Mono', monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

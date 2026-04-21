@@ -379,6 +379,36 @@ function renderMessages() {
     const roleLabel = m.role === 'user' ? 'вы' : 'иру';
     let bodyHTML = linkify(escapeHTML(m.content || m.text || ''));
 
+    // Блок задач (конвейер)
+    const tasks = m.tasks;
+    if (tasks && tasks.length > 0) {
+      for (const t of tasks) {
+        const st = t.status || 'running';
+        const statusLabel = st === 'completed' ? 'завершено'
+          : st === 'failed' ? 'ошибка'
+          : st === 'cancelled' ? 'отменено'
+          : 'выполняется';
+        bodyHTML += `<div class="task-block task-${st}">`;
+        bodyHTML += `<div class="task-goal"><span class="task-goal-label">Задача:</span> ${escapeHTML(t.goal || '')} <span class="task-badge task-badge-${st}">${statusLabel}</span></div>`;
+        const steps = t.steps || [];
+        if (steps.length > 0) {
+          bodyHTML += '<ul class="task-steps">';
+          for (const s of steps) {
+            const sst = s.status || 'pending';
+            const icon = sst === 'done' ? '\u2713'
+              : sst === 'failed' ? '\u2717'
+              : sst === 'running' ? '\u25b8'
+              : sst === 'skipped' ? '\u2014'
+              : '\u25cb';
+            const summary = s.summary ? `<div class="step-summary">${escapeHTML(s.summary)}</div>` : '';
+            bodyHTML += `<li class="task-step step-${sst}"><span class="step-icon">${icon}</span><span class="step-desc">${escapeHTML(s.description || '')}</span>${summary}</li>`;
+          }
+          bodyHTML += '</ul>';
+        }
+        bodyHTML += '</div>';
+      }
+    }
+
     const commands = m.commands;
     if (commands && commands.length > 0) {
       bodyHTML += '<div class="cmd-log">';
@@ -523,6 +553,7 @@ async function pollTask(taskId, msgIndex) {
           role: 'assistant',
           content: `Команда требует подтверждения:\n${cmdText}`,
           commands: task.commands,
+          tasks: task.tasks || [],
           confirmTaskId: taskId,
         };
         renderMessages();
@@ -534,6 +565,7 @@ async function pollTask(taskId, msgIndex) {
           role: 'assistant',
           content: task.answer || 'Готово.',
           commands: task.commands,
+          tasks: task.tasks || [],
         };
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
         renderMessages();

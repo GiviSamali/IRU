@@ -123,6 +123,35 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_device_profiles_device ON device_profiles(device_id);
             CREATE INDEX IF NOT EXISTS idx_device_profiles_user   ON device_profiles(user_id);
 
+            -- Конвейер-агентность: задачи и их шаги
+            CREATE TABLE IF NOT EXISTS tasks (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                chat_id     INTEGER REFERENCES chats(id) ON DELETE CASCADE,
+                device_id   TEXT,
+                goal        TEXT    NOT NULL,
+                status      TEXT    NOT NULL DEFAULT 'running',
+                -- 'running' | 'completed' | 'failed' | 'cancelled'
+                created_at  REAL    NOT NULL,
+                updated_at  REAL    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS task_steps (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                idx         INTEGER NOT NULL,
+                description TEXT    NOT NULL,
+                status      TEXT    NOT NULL DEFAULT 'pending',
+                -- 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+                summary     TEXT,
+                started_at  REAL,
+                finished_at REAL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tasks_chat   ON tasks(chat_id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_user   ON tasks(user_id);
+            CREATE INDEX IF NOT EXISTS idx_task_steps   ON task_steps(task_id, idx);
+
             -- миграция: добавить agent_version если не существует
         """)
         try:
@@ -652,3 +681,101 @@ def delete_device_profile(device_id: str) -> bool:
             "DELETE FROM device_profiles WHERE device_id = ?", (device_id,)
         )
         return cursor.rowcount > 0
+
+
+# ── Tasks (конвейер-агентность) ────────────────────────────────────────────────
+
+def create_task(user_id: int, chat_id: int | None, device_id: str | None,
+                goal: str, steps: list[str]) -> int:
+    """Создать задачу с планом. Возвращает task_id."""
+    now = time.time()
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO tasks(user_id, chat_id, device_id, goal, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 'running', ?, ?)",
+            (user_id, chat_id, device_id, goal, now, now),
+        )
+        task_id = cur.lastrowid
+        for i, desc in enumerate(steps):
+            conn.execute(
+                "INSERT INTO task_steps(task_id, idx, description, status) "
+                "VALUES (?, ?, ?, 'pending')",
+                (task_id, i, str(desc).strip()),
+            )
+        conn.commit()
+        return task_id
+
+
+def get_task(task_id: int) -> dict | None:
+    """Получить задачу со списком шагов."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if not row:
+            return None
+        task = dict(row)
+        steps = conn.execute(
+            "SELECT * FROM task_steps WHERE task_id = ? ORDER BY idx ASC",
+            (task_id,),
+        ).fetchall()
+        task["steps"] = [dict(s) for s in steps]
+        return task
+
+
+def update_step(task_id: int, idx: int, status: str,
+                summary: str | None = None) -> bool:
+    """Обновить статус шага. status: 'running' | 'done' | 'failed' | 'skipped'."""
+    now = time.time()
+    with get_db() as conn:
+        fields = ["status = ?"]
+        values = [status]
+        if status == "running":
+            fields.append("started_at = ?")
+            values.append(now)
+        elif status in ("done", "failed", "skipped"):
+            fields.append("finished_at = ?")
+            values.append(now)
+        if summary is not None:
+            fields.append("summary = ?")
+            values.append(summary)
+        values.extend([task_id, idx])
+        cur = conn.execute(
+            f"UPDATE task_steps SET {', '.join(fields)} WHERE task_id = ? AND idx = ?",
+            values,
+        )
+        conn.execute(
+            "UPDATE tasks SET updated_at = ? WHERE id = ?",
+            (now, task_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def finish_task(task_id: int, status: str) -> bool:
+    """Завершить задачу. status: 'completed' | 'failed' | 'cancelled'."""
+    with get_db() as conn:
+        cur = conn.execute(
+            "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
+            (status, time.time(), task_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def list_chat_tasks(chat_id: int) -> list[dict]:
+    """Список задач в чате со статусами шагов (для UI)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tasks WHERE chat_id = ? ORDER BY created_at ASC",
+            (chat_id,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            steps = conn.execute(
+                "SELECT idx, description, status, summary FROM task_steps "
+                "WHERE task_id = ? ORDER BY idx ASC",
+                (d["id"],),
+            ).fetchall()
+            d["steps"] = [dict(s) for s in steps]
+            result.append(d)
+        return result

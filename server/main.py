@@ -861,6 +861,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 "status": "ok",
                 "answer": result.get("answer", ""),
                 "commands": result.get("commands", []),
+                "tasks": result.get("tasks", []),
             }
         except ConfirmationRequired as cr:
             return {
@@ -989,6 +990,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             combined_answer = result.get("answer", "")
             combined_commands = result.get("commands", [])
 
+        combined_tasks = result.get("tasks", []) if not is_broadcast else primary_result.get("tasks", [])
+
         # Сохранить ответ в чат
         add_message(chat_id, "assistant", combined_answer, combined_commands)
 
@@ -1017,6 +1020,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
         task["status"] = "done"
         task["answer"] = combined_answer
         task["commands"] = combined_commands
+        task["tasks"] = combined_tasks
 
     except Exception as e:
         import traceback
@@ -1485,6 +1489,7 @@ async def api_get_task(task_id: str, request: Request):
             "status": task["status"],
             "answer": task.get("answer"),
             "commands": task.get("commands"),
+            "tasks": task.get("tasks", []),
             "results": task.get("results", {}),
             "confirm_data": task.get("confirm_data"),
             "created_at": task["created_at"],
