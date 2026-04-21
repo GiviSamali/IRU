@@ -7,6 +7,7 @@ const state = {
   devices: {},
   selectedDevice: null,
   sendTarget: 'single', // 'single' = selected device, 'all' = all devices
+  modes: { pipeline: false, autonomous: false }, // флаги режимов для следующего запроса
   explorerOpen: false,
   explorerPath: null,
   explorerHistory: [],
@@ -311,6 +312,7 @@ function renderDevices() {
     label.textContent = 'Нет устройств';
     state.selectedDevice = null;
     renderInputDeviceSelector();
+    renderInputModeBtn();
     return;
   }
   empty.style.display = 'none';
@@ -487,6 +489,7 @@ async function sendMessage() {
       message: text,
       chat_id: state.currentChatId,
       broadcast: isBroadcast,
+      modes: { ...state.modes },
     };
     const r = await fetch(`${API}/nl_command`, {
       method: 'POST',
@@ -523,7 +526,7 @@ async function sendMessage() {
 
 async function pollTask(taskId, msgIndex) {
   const startTime = Date.now();
-  const MAX_POLL_MS = 120000; // 2 минуты макс
+  const MAX_POLL_MS = 600000; // 10 минут макс (для длинных конвейеров)
   let stopped = false;
   const poll = async () => {
     if (stopped) return;
@@ -600,7 +603,36 @@ function closeInputDeviceDropdown() {
 }
 document.addEventListener('click', e => {
   if (!e.target.closest('.input-device-select')) closeInputDeviceDropdown();
+  if (!e.target.closest('.input-mode-select')) closeInputModeDropdown();
 });
+
+// Кнопка режимов (конвейер / автономный)
+function toggleInputModeDropdown() {
+  document.getElementById('inputModeDropdown').classList.toggle('show');
+}
+function closeInputModeDropdown() {
+  const el = document.getElementById('inputModeDropdown');
+  if (el) el.classList.remove('show');
+}
+function setMode(name, on) {
+  state.modes[name] = !!on;
+  renderInputModeBtn();
+}
+function renderInputModeBtn() {
+  const btn = document.getElementById('inputModeBtn');
+  const badges = document.getElementById('inputModeBadges');
+  if (!btn || !badges) return;
+  const active = [];
+  if (state.modes.pipeline)   active.push('Конвейер');
+  if (state.modes.autonomous) active.push('Авто');
+  btn.classList.toggle('active', active.length > 0);
+  badges.textContent = active.join(' · ');
+  // Синхронизируем чекбоксы с state (на случай внешнего изменения)
+  const p = document.getElementById('modePipeline');
+  const a = document.getElementById('modeAutonomous');
+  if (p) p.checked = !!state.modes.pipeline;
+  if (a) a.checked = !!state.modes.autonomous;
+}
 
 function selectInputDevice(mode, deviceId) {
   if (mode === 'all') {

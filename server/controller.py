@@ -503,6 +503,7 @@ async def process_nl_command(
     user_id: int = None,
     chat_id: int = None,
     device_profile: dict | None = None,
+    modes: dict | None = None,
 ) -> dict:
     """
     Обработка команды на естественном языке.
@@ -548,6 +549,26 @@ async def process_nl_command(
         device_profile_block=profile_block,
         os_rules=os_rules,
     )
+
+    # Выбранные пользователем режимы (кнопка "+" в UI)
+    modes = modes or {}
+    pipeline_forced = bool(modes.get("pipeline"))
+    autonomous = bool(modes.get("autonomous"))
+    if pipeline_forced or autonomous:
+        extra = []
+        if pipeline_forced:
+            extra.append(
+                "РЕЖИМ КОНВЕЙЕРА: Пользователь явно включил режим плана. "
+                "ОБЯЗАТЕЛЬНО начни с вызова create_plan с 2+ шагами, даже если задача выглядит простой. "
+                "После каждого шага вызывай mark_step."
+            )
+        if autonomous:
+            extra.append(
+                "АВТОНОМНЫЙ РЕЖИМ: Пользователь дал согласие на выполнение без дополнительных "
+                "подтверждений. Действуй самостоятельно, не спрашивай перед каждой командой. "
+                "Запрещённые системные команды всё равно не выполняй."
+            )
+        system_msg = system_msg + "\n\n## Активные режимы\n" + "\n".join(extra)
 
     # Формируем messages: system + история чата (без текущего сообщения) + текущее
     messages = [{"role": "system", "content": system_msg}]

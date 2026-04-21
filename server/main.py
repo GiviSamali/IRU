@@ -642,6 +642,7 @@ class NLCommand(BaseModel):
     chat_id: int | None = None
     broadcast: bool = False  # отправить на все устройства
     device_ids: list[str] = []  # конкретные устройства (если broadcast=False)
+    modes: dict = {}  # флаги режимов: {pipeline: bool, autonomous: bool}
 
 class AuthRequest(BaseModel):
     token: str
@@ -833,13 +834,20 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
         # Получить сохранённый профиль устройства из БД (по короткому device_id)
         device_profile = get_device_profile(_short_did(device_id))
 
+        # Автономный режим: пропускаем подтверждение опасных команд (BLOCKED остаётся)
+        task_modes = task.get("modes") or {}
+        autonomous_flag = bool(task_modes.get("autonomous"))
+
         async def send_fn(target_device_id, action, params):
             # LLM передаёт короткий device_id — конвертируем в составной ключ
             target_dk = _dk(user_id, target_device_id) if ":" not in target_device_id else target_device_id
             target_dev = devices.get(target_dk)
             if not target_dev or target_dev.get("user_id") != user_id:
                 raise RuntimeError(f"Нет доступа к устройству '{target_device_id}'")
-            return await send_command_to_agent(target_dk, action, params, user_id=user_id)
+            return await send_command_to_agent(
+                target_dk, action, params,
+                user_id=user_id, skip_confirm=autonomous_flag,
+            )
 
         # Замыкание для get_file_link_fn с user_id контекстом
         def _file_link_fn(dev_id: str, fpath: str) -> str:
@@ -855,6 +863,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 get_file_link_fn=_file_link_fn,
                 chat_history=chat_history,
                 device_profile=device_profile,
+                modes=task_modes,
             )
             return {
                 "device_id": device_id,
@@ -1434,6 +1443,7 @@ async def nl_command(cmd: NLCommand, request: Request):
         "results": {},
         "answer": None,
         "commands": None,
+        "modes": cmd.modes or {},
         "created_at": time.time(),
     }
 

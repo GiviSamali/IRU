@@ -135,6 +135,28 @@
               </button>
               <div class="input-device-dropdown" id="inputDeviceDropdown"></div>
             </div>
+            <div class="input-mode-select">
+              <button class="input-mode-btn" id="inputModeBtn" onclick="toggleInputModeDropdown()" title="Режим выполнения">
+                <span class="mode-plus">+</span>
+                <span class="mode-badges" id="inputModeBadges"></span>
+              </button>
+              <div class="input-mode-dropdown" id="inputModeDropdown">
+                <label class="input-mode-item">
+                  <input type="checkbox" id="modePipeline" onchange="setMode('pipeline', this.checked)">
+                  <div class="mode-info">
+                    <div class="mode-title">Конвейер</div>
+                    <div class="mode-desc">Разбить задачу на шаги и показать прогресс</div>
+                  </div>
+                </label>
+                <label class="input-mode-item">
+                  <input type="checkbox" id="modeAutonomous" onchange="setMode('autonomous', this.checked)">
+                  <div class="mode-info">
+                    <div class="mode-title">Автономный режим</div>
+                    <div class="mode-desc">Без подтверждений даже на опасных командах</div>
+                  </div>
+                </label>
+              </div>
+            </div>
             <textarea class="chat-input" id="chatInput" placeholder="Опиши задачу..." rows="1" maxlength="500"
               onkeydown="handleInputKey(event)" oninput="autoGrow(this); updateCharCount()"></textarea>
             <span class="char-count" id="charCount">0/500</span>

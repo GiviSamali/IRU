@@ -458,6 +458,49 @@ html, body {
 .input-device-dropdown-item.selected { color: var(--accent); }
 .input-device-dropdown-item .dev-os { font-size: 9px; color: var(--text-muted); }
 
+/* Input mode selector (+) */
+.input-mode-select { position: relative; flex-shrink: 0; }
+.input-mode-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 10px 10px; background: var(--bg-tertiary);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text-secondary); cursor: pointer; transition: all 0.15s;
+  font-family: var(--font); font-size: 11px; white-space: nowrap;
+}
+.input-mode-btn:hover { border-color: var(--accent-dim); color: var(--accent); }
+.input-mode-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+.input-mode-btn .mode-plus {
+  font-size: 14px; line-height: 1; font-weight: 400;
+  width: 12px; text-align: center; flex-shrink: 0;
+}
+.input-mode-btn .mode-badges:empty { display: none; }
+.input-mode-btn .mode-badges {
+  font-size: 10px; color: var(--accent);
+}
+.input-mode-dropdown {
+  position: absolute; bottom: calc(100% + 6px); left: 0;
+  min-width: 260px; background: var(--bg-tertiary);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 -8px 24px rgba(0,0,0,0.4); z-index: 200; display: none;
+  padding: 4px;
+}
+.input-mode-dropdown.show { display: block; }
+.input-mode-item {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px; cursor: pointer; border-radius: var(--radius-sm);
+  transition: background 0.1s;
+}
+.input-mode-item:hover { background: var(--bg-hover); }
+.input-mode-item input[type="checkbox"] {
+  margin-top: 2px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0;
+}
+.input-mode-item .mode-title {
+  font-size: 12px; color: var(--text-primary); margin-bottom: 2px;
+}
+.input-mode-item .mode-desc {
+  font-size: 10px; color: var(--text-muted); line-height: 1.4;
+}
+
 /* Header nav buttons */
 .btn-header-link {
   display: flex; align-items: center; gap: 5px;
@@ -1015,7 +1058,9 @@ html, body {
 .sidebar-logo img,
 .app-logo img,
 img[src*="IruIcon"],
-img[src*="iru_logo"]
+img[src*="iru_logo"] {
+  animation: logoGlow 3s ease-in-out infinite;
+}
 
 /* ===== Task Block (конвейер) ===== */
 .task-block {
