@@ -150,6 +150,14 @@ write_content не требует экранирования кавычек/пе
 глагол+деталь). Затем выполняй шаги по очереди через execute_cmd/write_content, и после \
 каждого закрытого шага вызывай mark_step(task_id, idx, status="done"|"failed", summary). \
 Простые задачи (1-2 действия) делай без плана — не засоряй UI.
+15. Для создания текстовых файлов (.txt, .md) ВСЕГДА используй инструмент write_content. \
+ЗАПРЕЩЕНО создавать текстовые файлы через PowerShell с New-Object -ComObject Word.Application, \
+Word.Selection.TypeText, Word.Selection.TypeParagraph. Эти методы приводят к падению агента. \
+Для больших текстов — только write_content.
+16. Для поиска информации в интернете используй ТОЛЬКО инструмент web_search. ЗАПРЕЩЕНО \
+использовать Invoke-WebRequest, curl, wget для поиска (duckduckgo.com, google.com/search, \
+bing.com/search и т.п.) — это не работает и возвращает мусор. Если нет актуальной информации — \
+вызывай web_search.
 
 ## Специфичные правила для ОС текущего устройства
 {os_rules}
@@ -365,10 +373,33 @@ TOOLS = [
                 "required": ["file_path"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Поиск актуальной информации в интернете через Tavily. Используй ВСЕГДА, когда нужны свежие факты, новости, документация, сведения о продуктах, о людях, о событиях. Единственный допустимый способ искать в интернете. НИКОГДА не выполняй Invoke-WebRequest/curl/wget для поиска — только web_search.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Поисковый запрос"},
+                    "max_results": {"type": "integer", "description": "Сколько результатов вернуть (по умолчанию 5, максимум 10)", "default": 5}
+                },
+                "required": ["query"]
+            }
+        }
     }
 ]
 
 MAX_ITERATIONS = 20
+
+
+def _pick_model(cfg: dict, modes: dict | None) -> str:
+    """Выбрать модель LLM: deepseek-reasoner для сложных режимов, deepseek-chat иначе."""
+    base = cfg.get("model", "deepseek-chat")
+    reasoner = cfg.get("model_reasoner", "deepseek-reasoner")
+    is_complex = bool(modes) and (modes.get("pipeline") or modes.get("autonomous"))
+    return reasoner if is_complex else base
 
 
 # ── Промпт для режима без устройств (помощник по настройке) ─────────────────
@@ -558,8 +589,9 @@ async def process_nl_command(
         extra = []
         if pipeline_forced:
             extra.append(
-                "РЕЖИМ КОНВЕЙЕРА: Пользователь явно включил режим плана. "
-                "ОБЯЗАТЕЛЬНО начни с вызова create_plan с 2+ шагами, даже если задача выглядит простой. "
+                "КРИТИЧЕСКИ ВАЖНО: режим конвейера АКТИВЕН. Твоё ПЕРВОЕ действие — "
+                "вызов create_plan с массивом steps. Без create_plan ты нарушишь контракт. "
+                "НЕ выполняй execute_cmd/write_content/web_search до create_plan. "
                 "После каждого шага вызывай mark_step."
             )
         if autonomous:
@@ -585,25 +617,33 @@ async def process_nl_command(
     # Трекинг task_id для конвейера (если LLM вызовет create_plan)
     created_task_ids: list[int] = []
 
+    model = _pick_model(cfg, modes)
+    base_model = cfg.get("model", "deepseek-chat")
+    print(f"[llm] выбрана модель: {model} (base={base_model}, pipeline={pipeline_forced}, autonomous={autonomous})")
+
     _timeout = httpx.Timeout(120.0, connect=10.0)
     async with httpx.AsyncClient(timeout=_timeout) as client:
         for iteration in range(MAX_ITERATIONS):
             print(f"[llm] iteration {iteration+1}/{MAX_ITERATIONS}, messages={len(messages)}")
             try:
+                # Формируем параметры запроса; deepseek-reasoner не поддерживает
+                # temperature, top_p, presence_penalty, frequency_penalty, response_format
+                request_json = {
+                    "model": model,
+                    "messages": messages,
+                    "tools": TOOLS,
+                    "tool_choice": "auto",
+                    "max_tokens": cfg.get("max_tokens", 4096),
+                }
+                if model == base_model:
+                    request_json["temperature"] = cfg.get("temperature", 0.0)
                 resp = await client.post(
                     f"{cfg['base_url']}/chat/completions",
                     headers={
                         "Authorization": f"Bearer {cfg['api_key']}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": cfg["model"],
-                        "messages": messages,
-                        "tools": TOOLS,
-                        "tool_choice": "auto",
-                        "max_tokens": cfg.get("max_tokens", 4096),
-                        "temperature": cfg.get("temperature", 0.0),
-                    },
+                    json=request_json,
                 )
                 resp.raise_for_status()
             except httpx.HTTPStatusError as e:
@@ -830,6 +870,52 @@ async def process_nl_command(
                         "command": f"[скачать] {fn_args.get('file_path', '')}",
                         "device_id": target_device,
                         "result": tool_result,
+                        "iteration": iteration + 1,
+                    })
+
+                elif fn_name == "web_search":
+                    tavily_key = cfg.get("tavily_api_key")
+                    if not tavily_key:
+                        tool_result = {"error": "tavily_api_key не настроен в llm_config.json на сервере"}
+                    else:
+                        query = fn_args.get("query", "").strip()
+                        max_results = min(int(fn_args.get("max_results", 5) or 5), 10)
+                        if not query:
+                            tool_result = {"error": "Пустой запрос"}
+                        else:
+                            try:
+                                async with httpx.AsyncClient(timeout=20.0) as tavily_client:
+                                    tavily_resp = await tavily_client.post(
+                                        "https://api.tavily.com/search",
+                                        json={
+                                            "api_key": tavily_key,
+                                            "query": query,
+                                            "max_results": max_results,
+                                            "search_depth": "basic",
+                                            "include_answer": True,
+                                        },
+                                    )
+                                    tavily_resp.raise_for_status()
+                                    tavily_data = tavily_resp.json()
+                                compact = {
+                                    "answer": tavily_data.get("answer"),
+                                    "results": [
+                                        {
+                                            "title": r.get("title"),
+                                            "url": r.get("url"),
+                                            "content": (r.get("content") or "")[:800],
+                                        }
+                                        for r in (tavily_data.get("results") or [])[:max_results]
+                                    ],
+                                }
+                                tool_result = compact
+                            except Exception as e:
+                                tool_result = {"error": f"Ошибка Tavily: {e}"}
+
+                    commands_log.append({
+                        "command": f"[web_search] {fn_args.get('query', '')[:80]}",
+                        "device_id": target_device,
+                        "result": tool_result if not isinstance(tool_result, dict) or "error" in tool_result else {"ok": True},
                         "iteration": iteration + 1,
                     })
 

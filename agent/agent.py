@@ -472,7 +472,12 @@ async def run_agent():
     print(f"[agent] system info collected: cpu={sys_info.get('cpu', '?')}, "
           f"ram={sys_info.get('ram_gb', '?')}GB, disks={len(sys_info.get('disks', []))}")
 
-    async for ws in websockets.connect(ws_url):
+    async for ws in websockets.connect(
+        ws_url,
+        ping_interval=30,
+        ping_timeout=60,
+        max_size=2**23,  # 8MB на сообщение
+    ):
         try:
             print(f"[agent] connected")
             # Отправить полный профиль устройства

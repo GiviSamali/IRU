@@ -40,17 +40,34 @@ pip install -r requirements.txt
 
 ### 2. Настройка API-ключа DeepSeek
 
-Откройте `server/llm_config.json` и вставьте свой API-ключ:
+Откройте `server/llm_config.json` и вставьте свой API-ключ.
+
+> **Примечание:** `llm_config.json` находится в `.gitignore` и не должен коммититься.
+> Он хранится только на сервере.
+
+Полная структура файла:
 
 ```json
 {
+  "api_key": "sk-...",
   "base_url": "https://api.deepseek.com/v1",
-  "api_key": "YOUR_API_KEY_HERE",
   "model": "deepseek-chat",
-  "max_tokens": 1024,
-  "temperature": 0.0
+  "model_reasoner": "deepseek-reasoner",
+  "max_tokens": 4096,
+  "temperature": 0.0,
+  "tavily_api_key": "tvly-..."
 }
 ```
+
+| Поле | Обязательное | Описание |
+|------|:---:|----------|
+| `api_key` | да | API-ключ DeepSeek. Можно переопределить через переменную окружения `DEEPSEEK_API_KEY`. |
+| `base_url` | да | Базовый URL API DeepSeek (`https://api.deepseek.com/v1`). |
+| `model` | нет | Модель для обычных запросов (по умолчанию `deepseek-chat`). |
+| `model_reasoner` | нет | Модель для сложных запросов — pipeline и autonomous режимы (по умолчанию `deepseek-reasoner`). Не поддерживает `temperature`, `top_p`, `response_format`. |
+| `max_tokens` | нет | Максимум токенов в ответе LLM (по умолчанию 4096). |
+| `temperature` | нет | Температура генерации (по умолчанию 0.0). Применяется только к базовой модели, не к reasoner. |
+| `tavily_api_key` | нет | API-ключ [Tavily](https://tavily.com/) для инструмента `web_search`. Без него LLM не сможет искать в интернете. |
 
 ### 3. Запуск сервера
 

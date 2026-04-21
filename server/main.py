@@ -712,6 +712,28 @@ async def send_command_to_agent(device_id: str, action: str, params: dict,
     """Отправить команду конкретному агенту и дождаться ответа."""
     if action == "execute_cmd":
         cmd_text = params.get("command", "")
+        # Лимит длины команды
+        if len(cmd_text) > 2000:
+            raise RuntimeError(
+                "Команда слишком длинная (>2000 символов). "
+                "Используй write_content для создания текстовых файлов, "
+                "а не PowerShell-строки."
+            )
+        # Запрет Word COM для текста
+        low = cmd_text.lower()
+        if "word.application" in low and ("typetext" in low or "typeparagraph" in low):
+            raise RuntimeError(
+                "Создание текстовых файлов через Word.Application/TypeText запрещено. "
+                "Используй инструмент write_content — он создаёт файл напрямую и безопасно."
+            )
+        # Запрет Invoke-WebRequest к поисковикам
+        if "invoke-webrequest" in low or "iwr " in low or "curl " in low or "wget " in low:
+            search_hosts = ("duckduckgo.com", "google.com/search", "bing.com/search", "yandex.ru/search")
+            if any(h in low for h in search_hosts):
+                raise RuntimeError(
+                    "Поиск в интернете через Invoke-WebRequest/curl/wget запрещён. "
+                    "Используй инструмент web_search."
+                )
         # ЗАПРЕЩЕНО полностью (всегда блокируем)
         if not is_command_safe(cmd_text):
             raise RuntimeError(
