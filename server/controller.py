@@ -18,11 +18,30 @@ controller.py — LLM-планировщик ИРУ v3.5
 
 import json
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 try:
     from . import database as db  # type: ignore
 except ImportError:
     import database as db  # type: ignore
+
+
+_MONTHS_RU = [
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+]
+_WEEKDAYS_RU = [
+    "понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье",
+]
+
+
+def _current_datetime_msk() -> str:
+    """Текущая дата/время в московской таймзоне, на русском языке."""
+    now = datetime.now(ZoneInfo("Europe/Moscow"))
+    weekday = _WEEKDAYS_RU[now.weekday()]
+    month = _MONTHS_RU[now.month - 1]
+    return f"{weekday}, {now.day} {month} {now.year}, {now.strftime('%H:%M')} MSK"
 
 
 def _collect_tasks(task_ids: list[int]) -> list[dict]:
@@ -83,6 +102,11 @@ def load_llm_config() -> dict:
 SYSTEM_PROMPT_TEMPLATE = """\
 Ты — ИРУ (Интеллектуальный Режим Управления), ИИ-ассистент для управления \
 компьютерами пользователя через командную строку.
+
+## Текущая дата и время
+Сейчас: {current_datetime_msk} (Москва, MSK).
+Используй эту дату для запросов про "сегодня", "сейчас", "последние \
+новости". НЕ полагайся на свою память о текущем годе — она устарела.
 
 ## Подключённые устройства
 {devices_block}
@@ -408,6 +432,11 @@ ONBOARDING_PROMPT = """\
 Ты — ИРУ (Интеллектуальный Режим Управления), ИИ-ассистент для управления \
 компьютером через естественный язык.
 
+## Текущая дата и время
+Сейчас: {current_datetime_msk} (Москва, MSK).
+Используй эту дату для запросов про "сегодня", "сейчас", "последние \
+новости". НЕ полагайся на свою память о текущем годе — она устарела.
+
 Сейчас у пользователя НЕТ подключённых устройств. Твоя главная задача — помочь \
 ему подключить первое устройство.
 
@@ -571,6 +600,8 @@ async def process_nl_command(
         # Windows по умолчанию (включая Windows Server и прочие)
         os_rules = WINDOWS_RULES
 
+    current_datetime_msk = _current_datetime_msk()
+
     system_msg = SYSTEM_PROMPT_TEMPLATE.format(
         devices_block=devices_block,
         current_device_id=device_id,
@@ -579,6 +610,7 @@ async def process_nl_command(
         current_os_version=os_version,
         device_profile_block=profile_block,
         os_rules=os_rules,
+        current_datetime_msk=current_datetime_msk,
     )
 
     # Выбранные пользователем режимы (кнопка "+" в UI)
@@ -981,7 +1013,12 @@ async def process_onboarding_message(
     """
     cfg = load_llm_config()
 
-    system_msg = ONBOARDING_PROMPT.format(instruction_text=INSTRUCTION_TEXT)
+    current_datetime_msk = _current_datetime_msk()
+
+    system_msg = ONBOARDING_PROMPT.format(
+        instruction_text=INSTRUCTION_TEXT,
+        current_datetime_msk=current_datetime_msk,
+    )
 
     messages = [{"role": "system", "content": system_msg}]
 
