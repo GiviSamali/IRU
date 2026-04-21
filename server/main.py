@@ -864,6 +864,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 chat_history=chat_history,
                 device_profile=device_profile,
                 modes=task_modes,
+                user_id=user_id,
+                chat_id=chat_id,
             )
             return {
                 "device_id": device_id,

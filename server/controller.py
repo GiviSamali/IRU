@@ -728,22 +728,26 @@ async def process_nl_command(
                     })
 
                 elif fn_name == "create_plan":
+                    print(f"[llm] create_plan called: user_id={user_id}, chat_id={chat_id}, args={str(fn_args)[:200]}")
                     try:
                         goal = str(fn_args.get("goal", "")).strip()
                         steps = fn_args.get("steps") or []
-                        if not goal or not isinstance(steps, list) or not steps:
+                        if not user_id:
+                            tool_result = {"error": "внутренняя ошибка: user_id не передан"}
+                        elif not goal or not isinstance(steps, list) or not steps:
                             tool_result = {"error": "goal и непустой список steps обязательны"}
                         elif len(steps) > 50:
                             tool_result = {"error": "слишком много шагов (макс 50)"}
                         else:
                             task_id = db.create_task(
-                                user_id=user_id or 0,
+                                user_id=user_id,
                                 chat_id=chat_id,
                                 device_id=target_device,
                                 goal=goal,
                                 steps=[str(s) for s in steps],
                             )
                             created_task_ids.append(task_id)
+                            print(f"[llm] create_plan OK: task_id={task_id}, steps={len(steps)}")
                             tool_result = {
                                 "task_id": task_id,
                                 "goal": goal,
@@ -752,6 +756,7 @@ async def process_nl_command(
                             }
                     except Exception as e:
                         print(f"[llm] create_plan EXCEPTION: {type(e).__name__}: {e}")
+                        import traceback; traceback.print_exc()
                         tool_result = {"error": str(e)}
 
                 elif fn_name == "mark_step":
