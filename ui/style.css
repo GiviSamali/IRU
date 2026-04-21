@@ -1,7 +1,7 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
   --bg-primary: #020308;
-  --bg-secondary: #05060a9c;
+  --bg-secondary: rgb(5 6 10 / 0);
   --bg-tertiary: #0a0e17;
   --bg-hover: #141726;
   --bg-input: #080b14;
