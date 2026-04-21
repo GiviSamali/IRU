@@ -235,6 +235,35 @@ def list_dir(path: str = None) -> dict:
     }
 
 
+def write_content(path: str, content: str, append: bool = False, encoding: str = "utf-8") -> dict:
+    """Напрямую записать текст в файл.
+
+    Альтернатива для длинных текстов, чтобы не гонять через шелл (экранирование,
+    here-string, кодировка). Работает одинаково на Windows и Linux.
+
+    Args:
+        path: путь к файлу
+        content: текстовое содержимое
+        append: True — дописать в конец файла; False — перезаписать
+        encoding: кодировка (по умолчанию utf-8)
+    """
+    try:
+        p = Path(path)
+        # Создать родительскую директорию при необходимости
+        p.parent.mkdir(parents=True, exist_ok=True)
+        mode = "a" if append else "w"
+        with open(p, mode, encoding=encoding, newline="") as f:
+            f.write(content)
+        return {
+            "path": str(p),
+            "bytes_written": len(content.encode(encoding, errors="replace")),
+            "mode": "append" if append else "overwrite",
+            "total_size": p.stat().st_size,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def get_file_content(path: str, max_size: int = 50_000_000) -> dict:
     """Прочитать файл и вернуть содержимое в base64."""
     try:
@@ -290,6 +319,7 @@ ACTIONS = {
     "execute_cmd": lambda **p: execute_cmd(**p),
     "list_dir": lambda **p: list_dir(**p),
     "get_file_content": lambda **p: get_file_content(**p),
+    "write_content": lambda **p: write_content(**p),
 }
 
 

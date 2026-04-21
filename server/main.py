@@ -725,6 +725,29 @@ async def send_command_to_agent(device_id: str, action: str, params: dict,
             )
         print(f"[cmd] executing: {cmd_text[:80]}")
 
+    elif action == "write_content":
+        # Запрет записи в критические системные пути на обеих ОС
+        path = str(params.get("path", "")).strip()
+        if not path:
+            raise RuntimeError("BLOCKED: путь не указан")
+        # Нормализуем слеши для проверки
+        norm = path.replace("\\", "/").lower()
+        forbidden_prefixes = (
+            # Windows
+            "c:/windows/", "c:/program files/", "c:/program files (x86)/",
+            "c:/programdata/", "c:/system volume information/",
+            # Linux
+            "/etc/", "/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/", "/usr/lib/",
+            "/boot/", "/dev/", "/proc/", "/sys/", "/var/log/", "/root/",
+        )
+        if any(norm.startswith(p) for p in forbidden_prefixes):
+            raise RuntimeError(
+                f"BLOCKED: Запись в системные каталоги запрещена на этапе бета-тестирования: {path}"
+            )
+        content_len = len(str(params.get("content", "")))
+        mode = "append" if params.get("append") else "write"
+        print(f"[cmd] write_content ({mode}): {path} | {content_len} chars")
+
     dev = devices.get(device_id)
     if not dev:
         raise RuntimeError(f"Устройство '{device_id}' не подключено")
