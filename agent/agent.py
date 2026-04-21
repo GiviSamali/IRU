@@ -19,13 +19,15 @@ import base64
 import time
 import tempfile
 from pathlib import Path
+import zipfile
+import shutil
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
 from platforms import get_platform
 platform_mod = get_platform()
 
-AGENT_VERSION = "3.6"
+AGENT_VERSION = "3.7"
 
 # Для PyInstaller: определяем путь к exe, а не к временной папке
 if getattr(sys, 'frozen', False):
@@ -333,6 +335,7 @@ def _version_tuple(v: str):
 
 def check_for_update(server_url: str) -> bool:
     """Проверить наличие обновления и выполнить его.
+    Поддерживает kind="exe" (старый путь) и kind="zip" (новый onedir).
     Возвращает True если обновление запущено (нужно завершить процесс)."""
     # Преобразовать wss:// в https:// для HTTP-запросов
     http_url = server_url.replace("wss://", "https://").replace("ws://", "http://")
@@ -348,6 +351,8 @@ def check_for_update(server_url: str) -> bool:
 
     server_version = data.get("version", "0.0")
     download_url = data.get("download_url", "")
+    # Обратная совместимость: если kind не указан — exe
+    kind = data.get("kind", "exe")
 
     if _version_tuple(server_version) <= _version_tuple(AGENT_VERSION):
         print(f"[update] актуальная версия ({AGENT_VERSION})")
@@ -358,7 +363,7 @@ def check_for_update(server_url: str) -> bool:
         return False
 
     # Скачать новую версию
-    print(f"[update] скачиваем {server_version}...")
+    print(f"[update] скачиваем {server_version} (kind={kind})...")
     full_url = f"{http_url}{download_url}" if download_url.startswith("/") else download_url
     try:
         req = Request(full_url, headers={"User-Agent": f"IRU-Agent/{AGENT_VERSION}"})
@@ -380,20 +385,26 @@ def check_for_update(server_url: str) -> bool:
         print(f"[update] авто-обновление пока только для Windows. Обновите бинарник вручную.")
         return False
 
+    if kind == "zip":
+        return _update_zip(new_data, server_version)
+    else:
+        return _update_exe(new_data, server_version)
+
+
+def _update_exe(new_data: bytes, server_version: str) -> bool:
+    """Обновление через подмену одиночного exe (старый путь, fallback)."""
     exe_path = Path(sys.executable)
     new_exe = exe_path.parent / "agent_new.exe"
     old_exe = exe_path.parent / "agent_old.exe"
 
-    # Записать новый файл
     try:
         new_exe.write_bytes(new_data)
     except Exception as e:
         print(f"[update] ошибка записи: {e}")
         return False
 
-    print(f"[update] скачано {len(new_data)} байт, запускаем обновление...")
+    print(f"[update] скачано {len(new_data)} байт, запускаем обновление (exe)...")
 
-    # Создать bat-скрипт для подмены exe
     bat_path = exe_path.parent / "_update.bat"
     pid = os.getpid()
     bat_content = f"""@echo off
@@ -416,7 +427,6 @@ del /f "%~f0"
 """
     try:
         bat_path.write_text(bat_content, encoding="utf-8")
-        # Запустить bat в скрытом окне
         subprocess.Popen(
             ["cmd", "/c", str(bat_path)],
             creationflags=0x08000000,  # CREATE_NO_WINDOW
@@ -425,10 +435,166 @@ del /f "%~f0"
         print(f"[update] обновление запущено, завершаем текущий процесс")
         return True
     except Exception as e:
-        print(f"[update] ошибка запуска обновления: {e}")
-        # Очистить
+        print(f"[update] ошибка запуска обновления (exe): {e}")
         try:
             new_exe.unlink(missing_ok=True)
+            bat_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False
+
+
+def _update_zip(new_data: bytes, server_version: str) -> bool:
+    """Обновление через ZIP: распаковка в staging, атомарная подмена папки через .bat."""
+    # Проверить ZIP-сигнатуру
+    if new_data[:4] != b"PK\x03\x04":
+        print(f"[update] скачанный файл не является ZIP, пропуск")
+        return False
+
+    parent_dir = BASE_DIR.parent
+    zip_path = parent_dir / f"agent_update_{server_version}.zip"
+    staging_dir = parent_dir / f"agent_new_{server_version}"
+
+    # Записать zip
+    try:
+        zip_path.write_bytes(new_data)
+    except Exception as e:
+        print(f"[update] ошибка записи zip: {e}")
+        return False
+
+    print(f"[update] скачано {len(new_data)} байт, распаковываем...")
+
+    # Создать staging (удалить если существует)
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir, ignore_errors=True)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    # Распаковать
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(staging_dir)
+    except Exception as e:
+        print(f"[update] ошибка распаковки: {e}")
+        try:
+            zip_path.unlink(missing_ok=True)
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        except Exception:
+            pass
+        return False
+
+    # Проверить наличие agent.exe в staging
+    staging_exe = staging_dir / "agent.exe"
+    if not staging_exe.exists():
+        print(f"[update] в архиве не найден agent.exe, пропуск")
+        try:
+            zip_path.unlink(missing_ok=True)
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        except Exception:
+            pass
+        return False
+
+    # Проверить VERSION.txt (если есть)
+    staging_version_file = staging_dir / "VERSION.txt"
+    if staging_version_file.exists():
+        ver_text = staging_version_file.read_text(encoding="utf-8").strip()
+        if ver_text != server_version:
+            print(f"[update] предупреждение: VERSION.txt={ver_text}, ожидалось {server_version}")
+
+    print(f"[update] распаковано, запускаем подмену папки...")
+
+    # Атомарная подмена через .bat
+    pid = os.getpid()
+    ts = int(time.time())
+    backup_dir = parent_dir / f"agent_old_{ts}"
+    new_exe_path = BASE_DIR / "agent.exe"
+    bat_path = parent_dir / "_update_zip.bat"
+    log_path = os.path.join(tempfile.gettempdir(), "iru_agent_update.log")
+    config_src = BASE_DIR / "config.json"
+    config_dst = staging_dir / "config.json"
+
+    bat_content = f"""@echo off
+chcp 65001 >nul
+set LOG="{log_path}"
+echo [%date% %time%] Начало обновления v{server_version} >> %LOG%
+
+echo [обновление] Ждём завершения старого процесса (PID {pid})...
+:wait_loop
+tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
+if not errorlevel 1 (
+    timeout /t 1 /nobreak >nul
+    goto wait_loop
+)
+echo [%date% %time%] Процесс завершён >> %LOG%
+
+echo [обновление] Переименовываем старую папку...
+move /y "{BASE_DIR}" "{backup_dir}"
+if errorlevel 1 (
+    echo [%date% %time%] ОШИБКА: не удалось переименовать старую папку >> %LOG%
+    echo [обновление] ОШИБКА: не удалось переименовать старую папку
+    goto restore
+)
+echo [%date% %time%] Старая папка -> {backup_dir} >> %LOG%
+
+echo [обновление] Переименовываем staging в рабочую папку...
+move /y "{staging_dir}" "{BASE_DIR}"
+if errorlevel 1 (
+    echo [%date% %time%] ОШИБКА: не удалось переименовать staging >> %LOG%
+    echo [обновление] ОШИБКА: не удалось переименовать staging
+    goto restore
+)
+echo [%date% %time%] Staging -> {BASE_DIR} >> %LOG%
+
+echo [обновление] Копируем config.json из бэкапа...
+if exist "{backup_dir}\\config.json" (
+    if not exist "{BASE_DIR}\\config.json" (
+        copy /y "{backup_dir}\\config.json" "{BASE_DIR}\\config.json" >nul
+        echo [%date% %time%] config.json скопирован >> %LOG%
+    ) else (
+        copy /y "{backup_dir}\\config.json" "{BASE_DIR}\\config.json" >nul
+        echo [%date% %time%] config.json перезаписан из бэкапа >> %LOG%
+    )
+)
+
+echo [обновление] Запускаем новую версию...
+echo [%date% %time%] Запуск {BASE_DIR}\\agent.exe >> %LOG%
+start "" "{BASE_DIR}\\agent.exe"
+
+echo [обновление] Удаляем временные файлы...
+if exist "{zip_path}" del /f "{zip_path}"
+echo [%date% %time%] Обновление завершено успешно >> %LOG%
+goto cleanup
+
+:restore
+echo [обновление] Восстановление из бэкапа...
+echo [%date% %time%] Восстановление... >> %LOG%
+if not exist "{BASE_DIR}" (
+    if exist "{backup_dir}" (
+        move /y "{backup_dir}" "{BASE_DIR}"
+        echo [%date% %time%] Восстановлено из бэкапа >> %LOG%
+    )
+)
+if exist "{zip_path}" del /f "{zip_path}"
+if exist "{staging_dir}" rmdir /s /q "{staging_dir}"
+echo [%date% %time%] Откат завершён >> %LOG%
+
+:cleanup
+del /f "%~f0"
+"""
+
+    try:
+        bat_path.write_text(bat_content, encoding="utf-8")
+        subprocess.Popen(
+            ["cmd", "/c", str(bat_path)],
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+            close_fds=True,
+        )
+        print(f"[update] обновление (zip) запущено, завершаем текущий процесс")
+        return True
+    except Exception as e:
+        print(f"[update] ошибка запуска обновления (zip): {e}")
+        try:
+            zip_path.unlink(missing_ok=True)
+            shutil.rmtree(staging_dir, ignore_errors=True)
             bat_path.unlink(missing_ok=True)
         except Exception:
             pass

@@ -1888,33 +1888,40 @@ async def api_agent_version():
     """Проверка актуальной версии агента. Не требует авторизации."""
     version_file = UPDATES_DIR / "version.json"
     if not version_file.exists():
-        return {"version": "0.0", "min_version": "0.0", "changelog": "", "download_url": ""}
+        return {"version": "0.0", "min_version": "0.0", "changelog": "",
+                "download_url": "", "kind": "exe"}
     data = json.loads(version_file.read_text(encoding="utf-8"))
     data["download_url"] = "/api/agent/download"
+    # Обратная совместимость: если kind отсутствует — exe
+    if "kind" not in data:
+        data["kind"] = "exe"
     return data
 
 
 @app.get("/api/agent/download")
 async def api_agent_download():
-    """Скачать последнюю версию agent.exe. Не требует авторизации."""
+    """Скачать последнюю версию агента (exe или zip). Не требует авторизации."""
     version_file = UPDATES_DIR / "version.json"
     if not version_file.exists():
         raise HTTPException(status_code=404, detail="Файл версии не найден")
     data = json.loads(version_file.read_text(encoding="utf-8"))
-    exe_name = data.get("filename", "agent.exe")
-    exe_path = UPDATES_DIR / exe_name
-    if not exe_path.exists():
+    filename = data.get("filename", "agent.exe")
+    kind = data.get("kind", "exe")
+    file_path = UPDATES_DIR / filename
+    if not file_path.exists():
         raise HTTPException(status_code=404, detail="Файл агента не найден на сервере")
+    media_type = "application/zip" if kind == "zip" else "application/octet-stream"
     return FileResponse(
-        path=str(exe_path),
-        filename=exe_name,
-        media_type="application/octet-stream",
+        path=str(file_path),
+        filename=filename,
+        media_type=media_type,
     )
 
 
 @app.post("/api/agent/upload")
 async def api_agent_upload(request: Request, version: str = Query(...)):
-    """Загрузить новую версию agent.exe. Только admin."""
+    """Загрузить новую версию агента (exe или zip). Только admin.
+    Тип определяется по сигнатуре: PK\\x03\\x04 = zip, иначе exe."""
     user = get_current_user(request)
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="Только для администратора")
@@ -1924,14 +1931,23 @@ async def api_agent_upload(request: Request, version: str = Query(...)):
     if len(body) > 100_000_000:
         raise HTTPException(status_code=400, detail="Файл слишком большой (>100МБ)")
     UPDATES_DIR.mkdir(exist_ok=True)
-    exe_path = UPDATES_DIR / "agent.exe"
-    exe_path.write_bytes(body)
+    # Определяем тип по ZIP-сигнатуре (PK\x03\x04)
+    is_zip = body[:4] == b"PK\x03\x04"
+    if is_zip:
+        kind = "zip"
+        filename = "agent.zip"
+    else:
+        kind = "exe"
+        filename = "agent.exe"
+    save_path = UPDATES_DIR / filename
+    save_path.write_bytes(body)
     # Обновить version.json
     version_data = {
         "version": version,
         "min_version": "3.0",
         "changelog": "",
-        "filename": "agent.exe",
+        "filename": filename,
+        "kind": kind,
     }
     version_file = UPDATES_DIR / "version.json"
     if version_file.exists():
@@ -1944,8 +1960,8 @@ async def api_agent_upload(request: Request, version: str = Query(...)):
     version_data["version"] = version
     version_file.write_text(json.dumps(version_data, ensure_ascii=False, indent=2), encoding="utf-8")
     add_audit_log(user["id"], user["name"], "agent_upload",
-                  f"version={version}, size={len(body)}", None)
-    return {"status": "ok", "version": version, "size": len(body)}
+                  f"version={version}, kind={kind}, size={len(body)}", None)
+    return {"status": "ok", "version": version, "kind": kind, "size": len(body)}
 
 
 # ── WebSocket для агентов ────────────────────────────────────────────────

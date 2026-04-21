@@ -1,19 +1,20 @@
-﻿# build_windows.ps1 -- sborka agent.exe pod Windows i zagruzka na server.
+﻿# build_windows.ps1 — сборка агента ИРУ (--onedir + ZIP) и загрузка на сервер.
 #
-# Zapusk iz kornya repozitoriya IRU na Windows (PowerShell):
+# Запуск из корня репозитория IRU на Windows (PowerShell):
 #
 #   .\deploy\build_windows.ps1 -Version 3.7
 #
-# Parametry:
-#   -Version      Stroka versii (naprimer "3.7"). OBYAZATELNO.
-#   -Server       URL servera (po umolchaniyu https://irumode.ru).
-#   -Token        Admin-token. Esli ne peredan, beryotsya iz env:IRU_ADMIN_TOKEN.
-#   -SkipUpload   Tolko sobrat, ne zagruzhat na server.
+# Параметры:
+#   -Version      Строка версии (например "3.7"). ОБЯЗАТЕЛЬНО.
+#   -Server       URL сервера (по умолчанию https://irumode.ru).
+#   -Token        Admin-токен. Если не передан, берётся из env:IRU_ADMIN_TOKEN.
+#   -SkipUpload   Только собрать, не загружать на сервер.
 #
-# Trebovaniya:
-#   - Python 3.11+ v PATH
-#   - pip install pyinstaller
-#   - agent\agent.py i ui\IruIcon.ico v repozitorii
+# Требования:
+#   - Python 3.11+ в PATH
+#   - agent\agent.py и ui\IruIcon.ico в репозитории
+#
+# КОДИРОВКА: UTF-8 с BOM (обязательно для PowerShell 5.1 на русской Windows)
 
 param(
     [Parameter(Mandatory = $true)]
@@ -28,7 +29,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# -- Proverki -------------------------------------------------------------
+# -- Пути ------------------------------------------------------------------
 $repoRoot  = (Get-Item -Path "$PSScriptRoot\..").FullName
 $agentDir  = Join-Path $repoRoot "agent"
 $iconPath  = Join-Path $repoRoot "ui\IruIcon.ico"
@@ -37,33 +38,34 @@ $buildDir  = Join-Path $repoRoot "build"
 $specPath  = Join-Path $repoRoot "agent.spec"
 
 if (-not (Test-Path "$agentDir\agent.py")) {
-    throw "Ne nayden agent\agent.py. Zapuskay skript iz repozitoriya IRU."
+    throw "Не найден agent\agent.py. Запускайте скрипт из репозитория IRU."
 }
 if (-not (Test-Path $iconPath)) {
-    Write-Warning "Ikonka $iconPath ne naydena -- sobirayu bez ikonki."
+    Write-Warning "Иконка $iconPath не найдена — собираем без иконки."
     $iconPath = $null
 }
 
-Write-Host "== Sborka agent.exe v$Version ==" -ForegroundColor Cyan
-Write-Host "Repozitoriy: $repoRoot"
+Write-Host "== Сборка agent v$Version (onedir + ZIP) ==" -ForegroundColor Cyan
+Write-Host "Репозиторий: $repoRoot"
 
-# -- Python + PyInstaller -------------------------------------------------
+# -- Python + зависимости --------------------------------------------------
 $py = (Get-Command python -ErrorAction SilentlyContinue)
-if (-not $py) { throw "Python ne nayden v PATH." }
+if (-not $py) { throw "Python не найден в PATH." }
 
 Write-Host "Python: $($py.Source)"
 & python -m pip install --upgrade pip | Out-Null
 & python -m pip install --upgrade pyinstaller websockets httpx | Out-Null
 
-# -- Ochistka -------------------------------------------------------------
+# -- Очистка ----------------------------------------------------------------
 if (Test-Path $distDir)  { Remove-Item -Recurse -Force $distDir }
 if (Test-Path $buildDir) { Remove-Item -Recurse -Force $buildDir }
 if (Test-Path $specPath) { Remove-Item -Force $specPath }
 
-# -- Sborka ---------------------------------------------------------------
+# -- Сборка (--onedir) -----------------------------------------------------
 $pyiArgs = @(
-    "--onefile",
+    "--onedir",
     "--name", "agent",
+    "--noconsole",
     "--distpath", $distDir,
     "--workpath", $buildDir,
     "--specpath", $repoRoot,
@@ -75,55 +77,59 @@ $pyiArgs = @(
 )
 if ($iconPath) { $pyiArgs += @("--icon", $iconPath) }
 
-# Dlya Windows agent -- bez konsoli (fonovyi rezhim)
-$pyiArgs += @("--noconsole")
-
-# Tochka vhoda
+# Точка входа
 $pyiArgs += (Join-Path $agentDir "agent.py")
 
 Push-Location $agentDir
 try {
-    Write-Host "Zapusk PyInstaller..."
+    Write-Host "Запуск PyInstaller (--onedir)..."
     & python -m PyInstaller @pyiArgs
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller zavershilsya s kodom $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller завершился с кодом $LASTEXITCODE" }
 }
 finally {
     Pop-Location
 }
 
-$exePath = Join-Path $distDir "agent.exe"
+$exePath = Join-Path $distDir "agent\agent.exe"
 if (-not (Test-Path $exePath)) {
-    throw "Posle sborki ne nayden $exePath"
+    throw "После сборки не найден $exePath"
 }
 
-$size = (Get-Item $exePath).Length
-Write-Host ("Gotovo: {0} ({1:N0} bayt)" -f $exePath, $size) -ForegroundColor Green
+# -- VERSION.txt внутри папки agent -----------------------------------------
+$versionTxt = Join-Path $distDir "agent\VERSION.txt"
+Set-Content -Path $versionTxt -Value $Version -Encoding UTF8 -NoNewline
 
-# -- Zagruzka na server ---------------------------------------------------
+# -- Упаковка в ZIP (файлы на верхнем уровне!) ------------------------------
+$zipPath = Join-Path $distDir "agent-v$Version.zip"
+Compress-Archive -Path "$distDir\agent\*" -DestinationPath $zipPath -Force
+
+$zipSize = (Get-Item $zipPath).Length
+Write-Host ("Готово: {0} ({1:N0} байт)" -f $zipPath, $zipSize) -ForegroundColor Green
+
+# -- Загрузка на сервер ----------------------------------------------------
 if ($SkipUpload) {
-    Write-Host "SkipUpload=true -- zagruzka propushchena."
+    Write-Host "SkipUpload=true — загрузка пропущена."
+    Write-Host "ZIP: $zipPath"
     exit 0
 }
 
 if (-not $Token) {
-    throw "Ne zadan admin-token. Pereday -Token ili ustanovi env:IRU_ADMIN_TOKEN."
+    throw "Не задан admin-токен. Передайте -Token или установите env:IRU_ADMIN_TOKEN."
 }
 
 $uri = "$Server/api/agent/upload?version=$Version"
-Write-Host "Zagruzka v $uri ..."
+Write-Host "Загрузка в $uri ..."
 
-# curl.exe idyot v Windows 10/11 iz korobki; PowerShell Invoke-WebRequest tozhe podhodit,
-# no curl nadyozhnee dlya bolshih binarnyh tel.
 $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
 if ($curl) {
     & curl.exe -sS -X POST $uri `
         -H "X-Token: $Token" `
         -H "Content-Type: application/octet-stream" `
-        --data-binary "@$exePath" `
+        --data-binary "@$zipPath" `
         --fail-with-body
-    if ($LASTEXITCODE -ne 0) { throw "curl vernul kod $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "curl вернул код $LASTEXITCODE" }
 } else {
-    $bytes = [System.IO.File]::ReadAllBytes($exePath)
+    $bytes = [System.IO.File]::ReadAllBytes($zipPath)
     $resp = Invoke-WebRequest -Uri $uri -Method Post `
         -Headers @{ "X-Token" = $Token; "Content-Type" = "application/octet-stream" } `
         -Body $bytes -UseBasicParsing
@@ -131,4 +137,4 @@ if ($curl) {
 }
 
 Write-Host ""
-Write-Host "OK: agent.exe v$Version zagruzhen. Agenty podtyanut obnovlenie avtomaticheski." -ForegroundColor Green
+Write-Host "OK: agent v$Version (ZIP) загружен. Агенты подтянут обновление автоматически." -ForegroundColor Green
