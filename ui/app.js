@@ -709,9 +709,10 @@ function sendHint(el) {
 }
 
 function downloadAgent() {
+  // НЕ задаём a.download — браузер возьмёт имя из Content-Disposition сервера.
+  // Это работает и для agent.zip, и для agent.exe (обратная совместимость).
   const a = document.createElement('a');
   a.href = `${API}/api/agent/download`;
-  a.download = 'agent.exe';
   document.body.appendChild(a);
   a.click();
   a.remove();
