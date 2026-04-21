@@ -227,7 +227,7 @@ html, body {
 /* HEADER */
 .header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0 16px; height: 68px; min-height: 68px;
+  padding: 0 16px; height: 68px; min-height: 73px;
   background: var(--bg-secondary); border-bottom: 1px solid var(--border);
   z-index: 100;
 }
@@ -431,7 +431,7 @@ html, body {
 }
 .input-device-btn {
   display: flex; align-items: center; gap: 5px;
-  padding: 5px 10px; background: var(--bg-tertiary);
+  padding: 10px 10px; background: var(--bg-tertiary);
   border: 1px solid var(--border); border-radius: var(--radius);
   color: var(--text-secondary); cursor: pointer; transition: all 0.15s;
   font-family: var(--font); font-size: 11px; white-space: nowrap;
