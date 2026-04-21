@@ -1,19 +1,19 @@
-# build_windows.ps1 — сборка agent.exe под Windows и загрузка на сервер.
+﻿# build_windows.ps1 -- sborka agent.exe pod Windows i zagruzka na server.
 #
-# Запуск из корня репозитория IRU на Windows (PowerShell):
+# Zapusk iz kornya repozitoriya IRU na Windows (PowerShell):
 #
 #   .\deploy\build_windows.ps1 -Version 3.7
 #
-# Параметры:
-#   -Version      Строка версии (например "3.7"). ОБЯЗАТЕЛЬНО.
-#   -Server       URL сервера (по умолчанию https://irumode.ru).
-#   -Token        Админ-токен. Если не передан, берётся из env:IRU_ADMIN_TOKEN.
-#   -SkipUpload   Только собрать, не загружать на сервер.
+# Parametry:
+#   -Version      Stroka versii (naprimer "3.7"). OBYAZATELNO.
+#   -Server       URL servera (po umolchaniyu https://irumode.ru).
+#   -Token        Admin-token. Esli ne peredan, beryotsya iz env:IRU_ADMIN_TOKEN.
+#   -SkipUpload   Tolko sobrat, ne zagruzhat na server.
 #
-# Требования:
-#   - Python 3.11+ в PATH
+# Trebovaniya:
+#   - Python 3.11+ v PATH
 #   - pip install pyinstaller
-#   - agent\agent.py и ui\IruIcon.ico в репозитории
+#   - agent\agent.py i ui\IruIcon.ico v repozitorii
 
 param(
     [Parameter(Mandatory = $true)]
@@ -28,7 +28,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# ── Проверки ──────────────────────────────────────────────────────────────
+# -- Proverki -------------------------------------------------------------
 $repoRoot  = (Get-Item -Path "$PSScriptRoot\..").FullName
 $agentDir  = Join-Path $repoRoot "agent"
 $iconPath  = Join-Path $repoRoot "ui\IruIcon.ico"
@@ -37,30 +37,30 @@ $buildDir  = Join-Path $repoRoot "build"
 $specPath  = Join-Path $repoRoot "agent.spec"
 
 if (-not (Test-Path "$agentDir\agent.py")) {
-    throw "Не найден agent\agent.py. Запускай скрипт из репозитория IRU."
+    throw "Ne nayden agent\agent.py. Zapuskay skript iz repozitoriya IRU."
 }
 if (-not (Test-Path $iconPath)) {
-    Write-Warning "Иконка $iconPath не найдена — собираю без иконки."
+    Write-Warning "Ikonka $iconPath ne naydena -- sobirayu bez ikonki."
     $iconPath = $null
 }
 
-Write-Host "── Сборка agent.exe v$Version ──" -ForegroundColor Cyan
-Write-Host "Репозиторий: $repoRoot"
+Write-Host "== Sborka agent.exe v$Version ==" -ForegroundColor Cyan
+Write-Host "Repozitoriy: $repoRoot"
 
-# ── Python + PyInstaller ──────────────────────────────────────────────────
+# -- Python + PyInstaller -------------------------------------------------
 $py = (Get-Command python -ErrorAction SilentlyContinue)
-if (-not $py) { throw "Python не найден в PATH." }
+if (-not $py) { throw "Python ne nayden v PATH." }
 
 Write-Host "Python: $($py.Source)"
 & python -m pip install --upgrade pip | Out-Null
 & python -m pip install --upgrade pyinstaller websockets httpx | Out-Null
 
-# ── Очистка ───────────────────────────────────────────────────────────────
+# -- Ochistka -------------------------------------------------------------
 if (Test-Path $distDir)  { Remove-Item -Recurse -Force $distDir }
 if (Test-Path $buildDir) { Remove-Item -Recurse -Force $buildDir }
 if (Test-Path $specPath) { Remove-Item -Force $specPath }
 
-# ── Сборка ────────────────────────────────────────────────────────────────
+# -- Sborka ---------------------------------------------------------------
 $pyiArgs = @(
     "--onefile",
     "--name", "agent",
@@ -68,7 +68,6 @@ $pyiArgs = @(
     "--workpath", $buildDir,
     "--specpath", $repoRoot,
     "--noconfirm",
-    # platforms — папка с windows.py/linux.py, подтянется как модуль
     "--collect-submodules", "platforms",
     "--hidden-import", "platforms",
     "--hidden-import", "platforms.windows",
@@ -76,17 +75,17 @@ $pyiArgs = @(
 )
 if ($iconPath) { $pyiArgs += @("--icon", $iconPath) }
 
-# Для Windows агент — без консоли (фоновый режим)
+# Dlya Windows agent -- bez konsoli (fonovyi rezhim)
 $pyiArgs += @("--noconsole")
 
-# Точка входа
+# Tochka vhoda
 $pyiArgs += (Join-Path $agentDir "agent.py")
 
 Push-Location $agentDir
 try {
-    Write-Host "Запуск PyInstaller…"
+    Write-Host "Zapusk PyInstaller..."
     & python -m PyInstaller @pyiArgs
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller завершился с кодом $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller zavershilsya s kodom $LASTEXITCODE" }
 }
 finally {
     Pop-Location
@@ -94,27 +93,27 @@ finally {
 
 $exePath = Join-Path $distDir "agent.exe"
 if (-not (Test-Path $exePath)) {
-    throw "После сборки не найден $exePath"
+    throw "Posle sborki ne nayden $exePath"
 }
 
 $size = (Get-Item $exePath).Length
-Write-Host ("Готово: {0} ({1:N0} байт)" -f $exePath, $size) -ForegroundColor Green
+Write-Host ("Gotovo: {0} ({1:N0} bayt)" -f $exePath, $size) -ForegroundColor Green
 
-# ── Загрузка на сервер ────────────────────────────────────────────────────
+# -- Zagruzka na server ---------------------------------------------------
 if ($SkipUpload) {
-    Write-Host "SkipUpload=true — загрузка пропущена."
+    Write-Host "SkipUpload=true -- zagruzka propushchena."
     exit 0
 }
 
 if (-not $Token) {
-    throw "Не задан админ-токен. Передай -Token или установи env:IRU_ADMIN_TOKEN."
+    throw "Ne zadan admin-token. Pereday -Token ili ustanovi env:IRU_ADMIN_TOKEN."
 }
 
 $uri = "$Server/api/agent/upload?version=$Version"
-Write-Host "Загрузка в $uri …"
+Write-Host "Zagruzka v $uri ..."
 
-# curl.exe идёт в Windows 10/11 из коробки; PowerShell Invoke-WebRequest тоже подходит,
-# но curl надёжнее для больших бинарных тел.
+# curl.exe idyot v Windows 10/11 iz korobki; PowerShell Invoke-WebRequest tozhe podhodit,
+# no curl nadyozhnee dlya bolshih binarnyh tel.
 $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
 if ($curl) {
     & curl.exe -sS -X POST $uri `
@@ -122,7 +121,7 @@ if ($curl) {
         -H "Content-Type: application/octet-stream" `
         --data-binary "@$exePath" `
         --fail-with-body
-    if ($LASTEXITCODE -ne 0) { throw "curl вернул код $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "curl vernul kod $LASTEXITCODE" }
 } else {
     $bytes = [System.IO.File]::ReadAllBytes($exePath)
     $resp = Invoke-WebRequest -Uri $uri -Method Post `
@@ -132,4 +131,4 @@ if ($curl) {
 }
 
 Write-Host ""
-Write-Host "✓ agent.exe v$Version загружен. Агенты подтянут обновление автоматически." -ForegroundColor Green
+Write-Host "OK: agent.exe v$Version zagruzhen. Agenty podtyanut obnovlenie avtomaticheski." -ForegroundColor Green
