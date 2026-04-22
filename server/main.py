@@ -441,6 +441,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
     затем команды повторяются на остальных.
     """
     task = tasks[task_id]
+    task["current_step"] = "ИРУ думает..."
     is_broadcast = len(device_ids) > 1
     print(f"[run_nl_task] START task={task_id[:8]}, user={user_id}, devices={device_ids}")
 
@@ -494,6 +495,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 modes=task_modes,
                 user_id=user_id,
                 chat_id=chat_id,
+                poll_task_id=task_id,
             )
             return {
                 "device_id": device_id,
@@ -682,6 +684,7 @@ async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id:
     Простой чат с LLM без tool-вызовов.
     """
     task = tasks[task_id]
+    task["current_step"] = "ИРУ думает..."
     try:
         chat_history = get_messages(chat_id, limit=50)
         result = await process_onboarding_message(
@@ -1132,6 +1135,7 @@ async def api_get_task(task_id: str, request: Request):
             "answer": task.get("answer"),
             "commands": task.get("commands"),
             "tasks": task.get("tasks", []),
+            "current_step": task.get("current_step"),
             "results": task.get("results", {}),
             "confirm_data": task.get("confirm_data"),
             "created_at": task["created_at"],

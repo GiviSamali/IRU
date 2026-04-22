@@ -1062,6 +1062,38 @@ img[src*="iru_logo"] {
   animation: logoGlow 3s ease-in-out infinite;
 }
 
+/* ===== Live Progress (живой статус) ===== */
+.msg-thinking .live-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #7aaed0;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 8px 0;
+}
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #00d4ff;
+  box-shadow: 0 0 8px #00d4ff;
+  animation: livePulse 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes livePulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.85); }
+  50%      { opacity: 1;   transform: scale(1.15); }
+}
+.live-text {
+  min-width: 0;
+  word-break: break-word;
+}
+.task-block-live {
+  margin-top: 6px;
+}
+.task-block-live[hidden] { display: none; }
+
 /* ===== Task Block (конвейер) ===== */
 .task-block {
   margin-top: 10px;

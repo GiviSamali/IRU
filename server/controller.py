@@ -66,6 +66,19 @@ def _collect_tasks(task_ids: list[int]) -> list[dict]:
     return result
 
 
+def _set_current_step(poll_task_id: str | None, text: str) -> None:
+    """Обновить task.current_step для отображения live-прогресса в UI."""
+    if not poll_task_id:
+        return
+    try:
+        from main import tasks          # локальный импорт — избегаем циклических зависимостей
+        t = tasks.get(poll_task_id)
+        if t:
+            t["current_step"] = text
+    except Exception:
+        pass
+
+
 class ConfirmationRequired(Exception):
     """Команда требует подтверждения пользователя."""
     def __init__(self, command: str, device_id: str, params: dict,
@@ -564,6 +577,7 @@ async def process_nl_command(
     chat_id: int = None,
     device_profile: dict | None = None,
     modes: dict | None = None,
+    poll_task_id: str | None = None,
 ) -> dict:
     """
     Обработка команды на естественном языке.
@@ -656,6 +670,7 @@ async def process_nl_command(
     _timeout = httpx.Timeout(120.0, connect=10.0)
     async with httpx.AsyncClient(timeout=_timeout) as client:
         for iteration in range(MAX_ITERATIONS):
+            _set_current_step(poll_task_id, "ИРУ думает...")
             print(f"[llm] iteration {iteration+1}/{MAX_ITERATIONS}, messages={len(messages)}")
             try:
                 # Формируем параметры запроса; deepseek-reasoner не поддерживает
@@ -770,6 +785,25 @@ async def process_nl_command(
                 # Определить целевое устройство
                 target_device = fn_args.pop("device_id", None) or device_id
                 print(f"[llm] tool_call: {fn_name}({json.dumps(fn_args, ensure_ascii=False)[:300]}) -> device={target_device}")
+
+                # ── Live-прогресс: текст для UI ──
+                if fn_name == "create_plan":
+                    _set_current_step(poll_task_id, "Планирую шаги...")
+                elif fn_name == "mark_step":
+                    step_num = fn_args.get("idx", "?")
+                    step_title = fn_args.get("summary") or ""
+                    _set_current_step(poll_task_id, f"Шаг {step_num}: {step_title[:60]}")
+                elif fn_name == "web_search":
+                    q = (fn_args.get("query") or "").strip()[:80]
+                    _set_current_step(poll_task_id, f"Ищу в интернете: {q}")
+                elif fn_name == "write_content":
+                    path = fn_args.get("path") or fn_args.get("filename", "")
+                    name = path.split("\\")[-1].split("/")[-1][:60]
+                    _set_current_step(poll_task_id, f"Создаю файл {name}")
+                elif fn_name == "execute_cmd":
+                    _set_current_step(poll_task_id, "Выполняю команду на устройстве")
+                elif fn_name == "get_file_link":
+                    _set_current_step(poll_task_id, "Формирую ссылку на файл")
 
                 if fn_name == "execute_cmd":
                     try:

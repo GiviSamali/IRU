@@ -382,34 +382,7 @@ function renderMessages() {
     let bodyHTML = linkify(escapeHTML(m.content || m.text || ''));
 
     // Блок задач (конвейер)
-    const tasks = m.tasks;
-    if (tasks && tasks.length > 0) {
-      for (const t of tasks) {
-        const st = t.status || 'running';
-        const statusLabel = st === 'completed' ? 'завершено'
-          : st === 'failed' ? 'ошибка'
-          : st === 'cancelled' ? 'отменено'
-          : 'выполняется';
-        bodyHTML += `<div class="task-block task-${st}">`;
-        bodyHTML += `<div class="task-goal"><span class="task-goal-label">Задача:</span> ${escapeHTML(t.goal || '')} <span class="task-badge task-badge-${st}">${statusLabel}</span></div>`;
-        const steps = t.steps || [];
-        if (steps.length > 0) {
-          bodyHTML += '<ul class="task-steps">';
-          for (const s of steps) {
-            const sst = s.status || 'pending';
-            const icon = sst === 'done' ? '\u2713'
-              : sst === 'failed' ? '\u2717'
-              : sst === 'running' ? '\u25b8'
-              : sst === 'skipped' ? '\u2014'
-              : '\u25cb';
-            const summary = s.summary ? `<div class="step-summary">${escapeHTML(s.summary)}</div>` : '';
-            bodyHTML += `<li class="task-step step-${sst}"><span class="step-icon">${icon}</span><span class="step-desc">${escapeHTML(s.description || '')}</span>${summary}</li>`;
-          }
-          bodyHTML += '</ul>';
-        }
-        bodyHTML += '</div>';
-      }
-    }
+    bodyHTML += renderTaskBlock(m.tasks);
 
     const commands = m.commands;
     if (commands && commands.length > 0) {
@@ -449,7 +422,10 @@ function renderMessages() {
     }
 
     if (m.loading) {
-      html += `<div class="msg assistant"><div class="msg-role">иру</div><div class="msg-body"><div class="typing"><span></span><span></span><span></span></div></div></div>`;
+      const stepText = escapeHTML(m.currentStep || 'ИРУ думает...');
+      const liveTasksHTML = renderTaskBlock(m.liveTasks);
+      const taskBlockAttr = (m.liveTasks && m.liveTasks.length > 0) ? '' : ' hidden';
+      html += `<div class="msg assistant msg-thinking"><div class="msg-role">иру</div><div class="msg-body"><div class="live-status"><span class="live-dot"></span><span class="live-text">${stepText}</span></div><div class="task-block-live"${taskBlockAttr}>${liveTasksHTML}</div></div></div>`;
     } else {
       html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}${confirmBtns}</div></div>`;
     }
@@ -477,9 +453,9 @@ async function sendMessage() {
 
   // Добавить сообщение пользователя в UI сразу
   state.messages.push({ role: 'user', content: text });
-  // Добавить placeholder для ответа (с индикатором загрузки)
+  // Добавить placeholder для ответа (live-статус вместо точек загрузки)
   const msgIndex = state.messages.length;
-  state.messages.push({ role: 'assistant', content: '', loading: true });
+  state.messages.push({ role: 'assistant', content: '', loading: true, currentStep: 'ИРУ думает...', liveTasks: [] });
   renderMessages();
 
   try {
@@ -575,8 +551,22 @@ async function pollTask(taskId, msgIndex) {
         loadChats();
         return;
       }
-      // Ещё выполняется — повторить через 1с
-      if (!stopped) setTimeout(poll, 1000);
+      // Ещё выполняется — обновить live-статус
+      const msg = state.messages[msgIndex];
+      if (msg && msg.loading) {
+        let needRender = false;
+        if (task.current_step && msg.currentStep !== task.current_step) {
+          msg.currentStep = task.current_step;
+          needRender = true;
+        }
+        if (task.tasks && task.tasks.length > 0) {
+          msg.liveTasks = task.tasks;
+          needRender = true;
+        }
+        if (needRender) renderMessages();
+      }
+      // Повторить через 800мс пока задача running
+      if (!stopped) setTimeout(poll, 800);
     } catch (e) {
       if (stopped) return;
       if (!poll._retries) poll._retries = 0;
@@ -701,6 +691,38 @@ function renderInputDeviceSelector() {
     </div>`;
   }
   dropdown.innerHTML = html;
+}
+
+// ── LIVE PROGRESS ─────────────────────────────────────
+function renderTaskBlock(tasks) {
+  if (!tasks || tasks.length === 0) return '';
+  let html = '';
+  for (const t of tasks) {
+    const st = t.status || 'running';
+    const statusLabel = st === 'completed' ? 'завершено'
+      : st === 'failed' ? 'ошибка'
+      : st === 'cancelled' ? 'отменено'
+      : 'выполняется';
+    html += `<div class="task-block task-${st}">`;
+    html += `<div class="task-goal"><span class="task-goal-label">Задача:</span> ${escapeHTML(t.goal || '')} <span class="task-badge task-badge-${st}">${statusLabel}</span></div>`;
+    const steps = t.steps || [];
+    if (steps.length > 0) {
+      html += '<ul class="task-steps">';
+      for (const s of steps) {
+        const sst = s.status || 'pending';
+        const icon = sst === 'done' ? '\u2713'
+          : sst === 'failed' ? '\u2717'
+          : sst === 'running' ? '\u25b8'
+          : sst === 'skipped' ? '\u2014'
+          : '\u25cb';
+        const summary = s.summary ? `<div class="step-summary">${escapeHTML(s.summary)}</div>` : '';
+        html += `<li class="task-step step-${sst}"><span class="step-icon">${icon}</span><span class="step-desc">${escapeHTML(s.description || '')}</span>${summary}</li>`;
+      }
+      html += '</ul>';
+    }
+    html += '</div>';
+  }
+  return html;
 }
 
 function sendHint(el) {
