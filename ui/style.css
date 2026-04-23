@@ -752,7 +752,7 @@ html, body {
 .audit-log-list::-webkit-scrollbar { width: 4px; }
 .audit-log-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .audit-row {
-  display: grid; grid-template-columns: 90px 100px 60px 1fr 80px;
+  display: grid; grid-template-columns: 90px 100px 60px 80px;
   gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--border);
   font-size: 10px; align-items: center;
 }
@@ -900,6 +900,9 @@ html, body {
   /* Dev mode panel mobile */
   .devmode-panel.open {
     width: 100%; position: fixed; right: 0; top: 0; bottom: 0; z-index: 201;
+  }
+  .chat-input-wrap{
+
   }
 }
 
