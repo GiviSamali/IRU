@@ -726,7 +726,10 @@ html, body {
 /* ── ADMIN TABS ─────────────────────────────── */
 /* Tab containers: fill remaining space, scroll internally */
 #adminUsersTab, #adminDevicesTab, #adminAuditTab {
-  flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0;
+  flex: 1; display: flex !important; flex-direction: column; overflow: hidden; min-height: 0;
+}
+#adminUsersTab[style*="none"], #adminDevicesTab[style*="none"], #adminAuditTab[style*="none"] {
+  display: none !important;
 }
 
 .admin-tabs {
@@ -867,7 +870,10 @@ html, body {
   .btn-header-link { display: none; }
   .sidebar-mobile-links { display: flex; }
   
-  .chat-input-area { padding: 8px 10px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .chat-input-area {
+    padding: 8px 10px calc(12px + env(safe-area-inset-bottom, 0px));
+    position: sticky; bottom: 0; z-index: 10;
+  }
   .chat-messages { padding: 10px; }
   
   .input-device-btn { font-size: 10px; padding: 4px 7px; gap: 3px; max-width: 100px; }
@@ -901,8 +907,77 @@ html, body {
   .devmode-panel.open {
     width: 100%; position: fixed; right: 0; top: 0; bottom: 0; z-index: 201;
   }
-  .chat-input-wrap{
+  /* ── MOBILE CHAT INPUT FIX ─────────────────── */
+  .chat-input-wrap {
+    flex-wrap: wrap; gap: 6px; padding: 6px;
+  }
+  /* Utility buttons row: device + mode + attach + voice */
+  .input-device-select,
+  .input-mode-select {
+    min-width: 0;
+  }
+  .input-mode-btn {
+    font-size: 10px; padding: 6px 8px;
+  }
+  /* Textarea row: textarea fills remaining width, send button stays inline */
+  .chat-input {
+    flex: 1 1 0%; min-width: 0; order: 10;
+    font-size: 16px; /* prevent iOS auto-zoom on focus */
+    min-height: 36px; max-height: 120px;
+  }
+  .char-count { order: 11; font-size: 8px; }
+  .btn-send { order: 12; }
+  /* Force line-break before textarea via a full-width pseudo-element */
+  .chat-input-wrap::before {
+    content: ''; display: block;
+    flex-basis: 100%; height: 0; order: 9;
+  }
 
+  .voice-btn,
+  .attach-btn {
+    width: 32px; height: 32px;
+  }
+  .voice-btn svg,
+  .attach-btn svg {
+    width: 16px; height: 16px;
+  }
+
+  /* Attachments bar: chips wrap, don't overflow */
+  .attachments-bar {
+    padding: 4px 6px 0;
+  }
+  .attachment-chip {
+    max-width: calc(100vw - 60px);
+    font-size: 11px;
+  }
+}
+
+/* ── EXTRA-NARROW (≤480px) ───────────────────── */
+@media (max-width: 480px) {
+  .chat-input-wrap {
+    gap: 4px; padding: 4px;
+  }
+  .input-device-btn {
+    font-size: 9px; padding: 4px 5px; gap: 2px; max-width: 80px;
+  }
+  .input-mode-btn {
+    font-size: 9px; padding: 4px 6px;
+  }
+  .voice-btn,
+  .attach-btn {
+    width: 28px; height: 28px;
+  }
+  .btn-send {
+    width: 28px; height: 28px;
+  }
+  .chat-input {
+    font-size: 16px;
+    padding: 6px 0;
+  }
+  .attachment-chip {
+    max-width: calc(100vw - 40px);
+    font-size: 10px;
+    padding: 3px 6px 3px 8px;
   }
 }
 
