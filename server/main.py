@@ -233,450 +233,7 @@ STATIC_DIR = Path(__file__).parent.parent / "ui"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# ── Страница инструкции для тестера ──────────────────────────────────────
-def _build_instruction_html() -> str:
-    """Build instruction HTML dynamically based on version.json (kind/version)."""
-    ver_path = Path(__file__).parent / "updates" / "version.json"
-    version = ""
-    kind = "exe"
-    try:
-        ver_data = json.loads(ver_path.read_text(encoding="utf-8"))
-        version = ver_data.get("version", "")
-        kind = ver_data.get("kind", "exe")
-    except Exception:
-        pass
-
-    ver_display = f" v{version}" if version else ""
-
-    if kind == "zip":
-        download_step = """
-<h2>Шаг 1: Скачайте архив</h2>
-<p>Нажмите <strong>«Скачать агент»</strong> в интерфейсе — начнётся загрузка файла <code>agent.zip</code>.</p>
-
-<h2>Шаг 2: Распакуйте архив</h2>
-<div class="warning">
-ВАЖНО: не запускайте agent.exe прямо из архива — он не найдёт нужные библиотеки и не запустится. Распакуйте архив полностью.
-</div>
-<ol>
-<li>Кликните правой кнопкой по <code>agent.zip</code> → <strong>«Извлечь всё…»</strong> (или используйте 7-Zip / WinRAR).</li>
-<li>Укажите постоянную папку, например <code>C:\\IRU\\</code>. Рекомендуем не внутри Downloads/Temp, чтобы автообновление работало корректно.</li>
-<li>В результате в папке должен появиться <code>agent.exe</code> рядом с файлами <code>python3XX.dll</code> и прочими <code>.dll</code>.</li>
-</ol>
-
-<h2>Шаг 3: Запустите agent.exe</h2>
-<p>Двойной клик по <code>agent.exe</code> <strong>в распакованной папке</strong>. При первом запуске откроется окно ввода токена.</p>
-
-<div class="info">
-Windows SmartScreen может показать предупреждение — <strong>«Подробнее»</strong> → <strong>«Выполнить в любом случае»</strong>.
-Это стандартное поведение для файлов из интернета. Если Защитник Windows или антивирус блокирует — добавьте папку <code>C:\\IRU\\</code> в исключения.
-</div>
-
-<p>Вставьте токен доступа и нажмите <strong>«Подключиться»</strong>. Токен сохранится автоматически — при следующих запусках вводить не нужно.</p>
-<p>Вы увидите окно консоли с сообщением о подключении:</p>
-<pre>[agent] connected</pre>
-
-<h2>Шаг 4: Войдите в интерфейс</h2>"""
-        need_items = '<li>Файл <code>agent.zip</code> (скачайте из интерфейса)</li>'
-    else:
-        download_step = """
-<h2>Шаг 1: Скачайте agent.exe</h2>
-<p>Получите файл <code>agent.exe</code> от администратора. Установка не требуется.</p>
-
-<h2>Шаг 2: Запустите agent.exe</h2>
-<p>Двойной клик по <code>agent.exe</code>. При первом запуске откроется окно ввода токена.</p>
-
-<div class="info">
-Windows SmartScreen может показать предупреждение при первом запуске. Нажмите <strong>«Подробнее»</strong>, затем <strong>«Выполнить в любом случае»</strong>. Это стандартное поведение для файлов, загруженных из интернета.
-</div>
-
-<p>Вставьте токен доступа и нажмите <strong>«Подключиться»</strong>. Токен сохранится автоматически — при следующих запусках вводить не нужно.</p>
-<p>Вы увидите окно консоли с сообщением о подключении:</p>
-<pre>[agent] connected</pre>
-
-<h2>Шаг 3: Войдите в интерфейс</h2>"""
-        need_items = '<li>Файл <code>agent.exe</code></li>'
-
-    login_step_num = "4" if kind == "zip" else "3"
-
-    return f"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ИРУ — Инструкция для тестера</title>
-<link rel="icon" type="image/x-icon" href="/static/IruIcon.ico">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<style>
-*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{ background: #020308; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.7; padding: 40px 20px; }}
-.container {{ max-width: 700px; margin: 0 auto; }}
-h1 {{ color: #00d4ff; font-size: 24px; margin-bottom: 8px; }}
-.subtitle {{ color: #64748b; font-size: 12px; margin-bottom: 32px; }}
-h2 {{ color: #00d4ff; font-size: 16px; margin: 28px 0 12px; border-bottom: 1px solid #1e293b; padding-bottom: 6px; }}
-h3 {{ color: #94a3b8; font-size: 14px; margin: 20px 0 8px; }}
-p {{ margin-bottom: 12px; color: #94a3b8; }}
-ol, ul {{ padding-left: 20px; margin-bottom: 16px; color: #94a3b8; }}
-li {{ margin-bottom: 8px; }}
-code {{ background: #0a0e17; border: 1px solid #1e293b; border-radius: 4px; padding: 2px 6px; font-size: 13px; color: #00d4ff; }}
-pre {{ background: #0a0e17; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; margin: 12px 0; overflow-x: auto; font-size: 12px; color: #e2e8f0; }}
-.warning {{ background: #1a1500; border: 1px solid #f59e0b33; border-radius: 8px; padding: 12px 16px; margin: 16px 0; color: #f59e0b; font-size: 12px; }}
-.info {{ background: #001a2e; border: 1px solid #00d4ff33; border-radius: 8px; padding: 12px 16px; margin: 16px 0; color: #00d4ff; font-size: 12px; }}
-.step-num {{ display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; background: #00d4ff20; border: 1px solid #00d4ff33; border-radius: 50%; font-size: 12px; color: #00d4ff; margin-right: 8px; }}
-a {{ color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; }}
-a:hover {{ border-bottom-style: solid; }}
-.footer {{ margin-top: 40px; padding-top: 16px; border-top: 1px solid #1e293b; font-size: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }}
-.footer-brand {{ color: #94a3b8; }}
-.footer-link {{ color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; font-size: 13px; }}
-.footer-link:hover {{ border-bottom-style: solid; }}
-</style>
-</head>
-<body>
-<div class="container">
-<h1>ИРУ — Инструкция для тестера</h1>
-<div class="subtitle">Интеллектуальный Режим Управления{ver_display}</div>
-
-<h2>Что такое ИРУ?</h2>
-<p>ИРУ — система удалённого управления компьютером через естественный язык. Вы описываете задачу текстом, ИИ переводит её в команды и выполняет на вашем ПК.</p>
-
-<h2>Что вам понадобится</h2>
-<ul>
-<li>Компьютер на <strong>Windows 10/11</strong></li>
-<li><strong>Токен доступа</strong> — получите у администратора</li>
-{need_items}
-</ul>
-{download_step}
-<ol>
-<li>Откройте браузер: <a href="https://irumode.ru" target="_blank">irumode.ru</a></li>
-<li>Введите тот же токен доступа</li>
-<li>Ваше устройство появится автоматически</li>
-<li>Создайте чат и начните общение</li>
-</ol>
-
-<h2>Примеры команд</h2>
-<ul>
-<li><code>Открой браузер</code></li>
-<li><code>Покажи IP-адрес</code></li>
-<li><code>Сколько свободного места на диске?</code></li>
-<li><code>Покажи запущенные процессы</code></li>
-<li><code>Создай файл test.txt на рабочем столе с текстом "привет"</code></li>
-<li><code>Какая версия Windows?</code></li>
-</ul>
-
-<div class="warning">
-Важно: Агент выполняет команды от имени вашего пользователя Windows. Не запрашивайте удаление системных файлов или форматирование дисков. ИРУ отклонит опасные команды, но будьте аккуратны.
-</div>
-
-<h2>Тарифные планы</h2>
-<p>Во время бета-тестирования все участники получают план <strong>Pro</strong> бесплатно.</p>
-<ul>
-<li><strong>Free</strong> — 1 устройство, 30 команд/день</li>
-<li><strong>Pro</strong> — безлимитные устройства и команды, файловый проводник, DEV MODE</li>
-<li><strong>Business</strong> — мультипользовательская админка, аудит-логи, API</li>
-</ul>
-
-<h2>Частые проблемы</h2>
-<h3>Агент не подключается</h3>
-<ul>
-<li>Проверьте интернет-соединение</li>
-<li>Убедитесь, что токен введён правильно</li>
-<li>Попробуйте удалить <code>config.json</code> рядом с exe и запустить заново — окно ввода токена появится снова</li>
-</ul>
-
-<h3>SmartScreen блокирует запуск</h3>
-<p>Нажмите «Подробнее» и «Выполнить в любом случае». Файл безопасен, предупреждение связано с отсутствием цифровой подписи.</p>
-
-<h3>Устройство не появляется в UI</h3>
-<ul>
-<li>Убедитесь, что агент запущен и показывает <code>[agent] connected</code></li>
-<li>Убедитесь, что в UI вы вошли с тем же токеном</li>
-</ul>
-
-<h3>Кракозябры в выводе</h3>
-<p>ИРУ автоматически обрабатывает кодировку (UTF-8), но если проблема остаётся — укажите это в чате, ИРУ попробует другой подход.</p>
-
-<div class="footer">
-<span class="footer-brand">ИРУ{ver_display} — Интеллектуальный Режим Управления</span>
-<a href="/" class="footer-link">&larr; Вернуться в ИРУ</a>
-</div>
-</div>
-</body>
-</html>"""
-
-
-# ── Пользовательское соглашение и дисклеймер ────────────────────────────────────
-TERMS_HTML = """<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ИРУ — Пользовательское соглашение</title>
-<link rel="icon" type="image/x-icon" href="/static/IruIcon.ico">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #020308; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.7; padding: 40px 20px; }
-.container { max-width: 700px; margin: 0 auto; }
-h1 { color: #00d4ff; font-size: 24px; margin-bottom: 8px; }
-.subtitle { color: #64748b; font-size: 12px; margin-bottom: 32px; }
-h2 { color: #00d4ff; font-size: 16px; margin: 28px 0 12px; border-bottom: 1px solid #1e293b; padding-bottom: 6px; }
-p { margin-bottom: 12px; color: #94a3b8; }
-ol, ul { padding-left: 20px; margin-bottom: 16px; color: #94a3b8; }
-li { margin-bottom: 8px; }
-.warning { background: #1a1500; border: 1px solid #f59e0b33; border-radius: 8px; padding: 12px 16px; margin: 16px 0; color: #f59e0b; font-size: 12px; }
-a { color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; }
-a:hover { border-bottom-style: solid; }
-.footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #1e293b; font-size: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
-.footer-brand { color: #94a3b8; }
-.footer-link { color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; font-size: 13px; }
-.footer-link:hover { border-bottom-style: solid; }
-</style>
-</head>
-<body>
-<div class="container">
-<h1>Пользовательское соглашение</h1>
-<div class="subtitle">ИРУ — Интеллектуальный Режим Управления | Редакция от 18.04.2026</div>
-
-<h2>1. Общие положения</h2>
-<p>1.1. Настоящее Пользовательское соглашение (далее — «Соглашение») регулирует порядок использования системы ИРУ (далее — «Сервис»).</p>
-<p>1.2. Используя Сервис, вы подтверждаете согласие с условиями настоящего Соглашения. Если вы не согласны, прекратите использование Сервиса.</p>
-<p>1.3. Сервис находится на стадии бета-тестирования и предоставляется «как есть» (as is).</p>
-
-<h2>2. Описание Сервиса</h2>
-<p>2.1. ИРУ — система удалённого управления компьютером через естественный язык. Пользователь описывает задачу текстом, ИИ переводит её в команды и выполняет на устройстве.</p>
-<p>2.2. Команды выполняются непосредственно на компьютере пользователя через программу-агент, установленную на устройстве.</p>
-
-<h2>3. Права и обязанности пользователя</h2>
-<p>3.1. Пользователь обязуется не использовать Сервис для:</p>
-<ul>
-<li>несанкционированного доступа к чужим устройствам или данным;</li>
-<li>распространения вредоносного ПО, майнинга или иных противоправных действий;</li>
-<li>попыток обхода систем защиты Сервиса;</li>
-<li>создания чрезмерной нагрузки на сервер (флуд, DDoS).</li>
-</ul>
-<p>3.2. Пользователь несёт полную ответственность за команды, отправляемые через Сервис, и их последствия на своих устройствах.</p>
-<p>3.3. Токен доступа является персональным. Передача токена третьим лицам запрещена.</p>
-
-<h2>4. Сбор данных</h2>
-<p>4.1. Сервис может собирать анонимизированные данные о взаимодействии с системой (текст запросов, выполненные команды, информация об ОС) исключительно для улучшения качества Сервиса и обучения модели.</p>
-<p>4.2. Сбор данных осуществляется только при явном согласии пользователя (переключатель в интерфейсе). Пользователь может отозвать согласие в любой момент.</p>
-<p>4.3. Персональные данные (имя пользователя, содержимое файлов) не передаются третьим лицам и не продаются.</p>
-
-<h2>5. Дисклеймер</h2>
-<div class="warning">
-ВАЖНО: Прочитайте этот раздел полностью.
-</div>
-<p>5.1. Сервис выполняет команды непосредственно на вашем компьютере. Некорректная формулировка запроса или ошибка ИИ может привести к нежелательным последствиям, включая потерю данных.</p>
-<p>5.2. Разработчик не несёт ответственности за:</p>
-<ul>
-<li>ущерб, причинённый выполнением команд, инициированных пользователем;</li>
-<li>потерю данных, вызванную ошибками ИИ или сбоями оборудования;</li>
-<li>перебои в работе Сервиса, вызванные техническими работами, обновлениями или форс-мажором;</li>
-<li>действия третьих лиц, получивших доступ к токену пользователя.</li>
-</ul>
-<p>5.3. Несмотря на наличие системы блокировки опасных команд, она не гарантирует 100% защиту. Пользователь должен контролировать выполняемые команды и иметь резервные копии важных данных.</p>
-
-<h2>6. Интеллектуальная собственность</h2>
-<p>6.1. Все права на ПО, дизайн, код и документацию Сервиса принадлежат разработчику.</p>
-<p>6.2. Использование Сервиса не даёт пользователю прав на исходный код, алгоритмы или технологии Сервиса.</p>
-
-<h2>7. Ограничения Сервиса</h2>
-<p>7.1. Разработчик вправе в любой момент ограничить или прекратить доступ пользователя к Сервису при нарушении условий Соглашения.</p>
-<p>7.2. Сервис может включать ограничения на количество запросов, устройств и объём хранимых данных в зависимости от тарифного плана.</p>
-
-<h2>8. Изменение условий</h2>
-<p>8.1. Разработчик вправе изменять условия Соглашения. Актуальная версия всегда доступна по адресу <a href="/terms">/terms</a>.</p>
-<p>8.2. Продолжение использования Сервиса после изменения условий означает согласие с новой редакцией.</p>
-
-<h2>9. Контакты</h2>
-<p>По всем вопросам: <a href="mailto:russaygushkin@gmail.com">russaygushkin@gmail.com</a></p>
-
-<div class="footer">
-<span class="footer-brand">ИРУ v3.5 — Интеллектуальный Режим Управления</span>
-<a class="footer-link" href="/">Вернуться</a>
-</div>
-</div>
-</body>
-</html>"""
-
-
-ABOUT_HTML = """<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ИРУ — О системе</title>
-<link rel="icon" type="image/x-icon" href="/static/IruIcon.ico">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #020308; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 15px; line-height: 1.75; padding: 48px 20px; }
-.container { max-width: 760px; margin: 0 auto; }
-.page-header { margin-bottom: 40px; }
-h1 { color: #00d4ff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 10px; }
-.subtitle { color: #ffffff; font-size: 15px; font-weight: 400; opacity: 0.85; }
-h2 { color: #00d4ff; font-size: 20px; font-weight: 600; margin: 36px 0 14px; padding-bottom: 8px; border-bottom: 1px solid #1e293b; }
-p { margin-bottom: 14px; color: #ffffff; opacity: 0.9; }
-strong { color: #ffffff; font-weight: 600; }
-ul { padding-left: 20px; margin-bottom: 16px; color: #ffffff; opacity: 0.9; }
-li { margin-bottom: 8px; }
-a { color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; }
-a:hover { border-bottom-style: solid; }
-
-/* Philosophy block */
-.philosophy { background: #0a0e17; border: 1px solid #1e3a5f; border-left: 4px solid #00d4ff; border-radius: 0 10px 10px 0; padding: 18px 22px; margin: 18px 0 28px; }
-.philosophy p { color: #ffffff; font-style: italic; margin: 0 0 10px; }
-.philosophy p:last-child { margin: 0; }
-.philosophy .no-emu { color: #e2e8f0; font-size: 13px; margin: 0; font-style: normal; }
-
-/* Architecture image */
-.arch-img-wrap { margin: 18px 0 28px; }
-.arch-img-wrap img { width: 100%; max-width: 100%; border-radius: 10px; border: 1px solid #1e3a5f; box-shadow: 0 8px 32px rgba(0,212,255,0.10), 0 2px 8px rgba(0,0,0,0.5); display: block; }
-
-/* Roadmap stage cards */
-.stages { display: flex; flex-direction: column; gap: 12px; margin: 18px 0 28px; }
-.stage-card { background: #0a0e17; border: 1px solid #1e293b; border-radius: 10px; padding: 16px 20px; display: flex; align-items: flex-start; gap: 16px; }
-.stage-card.done { border-left: 3px solid #00d4ff; }
-.stage-card.coming { border-left: 3px solid #f59e0b; }
-.stage-badge { flex-shrink: 0; font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 6px; white-space: nowrap; }
-.stage-badge.done { background: #00d4ff18; border: 1px solid #00d4ff40; color: #00d4ff; }
-.stage-badge.coming { background: #f59e0b18; border: 1px solid #f59e0b40; color: #f59e0b; }
-.stage-content { flex: 1; }
-.stage-title { color: #ffffff; font-weight: 600; font-size: 15px; margin-bottom: 2px; }
-.stage-desc { color: #e2e8f0; font-size: 13px; opacity: 0.85; }
-
-/* Plan cards */
-.plans { display: flex; flex-direction: column; gap: 10px; margin: 18px 0 28px; }
-.plan-card { background: #0a0e17; border: 1px solid #1e293b; border-radius: 10px; padding: 14px 20px; display: flex; align-items: center; gap: 16px; }
-.plan-card.active { border-color: #00d4ff40; }
-.plan-name { color: #00d4ff; font-weight: 600; font-size: 15px; min-width: 80px; }
-.plan-desc { color: #e2e8f0; font-size: 13px; opacity: 0.85; }
-.plan-beta { font-size: 11px; color: #f59e0b; background: #f59e0b18; border: 1px solid #f59e0b40; padding: 2px 8px; border-radius: 4px; margin-left: auto; white-space: nowrap; }
-
-/* Tech stack table */
-.tech-table { width: 100%; border-collapse: collapse; margin: 18px 0 28px; }
-.tech-table tr { border-bottom: 1px solid #1e293b; }
-.tech-table tr:last-child { border-bottom: none; }
-.tech-table td { padding: 10px 14px; font-size: 14px; }
-.tech-table td:first-child { color: #00d4ff; font-weight: 600; width: 42%; }
-.tech-table td:last-child { color: #ffffff; }
-.tech-table tr:nth-child(even) { background: #0a0e17; }
-
-/* Footer */
-.footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
-.footer-brand { color: #e2e8f0; font-size: 12px; }
-.footer-link { color: #00d4ff; font-size: 13px; text-decoration: none; border-bottom: 1px dashed #00d4ff80; }
-.footer-link:hover { border-bottom-style: solid; }
-</style>
-</head>
-<body>
-<div class="container">
-
-<div class="page-header">
-<h1>Об ИРУ — Интеллектуальный Режим Управления</h1>
-<div class="subtitle">Система удалённого управления компьютерами через естественный язык</div>
-</div>
-
-<h2>Что такое ИРУ?</h2>
-<p>ИРУ — система, в которой пользователь описывает задачу на естественном языке, языковая модель (LLM) переводит её в команды CMD/PowerShell, а агент выполняет их непосредственно на устройстве.</p>
-<div class="philosophy">
-<p>Философия: «научить машину быть машиной»</p>
-<p class="no-emu">Никакой эмуляции действий пользователя. Никаких скриншотов, кликов или pyautogui. Только прямые программные вызовы: COM-объекты, WMI, UI Automation API, DevTools Protocol. Машина управляется как машина.</p>
-</div>
-
-<h2>Архитектура системы</h2>
-<div class="arch-img-wrap">
-<img src="/static/architecture.jpg" alt="Архитектура ИРУ">
-</div>
-
-<h2>Тарифные планы</h2>
-<p>Во время бета-тестирования все участники получают план Pro бесплатно.</p>
-<div class="plans">
-<div class="plan-card">
-<span class="plan-name">Free</span>
-<span class="plan-desc">1 устройство, 30 команд/день, 7 дней история</span>
-</div>
-<div class="plan-card active">
-<span class="plan-name">Pro</span>
-<span class="plan-desc">Безлимитные устройства и команды, проводник, DEV MODE</span>
-<span class="plan-beta">БЕТА</span>
-</div>
-<div class="plan-card">
-<span class="plan-name">Business</span>
-<span class="plan-desc">Мультипользовательская админка, аудит-логи, API, приоритетная поддержка</span>
-</div>
-</div>
-
-<h2>DEV MODE</h2>
-<p>Прямой доступ к командной строке устройства без участия LLM. Команды отправляются напрямую в PowerShell/CMD агента. Доступен на плане Pro и выше.</p>
-<ul>
-<li>Аккордеон-вывод с группировкой по устройствам</li>
-<li>Автоматическая UTF-8 кодировка вывода</li>
-<li>Кнопка рядом с проводником в интерфейсе</li>
-<li>Чат не сохраняется на сервере</li>
-</ul>
-
-<h2>Этапы разработки</h2>
-<div class="stages">
-
-<div class="stage-card done">
-<span class="stage-badge done">✅ Этап 1</span>
-<div class="stage-content">
-<div class="stage-title">Умный ассистент (Текст → Команды)</div>
-<div class="stage-desc">NL-управление одним и несколькими устройствами одновременно, параллельное выполнение, broadcast-режим</div>
-</div>
-</div>
-
-<div class="stage-card done">
-<span class="stage-badge done">✅ Этап 2</span>
-<div class="stage-content">
-<div class="stage-title">Сбор данных (Обучающая выборка)</div>
-<div class="stage-desc">Автоматическая запись training data с согласия пользователя для последующего обучения модели</div>
-</div>
-</div>
-
-<div class="stage-card coming">
-<span class="stage-badge coming">🔜 Этап 3</span>
-<div class="stage-content">
-<div class="stage-title">Обучение модели (Собственный ИИ)</div>
-<div class="stage-desc">Fine-tuning собственной модели на реальных данных, собранных на этапе 2</div>
-</div>
-</div>
-
-<div class="stage-card coming">
-<span class="stage-badge coming">🔜 Этап 4</span>
-<div class="stage-content">
-<div class="stage-title">Запуск (Публичный релиз)</div>
-<div class="stage-desc">Выход собственной модели и публичный релиз системы ИРУ</div>
-</div>
-</div>
-
-</div>
-
-<h2>Технологический стек</h2>
-<table class="tech-table">
-<tr><td>Сервер</td><td>FastAPI + Uvicorn</td></tr>
-<tr><td>LLM</td><td>DeepSeek API (deepseek-chat)</td></tr>
-<tr><td>Агент</td><td>Python (WebSocket client, .exe)</td></tr>
-<tr><td>Фронтенд</td><td>Vanilla JS + HTML + CSS</td></tr>
-<tr><td>База данных</td><td>SQLite</td></tr>
-<tr><td>Протокол</td><td>WebSocket (двунаправленный, реальное время)</td></tr>
-<tr><td>ОС агента</td><td>Windows 10/11 (PowerShell / CMD)</td></tr>
-<tr><td>Хостинг</td><td>VPS + Caddy (HTTPS)</td></tr>
-</table>
-
-<h2>Контакты</h2>
-<p>Сайт: <a href="https://irumode.online" target="_blank">irumode.online</a></p>
-<p>Почта: <a href="mailto:russaygushkin@gmail.com">russaygushkin@gmail.com</a></p>
-
-<div class="footer">
-<span class="footer-brand">ИРУ v3.5 — Интеллектуальный Режим Управления</span>
-<a href="/" class="footer-link">← Вернуться в ИРУ</a>
-</div>
-
-</div>
-</body>
-</html>"""
-
+UI_DIR = Path(__file__).parent.parent / "ui"
 
 # ── Модели запросов ────────────────────────────────────────────
 
@@ -884,6 +441,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
     затем команды повторяются на остальных.
     """
     task = tasks[task_id]
+    task["current_step"] = "ИРУ думает..."
     is_broadcast = len(device_ids) > 1
     print(f"[run_nl_task] START task={task_id[:8]}, user={user_id}, devices={device_ids}")
 
@@ -937,6 +495,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
                 modes=task_modes,
                 user_id=user_id,
                 chat_id=chat_id,
+                poll_task_id=task_id,
             )
             return {
                 "device_id": device_id,
@@ -1112,7 +671,9 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
         task["status"] = "error"
         task["answer"] = f"Ошибка: {err_text}"
         task["commands"] = []
-        add_message(chat_id, "assistant", task["answer"])
+        # НЕ сохраняем error-ответ в историю чата — иначе LLM будет
+        # повторять текст ошибки из накопленного контекста после
+        # восстановления API. Ошибка вернётся пользователю через HTTP.
 
 
 # ── Onboarding task (без устройств) ──────────────────────────────────────
@@ -1123,6 +684,7 @@ async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id:
     Простой чат с LLM без tool-вызовов.
     """
     task = tasks[task_id]
+    task["current_step"] = "ИРУ думает..."
     try:
         chat_history = get_messages(chat_id, limit=50)
         result = await process_onboarding_message(
@@ -1138,7 +700,7 @@ async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id:
         task["status"] = "error"
         task["answer"] = f"Ошибка: {str(e)}"
         task["commands"] = []
-        add_message(chat_id, "assistant", task["answer"])
+        # НЕ сохраняем error-ответ в историю — аналогично run_nl_task
 
 
 # ── HTML ─────────────────────────────────────────────────────────────────
@@ -1151,22 +713,22 @@ async def root():
     return HTMLResponse("<h1>ИРУ v3.5 — UI не найден</h1>")
 
 
-@app.get("/instruction", response_class=HTMLResponse)
+@app.get("/instruction")
 async def instruction_page():
     """Страница-инструкция для тестера."""
-    return HTMLResponse(_build_instruction_html())
+    return FileResponse(UI_DIR / "install.html", media_type="text/html")
 
 
-@app.get("/about", response_class=HTMLResponse)
+@app.get("/about")
 async def about_page():
     """Страница «Об ИРУ»."""
-    return HTMLResponse(ABOUT_HTML)
+    return FileResponse(UI_DIR / "about.html", media_type="text/html")
 
 
-@app.get("/terms", response_class=HTMLResponse)
+@app.get("/terms")
 async def terms_page():
     """Пользовательское соглашение и дисклеймер."""
-    return HTMLResponse(TERMS_HTML)
+    return FileResponse(UI_DIR / "terms.html", media_type="text/html")
 
 
 # ── AUTH API ─────────────────────────────────────────────────────────────
@@ -1573,6 +1135,7 @@ async def api_get_task(task_id: str, request: Request):
             "answer": task.get("answer"),
             "commands": task.get("commands"),
             "tasks": task.get("tasks", []),
+            "current_step": task.get("current_step"),
             "results": task.get("results", {}),
             "confirm_data": task.get("confirm_data"),
             "created_at": task["created_at"],

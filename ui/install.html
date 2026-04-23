@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ИРУ — Инструкция для тестера</title>
+<link rel="icon" type="image/x-icon" href="/static/IruIcon.ico">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #020308; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.7; padding: 40px 20px; }
+.container { max-width: 700px; margin: 0 auto; }
+h1 { color: #00d4ff; font-size: 24px; margin-bottom: 8px; }
+.subtitle { color: #64748b; font-size: 12px; margin-bottom: 32px; }
+h2 { color: #00d4ff; font-size: 16px; margin: 28px 0 12px; border-bottom: 1px solid #1e293b; padding-bottom: 6px; }
+h3 { color: #94a3b8; font-size: 14px; margin: 20px 0 8px; }
+p { margin-bottom: 12px; color: #94a3b8; }
+ol, ul { padding-left: 20px; margin-bottom: 16px; color: #94a3b8; }
+li { margin-bottom: 8px; }
+code { background: #0a0e17; border: 1px solid #1e293b; border-radius: 4px; padding: 2px 6px; font-size: 13px; color: #00d4ff; }
+pre { background: #0a0e17; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; margin: 12px 0; overflow-x: auto; font-size: 12px; color: #e2e8f0; }
+.warning { background: #1a1500; border: 1px solid #f59e0b33; border-radius: 8px; padding: 12px 16px; margin: 16px 0; color: #f59e0b; font-size: 12px; }
+.info { background: #001a2e; border: 1px solid #00d4ff33; border-radius: 8px; padding: 12px 16px; margin: 16px 0; color: #00d4ff; font-size: 12px; }
+.step-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; background: #00d4ff20; border: 1px solid #00d4ff33; border-radius: 50%; font-size: 12px; color: #00d4ff; margin-right: 8px; }
+a { color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; }
+a:hover { border-bottom-style: solid; }
+.footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #1e293b; font-size: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+.footer-brand { color: #94a3b8; }
+.footer-link { color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; font-size: 13px; }
+.footer-link:hover { border-bottom-style: solid; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>ИРУ — Инструкция для тестера</h1>
+<div class="subtitle">Интеллектуальный Режим Управления <span id="agent-version"></span></div>
+
+<h2>Что такое ИРУ?</h2>
+<p>ИРУ — система удалённого управления компьютером через естественный язык. Вы описываете задачу текстом, ИИ переводит её в команды и выполняет на вашем ПК.</p>
+
+<h2>Что вам понадобится</h2>
+<ul>
+<li>Компьютер на <strong>Windows 10/11</strong></li>
+<li><strong>Токен доступа</strong> — получите у администратора</li>
+<li id="need-item-zip" hidden>Файл <code>agent.zip</code> (скачайте из интерфейса)</li>
+<li id="need-item-exe" hidden>Файл <code>agent.exe</code></li>
+</ul>
+
+<!-- ===== Шаги для ZIP ===== -->
+<div id="install-steps-zip" hidden>
+<h2>Шаг 1: Скачайте архив</h2>
+<p>Нажмите <strong>«Скачать агент»</strong> в интерфейсе — начнётся загрузка файла <code>agent.zip</code>.</p>
+
+<h2>Шаг 2: Распакуйте архив</h2>
+<div class="warning">
+ВАЖНО: не запускайте agent.exe прямо из архива — он не найдёт нужные библиотеки и не запустится. Распакуйте архив полностью.
+</div>
+<ol>
+<li>Кликните правой кнопкой по <code>agent.zip</code> → <strong>«Извлечь всё…»</strong> (или используйте 7-Zip / WinRAR).</li>
+<li>Укажите постоянную папку, например <code>C:\IRU\</code>. Рекомендуем не внутри Downloads/Temp, чтобы автообновление работало корректно.</li>
+<li>В результате в папке должен появиться <code>agent.exe</code> рядом с файлами <code>python3XX.dll</code> и прочими <code>.dll</code>.</li>
+</ol>
+
+<h2>Шаг 3: Запустите agent.exe</h2>
+<p>Двойной клик по <code>agent.exe</code> <strong>в распакованной папке</strong>. При первом запуске откроется окно ввода токена.</p>
+
+<div class="info">
+Windows SmartScreen может показать предупреждение — <strong>«Подробнее»</strong> → <strong>«Выполнить в любом случае»</strong>.
+Это стандартное поведение для файлов из интернета. Если Защитник Windows или антивирус блокирует — добавьте папку <code>C:\IRU\</code> в исключения.
+</div>
+
+<p>Вставьте токен доступа и нажмите <strong>«Подключиться»</strong>. Токен сохранится автоматически — при следующих запусках вводить не нужно.</p>
+<p>Вы увидите окно консоли с сообщением о подключении:</p>
+<pre>[agent] connected</pre>
+
+<h2>Шаг 4: Войдите в интерфейс</h2>
+</div>
+
+<!-- ===== Шаги для EXE ===== -->
+<div id="install-steps-exe" hidden>
+<h2>Шаг 1: Скачайте agent.exe</h2>
+<p>Получите файл <code>agent.exe</code> от администратора. Установка не требуется.</p>
+
+<h2>Шаг 2: Запустите agent.exe</h2>
+<p>Двойной клик по <code>agent.exe</code>. При первом запуске откроется окно ввода токена.</p>
+
+<div class="info">
+Windows SmartScreen может показать предупреждение при первом запуске. Нажмите <strong>«Подробнее»</strong>, затем <strong>«Выполнить в любом случае»</strong>. Это стандартное поведение для файлов, загруженных из интернета.
+</div>
+
+<p>Вставьте токен доступа и нажмите <strong>«Подключиться»</strong>. Токен сохранится автоматически — при следующих запусках вводить не нужно.</p>
+<p>Вы увидите окно консоли с сообщением о подключении:</p>
+<pre>[agent] connected</pre>
+
+<h2>Шаг 3: Войдите в интерфейс</h2>
+</div>
+
+<ol>
+<li>Откройте браузер: <a href="https://irumode.ru" target="_blank">irumode.ru</a></li>
+<li>Введите тот же токен доступа</li>
+<li>Ваше устройство появится автоматически</li>
+<li>Создайте чат и начните общение</li>
+</ol>
+
+<h2>Примеры команд</h2>
+<ul>
+<li><code>Открой браузер</code></li>
+<li><code>Покажи IP-адрес</code></li>
+<li><code>Сколько свободного места на диске?</code></li>
+<li><code>Покажи запущенные процессы</code></li>
+<li><code>Создай файл test.txt на рабочем столе с текстом "привет"</code></li>
+<li><code>Какая версия Windows?</code></li>
+</ul>
+
+<div class="warning">
+Важно: Агент выполняет команды от имени вашего пользователя Windows. Не запрашивайте удаление системных файлов или форматирование дисков. ИРУ отклонит опасные команды, но будьте аккуратны.
+</div>
+
+<h2>Тарифные планы</h2>
+<p>Во время бета-тестирования все участники получают план <strong>Pro</strong> бесплатно.</p>
+<ul>
+<li><strong>Free</strong> — 1 устройство, 30 команд/день</li>
+<li><strong>Pro</strong> — безлимитные устройства и команды, файловый проводник, DEV MODE</li>
+<li><strong>Business</strong> — мультипользовательская админка, аудит-логи, API</li>
+</ul>
+
+<h2>Частые проблемы</h2>
+<h3>Агент не подключается</h3>
+<ul>
+<li>Проверьте интернет-соединение</li>
+<li>Убедитесь, что токен введён правильно</li>
+<li>Попробуйте удалить <code>config.json</code> рядом с exe и запустить заново — окно ввода токена появится снова</li>
+</ul>
+
+<h3>SmartScreen блокирует запуск</h3>
+<p>Нажмите «Подробнее» и «Выполнить в любом случае». Файл безопасен, предупреждение связано с отсутствием цифровой подписи.</p>
+
+<h3>Устройство не появляется в UI</h3>
+<ul>
+<li>Убедитесь, что агент запущен и показывает <code>[agent] connected</code></li>
+<li>Убедитесь, что в UI вы вошли с тем же токеном</li>
+</ul>
+
+<h3>Кракозябры в выводе</h3>
+<p>ИРУ автоматически обрабатывает кодировку (UTF-8), но если проблема остаётся — укажите это в чате, ИРУ попробует другой подход.</p>
+
+<div class="footer">
+<span class="footer-brand">ИРУ <span id="footer-version"></span> — Интеллектуальный Режим Управления</span>
+<a href="/" class="footer-link">&larr; Вернуться в ИРУ</a>
+</div>
+</div>
+
+<script>
+fetch('/api/agent/version')
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    var ver = d.version ? 'v' + d.version : '';
+    document.getElementById('agent-version').textContent = ver;
+    document.getElementById('footer-version').textContent = ver;
+    var kind = d.kind || 'exe';
+    document.getElementById('install-steps-' + kind).hidden = false;
+    document.getElementById('need-item-' + kind).hidden = false;
+  });
+</script>
+</body>
+</html>

@@ -382,34 +382,7 @@ function renderMessages() {
     let bodyHTML = linkify(escapeHTML(m.content || m.text || ''));
 
     // Блок задач (конвейер)
-    const tasks = m.tasks;
-    if (tasks && tasks.length > 0) {
-      for (const t of tasks) {
-        const st = t.status || 'running';
-        const statusLabel = st === 'completed' ? 'завершено'
-          : st === 'failed' ? 'ошибка'
-          : st === 'cancelled' ? 'отменено'
-          : 'выполняется';
-        bodyHTML += `<div class="task-block task-${st}">`;
-        bodyHTML += `<div class="task-goal"><span class="task-goal-label">Задача:</span> ${escapeHTML(t.goal || '')} <span class="task-badge task-badge-${st}">${statusLabel}</span></div>`;
-        const steps = t.steps || [];
-        if (steps.length > 0) {
-          bodyHTML += '<ul class="task-steps">';
-          for (const s of steps) {
-            const sst = s.status || 'pending';
-            const icon = sst === 'done' ? '\u2713'
-              : sst === 'failed' ? '\u2717'
-              : sst === 'running' ? '\u25b8'
-              : sst === 'skipped' ? '\u2014'
-              : '\u25cb';
-            const summary = s.summary ? `<div class="step-summary">${escapeHTML(s.summary)}</div>` : '';
-            bodyHTML += `<li class="task-step step-${sst}"><span class="step-icon">${icon}</span><span class="step-desc">${escapeHTML(s.description || '')}</span>${summary}</li>`;
-          }
-          bodyHTML += '</ul>';
-        }
-        bodyHTML += '</div>';
-      }
-    }
+    bodyHTML += renderTaskBlock(m.tasks);
 
     const commands = m.commands;
     if (commands && commands.length > 0) {
@@ -449,7 +422,10 @@ function renderMessages() {
     }
 
     if (m.loading) {
-      html += `<div class="msg assistant"><div class="msg-role">иру</div><div class="msg-body"><div class="typing"><span></span><span></span><span></span></div></div></div>`;
+      const stepText = escapeHTML(m.currentStep || 'ИРУ думает...');
+      const liveTasksHTML = renderTaskBlock(m.liveTasks);
+      const taskBlockAttr = (m.liveTasks && m.liveTasks.length > 0) ? '' : ' hidden';
+      html += `<div class="msg assistant msg-thinking"><div class="msg-role">иру</div><div class="msg-body"><div class="live-status"><span class="live-dot"></span><span class="live-text">${stepText}</span></div><div class="task-block-live"${taskBlockAttr}>${liveTasksHTML}</div></div></div>`;
     } else {
       html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}${confirmBtns}</div></div>`;
     }
@@ -472,21 +448,24 @@ async function sendMessage() {
   const ids = Object.keys(state.devices);
   const isOnboarding = ids.length === 0;
 
+  const messageToSend = buildMessageWithAttachments(text);
+
   input.value = '';
   autoGrow(input);
+  clearAttachments();
 
   // Добавить сообщение пользователя в UI сразу
   state.messages.push({ role: 'user', content: text });
-  // Добавить placeholder для ответа (с индикатором загрузки)
+  // Добавить placeholder для ответа (live-статус вместо точек загрузки)
   const msgIndex = state.messages.length;
-  state.messages.push({ role: 'assistant', content: '', loading: true });
+  state.messages.push({ role: 'assistant', content: '', loading: true, currentStep: 'ИРУ думает...', liveTasks: [] });
   renderMessages();
 
   try {
     const isBroadcast = !isOnboarding && state.sendTarget === 'all';
     const body = {
       device_id: isOnboarding ? '' : (state.selectedDevice || ids[0]),
-      message: text,
+      message: messageToSend,
       chat_id: state.currentChatId,
       broadcast: isBroadcast,
       modes: { ...state.modes },
@@ -575,8 +554,22 @@ async function pollTask(taskId, msgIndex) {
         loadChats();
         return;
       }
-      // Ещё выполняется — повторить через 1с
-      if (!stopped) setTimeout(poll, 1000);
+      // Ещё выполняется — обновить live-статус
+      const msg = state.messages[msgIndex];
+      if (msg && msg.loading) {
+        let needRender = false;
+        if (task.current_step && msg.currentStep !== task.current_step) {
+          msg.currentStep = task.current_step;
+          needRender = true;
+        }
+        if (task.tasks && task.tasks.length > 0) {
+          msg.liveTasks = task.tasks;
+          needRender = true;
+        }
+        if (needRender) renderMessages();
+      }
+      // Повторить через 800мс пока задача running
+      if (!stopped) setTimeout(poll, 800);
     } catch (e) {
       if (stopped) return;
       if (!poll._retries) poll._retries = 0;
@@ -701,6 +694,38 @@ function renderInputDeviceSelector() {
     </div>`;
   }
   dropdown.innerHTML = html;
+}
+
+// ── LIVE PROGRESS ─────────────────────────────────────
+function renderTaskBlock(tasks) {
+  if (!tasks || tasks.length === 0) return '';
+  let html = '';
+  for (const t of tasks) {
+    const st = t.status || 'running';
+    const statusLabel = st === 'completed' ? 'завершено'
+      : st === 'failed' ? 'ошибка'
+      : st === 'cancelled' ? 'отменено'
+      : 'выполняется';
+    html += `<div class="task-block task-${st}">`;
+    html += `<div class="task-goal"><span class="task-goal-label">Задача:</span> ${escapeHTML(t.goal || '')} <span class="task-badge task-badge-${st}">${statusLabel}</span></div>`;
+    const steps = t.steps || [];
+    if (steps.length > 0) {
+      html += '<ul class="task-steps">';
+      for (const s of steps) {
+        const sst = s.status || 'pending';
+        const icon = sst === 'done' ? '\u2713'
+          : sst === 'failed' ? '\u2717'
+          : sst === 'running' ? '\u25b8'
+          : sst === 'skipped' ? '\u2014'
+          : '\u25cb';
+        const summary = s.summary ? `<div class="step-summary">${escapeHTML(s.summary)}</div>` : '';
+        html += `<li class="task-step step-${sst}"><span class="step-icon">${icon}</span><span class="step-desc">${escapeHTML(s.description || '')}</span>${summary}</li>`;
+      }
+      html += '</ul>';
+    }
+    html += '</div>';
+  }
+  return html;
 }
 
 function sendHint(el) {
@@ -1423,6 +1448,229 @@ function handleDevModeKey(e) {
     e.preventDefault();
     sendDevCommand();
   }
+}
+
+// ── Голосовой ввод (Web Speech API) ──────────────────────────
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let isRecording = false;
+
+const voiceBtn = document.getElementById('voiceBtn');
+if (!SpeechRecognition) {
+  if (voiceBtn) {
+    voiceBtn.disabled = true;
+    voiceBtn.title = 'Голосовой ввод не поддерживается этим браузером. Откройте в Chrome или Edge';
+  }
+} else if (voiceBtn) {
+  voiceBtn.addEventListener('click', toggleVoice);
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.shiftKey && (e.key === 'M' || e.key === 'm')) {
+      e.preventDefault();
+      toggleVoice();
+    }
+  });
+}
+
+function toggleVoice() {
+  if (isRecording) { stopVoice(); } else { startVoice(); }
+}
+
+function startVoice() {
+  if (!SpeechRecognition) return;
+  recognition = new SpeechRecognition();
+  recognition.lang = 'ru-RU';
+  recognition.interimResults = true;
+  recognition.continuous = true;
+
+  const input = document.getElementById('chatInput');
+  const initialValue = input.value;
+  let finalTranscript = '';
+
+  recognition.onstart = () => {
+    isRecording = true;
+    voiceBtn.classList.add('recording');
+    voiceBtn.setAttribute('aria-label', 'Остановить запись');
+  };
+
+  recognition.onresult = (event) => {
+    let interim = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const transcript = event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        finalTranscript += transcript;
+      } else {
+        interim += transcript;
+      }
+    }
+    const sep = initialValue && !initialValue.endsWith(' ') ? ' ' : '';
+    input.value = initialValue + sep + finalTranscript + interim;
+    if (input.tagName === 'TEXTAREA') {
+      input.style.height = 'auto';
+      input.style.height = input.scrollHeight + 'px';
+    }
+    updateCharCount();
+  };
+
+  recognition.onerror = (event) => {
+    console.warn('Speech recognition error:', event.error);
+    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+      alert('Доступ к микрофону запрещён. Разрешите в настройках браузера.');
+    }
+    stopVoice();
+  };
+
+  recognition.onend = () => { stopVoice(); };
+
+  try { recognition.start(); } catch (err) {
+    console.warn('Не удалось запустить распознавание:', err);
+    stopVoice();
+  }
+}
+
+function stopVoice() {
+  isRecording = false;
+  if (voiceBtn) {
+    voiceBtn.classList.remove('recording');
+    voiceBtn.setAttribute('aria-label', 'Включить микрофон');
+  }
+  if (recognition) {
+    try { recognition.stop(); } catch (_) {}
+    recognition = null;
+  }
+}
+
+// ── Прикрепление текстовых файлов ───────────────────────────
+const ALLOWED_EXT = new Set([
+  'txt','md','csv','json','xml','yml','yaml','py','js','ts','html','css',
+  'sql','log','ini','conf','sh','ps1','bat','go','rs','java','cpp','c','h'
+]);
+const MAX_FILE_SIZE = 500 * 1024;
+const MAX_TOTAL_SIZE = 2 * 1024 * 1024;
+const MAX_FILES = 5;
+
+let attachedFiles = [];
+
+const attachBtn = document.getElementById('attachBtn');
+const fileInput = document.getElementById('fileInput');
+const attachmentsBar = document.getElementById('attachmentsBar');
+
+if (attachBtn && fileInput) {
+  attachBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', (e) => {
+    handleFiles(Array.from(e.target.files));
+    fileInput.value = '';
+  });
+}
+
+// Drag & drop
+const _dragTarget = document.body;
+['dragenter', 'dragover'].forEach(evt => {
+  _dragTarget.addEventListener(evt, (e) => {
+    if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+      e.preventDefault();
+      _dragTarget.classList.add('drag-over');
+    }
+  });
+});
+['dragleave', 'drop'].forEach(evt => {
+  _dragTarget.addEventListener(evt, (e) => {
+    if (evt === 'drop') {
+      e.preventDefault();
+      if (e.dataTransfer && e.dataTransfer.files) {
+        handleFiles(Array.from(e.dataTransfer.files));
+      }
+    }
+    _dragTarget.classList.remove('drag-over');
+  });
+});
+
+// Paste файлов в поле ввода
+(function() {
+  const ci = document.getElementById('chatInput');
+  if (ci) {
+    ci.addEventListener('paste', (e) => {
+      if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length) {
+        e.preventDefault();
+        handleFiles(Array.from(e.clipboardData.files));
+      }
+    });
+  }
+})();
+
+function handleFiles(files) {
+  for (const file of files) {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (!ALLOWED_EXT.has(ext)) {
+      alert(`Файл "${file.name}" не поддерживается. Принимаются только текстовые файлы (.txt, .md, .csv, .json, .py и т.п.)`);
+      continue;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      alert(`Файл "${file.name}" слишком большой (${Math.round(file.size/1024)} КБ). Максимум 500 КБ.`);
+      continue;
+    }
+    if (attachedFiles.length >= MAX_FILES) {
+      alert(`Можно прикрепить максимум ${MAX_FILES} файлов.`);
+      return;
+    }
+    const totalSize = attachedFiles.reduce((s, f) => s + f.size, 0);
+    if (totalSize + file.size > MAX_TOTAL_SIZE) {
+      alert('Суммарный размер файлов превысит 2 МБ. Удалите ненужные.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      attachedFiles.push({ name: file.name, size: file.size, content: ev.target.result });
+      renderAttachments();
+    };
+    reader.onerror = () => { alert(`Не удалось прочитать файл "${file.name}"`); };
+    reader.readAsText(file, 'UTF-8');
+  }
+}
+
+function renderAttachments() {
+  if (!attachmentsBar) return;
+  if (attachedFiles.length === 0) {
+    attachmentsBar.hidden = true;
+    attachmentsBar.innerHTML = '';
+    return;
+  }
+  attachmentsBar.hidden = false;
+  attachmentsBar.innerHTML = attachedFiles.map((f, idx) => `
+    <div class="attachment-chip">
+      <span class="chip-name" title="${escapeHTML(f.name)}">${escapeHTML(f.name)}</span>
+      <span class="chip-size">${formatAttachSize(f.size)}</span>
+      <button class="chip-remove" data-idx="${idx}" aria-label="Удалить">\u00d7</button>
+    </div>
+  `).join('');
+  attachmentsBar.querySelectorAll('.chip-remove').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      attachedFiles.splice(parseInt(e.target.dataset.idx, 10), 1);
+      renderAttachments();
+    });
+  });
+}
+
+function formatAttachSize(bytes) {
+  if (bytes < 1024) return bytes + ' Б';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' КБ';
+  return (bytes / 1024 / 1024).toFixed(2) + ' МБ';
+}
+
+function buildMessageWithAttachments(userText) {
+  if (attachedFiles.length === 0) return userText;
+  const parts = ['=== Прикреплённые файлы ==='];
+  for (const f of attachedFiles) {
+    parts.push(`\n[${f.name}, ${f.size} байт]`);
+    parts.push(f.content);
+  }
+  parts.push('\n=== Сообщение ===');
+  parts.push(userText);
+  return parts.join('\n');
+}
+
+function clearAttachments() {
+  attachedFiles = [];
+  renderAttachments();
 }
 
 // ── INIT ───────────────────────────────────────────────────

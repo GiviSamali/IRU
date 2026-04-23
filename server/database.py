@@ -7,6 +7,7 @@ database.py — SQLite база данных ИРУ v3.5
   messages       — сообщения в чатах (role, content, commands_json)
   training_data  — записи для обучения модели (input, команды, контекст ОС)
   refresh_tokens — JWT refresh-токены (для logout + ротации)
+  device_memory  — память устройства (команды + закреплённые факты по machine_guid)
 
 Файл БД создаётся рядом с main.py при первом запуске.
 При старте автоматически создаётся администратор (admin).
@@ -16,6 +17,7 @@ import sqlite3
 import uuid
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -151,6 +153,27 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_tasks_chat   ON tasks(chat_id);
             CREATE INDEX IF NOT EXISTS idx_tasks_user   ON tasks(user_id);
             CREATE INDEX IF NOT EXISTS idx_task_steps   ON task_steps(task_id, idx);
+
+            -- Память устройства (команды + закреплённые факты)
+            CREATE TABLE IF NOT EXISTS device_memory (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                machine_guid    TEXT    NOT NULL,
+                device_id       TEXT,
+                type            TEXT    NOT NULL,
+                command         TEXT,
+                intent          TEXT,
+                exit_code       INTEGER,
+                success         INTEGER,
+                stdout_preview  TEXT,
+                stderr_preview  TEXT,
+                fact_text       TEXT,
+                category        TEXT,
+                pinned          INTEGER DEFAULT 0,
+                created_at      TEXT    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_device_memory_guid_created
+                ON device_memory(machine_guid, created_at DESC);
 
             -- миграция: добавить agent_version если не существует
         """)
@@ -779,3 +802,80 @@ def list_chat_tasks(chat_id: int) -> list[dict]:
             d["steps"] = [dict(s) for s in steps]
             result.append(d)
         return result
+
+
+# ── Device Memory (команды + факты по machine_guid) ──────────────────────
+
+def _utc_iso() -> str:
+    """ISO8601 timestamp в UTC."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def add_command_memory(machine_guid: str, device_id: str | None,
+                       command: str, intent: str | None,
+                       exit_code: int, stdout: str | None,
+                       stderr: str | None) -> int:
+    """Записать выполненную команду в память устройства. Возвращает id."""
+    success = 1 if exit_code == 0 else 0
+    stdout_preview = (stdout or "")[:500] or None
+    stderr_preview = (stderr or "")[:500] or None
+    with get_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO device_memory
+               (machine_guid, device_id, type, command, intent, exit_code,
+                success, stdout_preview, stderr_preview, pinned, created_at)
+               VALUES (?, ?, 'command', ?, ?, ?, ?, ?, ?, 0, ?)""",
+            (machine_guid, device_id, command, intent, exit_code,
+             success, stdout_preview, stderr_preview, _utc_iso()),
+        )
+        return cur.lastrowid
+
+
+def add_fact(machine_guid: str, device_id: str | None,
+             text: str, category: str | None) -> int:
+    """Добавить закреплённый факт. Возвращает id."""
+    with get_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO device_memory
+               (machine_guid, device_id, type, fact_text, category, pinned, created_at)
+               VALUES (?, ?, 'fact', ?, ?, 1, ?)""",
+            (machine_guid, device_id, text, category, _utc_iso()),
+        )
+        return cur.lastrowid
+
+
+def delete_fact(machine_guid: str, fact_id: int) -> bool:
+    """Удалить факт по id (только если принадлежит этому устройству)."""
+    with get_db() as conn:
+        cur = conn.execute(
+            "DELETE FROM device_memory WHERE id = ? AND machine_guid = ? AND type = 'fact'",
+            (fact_id, machine_guid),
+        )
+        return cur.rowcount > 0
+
+
+def get_recent_commands(machine_guid: str, limit: int = 20) -> list[dict]:
+    """Последние команды для устройства (новые первыми)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, command, intent, exit_code, success,
+                      stdout_preview, stderr_preview, created_at
+               FROM device_memory
+               WHERE machine_guid = ? AND type = 'command'
+               ORDER BY created_at DESC LIMIT ?""",
+            (machine_guid, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_pinned_facts(machine_guid: str) -> list[dict]:
+    """Все закреплённые факты для устройства (старые первыми)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, fact_text, category, created_at
+               FROM device_memory
+               WHERE machine_guid = ? AND type = 'fact' AND pinned = 1
+               ORDER BY created_at ASC""",
+            (machine_guid,),
+        ).fetchall()
+        return [dict(r) for r in rows]

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
-<title>ИРУ v3.5 — Интеллектуальный Режим Управления</title>
+<title>ИРУ v3.7 — Интеллектуальный Режим Управления</title>
 <link rel="icon" type="image/x-icon" href="IruIcon.ico">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -22,7 +22,7 @@
           <span><span class="accent-letter">Р</span>ежим</span>
           <span><span class="accent-letter">У</span>правления</span>
         </div>
-        <div class="auth-logo-ver">v3.5</div>
+        <div class="auth-logo-ver">v3.7</div>
       </div>
     </div>
     <div class="auth-desc">Введите токен доступа для входа в систему</div>
@@ -43,7 +43,7 @@
         <img src="IruIcon.ico" alt="ИРУ">
         <div>
           <div class="sidebar-logo-text">ИРУ</div>
-          <div class="sidebar-logo-ver">v3.5</div>
+          <div class="sidebar-logo-ver">v3.7</div>
         </div>
       </div>
       <button class="btn-new-chat" onclick="createNewChat()" title="Новый чат">
@@ -126,6 +126,7 @@
       <div class="chat-view">
         <div class="chat-messages" id="chatMessages"></div>
         <div class="chat-input-area">
+          <div id="attachmentsBar" class="attachments-bar" hidden></div>
           <div class="chat-input-wrap">
             <div class="input-device-select">
               <button class="input-device-btn" id="inputDeviceBtn" onclick="toggleInputDeviceDropdown()" title="Выбрать устройство">
@@ -157,6 +158,21 @@
                 </label>
               </div>
             </div>
+            <button id="attachBtn" class="attach-btn" type="button" title="Прикрепить текстовый файл" aria-label="Прикрепить файл">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+              </svg>
+            </button>
+            <input type="file" id="fileInput" multiple hidden
+                   accept=".txt,.md,.csv,.json,.xml,.yml,.yaml,.py,.js,.ts,.html,.css,.sql,.log,.ini,.conf,.sh,.ps1,.bat,.go,.rs,.java,.cpp,.c,.h">
+            <button id="voiceBtn" class="voice-btn" type="button" title="Голосовой ввод (Ctrl+Shift+M)" aria-label="Включить микрофон">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
+            </button>
             <textarea class="chat-input" id="chatInput" placeholder="Опиши задачу..." rows="1" maxlength="500"
               onkeydown="handleInputKey(event)" oninput="autoGrow(this); updateCharCount()"></textarea>
             <span class="char-count" id="charCount">0/500</span>
