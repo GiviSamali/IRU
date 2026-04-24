@@ -51,7 +51,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from collections import defaultdict
-from controller import process_nl_command, process_onboarding_message, ConfirmationRequired, strip_markdown
+from controller import process_nl_command, process_onboarding_message, ConfirmationRequired, strip_markdown, classify_task_complexity
 
 logger = logging.getLogger("iru.run_plan")
 
@@ -585,6 +585,35 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             "commands": results,
         }
 
+    # ── Предварительная классификация задачи (до LLM-цикла) ───────────
+    _is_pipeline = bool((task.get("modes") or {}).get("pipeline"))
+    if not _is_pipeline:
+        kind, plan_desc = await classify_task_complexity(message)
+        logger.info(
+            "[classify] kind=%s plan_desc=%r user_id=%s message=%r",
+            kind, plan_desc[:80] if plan_desc else "", user_id, message[:100],
+        )
+        if kind == "PLAN":
+            task["plan_suggestion"] = plan_desc
+            task["plan_original_request"] = message
+            _user_plan = get_user_plan(user_id)
+            _trial_used = get_plan_trial_used(user_id)
+
+            if _user_plan == "pro":
+                task["auto_plan"] = True
+            elif _trial_used:
+                logger.info(
+                    "[classify] FREE TRIAL EXHAUSTED — показываем upsell, user_id=%s",
+                    user_id,
+                )
+
+            # Сохранить сообщение "Это сложная задача, нужен план." в чат
+            add_message(chat_id, "assistant", "Это сложная задача, нужен план.")
+            task["status"] = "done"
+            task["answer"] = ""
+            task["commands"] = []
+            return  # НЕ запускать основной LLM-цикл
+
     try:
         if is_broadcast:
             # Broadcast: LLM планирует на первом устройстве
@@ -656,52 +685,20 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             combined_answer = combined_answer.strip()
             task["suggested_fact"] = suggested_fact
 
-        # Парсинг [[SUGGEST_PLAN: description]]
+        # Очистка остаточного маркера [[SUGGEST_PLAN:...]] из ответа LLM
+        # (классификация теперь вынесена наверх, но LLM может по инерции вставить маркер)
         _plan_match = _re.search(
             r'\[\[SUGGEST_PLAN:\s*([^\[\]]+?)\s*\]\]',
             combined_answer,
         )
-        _is_pipeline = bool((task.get("modes") or {}).get("pipeline"))
-        if _plan_match and _is_pipeline:
-            # Pipeline-режим: маркер SUGGEST_PLAN недопустим — LLM нарушает контракт.
-            # Вырезаем маркер из текста, но НЕ создаём plan_suggestion (иначе петля).
+        if _plan_match:
             logger.warning(
-                "[suggest_plan] в pipeline-режиме маркер найден и проигнорирован, "
+                "[suggest_plan] остаточный маркер в ответе LLM — вырезаю, "
                 "user_id=%s, chat_id=%s",
                 user_id, chat_id,
             )
             combined_answer = combined_answer[:_plan_match.start()].rstrip() + combined_answer[_plan_match.end():]
             combined_answer = combined_answer.strip()
-            if not combined_answer:
-                combined_answer = "Запускаю план…"
-        elif _plan_match:
-            plan_desc = _plan_match.group(1).strip()
-            combined_answer = combined_answer[:_plan_match.start()].rstrip() + combined_answer[_plan_match.end():]
-            combined_answer = combined_answer.strip()
-            task["plan_suggestion"] = plan_desc
-            task["plan_original_request"] = message
-
-            # ── ЗАЩИТА: маркер SUGGEST_PLAN найден — обнулить команды.
-            # Даже если LLM нарушил инструкцию и выполнил команды до маркера,
-            # не показываем их пользователю как «выполненные».
-            if combined_commands:
-                _dropped_count = len(combined_commands)
-                _cmds_preview = ", ".join(
-                    (c.get("command") or "?")[:60] for c in combined_commands[:3]
-                )
-                logger.warning(
-                    "[suggest_plan] Маркер SUGGEST_PLAN найден, обнуляю %d команд "
-                    "(user_id=%s, chat_id=%s, preview=[%s])",
-                    _dropped_count, user_id, chat_id, _cmds_preview,
-                )
-                combined_commands = []
-
-            # Проверить план пользователя
-            _user_plan = get_user_plan(user_id)
-
-            if _user_plan == "pro":
-                # Pro-пользователь: автоматически запускаем pipeline
-                task["auto_plan"] = True
 
         # strip_markdown на финальном ответе (только текст для пользователя)
         combined_answer = strip_markdown(combined_answer)

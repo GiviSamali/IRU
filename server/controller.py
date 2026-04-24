@@ -17,6 +17,7 @@ controller.py — LLM-планировщик ИРУ v3.5
 """
 
 import json
+import logging
 import os
 import re
 from datetime import datetime
@@ -124,45 +125,75 @@ def load_llm_config() -> dict:
     return cfg
 
 
+logger = logging.getLogger("iru.classify")
+
+# ── Быстрые слова-триггеры для PLAN ──────────────────────────────────────
+_PLAN_KEYWORDS = ("план", "пошагово", "по шагам")
+
+_CLASSIFY_SYSTEM = (
+    "Ты классификатор задач. Определи: "
+    "PLAN (многошаговая: установка ПО, создание проектов, настройка сред, "
+    "цепочка из 3+ действий) или SIMPLE (одна команда, текстовый ответ, "
+    "один файл, простой вопрос). "
+    "Верни РОВНО одну строку: 'PLAN: краткое описание плана' или 'SIMPLE'. "
+    "Никаких объяснений."
+)
+
+
+async def classify_task_complexity(message: str) -> tuple[str, str]:
+    """Лёгкий LLM-вызов для классификации задачи: PLAN или SIMPLE.
+
+    Возвращает (kind, plan_desc):
+      - ("PLAN", "описание")  — сложная задача
+      - ("SIMPLE", "")        — простая задача
+    """
+    # Fast-path: ключевые слова → сразу PLAN без LLM
+    msg_lower = message.lower()
+    for kw in _PLAN_KEYWORDS:
+        if kw in msg_lower:
+            logger.info("[classify] fast-path keyword=%r → PLAN, message=%r", kw, message[:100])
+            return ("PLAN", "Запрошен пошаговый план")
+
+    cfg = load_llm_config()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+            resp = await client.post(
+                f"{cfg['base_url']}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {cfg['api_key']}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "deepseek-chat",
+                    "messages": [
+                        {"role": "system", "content": _CLASSIFY_SYSTEM},
+                        {"role": "user", "content": message},
+                    ],
+                    "temperature": 0.0,
+                    "max_tokens": 100,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        answer = (data["choices"][0]["message"].get("content") or "").strip()
+    except Exception as exc:
+        logger.warning("[classify] LLM error, fallback to SIMPLE: %s", exc)
+        return ("SIMPLE", "")
+
+    if answer.upper().startswith("PLAN:"):
+        plan_desc = answer[5:].strip()
+        logger.info("[classify] kind=PLAN plan_desc=%r message=%r", plan_desc[:80], message[:100])
+        return ("PLAN", plan_desc)
+
+    logger.info("[classify] kind=SIMPLE message=%r", message[:100])
+    return ("SIMPLE", "")
+
+
 # ── Системный промпт (шаблон) ───────────────────────────────────────────
 
 SYSTEM_PROMPT_TEMPLATE = """\
 Ты — ИРУ (Интеллектуальный Режим Управления), ИИ-ассистент для управления \
 компьютерами пользователя через командную строку.
-
-ПЕРВЫЙ ШАГ: ОЦЕНКА ЗАДАЧИ (выполни ДО любых действий)
-
-Прежде чем что-либо выполнять, классифицируй запрос пользователя:
-
-ПРОСТАЯ задача (одна команда, один результат) — выполняй обычным способом.
-Примеры простых задач: "покажи свободную память", "открой блокнот",
-"создай папку test на рабочем столе", "какая погода в Москве", "напиши стих".
-
-СЛОЖНАЯ задача (установка ПО, создание проектов, многошаговая автоматизация,
-цепочка действий с разными приложениями, любая работа требующая 3+ команд или
-ожидания между шагами) — НЕ выполняй. Верни РОВНО ОДНУ строку и ничего больше:
-[[SUGGEST_PLAN: краткое описание плана на русском]]
-и полностью остановись. Никаких команд. Никаких объяснений после маркера.
-
-Примеры сложных задач:
-  "создай проект в PyCharm, напиши pyqt приложение, запусти его"
-  "установи Chrome, настрой дефолтным браузером, импортируй закладки"
-  "найди все большие файлы, заархивируй и удали"
-  "настрой VS Code: установи расширения Python, Git, Prettier"
-  "собери данные о системе и сделай отчёт"
-
-Пример правильного ответа на сложную задачу (ТОЛЬКО маркер, ничего больше):
-[[SUGGEST_PLAN: установить VS Code, настроить три расширения, перезапустить редактор]]
-
-КРИТИЧНО: если задача сложная — НЕ генерируй команды, НЕ вызывай инструменты,
-НЕ объясняй, НЕ выполняй поиск. Просто маркер и остановись.
-Клиент покажет пользователю кнопку подтверждения плана.
-
-АБСОЛЮТНЫЙ ЗАПРЕТ: НЕЛЬЗЯ возвращать [[SUGGEST_PLAN: ...]] И tool_calls в одном ответе.
-Если ты решил что задача сложная — верни ТОЛЬКО текст с маркером, БЕЗ tool_calls.
-ПЛОХОЙ пример (ЗАПРЕЩЁН): текст "[[SUGGEST_PLAN: ...]]\n" + tool_calls=[execute_cmd(...)]
-ХОРОШИЙ пример: текст "[[SUGGEST_PLAN: установить PyCharm, создать проект, запустить]]"
-Нарушение этого правила приводит к выполнению команд на ПК пользователя БЕЗ его согласия.
 
 КРИТИЧЕСКИ ВАЖНОЕ ПРАВИЛО ФОРМАТИРОВАНИЯ ОТВЕТА:
 Отвечай пользователю только чистым текстом без Markdown-разметки.
