@@ -1852,10 +1852,18 @@ function startRenameChat(chatId, event) {
 // ── SUGGEST MEMORY (Point 12) ───────────────────────────────────
 async function acceptSuggestedFact(taskId, text, category, el) {
   try {
-    await apiFetch(`${API}/api/tasks/${taskId}/remember`, {
+    const resp = await apiFetch(`${API}/api/tasks/${taskId}/remember`, {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({ text, category }),
     });
+    const data = await resp.json();
+    // Обновить локальный _memoryStats чтобы бейдж и popover были синхронны
+    if (data.status === 'ok') {
+      _memoryStats.facts_list = _memoryStats.facts_list || [];
+      _memoryStats.facts_list.push({ id: data.fact_id, text: text, category: category || '' });
+      _memoryStats.facts = _memoryStats.facts_list.length;
+      updateMemoryBadge(_memoryStats);
+    }
     el.innerHTML = '<span class="suggest-fact-done">Запомнено</span>';
     setTimeout(() => { if (el.parentNode) el.remove(); }, 2000);
   } catch (e) { showToast('Ошибка сохранения факта', true); }

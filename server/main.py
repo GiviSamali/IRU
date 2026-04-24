@@ -175,7 +175,7 @@ from database import (
     revoke_all_refresh_tokens, cleanup_expired_refresh_tokens,
     add_audit_log, get_audit_log, get_audit_log_count,
     upsert_device_profile, get_device_profile, get_user_device_profiles,
-    get_memory_stats, get_pinned_facts, add_fact,
+    get_memory_stats,
     add_user_fact, delete_user_fact, get_user_facts,
 )
 from auth import (

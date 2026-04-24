@@ -909,18 +909,43 @@ def get_pinned_facts(machine_guid: str) -> list[dict]:
 
 
 def get_memory_stats(machine_guid: str, user_id: str | None = None) -> dict:
-    """Количество фактов и команд + facts_list для единого источника в UI."""
+    """Количество фактов и команд + facts_list для единого источника в UI.
+
+    Если есть user_id — берём факты из user_memory, плюс legacy-факты
+    из device_memory (pinned=1), чтобы старые записи до миграции не пропали.
+    Дедупликация по тексту (user_memory приоритетнее).
+    """
     with get_db() as conn:
-        # Факты — из user_memory если есть user_id, иначе из device_memory
         facts_list = []
+        seen_texts: set[str] = set()
+
         if user_id:
+            # Основной источник — user_memory
             rows = conn.execute(
                 """SELECT id, fact_text, category, created_at
                    FROM user_memory WHERE user_id = ? ORDER BY created_at ASC""",
                 (user_id,),
             ).fetchall()
-            facts_list = [{"id": r["id"], "text": r["fact_text"],
-                           "category": r["category"]} for r in rows]
+            for r in rows:
+                facts_list.append({"id": r["id"], "text": r["fact_text"],
+                                   "category": r["category"], "source": "user"})
+                seen_texts.add((r["fact_text"] or "").strip().lower())
+
+            # Legacy: device_memory (pinned facts до миграции)
+            if machine_guid:
+                legacy = conn.execute(
+                    """SELECT id, fact_text, category, created_at
+                       FROM device_memory
+                       WHERE machine_guid = ? AND type = 'fact' AND pinned = 1
+                       ORDER BY created_at ASC""",
+                    (machine_guid,),
+                ).fetchall()
+                for r in legacy:
+                    key = (r["fact_text"] or "").strip().lower()
+                    if key not in seen_texts:
+                        facts_list.append({"id": r["id"], "text": r["fact_text"],
+                                           "category": r["category"], "source": "device"})
+                        seen_texts.add(key)
         else:
             rows = conn.execute(
                 """SELECT id, fact_text, category, created_at
@@ -930,7 +955,7 @@ def get_memory_stats(machine_guid: str, user_id: str | None = None) -> dict:
                 (machine_guid,),
             ).fetchall()
             facts_list = [{"id": r["id"], "text": r["fact_text"],
-                           "category": r["category"]} for r in rows]
+                           "category": r["category"], "source": "device"} for r in rows]
 
         if user_id:
             cmds_row = conn.execute(
