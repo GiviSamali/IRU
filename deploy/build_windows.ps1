@@ -96,8 +96,10 @@ if (-not (Test-Path $exePath)) {
 }
 
 # -- VERSION.txt внутри папки agent -----------------------------------------
+# Set-Content -Encoding UTF8 в PowerShell 5.1 пишет BOM (EF BB BF),
+# что ломает сравнение версий на агенте. WriteAllText пишет без BOM.
 $versionTxt = Join-Path $distDir "IruAgent\VERSION.txt"
-Set-Content -Path $versionTxt -Value $Version -Encoding UTF8 -NoNewline
+[System.IO.File]::WriteAllText($versionTxt, $Version, [System.Text.UTF8Encoding]::new($false))
 
 # -- Упаковка в ZIP (папка IruAgent/ на верхнем уровне) ---------------------
 $zipPath = Join-Path $distDir "IruAgent.zip"

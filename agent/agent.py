@@ -24,6 +24,14 @@ import shutil
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
+# Windows: stdout/stderr по умолчанию cp866, print() выдаёт мусор вместо кириллицы
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from platforms import get_platform
 platform_mod = get_platform()
 
@@ -512,7 +520,7 @@ def _update_zip(new_data: bytes, server_version: str) -> bool:
     # Проверить VERSION.txt (если есть)
     staging_version_file = staging_dir / "VERSION.txt"
     if staging_version_file.exists():
-        ver_text = staging_version_file.read_text(encoding="utf-8").strip()
+        ver_text = staging_version_file.read_text(encoding="utf-8").lstrip("\ufeff").strip()
         if ver_text != server_version:
             print(f"[update] предупреждение: VERSION.txt={ver_text}, ожидалось {server_version}")
 
