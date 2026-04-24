@@ -852,7 +852,13 @@ async def process_nl_command(
                 "КРИТИЧЕСКИ ВАЖНО: режим конвейера АКТИВЕН. Твоё ПЕРВОЕ действие — "
                 "вызов create_plan с массивом steps. Без create_plan ты нарушишь контракт. "
                 "НЕ выполняй execute_cmd/write_content/web_search до create_plan. "
-                "После каждого шага вызывай mark_step."
+                "После каждого шага вызывай mark_step.\n\n"
+                "ЗАПРЕЩЕНО возвращать [[SUGGEST_PLAN: ...]] в pipeline-режиме. "
+                "Этот маркер недопустим — ты УЖЕ в режиме плана. Вместо маркера "
+                "ОБЯЗАТЕЛЬНО вызови tool create_plan с массивом steps.\n\n"
+                "Если ты не знаешь как разбить задачу на шаги — всё равно сделай "
+                "попытку create_plan с 2-3 разумными шагами. "
+                "Маркер не является валидным ответом."
             )
         if autonomous:
             extra.append(
@@ -880,6 +886,9 @@ async def process_nl_command(
     model = _pick_model(cfg, modes)
     base_model = cfg.get("model", "deepseek-chat")
     print(f"[llm] выбрана модель: {model} (base={base_model}, pipeline={pipeline_forced}, autonomous={autonomous})")
+
+    _pipeline_sp_retries = 0          # счётчик попыток: LLM вернул SUGGEST_PLAN без create_plan в pipeline
+    _PIPELINE_SP_MAX_RETRIES = 2      # максимум повторных «напоминаний»
 
     _timeout = httpx.Timeout(120.0, connect=10.0)
     async with httpx.AsyncClient(timeout=_timeout) as client:
@@ -1002,6 +1011,26 @@ async def process_nl_command(
                     "role": assistant_msg.get("role", "assistant"),
                     "content": _content_text,
                 }
+
+            # ── ЗАЩИТА pipeline: LLM вернул SUGGEST_PLAN без create_plan ──
+            # В pipeline-режиме маркер недопустим. Даём LLM ещё шанс вызвать create_plan.
+            if (pipeline_forced and _sp_match
+                    and not assistant_msg.get("tool_calls")):
+                _pipeline_sp_retries += 1
+                print(f"[llm] pipeline: LLM вернул только SUGGEST_PLAN без create_plan, "
+                      f"форсим продолжение (попытка {_pipeline_sp_retries}/{_PIPELINE_SP_MAX_RETRIES}, "
+                      f"user_id={user_id}, chat_id={chat_id})")
+                if _pipeline_sp_retries <= _PIPELINE_SP_MAX_RETRIES:
+                    messages.append(assistant_msg)
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            "НАПОМИНАНИЕ: ты в pipeline-режиме. Вызови create_plan сейчас. "
+                            "Маркер SUGGEST_PLAN запрещён."
+                        ),
+                    })
+                    continue
+                # Исчерпали попытки — пропускаем, ответ уйдёт как обычный текст
 
             messages.append(assistant_msg)
 

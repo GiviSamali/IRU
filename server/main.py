@@ -658,7 +658,20 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             r'\[\[SUGGEST_PLAN:\s*([^\[\]]+?)\s*\]\]',
             combined_answer,
         )
-        if _plan_match:
+        _is_pipeline = bool((task.get("modes") or {}).get("pipeline"))
+        if _plan_match and _is_pipeline:
+            # Pipeline-режим: маркер SUGGEST_PLAN недопустим — LLM нарушает контракт.
+            # Вырезаем маркер из текста, но НЕ создаём plan_suggestion (иначе петля).
+            logger.warning(
+                "[suggest_plan] в pipeline-режиме маркер найден и проигнорирован, "
+                "user_id=%s, chat_id=%s",
+                user_id, chat_id,
+            )
+            combined_answer = combined_answer[:_plan_match.start()].rstrip() + combined_answer[_plan_match.end():]
+            combined_answer = combined_answer.strip()
+            if not combined_answer:
+                combined_answer = "Запускаю план…"
+        elif _plan_match:
             plan_desc = _plan_match.group(1).strip()
             combined_answer = combined_answer[:_plan_match.start()].rstrip() + combined_answer[_plan_match.end():]
             combined_answer = combined_answer.strip()
