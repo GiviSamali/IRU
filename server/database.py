@@ -879,3 +879,20 @@ def get_pinned_facts(machine_guid: str) -> list[dict]:
             (machine_guid,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_memory_stats(machine_guid: str) -> dict:
+    """Количество фактов и команд в памяти устройства."""
+    with get_db() as conn:
+        facts_row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM device_memory WHERE machine_guid = ? AND type = 'fact' AND pinned = 1",
+            (machine_guid,),
+        ).fetchone()
+        cmds_row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM device_memory WHERE machine_guid = ? AND type = 'command'",
+            (machine_guid,),
+        ).fetchone()
+        return {
+            "facts": facts_row["cnt"] if facts_row else 0,
+            "commands": cmds_row["cnt"] if cmds_row else 0,
+        }

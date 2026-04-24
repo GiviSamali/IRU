@@ -40,6 +40,11 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
 
+        # Скрыть мелькающее окно PowerShell/cmd
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE
+
         result = subprocess.run(
             shell_cmd,
             capture_output=True,
@@ -47,6 +52,8 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
             env=env,
             encoding="utf-8",
             errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            startupinfo=si,
         )
 
         return {
@@ -113,9 +120,14 @@ def get_machine_guid() -> str:
 def _ps(cmd: str, timeout: int = 10) -> str:
     """Хелпер: выполнить PowerShell команду и вернуть stdout."""
     try:
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0
         r = subprocess.run(
             ["powershell", "-NoProfile", "-Command", cmd],
-            capture_output=True, encoding="utf-8", errors="replace", timeout=timeout
+            capture_output=True, encoding="utf-8", errors="replace", timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            startupinfo=si,
         )
         if r.returncode == 0:
             return r.stdout.strip()

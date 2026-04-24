@@ -129,20 +129,19 @@ DANGEROUS_PATTERNS = [
 ]
 
 # Команды, которые требуют подтверждения пользователя
+# Только реально деструктивные операции (удаление, остановка, выключение)
 CONFIRM_PATTERNS = [
     r"remove-item",
     r"del\s+",
     r"rd\s+",
     r"rmdir\s+",
+    r"rm\s+",
     r"stop-process",
     r"kill\s+",
     r"taskkill",
     r"shutdown",
     r"restart-computer",
-    r"move-item.*-force",
     r"clear-content",
-    r"set-content",       # перезапись файла
-    r"out-file",          # перезапись файла
     r"uninstall",
 ]
 
@@ -176,6 +175,7 @@ from database import (
     revoke_all_refresh_tokens, cleanup_expired_refresh_tokens,
     add_audit_log, get_audit_log, get_audit_log_count,
     upsert_device_profile, get_device_profile, get_user_device_profiles,
+    get_memory_stats, get_pinned_facts, add_fact,
 )
 from auth import (
     create_access_token, verify_access_token, create_refresh_token,
@@ -528,11 +528,11 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             import traceback
             print(f"[run_nl_task] ERROR on device={device_id}: {type(e).__name__}: {e}")
             traceback.print_exc()
-            err_text = str(e) or type(e).__name__
+            err_text = str(e).strip() or type(e).__name__
             return {
                 "device_id": device_id,
                 "status": "error",
-                "answer": f"Ошибка: {err_text}",
+                "answer": f"Ошибка: {err_text}" if err_text else "Произошла внутренняя ошибка. Попробуйте ещё раз.",
                 "commands": [],
             }
 
@@ -633,6 +633,23 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
 
         combined_tasks = result.get("tasks", []) if not is_broadcast else primary_result.get("tasks", [])
 
+        # Парсинг [[SUGGEST_REMEMBER: text | category]]
+        import re as _re_main
+        _suggest_match = _re_main.search(
+            r'\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]',
+            combined_answer,
+        )
+        suggested_fact = None
+        if _suggest_match:
+            suggested_fact = {
+                "text": _suggest_match.group(1).strip(),
+                "category": _suggest_match.group(2).strip(),
+            }
+            # Убрать маркер из ответа пользователю
+            combined_answer = combined_answer[:_suggest_match.start()].rstrip() + combined_answer[_suggest_match.end():]
+            combined_answer = combined_answer.strip()
+            task["suggested_fact"] = suggested_fact
+
         # Сохранить ответ в чат
         add_message(chat_id, "assistant", combined_answer, combined_commands)
 
@@ -667,9 +684,9 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
         import traceback
         print(f"[run_nl_task] FATAL task={task_id[:8]}: {type(e).__name__}: {e}")
         traceback.print_exc()
-        err_text = str(e) or type(e).__name__
+        err_text = str(e).strip() or type(e).__name__
         task["status"] = "error"
-        task["answer"] = f"Ошибка: {err_text}"
+        task["answer"] = f"Ошибка: {err_text}" if err_text else "Произошла внутренняя ошибка. Попробуйте ещё раз."
         task["commands"] = []
         # НЕ сохраняем error-ответ в историю чата — иначе LLM будет
         # повторять текст ошибки из накопленного контекста после
@@ -1124,6 +1141,18 @@ async def api_get_task(task_id: str, request: Request):
     task = tasks.get(task_id)
     if not task or task["user_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Задача не найдена")
+    # Memory stats для текущего устройства
+    memory_stats = None
+    suggested_fact = task.get("suggested_fact")
+    if task.get("device_ids"):
+        try:
+            first_did = _short_did(task["device_ids"][0])
+            profile = get_device_profile(first_did)
+            if profile and profile.get("machine_guid"):
+                memory_stats = get_memory_stats(profile["machine_guid"])
+        except Exception:
+            pass
+
     return {
         "status": "ok",
         "task": {
@@ -1139,6 +1168,8 @@ async def api_get_task(task_id: str, request: Request):
             "results": task.get("results", {}),
             "confirm_data": task.get("confirm_data"),
             "created_at": task["created_at"],
+            "memory_stats": memory_stats,
+            "suggested_fact": suggested_fact,
         }
     }
 
@@ -1188,6 +1219,32 @@ async def api_confirm_task(task_id: str, request: Request):
 
     asyncio.create_task(execute_confirmed())
     return {"status": "ok"}
+
+
+@app.post("/api/tasks/{task_id}/remember")
+async def api_remember_fact(task_id: str, request: Request):
+    """Пользователь принял предложенный факт для запоминания."""
+    user = get_current_user(request)
+    task = tasks.get(task_id)
+    if not task or task["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    sf = task.get("suggested_fact")
+    if not sf:
+        return {"status": "error", "error": "Нет предложенного факта"}
+    # Найти machine_guid по первому устройству задачи
+    if task.get("device_ids"):
+        first_did = _short_did(task["device_ids"][0])
+        profile = get_device_profile(first_did)
+        if profile and profile.get("machine_guid"):
+            fact_id = add_fact(
+                machine_guid=profile["machine_guid"],
+                device_id=first_did,
+                text=sf["text"],
+                category=sf.get("category"),
+            )
+            task.pop("suggested_fact", None)
+            return {"status": "ok", "fact_id": fact_id}
+    return {"status": "error", "error": "Устройство не найдено"}
 
 
 @app.post("/api/tasks/{task_id}/deny")

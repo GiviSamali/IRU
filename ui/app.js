@@ -280,6 +280,9 @@ function renderChatList() {
     return `<div class="chat-item${active}" onclick="openChat(${c.id})">
       <svg class="chat-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
       <span class="chat-item-text">${escapeHTML(c.title)}</span>
+      <button class="chat-item-rename" onclick="startRenameChat(${c.id}, event)" title="Переименовать">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 3a2.83 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+      </button>
       <button class="chat-item-delete" onclick="deleteChat(${c.id}, event)" title="Удалить">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
@@ -421,13 +424,28 @@ function renderMessages() {
       </div>`;
     }
 
+    // Suggest memory block (Point 12)
+    let suggestHTML = '';
+    if (m.suggestedFact && m.suggestedFact.text) {
+      const sf = m.suggestedFact;
+      const tid = m._taskId || '';
+      suggestHTML = `<div class="suggest-fact-block" id="sf-${mi}">
+        <div class="suggest-fact-label">ИРУ предлагает запомнить:</div>
+        <div class="suggest-fact-text">${escapeHTML(sf.text)}</div>
+        <div class="suggest-fact-actions">
+          <button class="suggest-fact-accept" onclick="acceptSuggestedFact('${tid}','${escapeAttr(sf.text)}','${escapeAttr(sf.category || '')}',document.getElementById('sf-${mi}'))">Запомнить</button>
+          <button class="suggest-fact-decline" onclick="declineSuggestedFact(document.getElementById('sf-${mi}'))">Не надо</button>
+        </div>
+      </div>`;
+    }
+
     if (m.loading) {
       const stepText = escapeHTML(m.currentStep || 'ИРУ думает...');
       const liveTasksHTML = renderTaskBlock(m.liveTasks);
       const taskBlockAttr = (m.liveTasks && m.liveTasks.length > 0) ? '' : ' hidden';
       html += `<div class="msg assistant msg-thinking"><div class="msg-role">иру</div><div class="msg-body"><div class="live-status"><span class="live-dot"></span><span class="live-text">${stepText}</span></div><div class="task-block-live"${taskBlockAttr}>${liveTasksHTML}</div></div></div>`;
     } else {
-      html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}${confirmBtns}</div></div>`;
+      html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}${confirmBtns}${suggestHTML}</div></div>`;
     }
   }
 
@@ -543,13 +561,18 @@ async function pollTask(taskId, msgIndex) {
       }
       if (task.status === 'done' || task.status === 'error') {
         stopped = true;
-        state.messages[msgIndex] = {
+        const msg = {
           role: 'assistant',
           content: task.answer || 'Готово.',
           commands: task.commands,
           tasks: task.tasks || [],
         };
+        if (task.suggested_fact) msg.suggestedFact = task.suggested_fact;
+        msg._taskId = taskId;
+        state.messages[msgIndex] = msg;
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+        // Update memory badge (Point 10)
+        if (task.memory_stats) updateMemoryBadge(task.memory_stats);
         renderMessages();
         loadChats();
         return;
@@ -1671,6 +1694,144 @@ function buildMessageWithAttachments(userText) {
 function clearAttachments() {
   attachedFiles = [];
   renderAttachments();
+}
+
+// ── MOBILE PLUS POPOVER (Point 6) ─────────────────────────────
+function toggleMobilePlusPopover() {
+  document.getElementById('mobilePlusPopover').classList.toggle('show');
+}
+function closeMobilePlusPopover() {
+  document.getElementById('mobilePlusPopover').classList.remove('show');
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.mobile-plus-btn') && !e.target.closest('.mobile-plus-popover')) {
+    closeMobilePlusPopover();
+  }
+});
+
+// Mobile voice/send toggle: if text present show send, else show voice
+function updateMobileSendVoice() {
+  if (window.innerWidth > 768) return;
+  const input = document.getElementById('chatInput');
+  const voice = document.getElementById('voiceBtn');
+  const send = document.getElementById('btnSend');
+  if (!input || !voice || !send) return;
+  const hasText = input.value.trim().length > 0;
+  voice.classList.toggle('hidden-mobile', hasText);
+  send.classList.toggle('hidden-mobile', !hasText);
+}
+// Hook into input events
+(function() {
+  const ci = document.getElementById('chatInput');
+  if (ci) {
+    ci.addEventListener('input', updateMobileSendVoice);
+    // Initial state
+    setTimeout(updateMobileSendVoice, 100);
+  }
+  window.addEventListener('resize', updateMobileSendVoice);
+})();
+
+// ── MEMORY BADGE & POPOVER (Point 10) ──────────────────────────
+let _memoryStats = { facts: 0, commands: 0, facts_list: [] };
+
+function updateMemoryBadge(stats) {
+  if (!stats) return;
+  _memoryStats = stats;
+  const badge = document.getElementById('memoryBadge');
+  const text = document.getElementById('memoryBadgeText');
+  if (!badge || !text) return;
+  const f = stats.facts || 0;
+  const c = stats.commands || 0;
+  if (f === 0 && c === 0) { badge.style.display = 'none'; return; }
+  badge.style.display = 'inline-flex';
+  const cLabel = c > 20 ? '20+' : c;
+  text.textContent = `${f} фактов, ${cLabel} команд`;
+}
+
+function toggleMemoryPopover() {
+  const pop = document.getElementById('memoryPopover');
+  pop.classList.toggle('show');
+  if (pop.classList.contains('show')) renderMemoryPopover();
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.memory-badge')) {
+    const pop = document.getElementById('memoryPopover');
+    if (pop) pop.classList.remove('show');
+  }
+});
+
+function renderMemoryPopover() {
+  const list = document.getElementById('memoryPopoverList');
+  if (!list) return;
+  const facts = _memoryStats.facts_list || [];
+  if (facts.length === 0) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:8px 0">Нет закреплённых фактов</div>';
+    return;
+  }
+  list.innerHTML = facts.map(f => `<div class="memory-popover-item">
+    <span class="fact-text">${escapeHTML(f.text || f.fact || '')}</span>
+    <span class="fact-cat">${escapeHTML(f.category || '')}</span>
+  </div>`).join('');
+}
+
+// ── CHAT RENAME (Point 11) ──────────────────────────────────────
+function startRenameChat(chatId, event) {
+  event.stopPropagation();
+  const item = event.target.closest('.chat-item');
+  if (!item) return;
+  const textEl = item.querySelector('.chat-item-text');
+  if (!textEl) return;
+  const currentTitle = textEl.textContent;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'chat-item-edit';
+  input.value = currentTitle;
+  input.maxLength = 80;
+  textEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  const finish = async (save) => {
+    if (input._done) return;
+    input._done = true;
+    const newTitle = input.value.trim();
+    if (save && newTitle && newTitle !== currentTitle && newTitle.length <= 80) {
+      try {
+        await apiFetch(`${API}/api/chats/${chatId}`, {
+          method: 'PATCH', headers: authHeaders(),
+          body: JSON.stringify({ title: newTitle }),
+        });
+        const chat = state.chats.find(c => c.id === chatId);
+        if (chat) chat.title = newTitle;
+        if (state.currentChatId === chatId) {
+          document.getElementById('headerTitle').textContent = newTitle;
+        }
+      } catch (e) { showToast('Ошибка переименования', true); }
+    }
+    renderChatList();
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+// ── SUGGEST MEMORY (Point 12) ───────────────────────────────────
+async function acceptSuggestedFact(taskId, text, category, el) {
+  try {
+    await apiFetch(`${API}/api/tasks/${taskId}/remember`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ text, category }),
+    });
+    el.innerHTML = '<span class="suggest-fact-done">Запомнено</span>';
+    setTimeout(() => { if (el.parentNode) el.remove(); }, 2000);
+  } catch (e) { showToast('Ошибка сохранения факта', true); }
+}
+
+function declineSuggestedFact(el) {
+  el.remove();
 }
 
 // ── INIT ───────────────────────────────────────────────────

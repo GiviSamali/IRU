@@ -47,23 +47,27 @@ body {
 }
 
 .hero-cta {
-    padding: 12px 32px;
+    padding: 16px 32px;
     font-size: 16px;
-    border-radius: 999px;
-    border: 1px solid rgba(0, 212, 255, 0.5);
-    background: rgba(10, 16, 30, 0.9);
-
-    color: #eaf8ff;
+    font-family: 'JetBrains Mono', system-ui, monospace;
+    border-radius: 12px;
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    background: rgba(0, 212, 255, 0.08);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    color: #00d4ff;
     cursor: pointer;
-    transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
+    transition: all 0.2s ease;
     text-decoration: none;
-    display: inline-block;        
+    display: inline-block;
+    text-transform: uppercase;
+    letter-spacing: 1px;
 }
 
 .hero-cta:hover {
-    background: rgba(0, 212, 255, 0.12);
-    box-shadow: 0 0 24px rgba(0, 212, 255, 0.35);
-    transform: translateY(-1px);
+    background: rgba(0, 212, 255, 0.15);
+    border-color: #00d4ff;
+    box-shadow: 0 0 24px rgba(0, 212, 255, 0.4);
+    transform: translateY(-2px);
 }
 
 .hero-actions {
@@ -355,20 +359,25 @@ body {
 }
 
 .cta-button {
-    padding: 12px 32px;
+    padding: 16px 32px;
     font-size: 16px;
-    border-radius: 999px;
-    border: 1px solid rgba(0, 212, 255, 0.5);
-    background: rgba(10, 16, 30, 0.9);
-    color: #eaf8ff;
+    font-family: 'JetBrains Mono', system-ui, monospace;
+    border-radius: 12px;
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    background: rgba(0, 212, 255, 0.08);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    color: #00d4ff;
     cursor: pointer;
-    transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
+    transition: all 0.2s ease;
+    text-transform: uppercase;
+    letter-spacing: 1px;
 }
 
 .cta-button:hover {
-    background: rgba(0, 212, 255, 0.12);
-    box-shadow: 0 0 24px rgba(0, 212, 255, 0.35);
-    transform: translateY(-1px);
+    background: rgba(0, 212, 255, 0.15);
+    border-color: #00d4ff;
+    box-shadow: 0 0 24px rgba(0, 212, 255, 0.4);
+    transform: translateY(-2px);
 }
 
 .security {
