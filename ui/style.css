@@ -1466,6 +1466,27 @@ img[src*="iru_logo"] {
 .suggest-fact-decline:hover { border-color: var(--accent); }
 .suggest-fact-done { color: var(--success); font-size: 11px; }
 
+/* ── PLAN SUGGESTION BANNER ────────────────────── */
+.plan-suggest-block {
+  margin-top: 8px; padding: 10px 12px;
+  background: rgba(0, 212, 255, 0.05); border: 1px solid rgba(0, 212, 255, 0.3);
+  border-radius: var(--radius); font-size: 12px;
+}
+.plan-suggest-text { color: var(--text-secondary); margin-bottom: 8px; line-height: 1.5; }
+.plan-suggest-actions { display: flex; gap: 8px; }
+.plan-suggest-accept {
+  padding: 6px 16px; background: var(--accent); color: var(--bg-primary);
+  border: none; border-radius: var(--radius-sm); font-family: var(--font);
+  font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+}
+.plan-suggest-accept:hover { box-shadow: 0 0 8px var(--accent); }
+.plan-suggest-decline {
+  padding: 6px 16px; background: transparent; color: var(--accent);
+  border: 1px solid rgba(0, 212, 255, 0.3); border-radius: var(--radius-sm);
+  font-family: var(--font); font-size: 11px; cursor: pointer; transition: all 0.15s;
+}
+.plan-suggest-decline:hover { border-color: var(--accent); }
+
 /* ── DRAG & DROP OVERLAY ───────────────────────── */
 .drag-over {
   outline: 2px dashed #00d4ff;

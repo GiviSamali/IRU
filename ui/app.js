@@ -18,6 +18,13 @@ const state = {
 
 const API = window.location.origin;
 
+function plural(n, one, few, many) {
+  const mod10 = n % 10, mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+  return many;
+}
+
 // ── JWT TOKEN MANAGEMENT ────────────────────────────────
 
 let _accessToken = localStorage.getItem('iru_access_token') || '';
@@ -439,13 +446,27 @@ function renderMessages() {
       </div>`;
     }
 
+    // Plan suggestion banner
+    let planHTML = '';
+    if (m.planSuggestion && !m.autoPlan) {
+      const desc = escapeHTML(m.planSuggestion);
+      const origReq = escapeAttr(m.planOriginalRequest || '');
+      planHTML = `<div class="plan-suggest-block" id="ps-${mi}">
+        <div class="plan-suggest-text">Задача непростая: ${desc}. В режиме План ИРУ составит и выполнит пошаговое решение.</div>
+        <div class="plan-suggest-actions">
+          <button class="plan-suggest-accept" onclick="acceptPlanSuggestion(${state.currentChatId},'${origReq}',document.getElementById('ps-${mi}'))">Попробовать разово</button>
+          <button class="plan-suggest-decline" onclick="declinePlanSuggestion(${state.currentChatId},'${origReq}',document.getElementById('ps-${mi}'))">Без плана</button>
+        </div>
+      </div>`;
+    }
+
     if (m.loading) {
       const stepText = escapeHTML(m.currentStep || 'ИРУ думает...');
       const liveTasksHTML = renderTaskBlock(m.liveTasks);
       const taskBlockAttr = (m.liveTasks && m.liveTasks.length > 0) ? '' : ' hidden';
       html += `<div class="msg assistant msg-thinking"><div class="msg-role">иру</div><div class="msg-body"><div class="live-status"><span class="live-dot"></span><span class="live-text">${stepText}</span></div><div class="task-block-live"${taskBlockAttr}>${liveTasksHTML}</div></div></div>`;
     } else {
-      html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}${confirmBtns}${suggestHTML}</div></div>`;
+      html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}${confirmBtns}${suggestHTML}${planHTML}</div></div>`;
     }
   }
 
@@ -568,11 +589,18 @@ async function pollTask(taskId, msgIndex) {
           tasks: task.tasks || [],
         };
         if (task.suggested_fact) msg.suggestedFact = task.suggested_fact;
+        if (task.plan_suggestion) msg.planSuggestion = task.plan_suggestion;
+        if (task.plan_original_request) msg.planOriginalRequest = task.plan_original_request;
+        if (task.auto_plan) msg.autoPlan = true;
         msg._taskId = taskId;
         state.messages[msgIndex] = msg;
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
         // Update memory badge (Point 10)
         if (task.memory_stats) updateMemoryBadge(task.memory_stats);
+        // Auto-plan for pro users
+        if (task.auto_plan && task.plan_original_request) {
+          runPlan(state.currentChatId, task.plan_original_request);
+        }
         renderMessages();
         loadChats();
         return;
@@ -639,7 +667,7 @@ function renderInputModeBtn() {
   const badges = document.getElementById('inputModeBadges');
   if (!btn || !badges) return;
   const active = [];
-  if (state.modes.pipeline)   active.push('Конвейер');
+  if (state.modes.pipeline)   active.push('План');
   if (state.modes.autonomous) active.push('Авто');
   btn.classList.toggle('active', active.length > 0);
   badges.textContent = active.join(' · ');
@@ -1745,7 +1773,9 @@ function updateMemoryBadge(stats) {
   if (f === 0 && c === 0) { badge.style.display = 'none'; return; }
   badge.style.display = 'inline-flex';
   const cLabel = c > 20 ? '20+' : c;
-  text.textContent = `${f} фактов, ${cLabel} команд`;
+  const fWord = plural(f, 'факт', 'факта', 'фактов');
+  const cWord = plural(c, 'команда', 'команды', 'команд');
+  text.textContent = `${f} ${fWord}, ${cLabel} ${cWord}`;
 }
 
 function toggleMemoryPopover() {
@@ -1832,6 +1862,58 @@ async function acceptSuggestedFact(taskId, text, category, el) {
 
 function declineSuggestedFact(el) {
   el.remove();
+}
+
+// ── PLAN SUGGESTION ───────────────────────────────────────
+async function runPlan(chatId, originalRequest) {
+  try {
+    const resp = await apiFetch(`${API}/api/run_plan/${chatId}`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ original_request: originalRequest }),
+    });
+    const data = await resp.json();
+    if (data.task_id) {
+      const msgIndex = state.messages.length;
+      state.messages.push({ role: 'assistant', loading: true, currentStep: 'Запуск плана...' });
+      state.pendingTasks.push({ task_id: data.task_id, msgIndex });
+      renderMessages();
+      pollTask(data.task_id, msgIndex);
+    }
+  } catch (e) { showToast('Ошибка запуска плана', true); }
+}
+
+function acceptPlanSuggestion(chatId, originalRequest, el) {
+  el.innerHTML = '<span class="suggest-fact-done">Запускаю план...</span>';
+  runPlan(chatId, originalRequest);
+}
+
+function declinePlanSuggestion(chatId, originalRequest, el) {
+  el.innerHTML = '<span class="suggest-fact-done">Выполняю без плана...</span>';
+  // Re-send as regular (non-pipeline) request
+  sendMessageDirect(originalRequest);
+}
+
+async function sendMessageDirect(text) {
+  if (!text || !state.currentChatId) return;
+  const msgIndex = state.messages.length;
+  state.messages.push({ role: 'assistant', loading: true, currentStep: 'ИРУ думает...' });
+  renderMessages();
+  try {
+    const body = { message: text, device_id: state.selectedDevice, modes: {} };
+    if (state.sendTarget === 'all') body.broadcast = true;
+    const resp = await apiFetch(`${API}/nl_command?chat_id=${state.currentChatId}`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (data.task_id) {
+      state.pendingTasks.push({ task_id: data.task_id, msgIndex });
+      pollTask(data.task_id, msgIndex);
+    }
+  } catch (e) {
+    state.messages[msgIndex] = { role: 'assistant', content: 'Ошибка: ' + (e.message || e) };
+    renderMessages();
+  }
 }
 
 // ── INIT ───────────────────────────────────────────────────

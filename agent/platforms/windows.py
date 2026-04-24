@@ -12,6 +12,8 @@ Windows-специфичные функции агента ИРУ.
 import os
 import platform as _platform
 import subprocess
+import ctypes
+import string
 from pathlib import Path
 
 name = "Windows"
@@ -136,42 +138,63 @@ def _ps(cmd: str, timeout: int = 10) -> str:
     return ""
 
 
+class _MEMORYSTATUSEX(ctypes.Structure):
+    _fields_ = [
+        ('dwLength', ctypes.c_ulong),
+        ('dwMemoryLoad', ctypes.c_ulong),
+        ('ullTotalPhys', ctypes.c_ulonglong),
+        ('ullAvailPhys', ctypes.c_ulonglong),
+        ('ullTotalPageFile', ctypes.c_ulonglong),
+        ('ullAvailPageFile', ctypes.c_ulonglong),
+        ('ullTotalVirtual', ctypes.c_ulonglong),
+        ('ullAvailVirtual', ctypes.c_ulonglong),
+        ('sullAvailExtendedVirtual', ctypes.c_ulonglong),
+    ]
+
+
+def _get_ram_gb() -> int:
+    """Получить объём ОЗУ через kernel32.GlobalMemoryStatusEx."""
+    try:
+        mem = _MEMORYSTATUSEX()
+        mem.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem))
+        return round(mem.ullTotalPhys / (1024 ** 3))
+    except Exception:
+        return 0
+
+
+def _get_disks_info() -> list:
+    """Получить список фиксированных дисков через kernel32."""
+    try:
+        drives = []
+        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+        for letter in string.ascii_uppercase:
+            if bitmask & 1:
+                drive = f"{letter}:\\"
+                drive_type = ctypes.windll.kernel32.GetDriveTypeW(drive)
+                if drive_type == 3:  # DRIVE_FIXED
+                    free_bytes = ctypes.c_ulonglong(0)
+                    total_bytes = ctypes.c_ulonglong(0)
+                    ctypes.windll.kernel32.GetDiskFreeSpaceExW(
+                        drive, None, ctypes.byref(total_bytes), ctypes.byref(free_bytes)
+                    )
+                    drives.append({
+                        "drive": f"{letter}:",
+                        "total_gb": round(total_bytes.value / (1024 ** 3)),
+                        "free_gb": round(free_bytes.value / (1024 ** 3)),
+                    })
+            bitmask >>= 1
+        return drives
+    except Exception:
+        return []
+
+
 def get_system_info() -> dict:
-    """Собрать информацию о системе через WMI/PowerShell."""
+    """Собрать информацию о системе: CPU/GPU через PowerShell, RAM/диски через ctypes."""
     info = {
         "cpu": _ps("(Get-CimInstance Win32_Processor).Name"),
         "gpu": _ps("(Get-CimInstance Win32_VideoController).Name -join '; '"),
-        "ram_gb": 0,
-        "disks": [],
+        "ram_gb": _get_ram_gb(),
+        "disks": _get_disks_info(),
     }
-
-    # RAM
-    ram_str = _ps(
-        "[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)"
-    )
-    try:
-        info["ram_gb"] = float(ram_str) if ram_str else 0
-    except ValueError:
-        info["ram_gb"] = 0
-
-    # Диски
-    disks_raw = _ps(
-        'Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | '
-        "ForEach-Object { $_.DeviceID + '|' + "
-        "[math]::Round($_.Size/1GB,1).ToString() + '|' + "
-        "[math]::Round($_.FreeSpace/1GB,1).ToString() }"
-    )
-    if disks_raw:
-        for line in disks_raw.splitlines():
-            parts = line.strip().split("|")
-            if len(parts) == 3:
-                try:
-                    info["disks"].append({
-                        "drive": parts[0],
-                        "total_gb": float(parts[1]),
-                        "free_gb": float(parts[2]),
-                    })
-                except ValueError:
-                    pass
-
     return info

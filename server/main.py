@@ -50,7 +50,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from collections import defaultdict
-from controller import process_nl_command, process_onboarding_message, ConfirmationRequired
+from controller import process_nl_command, process_onboarding_message, ConfirmationRequired, strip_markdown
 
 # ── ADMIN CHECK ─────────────────────────────────────────────
 ADMIN_USER_ID = 1  # ID admin-пользователя (создаётся первым в init_db)
@@ -176,6 +176,7 @@ from database import (
     add_audit_log, get_audit_log, get_audit_log_count,
     upsert_device_profile, get_device_profile, get_user_device_profiles,
     get_memory_stats, get_pinned_facts, add_fact,
+    add_user_fact, delete_user_fact, get_user_facts,
 )
 from auth import (
     create_access_token, verify_access_token, create_refresh_token,
@@ -649,6 +650,31 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             combined_answer = combined_answer[:_suggest_match.start()].rstrip() + combined_answer[_suggest_match.end():]
             combined_answer = combined_answer.strip()
             task["suggested_fact"] = suggested_fact
+
+        # Парсинг [[SUGGEST_PLAN: description]]
+        _plan_match = _re_main.search(
+            r'\[\[SUGGEST_PLAN:\s*(.+?)\s*\]\]',
+            combined_answer,
+        )
+        if _plan_match:
+            plan_desc = _plan_match.group(1).strip()
+            combined_answer = combined_answer[:_plan_match.start()].rstrip() + combined_answer[_plan_match.end():]
+            combined_answer = combined_answer.strip()
+            task["plan_suggestion"] = plan_desc
+            task["plan_original_request"] = message
+
+            # Проверить tier пользователя
+            from database import get_db as _get_db2
+            with _get_db2() as _conn2:
+                _urow = _conn2.execute("SELECT tier FROM users WHERE id = ?", (user_id,)).fetchone()
+            _tier = (_urow["tier"] if _urow and _urow["tier"] else "free")
+
+            if _tier == "pro":
+                # Pro-пользователь: автоматически запускаем pipeline
+                task["auto_plan"] = True
+
+        # strip_markdown на финальном ответе (только текст для пользователя)
+        combined_answer = strip_markdown(combined_answer)
 
         # Сохранить ответ в чат
         add_message(chat_id, "assistant", combined_answer, combined_commands)
@@ -1144,34 +1170,41 @@ async def api_get_task(task_id: str, request: Request):
     # Memory stats для текущего устройства
     memory_stats = None
     suggested_fact = task.get("suggested_fact")
+    plan_suggestion = task.get("plan_suggestion")
+    mem_user_id = str(user["id"]) if user.get("id") else None
     if task.get("device_ids"):
         try:
             first_did = _short_did(task["device_ids"][0])
             profile = get_device_profile(first_did)
             if profile and profile.get("machine_guid"):
-                memory_stats = get_memory_stats(profile["machine_guid"])
+                memory_stats = get_memory_stats(profile["machine_guid"], mem_user_id)
         except Exception:
             pass
 
-    return {
-        "status": "ok",
-        "task": {
-            "task_id": task["task_id"],
-            "chat_id": task["chat_id"],
-            "message": task["message"],
-            "device_ids": task["device_ids"],
-            "status": task["status"],
-            "answer": task.get("answer"),
-            "commands": task.get("commands"),
-            "tasks": task.get("tasks", []),
-            "current_step": task.get("current_step"),
-            "results": task.get("results", {}),
-            "confirm_data": task.get("confirm_data"),
-            "created_at": task["created_at"],
-            "memory_stats": memory_stats,
-            "suggested_fact": suggested_fact,
-        }
+    resp_task = {
+        "task_id": task["task_id"],
+        "chat_id": task["chat_id"],
+        "message": task["message"],
+        "device_ids": task["device_ids"],
+        "status": task["status"],
+        "answer": task.get("answer"),
+        "commands": task.get("commands"),
+        "tasks": task.get("tasks", []),
+        "current_step": task.get("current_step"),
+        "results": task.get("results", {}),
+        "confirm_data": task.get("confirm_data"),
+        "created_at": task["created_at"],
+        "memory_stats": memory_stats,
+        "suggested_fact": suggested_fact,
     }
+    if plan_suggestion:
+        resp_task["plan_suggestion"] = plan_suggestion
+    # Для pro auto_plan — отметить что нужно автозапуск
+    if task.get("auto_plan"):
+        resp_task["auto_plan"] = True
+        resp_task["plan_original_request"] = task.get("plan_original_request", "")
+
+    return {"status": "ok", "task": resp_task}
 
 
 @app.post("/api/tasks/{task_id}/confirm")
@@ -1231,20 +1264,14 @@ async def api_remember_fact(task_id: str, request: Request):
     sf = task.get("suggested_fact")
     if not sf:
         return {"status": "error", "error": "Нет предложенного факта"}
-    # Найти machine_guid по первому устройству задачи
-    if task.get("device_ids"):
-        first_did = _short_did(task["device_ids"][0])
-        profile = get_device_profile(first_did)
-        if profile and profile.get("machine_guid"):
-            fact_id = add_fact(
-                machine_guid=profile["machine_guid"],
-                device_id=first_did,
-                text=sf["text"],
-                category=sf.get("category"),
-            )
-            task.pop("suggested_fact", None)
-            return {"status": "ok", "fact_id": fact_id}
-    return {"status": "error", "error": "Устройство не найдено"}
+    mem_user_id = str(user["id"])
+    fact_id = add_user_fact(
+        user_id=mem_user_id,
+        text=sf["text"],
+        category=sf.get("category"),
+    )
+    task.pop("suggested_fact", None)
+    return {"status": "ok", "fact_id": fact_id}
 
 
 @app.post("/api/tasks/{task_id}/deny")
@@ -1262,6 +1289,56 @@ async def api_deny_task(task_id: str, request: Request):
     task["answer"] = "Команда отменена пользователем."
     add_message(chat_id, "assistant", task["answer"], task.get("commands", []))
     return {"status": "ok"}
+
+
+class RunPlanBody(BaseModel):
+    original_request: str
+    device_id: Optional[str] = None
+
+
+@app.post("/api/run_plan/{chat_id}")
+async def api_run_plan(chat_id: int, request: Request):
+    """Запустить задачу в режиме План (pipeline) по запросу пользователя."""
+    user = get_current_user(request)
+    body = await request.json()
+    original_request = body.get("original_request", "")
+    device_id = body.get("device_id")
+
+    if not original_request:
+        raise HTTPException(status_code=400, detail="Не указан запрос")
+
+    # Найти устройства пользователя
+    user_devs = {dk: d for dk, d in devices.items() if d.get("user_id") == user["id"]}
+    if not user_devs:
+        return {"status": "error", "error": "Нет подключённых устройств"}
+
+    if device_id:
+        target_ids = [_dk(user["id"], device_id)]
+    else:
+        target_ids = [list(user_devs.keys())[0]]
+
+    task_id = str(uuid.uuid4())[:12]
+    tasks[task_id] = {
+        "task_id": task_id,
+        "user_id": user["id"],
+        "chat_id": chat_id,
+        "message": original_request,
+        "device_ids": target_ids,
+        "status": "running",
+        "results": {},
+        "answer": None,
+        "commands": None,
+        "modes": {"pipeline": True},
+        "created_at": time.time(),
+    }
+
+    asyncio.create_task(run_nl_task(task_id, user["id"], original_request, target_ids, chat_id))
+
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "chat_id": chat_id,
+    }
 
 
 # ── DOWNLOAD API ─────────────────────────────────────────────────────────

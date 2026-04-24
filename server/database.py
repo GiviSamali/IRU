@@ -175,6 +175,18 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_device_memory_guid_created
                 ON device_memory(machine_guid, created_at DESC);
 
+            -- Память пользователя (факты, привязанные к user_id)
+            CREATE TABLE IF NOT EXISTS user_memory (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     TEXT    NOT NULL,
+                fact_text   TEXT    NOT NULL,
+                category    TEXT,
+                created_at  TEXT    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_user_memory_user_created
+                ON user_memory(user_id, created_at DESC);
+
             -- миграция: добавить agent_version если не существует
         """)
         try:
@@ -195,6 +207,8 @@ def init_db():
             "ALTER TABLE users ADD COLUMN daily_commands_count INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN daily_commands_date TEXT DEFAULT ''",
             "ALTER TABLE users ADD COLUMN accepted_terms_at REAL DEFAULT NULL",
+            "ALTER TABLE users ADD COLUMN tier TEXT DEFAULT 'free'",
+            "ALTER TABLE device_memory ADD COLUMN user_id TEXT",
         ]
         for sql in migrations:
             try:
@@ -814,7 +828,8 @@ def _utc_iso() -> str:
 def add_command_memory(machine_guid: str, device_id: str | None,
                        command: str, intent: str | None,
                        exit_code: int, stdout: str | None,
-                       stderr: str | None) -> int:
+                       stderr: str | None,
+                       user_id: str | None = None) -> int:
     """Записать выполненную команду в память устройства. Возвращает id."""
     success = 1 if exit_code == 0 else 0
     stdout_preview = (stdout or "")[:500] or None
@@ -823,10 +838,10 @@ def add_command_memory(machine_guid: str, device_id: str | None,
         cur = conn.execute(
             """INSERT INTO device_memory
                (machine_guid, device_id, type, command, intent, exit_code,
-                success, stdout_preview, stderr_preview, pinned, created_at)
-               VALUES (?, ?, 'command', ?, ?, ?, ?, ?, ?, 0, ?)""",
+                success, stdout_preview, stderr_preview, pinned, created_at, user_id)
+               VALUES (?, ?, 'command', ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
             (machine_guid, device_id, command, intent, exit_code,
-             success, stdout_preview, stderr_preview, _utc_iso()),
+             success, stdout_preview, stderr_preview, _utc_iso(), user_id),
         )
         return cur.lastrowid
 
@@ -854,17 +869,29 @@ def delete_fact(machine_guid: str, fact_id: int) -> bool:
         return cur.rowcount > 0
 
 
-def get_recent_commands(machine_guid: str, limit: int = 20) -> list[dict]:
-    """Последние команды для устройства (новые первыми)."""
+def get_recent_commands(machine_guid: str, user_id: str | None = None,
+                        limit: int = 20) -> list[dict]:
+    """Последние команды для устройства (новые первыми).
+    Если user_id передан — фильтрует по нему тоже."""
     with get_db() as conn:
-        rows = conn.execute(
-            """SELECT id, command, intent, exit_code, success,
-                      stdout_preview, stderr_preview, created_at
-               FROM device_memory
-               WHERE machine_guid = ? AND type = 'command'
-               ORDER BY created_at DESC LIMIT ?""",
-            (machine_guid, limit),
-        ).fetchall()
+        if user_id:
+            rows = conn.execute(
+                """SELECT id, command, intent, exit_code, success,
+                          stdout_preview, stderr_preview, created_at
+                   FROM device_memory
+                   WHERE machine_guid = ? AND type = 'command' AND user_id = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (machine_guid, user_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT id, command, intent, exit_code, success,
+                          stdout_preview, stderr_preview, created_at
+                   FROM device_memory
+                   WHERE machine_guid = ? AND type = 'command'
+                   ORDER BY created_at DESC LIMIT ?""",
+                (machine_guid, limit),
+            ).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -881,18 +908,78 @@ def get_pinned_facts(machine_guid: str) -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def get_memory_stats(machine_guid: str) -> dict:
-    """Количество фактов и команд в памяти устройства."""
+def get_memory_stats(machine_guid: str, user_id: str | None = None) -> dict:
+    """Количество фактов и команд + facts_list для единого источника в UI."""
     with get_db() as conn:
-        facts_row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM device_memory WHERE machine_guid = ? AND type = 'fact' AND pinned = 1",
-            (machine_guid,),
-        ).fetchone()
-        cmds_row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM device_memory WHERE machine_guid = ? AND type = 'command'",
-            (machine_guid,),
-        ).fetchone()
+        # Факты — из user_memory если есть user_id, иначе из device_memory
+        facts_list = []
+        if user_id:
+            rows = conn.execute(
+                """SELECT id, fact_text, category, created_at
+                   FROM user_memory WHERE user_id = ? ORDER BY created_at ASC""",
+                (user_id,),
+            ).fetchall()
+            facts_list = [{"id": r["id"], "text": r["fact_text"],
+                           "category": r["category"]} for r in rows]
+        else:
+            rows = conn.execute(
+                """SELECT id, fact_text, category, created_at
+                   FROM device_memory
+                   WHERE machine_guid = ? AND type = 'fact' AND pinned = 1
+                   ORDER BY created_at ASC""",
+                (machine_guid,),
+            ).fetchall()
+            facts_list = [{"id": r["id"], "text": r["fact_text"],
+                           "category": r["category"]} for r in rows]
+
+        if user_id:
+            cmds_row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM device_memory WHERE machine_guid = ? AND type = 'command' AND user_id = ?",
+                (machine_guid, user_id),
+            ).fetchone()
+        else:
+            cmds_row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM device_memory WHERE machine_guid = ? AND type = 'command'",
+                (machine_guid,),
+            ).fetchone()
+
         return {
-            "facts": facts_row["cnt"] if facts_row else 0,
+            "facts": len(facts_list),
             "commands": cmds_row["cnt"] if cmds_row else 0,
+            "facts_list": facts_list,
         }
+
+
+# ── User Memory (факты пользователя) ──────────────────────────────────────
+
+def add_user_fact(user_id: str, text: str, category: str | None = None) -> int:
+    """Добавить факт о пользователе. Возвращает id."""
+    with get_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO user_memory (user_id, fact_text, category, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (user_id, text, category, _utc_iso()),
+        )
+        return cur.lastrowid
+
+
+def delete_user_fact(user_id: str, fact_id: int) -> bool:
+    """Удалить факт по id (только если принадлежит этому пользователю)."""
+    with get_db() as conn:
+        cur = conn.execute(
+            "DELETE FROM user_memory WHERE id = ? AND user_id = ?",
+            (fact_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_user_facts(user_id: str) -> list[dict]:
+    """Все факты пользователя (старые первыми)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, fact_text, category, created_at
+               FROM user_memory WHERE user_id = ?
+               ORDER BY created_at ASC""",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
