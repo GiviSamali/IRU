@@ -45,7 +45,7 @@ def _read_agent_version() -> str:
     for p in candidates:
         try:
             if p.exists():
-                return p.read_text(encoding="utf-8").lstrip("\ufeff").strip()
+                return p.read_text(encoding="utf-8-sig").strip()
         except Exception:
             continue
     return "3.11"
@@ -74,7 +74,7 @@ def load_config():
     if not CONFIG_PATH.exists():
         save_config(DEFAULT_CONFIG)
         return dict(DEFAULT_CONFIG)
-    data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
     return data
 
 
@@ -536,7 +536,7 @@ def _update_zip(new_data: bytes, server_version: str) -> bool:
     # Проверить VERSION.txt (если есть)
     staging_version_file = staging_dir / "VERSION.txt"
     if staging_version_file.exists():
-        ver_text = staging_version_file.read_text(encoding="utf-8").lstrip("\ufeff").strip()
+        ver_text = staging_version_file.read_text(encoding="utf-8-sig").strip()
         if ver_text != server_version:
             print(f"[update] предупреждение: VERSION.txt={ver_text}, ожидалось {server_version}")
 

@@ -1641,7 +1641,7 @@ async def api_agent_version():
     if not version_file.exists():
         return {"version": "0.0", "min_version": "0.0", "changelog": "",
                 "download_url": "", "kind": "exe"}
-    data = json.loads(version_file.read_text(encoding="utf-8"))
+    data = json.loads(version_file.read_text(encoding="utf-8-sig"))
     data["download_url"] = "/api/agent/download"
     # Обратная совместимость: если kind отсутствует — exe
     if "kind" not in data:
@@ -1655,7 +1655,7 @@ async def api_agent_download():
     version_file = UPDATES_DIR / "version.json"
     if not version_file.exists():
         raise HTTPException(status_code=404, detail="Файл версии не найден")
-    data = json.loads(version_file.read_text(encoding="utf-8"))
+    data = json.loads(version_file.read_text(encoding="utf-8-sig"))
     filename = data.get("filename", "IruAgent.exe")
     kind = data.get("kind", "exe")
     file_path = UPDATES_DIR / filename
@@ -1703,7 +1703,7 @@ async def api_agent_upload(request: Request, version: str = Query(...)):
     version_file = UPDATES_DIR / "version.json"
     if version_file.exists():
         try:
-            old = json.loads(version_file.read_text(encoding="utf-8"))
+            old = json.loads(version_file.read_text(encoding="utf-8-sig"))
             version_data["min_version"] = old.get("min_version", "3.0")
             version_data["changelog"] = old.get("changelog", "")
         except Exception:
