@@ -152,12 +152,40 @@ class _MEMORYSTATUSEX(ctypes.Structure):
     ]
 
 
+def _setup_kernel32():
+    """Настроить argtypes/restype для kernel32-функций."""
+    k32 = ctypes.windll.kernel32
+    k32.GlobalMemoryStatusEx.argtypes = [ctypes.POINTER(_MEMORYSTATUSEX)]
+    k32.GlobalMemoryStatusEx.restype = ctypes.c_bool
+    k32.GetLogicalDrives.argtypes = []
+    k32.GetLogicalDrives.restype = ctypes.c_ulong
+    k32.GetDriveTypeW.argtypes = [ctypes.c_wchar_p]
+    k32.GetDriveTypeW.restype = ctypes.c_uint
+    k32.GetDiskFreeSpaceExW.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.POINTER(ctypes.c_ulonglong),
+        ctypes.POINTER(ctypes.c_ulonglong),
+        ctypes.POINTER(ctypes.c_ulonglong),
+    ]
+    k32.GetDiskFreeSpaceExW.restype = ctypes.c_bool
+    return k32
+
+
+try:
+    _kernel32 = _setup_kernel32()
+except Exception:
+    _kernel32 = None
+
+
 def _get_ram_gb() -> int:
     """Получить объём ОЗУ через kernel32.GlobalMemoryStatusEx."""
     try:
+        if not _kernel32:
+            return 0
         mem = _MEMORYSTATUSEX()
         mem.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
-        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem))
+        if not _kernel32.GlobalMemoryStatusEx(ctypes.byref(mem)):
+            return 0
         return round(mem.ullTotalPhys / (1024 ** 3))
     except Exception:
         return 0
@@ -166,16 +194,18 @@ def _get_ram_gb() -> int:
 def _get_disks_info() -> list:
     """Получить список фиксированных дисков через kernel32."""
     try:
+        if not _kernel32:
+            return []
         drives = []
-        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+        bitmask = _kernel32.GetLogicalDrives()
         for letter in string.ascii_uppercase:
             if bitmask & 1:
                 drive = f"{letter}:\\"
-                drive_type = ctypes.windll.kernel32.GetDriveTypeW(drive)
+                drive_type = _kernel32.GetDriveTypeW(drive)
                 if drive_type == 3:  # DRIVE_FIXED
                     free_bytes = ctypes.c_ulonglong(0)
                     total_bytes = ctypes.c_ulonglong(0)
-                    ctypes.windll.kernel32.GetDiskFreeSpaceExW(
+                    _kernel32.GetDiskFreeSpaceExW(
                         drive, None, ctypes.byref(total_bytes), ctypes.byref(free_bytes)
                     )
                     drives.append({

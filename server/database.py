@@ -207,7 +207,7 @@ def init_db():
             "ALTER TABLE users ADD COLUMN daily_commands_count INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN daily_commands_date TEXT DEFAULT ''",
             "ALTER TABLE users ADD COLUMN accepted_terms_at REAL DEFAULT NULL",
-            "ALTER TABLE users ADD COLUMN tier TEXT DEFAULT 'free'",
+            # tier колонка убрана — используем существующий users.plan
             "ALTER TABLE device_memory ADD COLUMN user_id TEXT",
         ]
         for sql in migrations:
@@ -879,7 +879,7 @@ def get_recent_commands(machine_guid: str, user_id: str | None = None,
                 """SELECT id, command, intent, exit_code, success,
                           stdout_preview, stderr_preview, created_at
                    FROM device_memory
-                   WHERE machine_guid = ? AND type = 'command' AND user_id = ?
+                   WHERE machine_guid = ? AND type = 'command' AND (user_id = ? OR user_id IS NULL)
                    ORDER BY created_at DESC LIMIT ?""",
                 (machine_guid, user_id, limit),
             ).fetchall()

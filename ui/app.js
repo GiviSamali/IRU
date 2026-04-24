@@ -984,7 +984,7 @@ async function downloadFile(filePath) {
 
 // ── UTILS ────────────────────────────────────────────
 function escapeHTML(s) { return s ? s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
-function escapeAttr(s) { return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
+function escapeAttr(s) { if (s == null) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function formatSize(b) {
   if (b == null) return '';
   if (b < 1024) return b + ' B';
@@ -1773,9 +1773,10 @@ function updateMemoryBadge(stats) {
   if (f === 0 && c === 0) { badge.style.display = 'none'; return; }
   badge.style.display = 'inline-flex';
   const cLabel = c > 20 ? '20+' : c;
-  const fWord = plural(f, 'факт', 'факта', 'фактов');
-  const cWord = plural(c, 'команда', 'команды', 'команд');
-  text.textContent = `${f} ${fWord}, ${cLabel} ${cWord}`;
+  const fLabel = f > 20 ? '20+' : f;
+  const fWord = f > 20 ? 'фактов' : plural(f, 'факт', 'факта', 'фактов');
+  const cWord = c > 20 ? 'команд' : plural(c, 'команда', 'команды', 'команд');
+  text.textContent = `${fLabel} ${fWord}, ${cLabel} ${cWord}`;
 }
 
 function toggleMemoryPopover() {
@@ -1869,7 +1870,7 @@ async function runPlan(chatId, originalRequest) {
   try {
     const resp = await apiFetch(`${API}/api/run_plan/${chatId}`, {
       method: 'POST', headers: authHeaders(),
-      body: JSON.stringify({ original_request: originalRequest }),
+      body: JSON.stringify({ original_request: originalRequest, confirmed: true }),
     });
     const data = await resp.json();
     if (data.task_id) {

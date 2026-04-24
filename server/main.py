@@ -635,8 +635,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
         combined_tasks = result.get("tasks", []) if not is_broadcast else primary_result.get("tasks", [])
 
         # Парсинг [[SUGGEST_REMEMBER: text | category]]
-        import re as _re_main
-        _suggest_match = _re_main.search(
+        _suggest_match = _re.search(
             r'\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]',
             combined_answer,
         )
@@ -652,8 +651,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             task["suggested_fact"] = suggested_fact
 
         # Парсинг [[SUGGEST_PLAN: description]]
-        _plan_match = _re_main.search(
-            r'\[\[SUGGEST_PLAN:\s*(.+?)\s*\]\]',
+        _plan_match = _re.search(
+            r'\[\[SUGGEST_PLAN:\s*([^\[\]]+?)\s*\]\]',
             combined_answer,
         )
         if _plan_match:
@@ -663,13 +662,10 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             task["plan_suggestion"] = plan_desc
             task["plan_original_request"] = message
 
-            # Проверить tier пользователя
-            from database import get_db as _get_db2
-            with _get_db2() as _conn2:
-                _urow = _conn2.execute("SELECT tier FROM users WHERE id = ?", (user_id,)).fetchone()
-            _tier = (_urow["tier"] if _urow and _urow["tier"] else "free")
+            # Проверить план пользователя
+            _user_plan = get_user_plan(user_id)
 
-            if _tier == "pro":
+            if _user_plan == "pro":
                 # Pro-пользователь: автоматически запускаем pipeline
                 task["auto_plan"] = True
 
@@ -1294,26 +1290,35 @@ async def api_deny_task(task_id: str, request: Request):
 class RunPlanBody(BaseModel):
     original_request: str
     device_id: Optional[str] = None
+    confirmed: bool = False
 
 
 @app.post("/api/run_plan/{chat_id}")
-async def api_run_plan(chat_id: int, request: Request):
+async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
     """Запустить задачу в режиме План (pipeline) по запросу пользователя."""
     user = get_current_user(request)
-    body = await request.json()
-    original_request = body.get("original_request", "")
-    device_id = body.get("device_id")
 
-    if not original_request:
+    if not body.original_request:
         raise HTTPException(status_code=400, detail="Не указан запрос")
+
+    # B2: проверка владельца чата
+    chat = get_chat(chat_id, user["id"])
+    if not chat:
+        raise HTTPException(status_code=404, detail="Чат не найден")
+
+    # B3: серверный free/pro gate
+    plan = get_user_plan(user["id"])
+    if plan != "pro":
+        if not body.confirmed:
+            raise HTTPException(status_code=403, detail="Free: требуется подтверждение")
 
     # Найти устройства пользователя
     user_devs = {dk: d for dk, d in devices.items() if d.get("user_id") == user["id"]}
     if not user_devs:
         return {"status": "error", "error": "Нет подключённых устройств"}
 
-    if device_id:
-        target_ids = [_dk(user["id"], device_id)]
+    if body.device_id:
+        target_ids = [_dk(user["id"], body.device_id)]
     else:
         target_ids = [list(user_devs.keys())[0]]
 
@@ -1322,7 +1327,7 @@ async def api_run_plan(chat_id: int, request: Request):
         "task_id": task_id,
         "user_id": user["id"],
         "chat_id": chat_id,
-        "message": original_request,
+        "message": body.original_request,
         "device_ids": target_ids,
         "status": "running",
         "results": {},
@@ -1332,7 +1337,7 @@ async def api_run_plan(chat_id: int, request: Request):
         "created_at": time.time(),
     }
 
-    asyncio.create_task(run_nl_task(task_id, user["id"], original_request, target_ids, chat_id))
+    asyncio.create_task(run_nl_task(task_id, user["id"], body.original_request, target_ids, chat_id))
 
     return {
         "status": "ok",
