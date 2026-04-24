@@ -65,7 +65,7 @@ if (Test-Path $specPath) { Remove-Item -Force $specPath }
 $pyiArgs = @(
     "--onedir",
     "--name", "agent",
-    "--noconsole",
+    # "--noconsole",  # ВРЕМЕННО ОТКЛЮЧЕНО для отладки (v3.9) — console subsystem
     "--distpath", $distDir,
     "--workpath", $buildDir,
     "--specpath", $repoRoot,

@@ -27,7 +27,7 @@ from urllib.error import URLError
 from platforms import get_platform
 platform_mod = get_platform()
 
-AGENT_VERSION = "3.7"
+AGENT_VERSION = "3.9"
 
 # Для PyInstaller: определяем путь к exe, а не к временной папке
 if getattr(sys, 'frozen', False):
