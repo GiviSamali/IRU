@@ -9,7 +9,7 @@
 #   -Server       URL сервера (по умолчанию https://irumode.ru).
 #   -Token        Admin-токен. Если не передан, берётся из env:IRU_ADMIN_TOKEN.
 #   -SkipUpload   Только собрать, не загружать на сервер.
-#   -Debug        Собрать с --console (видимый stdout/stderr для отладки).
+#   -DebugBuild   Собрать с --console (видимый stdout/stderr для отладки).
 #                 ZIP будет называться IruAgent-debug.zip.
 #
 # Требования:
@@ -28,7 +28,7 @@ param(
 
     [switch]$SkipUpload,
 
-    [switch]$Debug
+    [switch]$DebugBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,7 +49,7 @@ if (-not (Test-Path $iconPath)) {
     $iconPath = $null
 }
 
-$modeLabel = if ($Debug) { "DEBUG/console" } else { "windowed" }
+$modeLabel = if ($DebugBuild) { "DEBUG/console" } else { "windowed" }
 Write-Host "== Сборка agent v$Version ($modeLabel, onedir + ZIP) ==" -ForegroundColor Cyan
 Write-Host "Репозиторий: $repoRoot"
 
@@ -70,7 +70,7 @@ if (Test-Path $specPath) { Remove-Item -Force $specPath }
 $pyiArgs = @(
     "--onedir",
     "--name", "IruAgent",
-    $(if ($Debug) { "--console" } else { "--noconsole" }),
+    $(if ($DebugBuild) { "--console" } else { "--noconsole" }),
     "--distpath", $distDir,
     "--workpath", $buildDir,
     "--specpath", $repoRoot,
@@ -107,7 +107,7 @@ $versionTxt = Join-Path $distDir "IruAgent\VERSION.txt"
 [System.IO.File]::WriteAllText($versionTxt, $Version, [System.Text.UTF8Encoding]::new($false))
 
 # -- Упаковка в ZIP (папка IruAgent/ на верхнем уровне) ---------------------
-$zipName = if ($Debug) { "IruAgent-debug.zip" } else { "IruAgent.zip" }
+$zipName = if ($DebugBuild) { "IruAgent-debug.zip" } else { "IruAgent.zip" }
 $zipPath = Join-Path $distDir $zipName
 Compress-Archive -Path "$distDir\IruAgent" -DestinationPath $zipPath -Force
 
