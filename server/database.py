@@ -209,6 +209,7 @@ def init_db():
             "ALTER TABLE users ADD COLUMN accepted_terms_at REAL DEFAULT NULL",
             # tier колонка убрана — используем существующий users.plan
             "ALTER TABLE device_memory ADD COLUMN user_id TEXT",
+            "ALTER TABLE users ADD COLUMN plan_trial_used INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try:
@@ -518,6 +519,17 @@ def set_user_plan(user_id: int, plan: str) -> bool:
             (plan, user_id)
         )
         return cursor.rowcount > 0
+
+
+def get_plan_trial_used(user_id: int) -> int:
+    with get_db() as conn:
+        row = conn.execute("SELECT plan_trial_used FROM users WHERE id = ?", (user_id,)).fetchone()
+        return row["plan_trial_used"] if row and row["plan_trial_used"] else 0
+
+
+def set_plan_trial_used(user_id: int, value: int = 1) -> None:
+    with get_db() as conn:
+        conn.execute("UPDATE users SET plan_trial_used = ? WHERE id = ?", (value, user_id))
 
 
 def check_daily_command_limit(user_id: int) -> dict:

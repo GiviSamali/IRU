@@ -171,7 +171,7 @@ from database import (
     add_message, get_messages,
     add_training_record, get_training_data, get_training_count,
     set_user_consent,
-    PLAN_LIMITS, get_user_plan, set_user_plan,
+    PLAN_LIMITS, get_user_plan, set_user_plan, get_plan_trial_used, set_plan_trial_used,
     check_daily_command_limit, increment_daily_commands,
     check_device_limit, accept_terms, has_accepted_terms,
     store_refresh_token, get_refresh_token, revoke_refresh_token,
@@ -1230,6 +1230,10 @@ async def api_get_task(task_id: str, request: Request):
     if plan_suggestion:
         resp_task["plan_suggestion"] = plan_suggestion
         resp_task["plan_original_request"] = task.get("plan_original_request", "")
+        _user_plan = get_user_plan(user["id"])
+        if _user_plan == "free":
+            _trial_used = get_plan_trial_used(user["id"])
+            resp_task["plan_trial_used"] = bool(_trial_used)
     # Для pro auto_plan — отметить что нужно автозапуск
     if task.get("auto_plan"):
         resp_task["auto_plan"] = True
@@ -1354,6 +1358,13 @@ async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
             logger.warning("[run_plan] REJECT 403: free без confirmed. chat_id=%s user_id=%s plan=%s",
                            chat_id, user.get("id"), plan)
             raise HTTPException(status_code=403, detail="Free: требуется подтверждение")
+        # free-trial: одноразовый запуск
+        trial_used = get_plan_trial_used(user["id"])
+        if trial_used:
+            logger.warning("[run_plan] REJECT 403: free-trial уже использован. user_id=%s", user["id"])
+            raise HTTPException(status_code=403, detail="Режим План доступен на Pro-тарифе. Вы уже использовали пробный запуск.")
+        set_plan_trial_used(user["id"], 1)
+        logger.info("[run_plan] free-trial использован. user_id=%s", user["id"])
 
     # Найти устройства пользователя
     user_devs = {dk: d for dk, d in devices.items() if d.get("user_id") == user["id"]}

@@ -450,16 +450,22 @@ function renderMessages() {
     let planHTML = '';
     // TODO: persist planDismissed/planDeclined на сервере, чтобы после F5 плашка не возвращалась
     if (m.planSuggestion && !m.autoPlan && !m.planDismissed && !m.planDeclined) {
-      const desc = escapeHTML(m.planSuggestion);
-      const origReq = escapeAttr(m.planOriginalRequest || '');
-      planHTML = `<div class="plan-suggest-block" id="ps-${mi}" data-chat-id="${state.currentChatId}" data-orig-req="${origReq}">
-        <div class="plan-suggest-text">Задача непростая: ${desc}. В режиме План ИРУ составит и выполнит пошаговое решение.</div>
-        <div class="plan-suggest-actions">
-          <button class="plan-suggest-accept" onclick="acceptPlanSuggestion(document.getElementById('ps-${mi}'))">Попробовать разово</button>
-          <button class="plan-suggest-decline" onclick="declinePlanSuggestion(document.getElementById('ps-${mi}'))">Без плана</button>
-        </div>
-        <div class="plan-suggest-warning" style="font-size:11px;color:#888;margin-top:6px;">Команды плана будут выполнены без отдельного подтверждения. Нажимайте, только если доверяете задаче.</div>
-      </div>`;
+      if (m.planTrialUsed) {
+        planHTML = `<div class="plan-suggest-block" id="ps-${mi}">
+          <div class="plan-suggest-text" style="color:#888;">Режим План доступен на Pro-тарифе. Вы уже использовали пробный запуск.</div>
+        </div>`;
+      } else {
+        const desc = escapeHTML(m.planSuggestion);
+        const origReq = escapeAttr(m.planOriginalRequest || '');
+        planHTML = `<div class="plan-suggest-block" id="ps-${mi}" data-chat-id="${state.currentChatId}" data-orig-req="${origReq}">
+          <div class="plan-suggest-text">Задача непростая: ${desc}. В режиме План ИРУ составит и выполнит пошаговое решение.</div>
+          <div class="plan-suggest-actions">
+            <button class="plan-suggest-accept" onclick="acceptPlanSuggestion(document.getElementById('ps-${mi}'))">Попробовать разово</button>
+            <button class="plan-suggest-decline" onclick="declinePlanSuggestion(document.getElementById('ps-${mi}'))">Без плана</button>
+          </div>
+          <div class="plan-suggest-warning" style="font-size:11px;color:#888;margin-top:6px;">Команды плана будут выполнены без отдельного подтверждения. Нажимайте, только если доверяете задаче.</div>
+        </div>`;
+      }
     }
 
     if (m.loading) {
@@ -593,6 +599,7 @@ async function pollTask(taskId, msgIndex) {
         if (task.suggested_fact) msg.suggestedFact = task.suggested_fact;
         if (task.plan_suggestion) msg.planSuggestion = task.plan_suggestion;
         if (task.plan_original_request) msg.planOriginalRequest = task.plan_original_request;
+        if (task.plan_trial_used) msg.planTrialUsed = true;
         if (task.auto_plan) msg.autoPlan = true;
         msg._taskId = taskId;
         state.messages[msgIndex] = msg;
