@@ -448,7 +448,8 @@ function renderMessages() {
 
     // Plan suggestion banner
     let planHTML = '';
-    if (m.planSuggestion && !m.autoPlan) {
+    // TODO: persist planDismissed/planDeclined на сервере, чтобы после F5 плашка не возвращалась
+    if (m.planSuggestion && !m.autoPlan && !m.planDismissed && !m.planDeclined) {
       const desc = escapeHTML(m.planSuggestion);
       const origReq = escapeAttr(m.planOriginalRequest || '');
       planHTML = `<div class="plan-suggest-block" id="ps-${mi}" data-chat-id="${state.currentChatId}" data-orig-req="${origReq}">
@@ -1898,14 +1899,17 @@ async function runPlan(chatId, originalRequest) {
 function acceptPlanSuggestion(el) {
   const chatId = parseInt(el.dataset.chatId, 10);
   const originalRequest = el.dataset.origReq || '';
-  el.innerHTML = '<span class="suggest-fact-done">Запускаю план...</span>';
+  const mi = parseInt(el.id.replace('ps-', ''), 10);
+  if (state.messages[mi]) state.messages[mi].planDismissed = true;
+  renderMessages();
   runPlan(chatId, originalRequest);
 }
 
 function declinePlanSuggestion(el) {
   const originalRequest = el.dataset.origReq || '';
-  el.innerHTML = '<span class="suggest-fact-done">Выполняю без плана...</span>';
-  // Re-send as regular (non-pipeline) request
+  const mi = parseInt(el.id.replace('ps-', ''), 10);
+  if (state.messages[mi]) state.messages[mi].planDeclined = true;
+  renderMessages();
   sendMessageDirect(originalRequest);
 }
 
