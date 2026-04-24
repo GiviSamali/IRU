@@ -1656,7 +1656,7 @@ async def api_agent_download():
     if not version_file.exists():
         raise HTTPException(status_code=404, detail="Файл версии не найден")
     data = json.loads(version_file.read_text(encoding="utf-8"))
-    filename = data.get("filename", "agent.exe")
+    filename = data.get("filename", "IruAgent.exe")
     kind = data.get("kind", "exe")
     file_path = UPDATES_DIR / filename
     if not file_path.exists():
@@ -1686,10 +1686,10 @@ async def api_agent_upload(request: Request, version: str = Query(...)):
     is_zip = body[:4] == b"PK\x03\x04"
     if is_zip:
         kind = "zip"
-        filename = "agent.zip"
+        filename = "IruAgent.zip"
     else:
         kind = "exe"
-        filename = "agent.exe"
+        filename = "IruAgent.exe"
     save_path = UPDATES_DIR / filename
     save_path.write_bytes(body)
     # Обновить version.json

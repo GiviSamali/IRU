@@ -246,7 +246,7 @@ curl -X DELETE http://localhost:8000/api/admin/users/2 \
    - `device_id` — любое имя для своего ПК (латиница, без пробелов)
    - `server_url` — `ws://IP:8000` или `wss://домен`
    - `user_token` — его токен
-4. Запускает `python agent.py` (или `agent.exe`)
+4. Запускает `python agent.py` (или `IruAgent.exe`)
 5. Открывает URL сервера в браузере, вводит токен
 
 Каждый тестер видит **только свои устройства** и **свои чаты**.

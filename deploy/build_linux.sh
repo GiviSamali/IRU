@@ -21,10 +21,10 @@
 #
 # ВАЖНО: собранный бинарь — это Linux ELF (для Linux-тестеров).
 # Windows-сборку делай отдельно через build_windows.ps1 на Windows.
-# agent.exe на сервере остаётся Windows-версией — Linux-бинарь
+# IruAgent.exe на сервере остаётся Windows-версией — Linux-бинарь
 # загружается с другим именем: agent-linux.
 #
-# Серверный endpoint /api/agent/upload принимает только agent.exe,
+# Серверный endpoint /api/agent/upload принимает только IruAgent.exe,
 # поэтому Linux-бинарь кладётся рядом через scp — раздача через
 # статику. Для полноценной двойной раздачи нужен доп. endpoint,
 # сейчас скрипт ограничивается scp на VPS.
@@ -69,7 +69,7 @@ python -m pip install --upgrade pyinstaller websockets httpx >/dev/null
 
 # ── Очистка ──────────────────────────────────────────────────────────────
 rm -rf "$DIST_DIR" "$BUILD_DIR"
-rm -f "$REPO_ROOT/agent.spec"
+rm -f "$REPO_ROOT/IruAgent.spec" "$REPO_ROOT/agent.spec"
 
 # ── Сборка ───────────────────────────────────────────────────────────────
 cd "$AGENT_DIR"

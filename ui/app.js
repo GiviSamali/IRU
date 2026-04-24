@@ -786,7 +786,7 @@ function sendHint(el) {
 
 function downloadAgent() {
   // НЕ задаём a.download — браузер возьмёт имя из Content-Disposition сервера.
-  // Это работает и для agent.zip, и для agent.exe (обратная совместимость).
+  // Это работает и для IruAgent.zip, и для IruAgent.exe.
   const a = document.createElement('a');
   a.href = `${API}/api/agent/download`;
   document.body.appendChild(a);

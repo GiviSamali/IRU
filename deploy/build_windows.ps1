@@ -35,7 +35,7 @@ $agentDir  = Join-Path $repoRoot "agent"
 $iconPath  = Join-Path $repoRoot "ui\IruIcon.ico"
 $distDir   = Join-Path $repoRoot "dist"
 $buildDir  = Join-Path $repoRoot "build"
-$specPath  = Join-Path $repoRoot "agent.spec"
+$specPath  = Join-Path $repoRoot "IruAgent.spec"
 
 if (-not (Test-Path "$agentDir\agent.py")) {
     throw "Не найден agent\agent.py. Запускайте скрипт из репозитория IRU."
@@ -64,8 +64,8 @@ if (Test-Path $specPath) { Remove-Item -Force $specPath }
 # -- Сборка (--onedir) -----------------------------------------------------
 $pyiArgs = @(
     "--onedir",
-    "--name", "agent",
-    # "--noconsole",  # ВРЕМЕННО ОТКЛЮЧЕНО для отладки (v3.9) — console subsystem
+    "--name", "IruAgent",
+    "--noconsole",
     "--distpath", $distDir,
     "--workpath", $buildDir,
     "--specpath", $repoRoot,
@@ -90,18 +90,18 @@ finally {
     Pop-Location
 }
 
-$exePath = Join-Path $distDir "agent\agent.exe"
+$exePath = Join-Path $distDir "IruAgent\IruAgent.exe"
 if (-not (Test-Path $exePath)) {
     throw "После сборки не найден $exePath"
 }
 
 # -- VERSION.txt внутри папки agent -----------------------------------------
-$versionTxt = Join-Path $distDir "agent\VERSION.txt"
+$versionTxt = Join-Path $distDir "IruAgent\VERSION.txt"
 Set-Content -Path $versionTxt -Value $Version -Encoding UTF8 -NoNewline
 
 # -- Упаковка в ZIP (файлы на верхнем уровне!) ------------------------------
 $zipPath = Join-Path $distDir "agent-v$Version.zip"
-Compress-Archive -Path "$distDir\agent\*" -DestinationPath $zipPath -Force
+Compress-Archive -Path "$distDir\IruAgent\*" -DestinationPath $zipPath -Force
 
 $zipSize = (Get-Item $zipPath).Length
 Write-Host ("Готово: {0} ({1:N0} байт)" -f $zipPath, $zipSize) -ForegroundColor Green

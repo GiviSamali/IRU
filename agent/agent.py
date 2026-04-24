@@ -482,10 +482,10 @@ def _update_zip(new_data: bytes, server_version: str) -> bool:
             pass
         return False
 
-    # Проверить наличие agent.exe в staging
-    staging_exe = staging_dir / "agent.exe"
+    # Проверить наличие IruAgent.exe в staging
+    staging_exe = staging_dir / "IruAgent.exe"
     if not staging_exe.exists():
-        print(f"[update] в архиве не найден agent.exe, пропуск")
+        print(f"[update] в архиве не найден IruAgent.exe, пропуск")
         try:
             zip_path.unlink(missing_ok=True)
             shutil.rmtree(staging_dir, ignore_errors=True)
@@ -506,7 +506,7 @@ def _update_zip(new_data: bytes, server_version: str) -> bool:
     pid = os.getpid()
     ts = int(time.time())
     backup_dir = parent_dir / f"agent_old_{ts}"
-    new_exe_path = BASE_DIR / "agent.exe"
+    new_exe_path = BASE_DIR / "IruAgent.exe"
     bat_path = parent_dir / "_update_zip.bat"
     log_path = os.path.join(tempfile.gettempdir(), "iru_agent_update.log")
     config_src = BASE_DIR / "config.json"
@@ -556,8 +556,8 @@ if exist "{backup_dir}\\config.json" (
 )
 
 echo [обновление] Запускаем новую версию...
-echo [%date% %time%] Запуск {BASE_DIR}\\agent.exe >> %LOG%
-start "" "{BASE_DIR}\\agent.exe"
+echo [%date% %time%] Запуск {BASE_DIR}\\IruAgent.exe >> %LOG%
+start "" "{BASE_DIR}\\IruAgent.exe"
 
 echo [обновление] Удаляем временные файлы...
 if exist "{zip_path}" del /f "{zip_path}"
