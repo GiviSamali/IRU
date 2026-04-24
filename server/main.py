@@ -351,11 +351,14 @@ async def send_command_to_agent(device_id: str, action: str, params: dict,
                 f"Сообщи пользователю, что эта команда недоступна в бета-версии."
             )
         # ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ (можно пропустить после подтверждения)
-        if not skip_confirm and needs_confirmation(cmd_text):
-            print(f"[security] CONFIRM_REQUIRED: {cmd_text[:80]}")
-            raise RuntimeError(
-                f"CONFIRM_REQUIRED: Команда требует подтверждения пользователя."
-            )
+        if needs_confirmation(cmd_text):
+            if skip_confirm:
+                logger.info("[security] skip_confirm=True, команда пропущена без плашки: %s", cmd_text[:80])
+            else:
+                print(f"[security] CONFIRM_REQUIRED: {cmd_text[:80]}")
+                raise RuntimeError(
+                    f"CONFIRM_REQUIRED: Команда требует подтверждения пользователя."
+                )
         print(f"[cmd] executing: {cmd_text[:80]}")
 
     elif action == "write_content":
@@ -1373,7 +1376,7 @@ async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
         "results": {},
         "answer": None,
         "commands": None,
-        "modes": {"pipeline": True},
+        "modes": {"pipeline": True, "autonomous": True},
         "created_at": time.time(),
     }
 
