@@ -35,7 +35,23 @@ if sys.platform == "win32":
 from platforms import get_platform
 platform_mod = get_platform()
 
-AGENT_VERSION = "3.9"
+def _read_agent_version() -> str:
+    """Читает версию из VERSION.txt рядом с exe (PyInstaller) или из дерева проекта (dev)."""
+    candidates = []
+    if getattr(sys, 'frozen', False):
+        candidates.append(Path(sys.executable).parent / "VERSION.txt")
+    candidates.append(Path(__file__).parent / "VERSION.txt")
+    candidates.append(Path(__file__).parent.parent / "VERSION.txt")
+    for p in candidates:
+        try:
+            if p.exists():
+                return p.read_text(encoding="utf-8").lstrip("\ufeff").strip()
+        except Exception:
+            continue
+    return "3.11"
+
+
+AGENT_VERSION = _read_agent_version()
 
 # Для PyInstaller: определяем путь к exe, а не к временной папке
 if getattr(sys, 'frozen', False):
