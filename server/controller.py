@@ -94,6 +94,19 @@ def _set_current_step(poll_task_id: str | None, text: str) -> None:
         pass
 
 
+def _push_tasks_view(poll_task_id: str | None, task_ids: list[int]) -> None:
+    """Обновить task['tasks'] для live-отображения шагов плана в UI."""
+    if not poll_task_id or not task_ids:
+        return
+    try:
+        from main import tasks
+        t = tasks.get(poll_task_id)
+        if t:
+            t["tasks"] = _collect_tasks(task_ids)
+    except Exception:
+        pass
+
+
 class ConfirmationRequired(Exception):
     """Команда требует подтверждения пользователя."""
     def __init__(self, command: str, device_id: str, params: dict,
@@ -1200,6 +1213,7 @@ async def process_nl_command(
                                 steps=[str(s) for s in steps],
                             )
                             created_task_ids.append(task_id)
+                            _push_tasks_view(poll_task_id, created_task_ids)
                             print(f"[llm] create_plan OK: task_id={task_id}, steps={len(steps)}")
                             tool_result = {
                                 "task_id": task_id,
@@ -1239,6 +1253,7 @@ async def process_nl_command(
                                 "status": status_v,
                                 "updated": ok,
                             }
+                            _push_tasks_view(poll_task_id, created_task_ids)
                     except Exception as e:
                         print(f"[llm] mark_step EXCEPTION: {type(e).__name__}: {e}")
                         tool_result = {"error": str(e)}
