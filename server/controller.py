@@ -158,6 +158,12 @@ SYSTEM_PROMPT_TEMPLATE = """\
 НЕ объясняй, НЕ выполняй поиск. Просто маркер и остановись.
 Клиент покажет пользователю кнопку подтверждения плана.
 
+АБСОЛЮТНЫЙ ЗАПРЕТ: НЕЛЬЗЯ возвращать [[SUGGEST_PLAN: ...]] И tool_calls в одном ответе.
+Если ты решил что задача сложная — верни ТОЛЬКО текст с маркером, БЕЗ tool_calls.
+ПЛОХОЙ пример (ЗАПРЕЩЁН): текст "[[SUGGEST_PLAN: ...]]\n" + tool_calls=[execute_cmd(...)]
+ХОРОШИЙ пример: текст "[[SUGGEST_PLAN: установить PyCharm, создать проект, запустить]]"
+Нарушение этого правила приводит к выполнению команд на ПК пользователя БЕЗ его согласия.
+
 КРИТИЧЕСКИ ВАЖНОЕ ПРАВИЛО ФОРМАТИРОВАНИЯ ОТВЕТА:
 Отвечай пользователю только чистым текстом без Markdown-разметки.
 Запрещено использовать: звёздочки (*, **), решётки (#, ##, ###), обратные кавычки (`, ```),
@@ -978,6 +984,24 @@ async def process_nl_command(
                             "method": "powershell" if "windows" in device_info.get("os", "").lower() else "bash",
                         },
                     }
+
+            # ── ЗАЩИТА: если LLM вернул [[SUGGEST_PLAN:...]] вместе с tool_calls,
+            # отменить tool_calls — маркер означает «не выполнять, показать плашку»
+            _content_text = assistant_msg.get("content") or ""
+            _sp_match = re.search(r'\[\[SUGGEST_PLAN:\s*[^\[\]]+?\s*\]\]', _content_text)
+            if _sp_match and assistant_msg.get("tool_calls"):
+                _dropped = len(assistant_msg["tool_calls"])
+                _cmds_preview = ", ".join(
+                    tc["function"]["name"] for tc in assistant_msg["tool_calls"][:5]
+                )
+                print(f"[llm] SUGGEST_PLAN guard: маркер найден в content, "
+                      f"ОТМЕНЯЮ {_dropped} tool_calls [{_cmds_preview}] "
+                      f"(user_id={user_id}, chat_id={chat_id})")
+                # Убираем tool_calls из сообщения, оставляем только текст с маркером
+                assistant_msg = {
+                    "role": assistant_msg.get("role", "assistant"),
+                    "content": _content_text,
+                }
 
             messages.append(assistant_msg)
 

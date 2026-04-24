@@ -665,6 +665,21 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             task["plan_suggestion"] = plan_desc
             task["plan_original_request"] = message
 
+            # ── ЗАЩИТА: маркер SUGGEST_PLAN найден — обнулить команды.
+            # Даже если LLM нарушил инструкцию и выполнил команды до маркера,
+            # не показываем их пользователю как «выполненные».
+            if combined_commands:
+                _dropped_count = len(combined_commands)
+                _cmds_preview = ", ".join(
+                    (c.get("command") or "?")[:60] for c in combined_commands[:3]
+                )
+                logger.warning(
+                    "[suggest_plan] Маркер SUGGEST_PLAN найден, обнуляю %d команд "
+                    "(user_id=%s, chat_id=%s, preview=[%s])",
+                    _dropped_count, user_id, chat_id, _cmds_preview,
+                )
+                combined_commands = []
+
             # Проверить план пользователя
             _user_plan = get_user_plan(user_id)
 
