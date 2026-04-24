@@ -451,11 +451,11 @@ function renderMessages() {
     if (m.planSuggestion && !m.autoPlan) {
       const desc = escapeHTML(m.planSuggestion);
       const origReq = escapeAttr(m.planOriginalRequest || '');
-      planHTML = `<div class="plan-suggest-block" id="ps-${mi}">
+      planHTML = `<div class="plan-suggest-block" id="ps-${mi}" data-chat-id="${state.currentChatId}" data-orig-req="${origReq}">
         <div class="plan-suggest-text">Задача непростая: ${desc}. В режиме План ИРУ составит и выполнит пошаговое решение.</div>
         <div class="plan-suggest-actions">
-          <button class="plan-suggest-accept" onclick="acceptPlanSuggestion(${state.currentChatId},'${origReq}',document.getElementById('ps-${mi}'))">Попробовать разово</button>
-          <button class="plan-suggest-decline" onclick="declinePlanSuggestion(${state.currentChatId},'${origReq}',document.getElementById('ps-${mi}'))">Без плана</button>
+          <button class="plan-suggest-accept" onclick="acceptPlanSuggestion(document.getElementById('ps-${mi}'))">Попробовать разово</button>
+          <button class="plan-suggest-decline" onclick="declinePlanSuggestion(document.getElementById('ps-${mi}'))">Без плана</button>
         </div>
       </div>`;
     }
@@ -1881,6 +1881,10 @@ async function runPlan(chatId, originalRequest) {
       body: JSON.stringify({ original_request: originalRequest, confirmed: true }),
     });
     const data = await resp.json();
+    if (!resp.ok) {
+      showToast(data.detail || 'Ошибка запуска плана', true);
+      return;
+    }
     if (data.task_id) {
       const msgIndex = state.messages.length;
       state.messages.push({ role: 'assistant', loading: true, currentStep: 'Запуск плана...' });
@@ -1891,12 +1895,15 @@ async function runPlan(chatId, originalRequest) {
   } catch (e) { showToast('Ошибка запуска плана', true); }
 }
 
-function acceptPlanSuggestion(chatId, originalRequest, el) {
+function acceptPlanSuggestion(el) {
+  const chatId = parseInt(el.dataset.chatId, 10);
+  const originalRequest = el.dataset.origReq || '';
   el.innerHTML = '<span class="suggest-fact-done">Запускаю план...</span>';
   runPlan(chatId, originalRequest);
 }
 
-function declinePlanSuggestion(chatId, originalRequest, el) {
+function declinePlanSuggestion(el) {
+  const originalRequest = el.dataset.origReq || '';
   el.innerHTML = '<span class="suggest-fact-done">Выполняю без плана...</span>';
   // Re-send as regular (non-pipeline) request
   sendMessageDirect(originalRequest);

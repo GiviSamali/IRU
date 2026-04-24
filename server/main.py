@@ -38,6 +38,7 @@ import asyncio
 import uuid
 import base64
 import time
+import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
 from io import BytesIO
@@ -51,6 +52,8 @@ from typing import Optional
 
 from collections import defaultdict
 from controller import process_nl_command, process_onboarding_message, ConfirmationRequired, strip_markdown
+
+logger = logging.getLogger("iru.run_plan")
 
 # ── ADMIN CHECK ─────────────────────────────────────────────
 ADMIN_USER_ID = 1  # ID admin-пользователя (создаётся первым в init_db)
@@ -1195,10 +1198,10 @@ async def api_get_task(task_id: str, request: Request):
     }
     if plan_suggestion:
         resp_task["plan_suggestion"] = plan_suggestion
+        resp_task["plan_original_request"] = task.get("plan_original_request", "")
     # Для pro auto_plan — отметить что нужно автозапуск
     if task.get("auto_plan"):
         resp_task["auto_plan"] = True
-        resp_task["plan_original_request"] = task.get("plan_original_request", "")
 
     return {"status": "ok", "task": resp_task}
 
@@ -1297,19 +1300,28 @@ class RunPlanBody(BaseModel):
 async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
     """Запустить задачу в режиме План (pipeline) по запросу пользователя."""
     user = get_current_user(request)
+    logger.info("[run_plan] chat_id=%s user_id=%s user_name=%s confirmed=%s original_request=%r",
+                chat_id, user.get("id"), user.get("name"), body.confirmed,
+                body.original_request[:120] if body.original_request else "<empty>")
 
     if not body.original_request:
+        logger.warning("[run_plan] REJECT 400: пустой original_request. chat_id=%s user_id=%s payload=%r",
+                       chat_id, user.get("id"), body.dict())
         raise HTTPException(status_code=400, detail="Не указан запрос")
 
     # B2: проверка владельца чата
     chat = get_chat(chat_id, user["id"])
     if not chat:
+        logger.warning("[run_plan] REJECT 404: чат не найден. chat_id=%s user_id=%s",
+                       chat_id, user.get("id"))
         raise HTTPException(status_code=404, detail="Чат не найден")
 
     # B3: серверный free/pro gate
     plan = get_user_plan(user["id"])
     if plan != "pro":
         if not body.confirmed:
+            logger.warning("[run_plan] REJECT 403: free без confirmed. chat_id=%s user_id=%s plan=%s",
+                           chat_id, user.get("id"), plan)
             raise HTTPException(status_code=403, detail="Free: требуется подтверждение")
 
     # Найти устройства пользователя
