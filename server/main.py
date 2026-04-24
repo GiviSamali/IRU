@@ -599,7 +599,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str,
             _user_plan = get_user_plan(user_id)
             _trial_used = get_plan_trial_used(user_id)
 
-            if _user_plan == "pro":
+            if _user_plan in ("pro", "business"):
                 task["auto_plan"] = True
             elif _trial_used:
                 logger.info(
@@ -1350,7 +1350,7 @@ async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
 
     # B3: серверный free/pro gate
     plan = get_user_plan(user["id"])
-    if plan != "pro":
+    if plan not in ("pro", "business"):
         if not body.confirmed:
             logger.warning("[run_plan] REJECT 403: free без confirmed. chat_id=%s user_id=%s plan=%s",
                            chat_id, user.get("id"), plan)
