@@ -99,9 +99,9 @@ if (-not (Test-Path $exePath)) {
 $versionTxt = Join-Path $distDir "IruAgent\VERSION.txt"
 Set-Content -Path $versionTxt -Value $Version -Encoding UTF8 -NoNewline
 
-# -- Упаковка в ZIP (файлы на верхнем уровне!) ------------------------------
-$zipPath = Join-Path $distDir "agent-v$Version.zip"
-Compress-Archive -Path "$distDir\IruAgent\*" -DestinationPath $zipPath -Force
+# -- Упаковка в ZIP (папка IruAgent/ на верхнем уровне) ---------------------
+$zipPath = Join-Path $distDir "IruAgent.zip"
+Compress-Archive -Path "$distDir\IruAgent" -DestinationPath $zipPath -Force
 
 $zipSize = (Get-Item $zipPath).Length
 Write-Host ("Готово: {0} ({1:N0} байт)" -f $zipPath, $zipSize) -ForegroundColor Green

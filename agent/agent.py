@@ -482,8 +482,24 @@ def _update_zip(new_data: bytes, server_version: str) -> bool:
             pass
         return False
 
-    # Проверить наличие IruAgent.exe в staging
+    # Проверить наличие IruAgent.exe в staging (плоская или вложенная структура)
     staging_exe = staging_dir / "IruAgent.exe"
+    nested_dir = staging_dir / "IruAgent"
+    if not staging_exe.exists() and nested_dir.is_dir():
+        # ZIP содержит папку IruAgent/ — поднимаем содержимое на уровень выше
+        nested_exe = nested_dir / "IruAgent.exe"
+        if nested_exe.exists():
+            print(f"[update] обнаружена вложенная структура IruAgent/, поднимаем файлы")
+            for item in list(nested_dir.iterdir()):
+                dest = staging_dir / item.name
+                if dest.exists():
+                    if dest.is_dir():
+                        shutil.rmtree(dest, ignore_errors=True)
+                    else:
+                        dest.unlink()
+                shutil.move(str(item), str(dest))
+            nested_dir.rmdir()
+            staging_exe = staging_dir / "IruAgent.exe"
     if not staging_exe.exists():
         print(f"[update] в архиве не найден IruAgent.exe, пропуск")
         try:
