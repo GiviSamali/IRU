@@ -69,6 +69,85 @@
             0%,100% { filter: drop-shadow(0 0 10px rgba(0,212,255,0.25)); }
             50%      { filter: drop-shadow(0 0 22px rgba(0,212,255,0.55)); }
         }
+
+        /* ── ARCHITECTURE DIAGRAM ── */
+        .arch-section {
+            padding: 80px 24px 100px;
+            background: #010103;
+            color: #ffffff;
+            border-top: 1px solid rgba(255,255,255,0.05);
+        }
+        .arch-inner {
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        .arch-title {
+            font-size: 28px;
+            margin-bottom: 12px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.85);
+        }
+        .arch-subtitle {
+            font-size: 15px;
+            color: rgba(255,255,255,0.45);
+            margin-bottom: 48px;
+            letter-spacing: 0.02em;
+        }
+        .arch-canvas-wrap {
+            position: relative;
+            width: 100%;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        #arch-canvas {
+            width: 100%;
+            display: block;
+            border-radius: 16px;
+            background: rgba(5,8,20,0.80);
+            border: 1px solid rgba(0,212,255,0.10);
+            box-shadow: 0 0 60px rgba(0,212,255,0.06), 0 24px 60px rgba(0,0,0,0.6);
+        }
+        /* Tooltip */
+        .arch-tooltip {
+            position: absolute;
+            pointer-events: none;
+            background: rgba(5,10,25,0.96);
+            border: 1px solid rgba(0,212,255,0.35);
+            border-radius: 10px;
+            padding: 10px 14px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            color: #00d4ff;
+            white-space: nowrap;
+            opacity: 0;
+            transition: opacity 0.18s ease;
+            z-index: 10;
+            box-shadow: 0 4px 24px rgba(0,212,255,0.15);
+        }
+        .arch-tooltip.visible { opacity: 1; }
+        /* Legend */
+        .arch-legend {
+            display: flex;
+            gap: 28px;
+            flex-wrap: wrap;
+            margin-top: 24px;
+            justify-content: center;
+        }
+        .arch-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: rgba(255,255,255,0.50);
+            letter-spacing: 0.05em;
+        }
+        .arch-legend-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
     </style>
 </head>
 <body>
@@ -180,28 +259,33 @@
             <span>Дежурный по смене</span>
         </div>
     </section>
-    <section class="how-it-works">
-        <div class="how-inner">
-            <h2 class="how-title">Как работает ИРУ</h2>
 
-            <div class="how-grid">
-                <div class="how-card">
-                    <h3>Устанавливайте</h3>
-                    <p>Ставите агент ИРУ на тот компьютер, которым хотите управлять — дома, в офисе или в другом городе.</p>
+    <!-- ── ARCHITECTURE DIAGRAM (replaces how-it-works) ── -->
+    <section class="arch-section">
+        <div class="arch-inner">
+            <h2 class="arch-title">Как работает ИРУ</h2>
+            <p class="arch-subtitle">Наведите на узел — увидите подробности</p>
+            <div class="arch-canvas-wrap">
+                <canvas id="arch-canvas" height="420"></canvas>
+                <div class="arch-tooltip" id="arch-tooltip"></div>
+            </div>
+            <div class="arch-legend">
+                <div class="arch-legend-item">
+                    <div class="arch-legend-dot" style="background:#00d4ff;box-shadow:0 0 6px #00d4ff88;"></div>
+                    HTTPS / WSS 443
                 </div>
-
-                <div class="how-card">
-                    <h3>Подключайтесь</h3>
-                    <p>Авторизуетесь в веб‑интерфейсе, выбираете своё устройство и подтверждаете доступ к нему.</p>
+                <div class="arch-legend-item">
+                    <div class="arch-legend-dot" style="background:#00ff9d;box-shadow:0 0 6px #00ff9d88;"></div>
+                    WebSocket heartbeat
                 </div>
-
-                <div class="how-card"> 
-                    <h3>Управляйте</h3>
-                    <p>Даёте команды — ИРУ переводит их в системные действия и выполняет безопасно, без эмуляции кликов.</p>
+                <div class="arch-legend-item">
+                    <div class="arch-legend-dot" style="background:#ff6b35;box-shadow:0 0 6px #ff6b3588;"></div>
+                    Системные команды
                 </div>
             </div>
         </div>
     </section>
+
     <section class="cta-bottom">
         <div class="cta-inner">
             <h2 class="cta-title">Начните с вашего компьютера</h2>
@@ -255,6 +339,382 @@
 </main>
 
 <script src="main.js"></script>
+
+<!-- ── ARCHITECTURE DIAGRAM SCRIPT ── -->
+<script>
+(function () {
+    const canvas = document.getElementById('arch-canvas');
+    const tooltip = document.getElementById('arch-tooltip');
+    const ctx = canvas.getContext('2d');
+    let W, H, dpr;
+
+    // ── Node definitions (positions in % of W/H)
+    const NODES = [
+        {
+            id: 'user',
+            label: 'Браузер / Телефон',
+            sublabel: 'Вы',
+            icon: '🖥',
+            xr: 0.08, yr: 0.50,
+            color: '#00d4ff',
+            tip: 'Веб-интерфейс · любое устройство\nJWT авторизация · HTTPS',
+        },
+        {
+            id: 'caddy',
+            label: 'Caddy',
+            sublabel: 'Reverse Proxy + SSL',
+            icon: '🔒',
+            xr: 0.33, yr: 0.50,
+            color: '#00d4ff',
+            tip: 'Терминирует TLS/SSL\nПроксирует на FastAPI :8000\nАвтоматический HTTPS-сертификат',
+        },
+        {
+            id: 'server',
+            label: 'FastAPI',
+            sublabel: 'Сервер на VPS',
+            icon: '⚡',
+            xr: 0.58, yr: 0.50,
+            color: '#00d4ff',
+            tip: 'FastAPI + Uvicorn · порт 8000\nDeepSeek LLM · SQLite\nJWT · WebSocket-хаб · Rate Limiting',
+        },
+        {
+            id: 'agent',
+            label: 'Агент ИРУ',
+            sublabel: 'Windows / Linux ПК',
+            icon: '🤖',
+            xr: 0.82, yr: 0.50,
+            color: '#00ff9d',
+            tip: 'agent.py · Python\nPostоянное WebSocket-соединение\nHeartbeat · автообновление',
+        },
+        {
+            id: 'os',
+            label: 'ОС',
+            sublabel: 'PowerShell / bash',
+            icon: '⚙',
+            xr: 0.82, yr: 0.82,
+            color: '#ff6b35',
+            tip: 'PowerShell (Windows)\nbash (Linux)\nWMI · системные вызовы',
+        },
+    ];
+
+    // ── Edge definitions
+    const EDGES = [
+        { from: 'user',   to: 'caddy',  label: 'HTTPS / WSS :443', color: '#00d4ff', bidirectional: true },
+        { from: 'caddy',  to: 'server', label: 'HTTP / WS :8000',  color: '#00d4ff', bidirectional: true },
+        { from: 'server', to: 'agent',  label: 'WebSocket',        color: '#00ff9d', bidirectional: true },
+        { from: 'agent',  to: 'os',     label: 'Команды',          color: '#ff6b35', bidirectional: false },
+    ];
+
+    // ── Particle system
+    const particles = [];
+    const MAX_PARTICLES = 40;
+
+    function nodeById(id) { return NODES.find(n => n.id === id); }
+
+    function spawnParticle(edge) {
+        const a = nodeById(edge.from);
+        const b = nodeById(edge.to);
+        // randomly go a→b or b→a for bidirectional
+        const reverse = edge.bidirectional && Math.random() < 0.5;
+        const src = reverse ? b : a;
+        const dst = reverse ? a : b;
+        particles.push({
+            edge,
+            sx: src.xr, sy: src.yr,
+            ex: dst.xr, ey: dst.yr,
+            t: 0,
+            speed: 0.0025 + Math.random() * 0.0015,
+            color: edge.color,
+            size: 3 + Math.random() * 2,
+            trail: [],
+        });
+    }
+
+    // Pre-spawn some particles
+    EDGES.forEach(e => {
+        const count = e.id === 'agent-os' ? 2 : 3;
+        for (let i = 0; i < count; i++) {
+            const p = {
+                edge: e,
+                sx: nodeById(e.from).xr, sy: nodeById(e.from).yr,
+                ex: nodeById(e.to).xr,   ey: nodeById(e.to).yr,
+                t: Math.random(),
+                speed: 0.0025 + Math.random() * 0.0015,
+                color: e.color,
+                size: 3 + Math.random() * 2,
+                trail: [],
+            };
+            particles.push(p);
+        }
+    });
+
+    // ── Hover state
+    let hoveredNode = null;
+    let mouseX = -999, mouseY = -999;
+
+    function nodeRadius() { return Math.min(W, H) * 0.068; }
+
+    function getNodePos(node) {
+        return { x: node.xr * W, y: node.yr * H };
+    }
+
+    function hitTest(mx, my) {
+        const r = nodeRadius() + 8;
+        for (const n of NODES) {
+            const p = getNodePos(n);
+            const dx = mx - p.x, dy = my - p.y;
+            if (dx*dx + dy*dy < r*r) return n;
+        }
+        return null;
+    }
+
+    // ── Draw
+    function drawEdge(edge) {
+        const a = getNodePos(nodeById(edge.from));
+        const b = getNodePos(nodeById(edge.to));
+        const isVertical = edge.from === 'agent' && edge.to === 'os';
+
+        ctx.save();
+        // Glow pass
+        ctx.shadowColor = edge.color;
+        ctx.shadowBlur = 8;
+        ctx.strokeStyle = edge.color;
+        ctx.globalAlpha = 0.18;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 6]);
+        ctx.lineDashOffset = (Date.now() / 40) % 12;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+
+        // Label
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+        const offX = isVertical ? 48 : 0;
+        const offY = isVertical ? 0 : -14;
+        ctx.save();
+        ctx.font = `500 11px 'JetBrains Mono', monospace`;
+        ctx.fillStyle = edge.color;
+        ctx.globalAlpha = 0.55;
+        ctx.textAlign = 'center';
+        ctx.fillText(edge.label, mx + offX, my + offY);
+        ctx.restore();
+    }
+
+    function drawNode(node, hovered) {
+        const { x, y } = getNodePos(node);
+        const r = nodeRadius();
+
+        ctx.save();
+        // Outer glow ring (hovered)
+        if (hovered) {
+            ctx.shadowColor = node.color;
+            ctx.shadowBlur = 28;
+            ctx.beginPath();
+            ctx.arc(x, y, r + 6, 0, Math.PI * 2);
+            ctx.strokeStyle = node.color;
+            ctx.globalAlpha = 0.5;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+            ctx.shadowBlur = 0;
+        }
+
+        // Node bg
+        const grad = ctx.createRadialGradient(x - r*0.25, y - r*0.25, r*0.1, x, y, r);
+        grad.addColorStop(0, hovered ? 'rgba(0,212,255,0.22)' : 'rgba(10,20,50,0.95)');
+        grad.addColorStop(1, 'rgba(2,4,14,0.98)');
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.shadowColor = node.color;
+        ctx.shadowBlur = hovered ? 20 : 10;
+        ctx.fill();
+
+        // Border
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = node.color;
+        ctx.globalAlpha = hovered ? 0.9 : 0.45;
+        ctx.lineWidth = hovered ? 2 : 1.5;
+        ctx.stroke();
+        ctx.restore();
+
+        // Icon
+        ctx.save();
+        ctx.font = `${r * 0.52}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(node.icon, x, y - r * 0.16);
+        ctx.restore();
+
+        // Label
+        ctx.save();
+        ctx.font = `600 ${Math.max(10, r * 0.24)}px 'JetBrains Mono', monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = hovered ? node.color : 'rgba(255,255,255,0.85)';
+        ctx.shadowColor = node.color;
+        ctx.shadowBlur = hovered ? 8 : 0;
+        ctx.fillText(node.label, x, y + r * 0.30);
+        ctx.restore();
+
+        // Sublabel
+        ctx.save();
+        ctx.font = `400 ${Math.max(9, r * 0.19)}px 'JetBrains Mono', monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = 'rgba(255,255,255,0.38)';
+        ctx.fillText(node.sublabel, x, y + r * 0.52);
+        ctx.restore();
+    }
+
+    function drawParticles() {
+        for (const p of particles) {
+            const px = p.sx * W + (p.ex * W - p.sx * W) * p.t;
+            const py = p.sy * H + (p.ey * H - p.sy * H) * p.t;
+
+            // Trail
+            p.trail.push({ x: px, y: py });
+            if (p.trail.length > 10) p.trail.shift();
+
+            for (let i = 1; i < p.trail.length; i++) {
+                ctx.save();
+                ctx.globalAlpha = (i / p.trail.length) * 0.35;
+                ctx.strokeStyle = p.color;
+                ctx.lineWidth = p.size * (i / p.trail.length) * 0.6;
+                ctx.beginPath();
+                ctx.moveTo(p.trail[i-1].x, p.trail[i-1].y);
+                ctx.lineTo(p.trail[i].x, p.trail[i].y);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // Head
+            ctx.save();
+            ctx.shadowColor = p.color;
+            ctx.shadowBlur = 10;
+            ctx.beginPath();
+            ctx.arc(px, py, p.size, 0, Math.PI * 2);
+            ctx.fillStyle = p.color;
+            ctx.globalAlpha = 0.9;
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    function updateParticles() {
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.t += p.speed;
+            if (p.t >= 1) {
+                particles.splice(i, 1);
+                // Respawn on same or random edge
+                const edge = EDGES[Math.floor(Math.random() * EDGES.length)];
+                spawnParticle(edge);
+            }
+        }
+        // Keep pool topped up
+        while (particles.length < MAX_PARTICLES) {
+            spawnParticle(EDGES[Math.floor(Math.random() * EDGES.length)]);
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, W, H);
+
+        // Subtle grid
+        ctx.save();
+        ctx.globalAlpha = 0.04;
+        ctx.strokeStyle = '#00d4ff';
+        ctx.lineWidth = 0.5;
+        const step = Math.round(W / 18);
+        for (let gx = 0; gx <= W; gx += step) {
+            ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke();
+        }
+        for (let gy = 0; gy <= H; gy += step) {
+            ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+        }
+        ctx.restore();
+
+        EDGES.forEach(drawEdge);
+        drawParticles();
+        NODES.forEach(n => drawNode(n, hoveredNode && hoveredNode.id === n.id));
+        updateParticles();
+        requestAnimationFrame(draw);
+    }
+
+    // ── Resize
+    function resize() {
+        dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        W = rect.width;
+        H = 420;
+        canvas.width  = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.height = H + 'px';
+        ctx.scale(dpr, dpr);
+    }
+    resize();
+    window.addEventListener('resize', () => { ctx.setTransform(1,0,0,1,0,0); resize(); });
+
+    // ── Tooltip
+    function showTooltip(node, mx, my) {
+        tooltip.textContent = '';
+        node.tip.split('\n').forEach((line, i) => {
+            if (i > 0) tooltip.appendChild(document.createElement('br'));
+            tooltip.appendChild(document.createTextNode(line));
+        });
+        const wrap = canvas.parentElement.getBoundingClientRect();
+        const cx = canvas.getBoundingClientRect();
+        const { x, y } = getNodePos(node);
+        let tx = x + nodeRadius() + 12;
+        let ty = y - 20;
+        // keep in bounds
+        if (tx + 220 > W) tx = x - nodeRadius() - 230;
+        if (ty + 80 > H)  ty = H - 90;
+        tooltip.style.left = tx + 'px';
+        tooltip.style.top  = ty + 'px';
+        tooltip.classList.add('visible');
+    }
+    function hideTooltip() { tooltip.classList.remove('visible'); }
+
+    canvas.addEventListener('mousemove', e => {
+        const rect = canvas.getBoundingClientRect();
+        mouseX = e.clientX - rect.left;
+        mouseY = e.clientY - rect.top;
+        const n = hitTest(mouseX, mouseY);
+        if (n) {
+            hoveredNode = n;
+            canvas.style.cursor = 'pointer';
+            showTooltip(n, mouseX, mouseY);
+        } else {
+            hoveredNode = null;
+            canvas.style.cursor = 'default';
+            hideTooltip();
+        }
+    });
+    canvas.addEventListener('mouseleave', () => {
+        hoveredNode = null;
+        hideTooltip();
+    });
+    // Touch support
+    canvas.addEventListener('touchstart', e => {
+        const rect = canvas.getBoundingClientRect();
+        const t = e.touches[0];
+        const tx = t.clientX - rect.left, ty = t.clientY - rect.top;
+        const n = hitTest(tx, ty);
+        hoveredNode = n || null;
+        if (n) showTooltip(n, tx, ty); else hideTooltip();
+    });
+
+    requestAnimationFrame(draw);
+})();
+</script>
+
 <script>
 (function () {
     const canvas = document.getElementById('fluid-canvas');
@@ -375,7 +835,6 @@
 
     let vel,dye_buf,pres,div_buf,curl_buf;
     function initBuffers(){
-        // sim: 192, dye: 384 — заметно легче, визуально то же самое
         const ar=W/H,sw=Math.round(192*Math.max(ar,1)),sh=Math.round(192/Math.min(ar,1));
         const dw=Math.round(384*Math.max(ar,1)),dh=Math.round(384/Math.min(ar,1));
         vel=makeDB(sw,sh);dye_buf=makeDB(dw,dh);pres=makeDB(sw,sh);
@@ -383,7 +842,6 @@
     }
     initBuffers();
 
-    // 4 источника вместо 6
     const SRCS=Array.from({length:4},(_,i)=>({
         angle:(i/4)*Math.PI*2,speed:0.15+Math.random()*0.10,
         rx:0.28+Math.random()*0.18,ry:0.16+Math.random()*0.12,
@@ -406,7 +864,6 @@
             gl.uniform1f(prog.inject.u['u_radius'],0.0014);
             gl.uniform1f(prog.inject.u['u_aspect'],ar);
             blit(vel.write);vel.swap();
-            // реже красим dye: 0.03 вместо 0.05
             if(Math.random()<0.03){
                 gl.useProgram(prog.dye);bq(prog.dye);
                 tx(prog.dye,'u_target',dye_buf.read,0);
@@ -491,7 +948,6 @@
         gl.uniform2f(prog.div.u['u_texel'],txS,tyS);blit(div_buf);
         gl.useProgram(prog.pres);bq(prog.pres);tx(prog.pres,'u_div',div_buf,1);
         gl.uniform2f(prog.pres.u['u_texel'],txS,tyS);
-        // 12 итераций вместо 25 — главная оптимизация
         for(let i=0;i<12;i++){tx(prog.pres,'u_pressure',pres.read,0);blit(pres.write);pres.swap();}
         gl.useProgram(prog.sub);bq(prog.sub);tx(prog.sub,'u_pressure',pres.read,0);tx(prog.sub,'u_vel',vel.read,1);
         gl.uniform2f(prog.sub.u['u_texel'],txS,tyS);blit(vel.write);vel.swap();
@@ -504,7 +960,6 @@
     }
     let last=performance.now();
     function render(now){
-        // пауза когда hero не виден на экране
         if(!heroVisible){ last=now; requestAnimationFrame(render); return; }
         const dt=Math.min((now-last)/1000,0.033);last=now;step(dt);
         gl.disable(gl.BLEND);gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,W,H);
