@@ -14,12 +14,12 @@ body {
     padding: 0 24px;
 
     background-image: url("assets/IRU_FON.png");
-    background-size: 110% 110%; /* чуть больше, чтобы при движении не было краёв */
+    background-size: 110% 110%;
     background-position: 0% 50%;
     background-repeat: no-repeat;
     position: relative;
 
-    animation: hero-bg-drift 45s linear infinite; /* очень медленное движение */
+    animation: hero-bg-drift 45s linear infinite;
 }
 .hero::before {
     content: "";
@@ -86,7 +86,7 @@ body {
 .hero-logo {
     width: 300px;
     height: 300px;
-    border-radius: 16px; /* если хочешь мягче */
+    border-radius: 16px;
     flex-shrink: 0;
 }
 
@@ -152,11 +152,11 @@ body {
     }
 }
 .benefits {
-    padding: 80px 24px 80px; /* чуть меньше нижний отступ, чтобы блоки визуально ближе были */
+    padding: 80px 24px 80px;
     background: radial-gradient(circle at top, #040612 0%, #020308 50%, #010103 100%);
     color: #ffffff;
     border-top: 1px solid rgba(255, 255, 255, 0.06);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04); /* лёгкий разделитель */
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .benefits-inner {
@@ -202,7 +202,7 @@ body {
 .audience {
     position: relative;
     overflow: hidden;
-    padding: 60px 24px 120px; /* чуть меньше верхний паддинг */
+    padding: 60px 24px 120px;
     background: linear-gradient(to bottom, #020308 0%, #010103 60%, #000000 100%);
     color: #ffffff;
     border-top: 1px solid rgba(255, 255, 255, 0.05);
@@ -214,7 +214,6 @@ body {
     letter-spacing: 0.25em;
 }
 
-/* плавное движение в одну сторону */
 @keyframes audience-scroll {
     0% {
         transform: translateX(0);
@@ -223,7 +222,6 @@ body {
         transform: translateX(-50%);
     }
 }
-
 
 .audience-inner {
     position: relative;
@@ -239,7 +237,6 @@ body {
     color: rgba(255, 255, 255, 0.85);
 }
 
-/* Общий стиль для бегущих строк */
 .audience-marquee {
     position: relative;
     z-index: 1;
@@ -253,7 +250,6 @@ body {
     pointer-events: none;
 }
 
-/* Позиционируем три линии */
 .audience-marquee--top {
     margin-bottom: 24px;
     animation: marquee-right 50s linear infinite;
@@ -268,7 +264,6 @@ body {
     animation: marquee-right 55s linear infinite;
 }
 
-/* Вправо */
 @keyframes marquee-right {
     0% {
         transform: translateX(-50%);
@@ -278,7 +273,6 @@ body {
     }
 }
 
-/* Влево */
 @keyframes marquee-left {
     0% {
         transform: translateX(0%);
@@ -463,9 +457,247 @@ body {
 }
 .contacts {
     display: flex;
-    justify-content: space-between; /* слева/справа */
-    gap: 10px; /* расстояние между ними, если сожмётся */
+    justify-content: space-between;
+    gap: 10px;
 }
 .contact-item {
-    white-space: nowrap; /* чтобы не переносилось на две строки */
+    white-space: nowrap;
+}
+
+/* ═══════════════════════════════════════════
+   MOBILE RESPONSIVE — 768px
+═══════════════════════════════════════════ */
+@media (max-width: 768px) {
+
+    /* --- HERO --- */
+    .hero {
+        padding: 60px 20px 60px;
+        align-items: flex-start;
+        padding-top: 80px;
+    }
+    .hero-content {
+        max-width: 100%;
+        text-align: center;
+    }
+    .hero-logo-wrap {
+        margin-bottom: 24px;
+    }
+    .hero-logo {
+        width: 88px;
+        height: 88px;
+    }
+    .hero-title {
+        font-size: clamp(32px, 9vw, 48px);
+        gap: 4px;
+    }
+    .hero-top-text {
+        font-size: 12px;
+        letter-spacing: 0.18em;
+    }
+    .hero-content p {
+        font-size: 15px;
+    }
+    .hero-cta {
+        width: 100%;
+        text-align: center;
+        padding: 15px 24px;
+        font-size: 14px;
+        box-sizing: border-box;
+    }
+    .hero-actions {
+        margin-top: 24px;
+    }
+
+    /* --- BENEFITS --- */
+    .benefits {
+        padding: 52px 20px 52px;
+    }
+    .benefits-title {
+        font-size: 22px;
+        margin-bottom: 24px;
+    }
+    .benefits-grid {
+        grid-template-columns: 1fr;
+        gap: 16px;
+    }
+    .benefit-card h3 {
+        font-size: 17px;
+    }
+    .benefit-card p {
+        font-size: 14px;
+    }
+
+    /* --- AUDIENCE --- */
+    .audience {
+        padding: 48px 0 80px;
+    }
+    .audience-inner {
+        padding: 0 20px;
+        margin-bottom: 28px;
+    }
+    .audience-title {
+        font-size: 22px;
+    }
+    .audience-marquee {
+        font-size: 14px;
+        gap: 28px;
+        letter-spacing: 0.15em;
+    }
+    .audience-marquee--top,
+    .audience-marquee--middle {
+        margin-bottom: 16px;
+    }
+
+    /* --- ARCH SECTION --- */
+    .arch-section {
+        padding: 52px 16px 64px;
+    }
+    .arch-title {
+        font-size: 22px;
+        margin-bottom: 8px;
+    }
+    .arch-subtitle {
+        font-size: 13px;
+        margin-bottom: 28px;
+    }
+    #arch-canvas {
+        height: 320px !important;
+    }
+    .arch-legend {
+        gap: 16px;
+        margin-top: 20px;
+    }
+    .arch-legend-item {
+        font-size: 11px;
+    }
+
+    /* --- CTA BOTTOM --- */
+    .cta-bottom {
+        padding: 52px 20px 64px;
+    }
+    .cta-title {
+        font-size: 20px;
+    }
+    .cta-text {
+        font-size: 14px;
+    }
+    .cta-button {
+        width: 100%;
+        padding: 15px 20px;
+        font-size: 14px;
+        box-sizing: border-box;
+    }
+
+    /* --- SECURITY --- */
+    .security {
+        padding: 52px 20px 64px;
+    }
+    .security-title {
+        font-size: 22px;
+        margin-bottom: 24px;
+    }
+    .security-grid {
+        grid-template-columns: 1fr;
+        gap: 16px;
+    }
+    .security-item h3 {
+        font-size: 17px;
+    }
+    .security-item p {
+        font-size: 14px;
+    }
+
+    /* --- FOUNDER --- */
+    .founder {
+        padding: 36px 20px 48px;
+    }
+    .founder-title {
+        font-size: 20px;
+    }
+    .founder-text {
+        font-size: 14px;
+    }
+    .contacts {
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        text-align: center;
+    }
+    .contact-item {
+        white-space: normal;
+    }
+}
+
+/* ═══════════════════════════════════════════
+   MOBILE RESPONSIVE — 480px (small phones)
+═══════════════════════════════════════════ */
+@media (max-width: 480px) {
+
+    /* --- HERO --- */
+    .hero {
+        padding-top: 64px;
+    }
+    .hero-logo {
+        width: 72px;
+        height: 72px;
+    }
+    .hero-title {
+        font-size: clamp(28px, 10vw, 40px);
+    }
+    .hero-top-text {
+        font-size: 11px;
+    }
+
+    /* --- SECTION TITLES --- */
+    .benefits-title,
+    .audience-title,
+    .arch-title,
+    .security-title,
+    .cta-title,
+    .founder-title {
+        font-size: 18px;
+    }
+
+    /* --- CARDS --- */
+    .benefit-card,
+    .how-card,
+    .security-item {
+        padding: 18px 16px;
+        border-radius: 14px;
+    }
+    .benefit-card h3,
+    .how-card h3,
+    .security-item h3 {
+        font-size: 15px;
+    }
+    .benefit-card p,
+    .how-card p,
+    .security-item p {
+        font-size: 13px;
+    }
+
+    /* --- ARCH CANVAS --- */
+    #arch-canvas {
+        height: 260px !important;
+    }
+    .arch-legend {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    /* --- AUDIENCE MARQUEE --- */
+    .audience-marquee {
+        font-size: 12px;
+        gap: 20px;
+        letter-spacing: 0.10em;
+    }
+
+    /* --- CTA --- */
+    .cta-title {
+        font-size: 17px;
+    }
+    .cta-text {
+        font-size: 13px;
+    }
 }
