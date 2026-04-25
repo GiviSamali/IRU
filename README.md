@@ -1,8 +1,31 @@
-# ИРУ v3.4 — Интеллектуальный Режим Управления
+# ИРУ — Интеллектуальный Режим Управления
 
-Веб-приложение для удалённого управления компьютерами через естественный язык.
-Пользователь описывает задачу текстом — ИИ (DeepSeek) переводит её в команды
-PowerShell/bash и выполняет на подключённых устройствах.
+English version: [README.en.md](README.en.md)
+
+---
+
+AI-агент для управления компьютерами через естественный язык.
+Локальный клиент (Windows/Linux) подключается по WebSocket к облачному серверу,
+получает команды от LLM (DeepSeek) и выполняет их в PowerShell/bash.
+Пользователь описывает задачу текстом в браузере — ИРУ сама решает,
+какие команды запустить, и отдаёт результат.
+
+---
+
+## Возможности
+
+- Выполнение команд на ПК через естественный язык
+- Режим План — пошаговое автономное исполнение сложных задач (create_plan / mark_step pipeline с live-прогрессом в UI)
+- Двухэтапная классификация задач: быстрые ключевые слова + LLM-классификатор (PLAN / SIMPLE)
+- Тарифы: free (30 команд/день, 1 устройство, 1 пробный запуск Плана), pro (безлимит, dev_mode), business (безлимит, dev_mode, до 9999 устройств)
+- Broadcast — одна команда на все подключённые устройства
+- Файловый проводник — навигация и скачивание файлов с устройства
+- Память: автоматическое сохранение фактов о пользователе и устройстве, предложение запомнить новые факты
+- Система безопасности: блокировка опасных команд (format, diskpart и др.), подтверждение удалений
+- Голосовой ввод (Web Speech API, ru-RU)
+- Вложение текстовых файлов в сообщения (до 5 файлов, 500 КБ каждый)
+- Админ-панель: управление пользователями, аудит, смена тарифов, профили устройств
+- Сбор training data с согласия пользователя
 
 ---
 
@@ -10,23 +33,33 @@ PowerShell/bash и выполняет на подключённых устрой
 
 ```
 ┌─────────────┐     HTTPS/WSS      ┌──────────────┐     WebSocket      ┌───────────┐
-│  Браузер UI │ ◄──────────────────► │  Сервер      │ ◄─────────────────► │  Агент    │
-│  (index.html)│                     │  (FastAPI)   │                     │  (Python) │
-└─────────────┘                     │              │     DeepSeek API    └───────────┘
-                                    │  SQLite БД   │ ◄──────────────────►
+│  Браузер UI │ <───────────────── >│  Сервер      │ <─────────────────>│  Агент    │
+│  (SPA)      │                     │  (FastAPI)   │                    │  (Python) │
+└─────────────┘                     │              │     DeepSeek API   └───────────┘
+                                    │  SQLite БД   │ <────────────────>
                                     │  controller  │     LLM
                                     └──────────────┘
 ```
+
+### Поток сообщений
+
+1. Пользователь отправляет текст из UI
+2. Сервер вызывает `classify_task_complexity(message)`:
+   - Стадия 1: ключевые слова ("план", "пошагово", "по шагам") — мгновенно PLAN
+   - Стадия 2: LLM-классификатор (DeepSeek, temperature=0, max_tokens=100) — PLAN или SIMPLE
+3. SIMPLE — LLM-цикл: LLM генерирует tool_call, сервер отправляет команду агенту через WebSocket, результат возвращается в LLM, цикл повторяется (до 20 итераций)
+4. PLAN — UI показывает предложение запустить План. При подтверждении LLM вызывает `create_plan(goal, steps)`, затем последовательно выполняет шаги с `mark_step(task_id, idx, status)`. UI обновляется в реальном времени
 
 ### Компоненты
 
 | Компонент | Путь | Описание |
 |-----------|------|----------|
-| **Сервер** | `server/main.py` | FastAPI, REST API, WebSocket-хаб, авторизация |
-| **Контроллер** | `server/controller.py` | LLM-планировщик (DeepSeek), tool-call loop |
-| **База данных** | `server/database.py` | SQLite: пользователи, чаты, сообщения, training data |
-| **Агент** | `agent/agent.py` | Исполнитель команд на устройстве |
-| **UI** | `ui/index.html` | Веб-интерфейс (SPA, без фреймворков) |
+| Сервер | `server/main.py` | FastAPI, REST API, WebSocket-хаб, авторизация, rate limiting |
+| Контроллер | `server/controller.py` | LLM-цикл (DeepSeek), system prompt, tool-call loop, pipeline |
+| База данных | `server/database.py` | SQLite: users, chats, messages, tasks, device_memory, audit_log |
+| Авторизация | `server/auth.py` | JWT-токены (access + refresh) |
+| Агент | `agent/agent.py` | WebSocket-клиент, выполнение команд через subprocess |
+| UI | `ui/app.js` | SPA без фреймворков, live-прогресс, план, проводник |
 
 ---
 
@@ -38,14 +71,11 @@ PowerShell/bash и выполняет на подключённых устрой
 pip install -r requirements.txt
 ```
 
-### 2. Настройка API-ключа DeepSeek
+Зависимости: FastAPI, Uvicorn, websockets, httpx, python-multipart.
 
-Откройте `server/llm_config.json` и вставьте свой API-ключ.
+### 2. Настройка LLM
 
-> **Примечание:** `llm_config.json` находится в `.gitignore` и не должен коммититься.
-> Он хранится только на сервере.
-
-Полная структура файла:
+Создайте `server/llm_config.json`:
 
 ```json
 {
@@ -59,15 +89,17 @@ pip install -r requirements.txt
 }
 ```
 
+`llm_config.json` находится в `.gitignore`. API-ключ можно переопределить через переменную окружения `DEEPSEEK_API_KEY`.
+
 | Поле | Обязательное | Описание |
 |------|:---:|----------|
-| `api_key` | да | API-ключ DeepSeek. Можно переопределить через переменную окружения `DEEPSEEK_API_KEY`. |
-| `base_url` | да | Базовый URL API DeepSeek (`https://api.deepseek.com/v1`). |
-| `model` | нет | Модель для обычных запросов (по умолчанию `deepseek-chat`). |
-| `model_reasoner` | нет | Модель для сложных запросов — pipeline и autonomous режимы (по умолчанию `deepseek-reasoner`). Не поддерживает `temperature`, `top_p`, `response_format`. |
-| `max_tokens` | нет | Максимум токенов в ответе LLM (по умолчанию 4096). |
-| `temperature` | нет | Температура генерации (по умолчанию 0.0). Применяется только к базовой модели, не к reasoner. |
-| `tavily_api_key` | нет | API-ключ [Tavily](https://tavily.com/) для инструмента `web_search`. Без него LLM не сможет искать в интернете. |
+| `api_key` | да | API-ключ DeepSeek |
+| `base_url` | да | Базовый URL API |
+| `model` | нет | Модель для обычных запросов (по умолчанию `deepseek-chat`) |
+| `model_reasoner` | нет | Модель для режима План и автономного режима (по умолчанию `deepseek-reasoner`) |
+| `max_tokens` | нет | Максимум токенов в ответе (по умолчанию 4096) |
+| `temperature` | нет | Температура генерации (по умолчанию 0.0, только для базовой модели) |
+| `tavily_api_key` | нет | API-ключ Tavily для инструмента `web_search` |
 
 ### 3. Запуск сервера
 
@@ -76,25 +108,13 @@ cd server
 python main.py
 ```
 
-Сервер запустится на `http://localhost:8000`.
-
-При первом запуске автоматически:
-- Создаётся файл `iru.db` (SQLite база)
-- Создаётся пользователь **admin** с уникальным токеном
-- Токен выводится в консоль — **сохраните его!**
-
-```
-[db] Создан admin-пользователь. Токен: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-[server] ИРУ v3.4 запущен
-```
+Сервер запустится на `http://localhost:8000`. При первом запуске создаётся SQLite-база `iru.db` и пользователь admin с уникальным токеном (выводится в консоль).
 
 ### 4. Вход в UI
 
-1. Откройте `http://localhost:8000` в браузере
-2. Введите токен admin-пользователя
-3. Вы попадёте в интерфейс ИРУ
+Откройте `http://localhost:8000`, введите admin-токен.
 
-### 5. Запуск агента на устройстве
+### 5. Запуск агента
 
 Отредактируйте `agent/config.json`:
 
@@ -102,18 +122,29 @@ python main.py
 {
   "device_id": "МОЙ_ПК",
   "server_url": "ws://127.0.0.1:8000",
-  "user_token": "ваш-токен-пользователя"
+  "user_token": "ваш-токен"
 }
 ```
-
-Запустите:
 
 ```bash
 cd agent
 python agent.py
 ```
 
-Агент подключится к серверу и появится в списке устройств в UI.
+Агент подключится к серверу и появится в списке устройств.
+
+---
+
+## Тарифы
+
+| | free | pro | business |
+|---|---|---|---|
+| Команд в день | 30 | безлимит | безлимит |
+| Устройств | 1 | безлимит | безлимит (до 9999) |
+| Режим План | 1 пробный запуск | безлимит | безлимит |
+| dev_mode (raw-команды) | нет | да | да |
+
+Пробный запуск Плана для free-тарифа: пользователь может один раз попробовать режим План. После использования флаг `plan_trial_used` выставляется в 1 и повторный запуск недоступен без смены тарифа.
 
 ---
 
@@ -121,47 +152,29 @@ python agent.py
 
 ### Требования
 
-- VPS с Ubuntu/Debian, Python 3.11+
-- Открытые порты: 80, 443 (для HTTPS через Caddy)
+- Ubuntu/Debian, Python 3.11+
+- Порты 80, 443 (HTTPS через Caddy)
 
 ### Установка
 
 ```bash
-# Создать директорию и виртуальное окружение
 mkdir -p /opt/iru/app
 cd /opt/iru
 python3 -m venv venv
 source venv/bin/activate
-
-# Скопировать файлы проекта в /opt/iru/app/
-# Установить зависимости
 pip install -r app/requirements.txt
 ```
 
-### HTTPS через Caddy (рекомендуется)
-
-Caddy автоматически получает SSL-сертификаты от Let's Encrypt.
+### HTTPS через Caddy
 
 ```bash
-# Установить Caddy
-apt install -y debian-keyring debian-archive-keyring apt-transport-https
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
-apt update && apt install caddy
+apt install caddy
 ```
 
-Создайте `/etc/caddy/Caddyfile`:
+`/etc/caddy/Caddyfile`:
 
 ```
 ваш-домен.ru {
-    reverse_proxy localhost:8000
-}
-```
-
-Если нет домена (только IP), используйте HTTP-режим:
-
-```
-:80 {
     reverse_proxy localhost:8000
 }
 ```
@@ -171,13 +184,13 @@ systemctl enable caddy
 systemctl restart caddy
 ```
 
-### Автозапуск сервера (systemd)
+### Автозапуск (systemd)
 
-Создайте `/etc/systemd/system/iru.service`:
+`/etc/systemd/system/iru.service`:
 
 ```ini
 [Unit]
-Description=ИРУ v3.4 Server
+Description=IRU Server
 After=network.target
 
 [Service]
@@ -197,196 +210,73 @@ WantedBy=multi-user.target
 systemctl daemon-reload
 systemctl enable iru
 systemctl start iru
-systemctl status iru
+```
+
+### Обновление
+
+```bash
+cd /opt/iru/app && git pull origin main && systemctl restart iru
 ```
 
 ---
 
 ## Управление пользователями
 
-### Через админ-панель в UI (рекомендуется)
+### Через админ-панель в UI
 
-Войдите в UI под admin-токеном. Нажмите кнопку 👥 в правом верхнем углу:
-- **Создание** — введите имя, нажмите «Создать»
-- **Удаление** — кнопка × рядом с пользователем
-- **Копирование токена** — клик по токену копирует в буфер
+Войдите под admin-токеном, откройте админ-панель:
+- Создание, удаление пользователей
+- Смена тарифа (free / pro / business)
+- Копирование токена
+- Аудит-лог действий
 
-### Через API (curl)
+### Через API
 
-**Создать пользователя:**
 ```bash
+# Создать пользователя
 curl -X POST http://localhost:8000/api/admin/users \
-  -H "X-Token: admin-токен" \
+  -H "Authorization: Bearer <jwt>" \
   -H "Content-Type: application/json" \
-  -d '{"name": "Имя_тестера"}'
-```
+  -d '{"name": "Имя"}'
 
-**Список пользователей:**
-```bash
+# Список пользователей
 curl http://localhost:8000/api/admin/users \
-  -H "X-Token: admin-токен"
+  -H "Authorization: Bearer <jwt>"
 ```
-
-**Удалить пользователя:**
-```bash
-curl -X DELETE http://localhost:8000/api/admin/users/2 \
-  -H "X-Token: admin-токен"
-```
-
----
-
-## Как раздать тестеру
-
-1. Создайте пользователя через админ-панель
-2. Передайте тестеру:
-   - Публичный URL сервера (для браузера)
-   - Токен пользователя (для входа в UI)
-   - Папку `agent/` (agent.py + config.json) или EXE-файл
-3. Тестер редактирует `config.json`:
-   - `device_id` — любое имя для своего ПК (латиница, без пробелов)
-   - `server_url` — `ws://IP:8000` или `wss://домен`
-   - `user_token` — его токен
-4. Запускает `python agent.py` (или `IruAgent.exe`)
-5. Открывает URL сервера в браузере, вводит токен
-
-Каждый тестер видит **только свои устройства** и **свои чаты**.
-
-**Страница-инструкция:** `http://сервер:8000/instruction` — подробное руководство для тестера.
-
----
-
-## Новое в v3.4
-
-### Мобильная адаптация
-- Адаптивный UI для смартфонов и планшетов
-- Выдвижной сайдбар с оверлеем
-- Гамбургер-меню в шапке
-- Полноэкранные панели (проводник, админка) на мобильных
-
-### Сбор данных для обучения
-- Таблица `training_data` в SQLite
-- Автоматическая запись: запрос → команды → результат
-- Контекст системы: ОС, hostname, метод (powershell/bash)
-- API для выгрузки данных: `GET /api/admin/training`
-
-### Согласие на сбор данных
-- Модальное окно при первом входе
-- Данные собираются только с согласия пользователя
-- Можно изменить через API: `POST /api/consent`
-
-### Админ-панель в UI
-- Создание и удаление пользователей без curl
-- Копирование токена по клику
-- Статистика пользователей
-
-### Инструкция для тестера
-- Standalone-страница: `/instruction`
-- Пошаговое руководство на русском
-- Тёмная тема в стиле ИРУ
-
----
-
-## Функции UI
-
-### Авторизация
-- Экран входа по токену
-- Автовход (токен сохраняется в localStorage)
-- Кнопка «Выйти»
-
-### Панель чатов (сайдбар)
-- Список чатов с названиями (автогенерация из первого сообщения)
-- Создание нового чата (+)
-- Удаление чата (×)
-- Переключение между чатами
-
-### Память (контекст)
-- Последние 50 сообщений чата загружаются в контекст LLM
-- Скользящее окно: когда сообщений больше 50, старые отбрасываются
-- Системный промт всегда присутствует
-
-### Чат
-- Ввод задачи на естественном языке
-- Ответ ИРУ с компактным логом команд
-- Сворачиваемые блоки с деталями выполнения
-- Подсказки-чипы для быстрого старта
-- Параллельное выполнение задач (v3.3)
-- Broadcast — одна команда на все устройства (v3.3)
-
-### Проводник
-- Навигация по файловой системе устройства
-- Открытие файлов/папок на устройстве
-- Скачивание файлов через временные ссылки
-
-### Мультиустройства
-- Выбор устройства в выпадающем меню
-- LLM знает все устройства и может маршрутизировать команды
 
 ---
 
 ## Структура файлов
 
 ```
-iru_v3_new/
 ├── server/
-│   ├── main.py           # FastAPI сервер + API эндпоинты + инструкция
-│   ├── controller.py     # LLM-планировщик (DeepSeek)
-│   ├── database.py       # SQLite: users, chats, messages, training_data
-│   ├── llm_config.json   # Конфиг DeepSeek API
+│   ├── main.py           # FastAPI, API, WebSocket-хаб, безопасность
+│   ├── controller.py     # LLM-цикл, промпт, инструменты, pipeline
+│   ├── database.py       # SQLite: схема, миграции, PLAN_LIMITS
+│   ├── auth.py           # JWT авторизация
+│   ├── llm_config.json   # Конфиг DeepSeek API (в .gitignore)
 │   └── iru.db            # БД (создаётся при запуске)
 ├── agent/
-│   ├── agent.py          # Агент-исполнитель
-│   └── config.json       # Конфиг: device_id, server_url, user_token
+│   ├── agent.py          # WebSocket-клиент, subprocess
+│   ├── config.json       # device_id, server_url, user_token
+│   └── platforms/        # Платформенные модули (windows.py, linux.py)
 ├── ui/
-│   └── index.html        # Веб-интерфейс (SPA, адаптивный)
+│   ├── index.html        # HTML-каркас
+│   ├── app.js            # SPA логика
+│   └── style.css         # Стили, тёмная тема
+├── deploy/               # Скрипты деплоя, systemd, Caddy
+├── landing/              # Лендинг
 ├── requirements.txt      # Python-зависимости
-└── README.md             # Документация
+└── README.md
 ```
-
----
-
-## API-эндпоинты
-
-Все эндпоинты (кроме `/`, `/api/auth`, `/api/download/{token}`, `/instruction`) требуют заголовок `X-Token`.
-
-| Метод | Путь | Описание |
-|-------|------|----------|
-| GET | `/` | UI (index.html) |
-| GET | `/instruction` | Страница-инструкция для тестера |
-| POST | `/api/auth` | Авторизация по токену |
-| POST | `/api/consent` | Согласие на сбор данных |
-| GET | `/api/devices` | Устройства пользователя |
-| POST | `/api/chats` | Создать чат |
-| GET | `/api/chats` | Список чатов |
-| GET | `/api/chats/{id}/messages` | Сообщения чата |
-| PATCH | `/api/chats/{id}` | Переименовать чат |
-| DELETE | `/api/chats/{id}` | Удалить чат |
-| POST | `/command` | Прямая команда агенту |
-| POST | `/nl_command` | NL-команда через LLM |
-| GET | `/api/tasks` | Список задач пользователя |
-| GET | `/api/tasks/{task_id}` | Статус задачи |
-| GET | `/api/download/{token}` | Скачать файл |
-| POST | `/api/download_request` | Запрос на скачивание |
-| GET | `/api/admin/users` | Список пользователей (admin) |
-| POST | `/api/admin/users` | Создать пользователя (admin) |
-| DELETE | `/api/admin/users/{id}` | Удалить пользователя (admin) |
-| GET | `/api/admin/training` | Данные обучения (admin) |
-| WS | `/ws/{device_id}?user_token=` | WebSocket для агентов |
-
----
-
-## Дорожная карта
-
-1. ✅ **Умный ассистент** — управление через NL, мультиустройства, параллельность
-2. ✅ **Сбор данных** — автозапись training data с согласием
-3. 🔜 **Обучение модели** — fine-tuning на собранных данных
-4. 🔜 **Запуск** — публичный релиз
 
 ---
 
 ## Технологии
 
-- **Backend:** Python 3.11+, FastAPI, Uvicorn, SQLite
-- **LLM:** DeepSeek Chat (OpenAI-совместимый API)
-- **Agent:** Python, websockets, subprocess
-- **Frontend:** HTML/CSS/JS (без фреймворков), JetBrains Mono, адаптивный дизайн
-- **Деплой:** VPS + Caddy (HTTPS) + systemd
+- Python 3.11+, FastAPI, Uvicorn, SQLite (WAL)
+- DeepSeek Chat / DeepSeek Reasoner (OpenAI-совместимый API)
+- Tavily API (веб-поиск)
+- websockets, httpx
+- HTML/CSS/JS (SPA без фреймворков), JetBrains Mono
+- Caddy (HTTPS), systemd
