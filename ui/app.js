@@ -397,18 +397,18 @@ function renderMessages() {
     const commands = m.commands;
     if (commands && commands.length > 0) {
       bodyHTML += '<div class="cmd-log">';
-      for (let i = 0; i < commands.length; i++) {
-        const c = commands[i];
+      if (commands.length === 1) {
+        // Одна команда — обычная плашка, но с stripUtfPrefix
+        const c = commands[0];
         const stdout = c.result?.stdout || '';
         const stderr = c.result?.stderr || '';
-        const url = c.result?.url || '';
         const errMsg = c.result?.error || '';
         const output = stdout || stderr || errMsg || '(нет вывода)';
         const isOk = !errMsg && (c.result?.returncode === 0 || c.result?.returncode == null);
         const statusCls = isOk ? 'ok' : 'err';
         const statusTxt = isOk ? '\u2713' : '\u2717';
         const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
-        const cmdText = escapeHTML(c.command || '');
+        const cmdText = escapeHTML(stripUtfPrefix(c.command || ''));
         bodyHTML += `
           <div class="cmd-entry" onclick="this.classList.toggle('open')">
             <div class="cmd-summary">
@@ -418,6 +418,52 @@ function renderMessages() {
               <span class="cmd-status ${statusCls}">${statusTxt}</span>
             </div>
             <div class="cmd-details">${escapeHTML(output)}</div>
+          </div>`;
+      } else {
+        // Группа команд — свёрнутая плашка
+        const groupId = 'cmdgrp-' + mi;
+        const lastCmd = commands[commands.length - 1];
+        const lastClean = stripUtfPrefix(lastCmd.command || '');
+        const lastTrunc = lastClean.length > 120 ? lastClean.slice(0, 120) + '\u2026' : lastClean;
+        const lastIsOk = !(lastCmd.result?.error) && (lastCmd.result?.returncode === 0 || lastCmd.result?.returncode == null);
+        const lastStatusCls = lastIsOk ? 'ok' : 'err';
+        const lastStatusTxt = lastIsOk ? '\u2713' : '\u2717';
+        const lastDevice = lastCmd.device_id ? `<span class="cmd-device">${escapeHTML(lastCmd.device_id)}</span>` : '';
+        const extra = commands.length - 1;
+        bodyHTML += `
+          <div class="cmd-group" id="${groupId}">
+            <div class="cmd-group-header" onclick="document.getElementById('${groupId}').classList.toggle('open')">
+              <span class="cmd-group-arrow">\u25be</span>
+              <span class="cmd-group-text">${escapeHTML(lastTrunc)}</span>
+              ${lastDevice}
+              <span class="cmd-status ${lastStatusCls}">${lastStatusTxt}</span>
+              <span class="cmd-group-extra">(+${extra} ещё)</span>
+            </div>
+            <div class="cmd-group-body">`;
+        for (let i = 0; i < commands.length; i++) {
+          const c = commands[i];
+          const stdout = c.result?.stdout || '';
+          const stderr = c.result?.stderr || '';
+          const errMsg = c.result?.error || '';
+          const output = stdout || stderr || errMsg || '(нет вывода)';
+          const isOk = !errMsg && (c.result?.returncode === 0 || c.result?.returncode == null);
+          const statusCls = isOk ? 'ok' : 'err';
+          const statusTxt = isOk ? '\u2713' : '\u2717';
+          const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
+          const cmdText = escapeHTML(stripUtfPrefix(c.command || ''));
+          bodyHTML += `
+              <div class="cmd-entry" onclick="event.stopPropagation(); this.classList.toggle('open')">
+                <div class="cmd-summary">
+                  <span class="cmd-icon">\u25b8</span>
+                  <span class="cmd-text">${cmdText}</span>
+                  ${deviceTag}
+                  <span class="cmd-status ${statusCls}">${statusTxt}</span>
+                </div>
+                <div class="cmd-details">${escapeHTML(output)}</div>
+              </div>`;
+        }
+        bodyHTML += `
+            </div>
           </div>`;
       }
       bodyHTML += '</div>';
@@ -992,6 +1038,9 @@ async function downloadFile(filePath) {
 }
 
 // ── UTILS ────────────────────────────────────────────
+function stripUtfPrefix(cmd) {
+  return (cmd || '').replace(/^\s*\[Console\]::OutputEncoding\s*=\s*\[System\.Text\.Encoding\]::UTF8;\s*\$OutputEncoding\s*=\s*\[System\.Text\.Encoding\]::UTF8;\s*/i, '');
+}
 function escapeHTML(s) { return s ? s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
 function escapeAttr(s) { if (s == null) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function formatSize(b) {
