@@ -596,7 +596,22 @@ TOOLS = [
     }
 ]
 
+WORKER_TOOL_NAMES = {
+    "execute_cmd",
+    "write_content",
+    "get_file_link",
+    "web_search",
+    "remember_fact",
+    "forget_fact",
+}
+WORKER_TOOLS = [
+    tool for tool in TOOLS
+    if tool["function"]["name"] in WORKER_TOOL_NAMES
+]
+
 MAX_ITERATIONS = 20
+PIPELINE_WORKER_MAX_ITERATIONS = 10
+PIPELINE_MAX_STEPS = 10
 
 
 def _pick_model(cfg: dict, modes: dict | None) -> str:
@@ -605,6 +620,774 @@ def _pick_model(cfg: dict, modes: dict | None) -> str:
     reasoner = cfg.get("model_reasoner", "deepseek-reasoner")
     is_complex = bool(modes) and (modes.get("pipeline") or modes.get("autonomous"))
     return reasoner if is_complex else base
+
+
+async def _chat_completion_request(
+    client: httpx.AsyncClient,
+    cfg: dict,
+    model: str,
+    messages: list[dict],
+    tools: list[dict] | None = None,
+    max_tokens: int | None = None,
+) -> dict:
+    """Единая обёртка для вызова chat/completions с ретраями."""
+    request_json = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens or cfg.get("max_tokens", 4096),
+    }
+    if tools is not None:
+        request_json["tools"] = tools
+        request_json["tool_choice"] = "auto"
+
+    base_model = cfg.get("model", "deepseek-chat")
+    if model == base_model:
+        request_json["temperature"] = cfg.get("temperature", 0.0)
+
+    resp = None
+    for _attempt in range(2):
+        try:
+            resp = await client.post(
+                f"{cfg['base_url']}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {cfg['api_key']}",
+                    "Content-Type": "application/json",
+                },
+                json=request_json,
+            )
+            resp.raise_for_status()
+            break
+        except httpx.HTTPStatusError as _he:
+            if _he.response.status_code >= 500 and _attempt == 0:
+                print(f"[llm] 5xx retry: {_he.response.status_code}")
+                await asyncio.sleep(2)
+                continue
+            raise
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as _ne:
+            if _attempt == 0:
+                print(f"[llm] network retry: {type(_ne).__name__}")
+                await asyncio.sleep(2)
+                continue
+            raise
+
+    return resp.json()
+
+
+def _extract_json_payload(text: str):
+    """Достать JSON-объект или массив из ответа модели."""
+    if not text:
+        return None
+
+    raw = text.strip()
+    candidates = [raw]
+
+    start_obj = raw.find("{")
+    end_obj = raw.rfind("}")
+    if start_obj != -1 and end_obj > start_obj:
+        candidates.append(raw[start_obj:end_obj + 1])
+
+    start_arr = raw.find("[")
+    end_arr = raw.rfind("]")
+    if start_arr != -1 and end_arr > start_arr:
+        candidates.append(raw[start_arr:end_arr + 1])
+
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except Exception:
+            continue
+    return None
+
+
+def _normalize_pipeline_plan(raw_plan, fallback_goal: str, default_device_id: str) -> dict:
+    """Нормализовать план оркестратора к единому виду."""
+    goal = fallback_goal.strip() or "Выполнить задачу"
+    steps_raw = []
+    if isinstance(raw_plan, dict):
+        goal = str(raw_plan.get("goal") or raw_plan.get("title") or goal).strip() or goal
+        steps_raw = raw_plan.get("steps") or []
+    elif isinstance(raw_plan, list):
+        steps_raw = raw_plan
+
+    steps = []
+    for idx, item in enumerate(steps_raw[:PIPELINE_MAX_STEPS]):
+        if isinstance(item, str):
+            title = item.strip()
+            instruction = title
+            success_criteria = ""
+            step_device_id = default_device_id
+        elif isinstance(item, dict):
+            title = str(
+                item.get("title")
+                or item.get("step")
+                or item.get("name")
+                or item.get("instruction")
+                or f"Шаг {idx + 1}"
+            ).strip()
+            instruction = str(
+                item.get("instruction")
+                or item.get("details")
+                or item.get("objective")
+                or item.get("task")
+                or title
+            ).strip()
+            success_criteria = str(
+                item.get("success_criteria")
+                or item.get("success")
+                or item.get("done_when")
+                or ""
+            ).strip()
+            step_device_id = str(item.get("device_id") or default_device_id).strip() or default_device_id
+        else:
+            continue
+
+        if not title:
+            continue
+        if not instruction:
+            instruction = title
+
+        steps.append({
+            "title": title[:160],
+            "instruction": instruction[:1400],
+            "success_criteria": success_criteria[:400],
+            "device_id": step_device_id,
+        })
+
+    if not steps:
+        steps = [{
+            "title": goal[:160],
+            "instruction": fallback_goal.strip() or goal,
+            "success_criteria": "",
+            "device_id": default_device_id,
+        }]
+
+    return {
+        "goal": goal[:200],
+        "steps": steps,
+    }
+
+
+def _pipeline_plan_prompt(shared: dict, user_message: str) -> str:
+    """Промпт для оркестратора: разбить задачу на subagent-шаги."""
+    return f"""\
+Ты — ОРКЕСТРАТОР конвейерного режима ИРУ.
+
+Твоя роль: НЕ выполнять команды самостоятельно, а разбить общий запрос на понятные subagent-шаги.
+Каждый шаг потом пойдёт отдельному LLM-исполнителю. Поэтому шаги должны быть:
+1. Непересекающимися.
+2. Последовательными.
+3. Достаточно конкретными, чтобы исполнитель мог сделать шаг без нового планирования.
+4. В количестве от 2 до {PIPELINE_MAX_STEPS}, если только задача не совсем точечная.
+
+Верни ТОЛЬКО JSON без Markdown и без пояснений в таком формате:
+{{
+  "goal": "краткая цель",
+  "steps": [
+    {{
+      "title": "короткое название шага",
+      "instruction": "подробное задание для subagent-исполнителя",
+      "success_criteria": "как понять, что шаг завершён",
+      "device_id": "ID устройства, если шаг лучше делать не на текущем устройстве"
+    }}
+  ]
+}}
+
+Поле device_id можно опускать, если подходит текущее устройство.
+Не создавай лишних микро-шагов. Не используй маркеры [[SUGGEST_PLAN]].
+
+Текущая дата и время: {shared["current_datetime_msk"]}.
+
+Подключённые устройства:
+{shared["devices_block"]}
+
+Текущее устройство:
+ID: {shared["current_device_id"]}
+Hostname: {shared["current_hostname"]}
+ОС: {shared["current_os"]} ({shared["current_os_version"]})
+
+Профиль устройства:
+{shared["device_profile_block"] or "Нет расширенного профиля."}
+
+Память:
+{shared["device_memory_block"] or "Нет дополнительной памяти."}
+
+Правила ОС:
+{shared["os_rules"]}
+
+Запрос пользователя:
+{user_message}
+"""
+
+
+def _pipeline_worker_prompt(
+    shared: dict,
+    overall_goal: str,
+    step: dict,
+    completed_steps: list[dict],
+) -> str:
+    """Промпт для subagent-исполнителя одного шага."""
+    completed_block = "Нет завершённых шагов."
+    if completed_steps:
+        completed_block = "\n".join(
+            f"- {item['title']}: {item['summary']}"
+            for item in completed_steps[-6:]
+        )
+
+    step_device_id = step.get("device_id") or shared["current_device_id"]
+    return f"""\
+Ты — SUBAGENT-ИСПОЛНИТЕЛЬ внутри Pipeline Mode ИРУ.
+
+Ты выполняешь ТОЛЬКО ОДИН назначенный шаг. Ты не главный ассистент и не оркестратор.
+Твоя задача: довести текущий шаг до результата с помощью инструментов и затем коротко отчитаться.
+
+КРИТИЧЕСКИЕ ПРАВИЛА:
+1. Не создавай новый план.
+2. Не используй create_plan и mark_step — их нет в твоих инструментах.
+3. Действуй только в рамках текущего шага.
+4. Если шаг завершён — верни короткий итог простым текстом без Markdown.
+5. Если шаг не удаётся — верни краткое описание проблемы и на чём остановился.
+6. Для длинных текстов и файлов используй write_content.
+7. Для актуальной информации используй только web_search.
+
+Общая цель:
+{overall_goal}
+
+Текущий шаг:
+Название: {step.get("title", "")}
+Задание: {step.get("instruction", "")}
+Критерий успеха: {step.get("success_criteria", "Не задан явно")}
+Предпочтительное устройство: {step_device_id}
+
+Что уже сделано:
+{completed_block}
+
+Подключённые устройства:
+{shared["devices_block"]}
+
+Текущее устройство:
+ID: {shared["current_device_id"]}
+Hostname: {shared["current_hostname"]}
+ОС: {shared["current_os"]} ({shared["current_os_version"]})
+
+Профиль устройства:
+{shared["device_profile_block"] or "Нет расширенного профиля."}
+
+Память:
+{shared["device_memory_block"] or "Нет дополнительной памяти."}
+
+Правила ОС:
+{shared["os_rules"]}
+
+Текущая дата и время: {shared["current_datetime_msk"]}.
+"""
+
+
+def _pipeline_summary_prompt() -> str:
+    """Финальный промпт оркестратора для сборки общего ответа."""
+    return """\
+Ты — ОРКЕСТРАТОР Pipeline Mode ИРУ.
+
+Тебе дали результат работы subagent-исполнителей по шагам. Сформируй финальный ответ пользователю:
+1. Кратко скажи, что сделано.
+2. Если выполнение остановилось — честно укажи на каком шаге и почему.
+3. Если есть полезный итоговый артефакт или ссылка на скачивание — упомяни это явно.
+4. Пиши только чистым текстом без Markdown.
+5. Если стоит запомнить важный факт о конфигурации или предпочтении пользователя — можешь в САМОМ КОНЦЕ добавить маркер:
+[[SUGGEST_REMEMBER: текст факта | категория]]
+Категории: preference, config, warning, layout, software.
+"""
+
+
+def _build_pipeline_shared_context(
+    device_id: str,
+    device_info: dict,
+    all_devices: dict,
+    device_profile: dict | None,
+    machine_guid: str | None,
+    mem_user_id: str | None,
+) -> dict:
+    """Контекст окружения для оркестратора и subagent-исполнителей."""
+    os_info = device_info.get("os", "Windows")
+    os_lower = (os_info or "").lower()
+    return {
+        "devices_block": build_devices_block(all_devices),
+        "current_device_id": device_id,
+        "current_hostname": device_info.get("hostname", "unknown"),
+        "current_os": os_info,
+        "current_os_version": device_info.get("os_version", ""),
+        "device_profile_block": build_device_profile_block(device_profile),
+        "device_memory_block": build_memory_block(machine_guid, mem_user_id),
+        "os_rules": LINUX_RULES if "linux" in os_lower else WINDOWS_RULES,
+        "current_datetime_msk": _current_datetime_msk(),
+    }
+
+
+async def _run_pipeline_worker(
+    client: httpx.AsyncClient,
+    cfg: dict,
+    model: str,
+    shared: dict,
+    overall_goal: str,
+    step: dict,
+    completed_steps: list[dict],
+    chat_history: list[dict] | None,
+    send_command_fn,
+    get_file_link_fn,
+    machine_guid: str | None,
+    mem_user_id: str | None,
+    poll_task_id: str | None,
+) -> dict:
+    """Subagent-исполнитель одного шага pipeline."""
+    worker_prompt = _pipeline_worker_prompt(shared, overall_goal, step, completed_steps)
+    messages = [{"role": "system", "content": worker_prompt}]
+    if chat_history:
+        messages.extend(build_chat_messages(chat_history[:-1], filter_onboarding=True)[-6:])
+    messages.append({
+        "role": "user",
+        "content": (
+            f"Выполни шаг: {step.get('title', '')}\n"
+            f"Инструкция: {step.get('instruction', '')}\n"
+            f"Критерий успеха: {step.get('success_criteria', 'не задан')}"
+        ),
+    })
+
+    commands_log = []
+    step_device_id = step.get("device_id") or shared["current_device_id"]
+
+    for iteration in range(PIPELINE_WORKER_MAX_ITERATIONS):
+        print(
+            f"[pipeline/worker] iteration {iteration + 1}/{PIPELINE_WORKER_MAX_ITERATIONS}, "
+            f"step={step.get('title', '')[:60]!r}"
+        )
+        data = await _chat_completion_request(
+            client=client,
+            cfg=cfg,
+            model=model,
+            messages=messages,
+            tools=WORKER_TOOLS,
+        )
+        choice = data["choices"][0]
+        assistant_msg = choice["message"]
+        finish_reason = choice.get("finish_reason", "?")
+        content_preview = (assistant_msg.get("content") or "")[:120]
+        tool_calls = assistant_msg.get("tool_calls")
+        print(
+            f"[pipeline/worker] response: finish_reason={finish_reason}, "
+            f"tool_calls={len(tool_calls) if tool_calls else 0}, "
+            f"content_preview={content_preview!r}"
+        )
+
+        if finish_reason == "length":
+            if tool_calls and iteration < PIPELINE_WORKER_MAX_ITERATIONS - 1:
+                messages.append({
+                    "role": "user",
+                    "content": "Предыдущий ответ был обрезан. Продолжи короче и точнее.",
+                })
+                continue
+            if not tool_calls:
+                return {
+                    "status": "ok",
+                    "answer": (assistant_msg.get("content") or "").strip() or "Шаг завершён.",
+                    "commands": commands_log,
+                }
+
+        messages.append(assistant_msg)
+
+        if not tool_calls:
+            return {
+                "status": "ok",
+                "answer": (assistant_msg.get("content") or "").strip() or "Шаг завершён.",
+                "commands": commands_log,
+            }
+
+        for tc in tool_calls:
+            fn_name = tc["function"]["name"]
+            try:
+                fn_args = json.loads(tc["function"]["arguments"])
+            except json.JSONDecodeError as e:
+                tool_result = {
+                    "error": f"Ошибка парсинга аргументов: {e}. Используй более короткие аргументы."
+                }
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": json.dumps(tool_result, ensure_ascii=False),
+                })
+                continue
+
+            target_device = fn_args.pop("device_id", None) or step_device_id
+            print(
+                f"[pipeline/worker] tool_call: {fn_name}"
+                f"({json.dumps(fn_args, ensure_ascii=False)[:250]}) -> device={target_device}"
+            )
+
+            if fn_name == "execute_cmd":
+                _set_current_step(poll_task_id, f"Исполняю шаг: {step.get('title', '')[:60]}")
+                is_long_running = fn_args.pop("long_running", False)
+                try:
+                    if is_long_running:
+                        fn_args["timeout"] = 5
+                        try:
+                            tool_result = await send_command_fn(target_device, "execute_cmd", fn_args)
+                        except Exception as lr_e:
+                            if "Таймаут" in str(lr_e):
+                                tool_result = {
+                                    "stdout": "Приложение запущено (long_running)",
+                                    "stderr": "",
+                                    "returncode": 0,
+                                    "error": None,
+                                }
+                            else:
+                                raise
+                    else:
+                        tool_result = await send_command_fn(target_device, "execute_cmd", fn_args)
+                except Exception as e:
+                    err_str = str(e)
+                    if "CONFIRM_REQUIRED" in err_str:
+                        raise ConfirmationRequired(
+                            command=fn_args.get("command", ""),
+                            device_id=target_device,
+                            params=fn_args,
+                            answer=f"Для шага «{step.get('title', '')}» требуется подтверждение команды",
+                            commands_log=commands_log,
+                        )
+                    tool_result = {"error": err_str}
+
+                commands_log.append({
+                    "command": fn_args.get("command", ""),
+                    "device_id": target_device,
+                    "result": tool_result,
+                    "iteration": iteration + 1,
+                })
+                if machine_guid and "error" not in tool_result:
+                    try:
+                        db.add_command_memory(
+                            machine_guid=machine_guid,
+                            device_id=target_device,
+                            command=fn_args.get("command", ""),
+                            intent=step.get("title"),
+                            exit_code=int(tool_result.get("returncode", -1)),
+                            stdout=tool_result.get("stdout"),
+                            stderr=tool_result.get("stderr"),
+                            user_id=mem_user_id,
+                        )
+                    except Exception:
+                        print("[pipeline/worker] Failed to write command memory")
+
+            elif fn_name == "write_content":
+                _set_current_step(poll_task_id, f"Создаю файл для шага: {step.get('title', '')[:50]}")
+                try:
+                    tool_result = await send_command_fn(target_device, "write_content", fn_args)
+                except Exception as e:
+                    err_str = str(e)
+                    if "CONFIRM_REQUIRED" in err_str:
+                        raise ConfirmationRequired(
+                            command=f"write_content: {fn_args.get('path', '')}",
+                            device_id=target_device,
+                            params=fn_args,
+                            answer=f"Для шага «{step.get('title', '')}» требуется подтверждение записи в файл",
+                            commands_log=commands_log,
+                        )
+                    tool_result = {"error": err_str}
+
+                preview = fn_args.get("content", "")[:60]
+                mode = "append" if fn_args.get("append") else "write"
+                commands_log.append({
+                    "command": f"[{mode}] {fn_args.get('path', '')} | {preview}...",
+                    "device_id": target_device,
+                    "result": tool_result,
+                    "iteration": iteration + 1,
+                })
+
+            elif fn_name == "get_file_link":
+                _set_current_step(poll_task_id, f"Формирую ссылку: {step.get('title', '')[:50]}")
+                try:
+                    file_path = fn_args["file_path"]
+                    url = get_file_link_fn(target_device, file_path)
+                    tool_result = {"url": url, "file_path": file_path}
+                except Exception as e:
+                    tool_result = {"error": str(e)}
+
+                commands_log.append({
+                    "command": f"[скачать] {fn_args.get('file_path', '')}",
+                    "device_id": target_device,
+                    "result": tool_result,
+                    "iteration": iteration + 1,
+                })
+
+            elif fn_name == "web_search":
+                _set_current_step(poll_task_id, f"Ищу данные для шага: {step.get('title', '')[:50]}")
+                tavily_key = cfg.get("tavily_api_key")
+                if not tavily_key:
+                    tool_result = {"error": "tavily_api_key не настроен в llm_config.json на сервере"}
+                else:
+                    query = fn_args.get("query", "").strip()
+                    max_results = min(int(fn_args.get("max_results", 5) or 5), 10)
+                    if not query:
+                        tool_result = {"error": "Пустой запрос"}
+                    else:
+                        try:
+                            tavily_data = None
+                            async with httpx.AsyncClient(timeout=20.0) as tavily_client:
+                                for _tavily_attempt in range(2):
+                                    try:
+                                        tavily_resp = await tavily_client.post(
+                                            "https://api.tavily.com/search",
+                                            json={
+                                                "api_key": tavily_key,
+                                                "query": query,
+                                                "max_results": max_results,
+                                                "search_depth": "basic",
+                                                "include_answer": True,
+                                            },
+                                        )
+                                        tavily_resp.raise_for_status()
+                                        tavily_data = tavily_resp.json()
+                                        break
+                                    except (httpx.HTTPStatusError, httpx.ConnectError,
+                                            httpx.ReadTimeout, httpx.ConnectTimeout) as _te:
+                                        is_5xx = isinstance(_te, httpx.HTTPStatusError) and _te.response.status_code >= 500
+                                        is_net = isinstance(_te, (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout))
+                                        if (is_5xx or is_net) and _tavily_attempt == 0:
+                                            print(f"[pipeline/worker] tavily retry: {type(_te).__name__}")
+                                            await asyncio.sleep(2)
+                                            continue
+                                        raise
+                            if tavily_data is None:
+                                tool_result = {"error": "Поиск временно недоступен. Попробуйте позже."}
+                            else:
+                                tool_result = {
+                                    "answer": tavily_data.get("answer"),
+                                    "results": [
+                                        {
+                                            "title": r.get("title"),
+                                            "url": r.get("url"),
+                                            "content": (r.get("content") or "")[:800],
+                                        }
+                                        for r in (tavily_data.get("results") or [])[:max_results]
+                                    ],
+                                }
+                        except Exception as e:
+                            tool_result = {"error": f"Поиск временно недоступен: {e}"}
+
+                commands_log.append({
+                    "command": f"[web_search] {fn_args.get('query', '')[:80]}",
+                    "device_id": target_device,
+                    "result": tool_result if not isinstance(tool_result, dict) or "error" in tool_result else {"ok": True},
+                    "iteration": iteration + 1,
+                })
+
+            elif fn_name == "remember_fact":
+                if not mem_user_id:
+                    tool_result = {"result": "Не удалось сохранить факт: пользователь не идентифицирован"}
+                else:
+                    try:
+                        fact_id = db.add_user_fact(
+                            user_id=mem_user_id,
+                            text=fn_args.get("text", ""),
+                            category=fn_args.get("category"),
+                        )
+                        tool_result = {"result": f"Запомнил факт о тебе (id={fact_id})"}
+                    except Exception as e:
+                        tool_result = {"error": str(e)}
+
+            elif fn_name == "forget_fact":
+                if not mem_user_id:
+                    tool_result = {"result": "Факт не найден"}
+                else:
+                    try:
+                        ok = db.delete_user_fact(mem_user_id, int(fn_args.get("fact_id", 0)))
+                        tool_result = {"result": "Факт удалён" if ok else "Факт не найден"}
+                    except Exception as e:
+                        tool_result = {"error": str(e)}
+
+            else:
+                tool_result = {"error": f"Неизвестная функция: {fn_name}"}
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": json.dumps(tool_result, ensure_ascii=False)[:2000],
+            })
+
+    return {
+        "status": "error",
+        "answer": "Subagent достиг лимита итераций и остановил шаг.",
+        "commands": commands_log,
+    }
+
+
+async def _process_pipeline_subagents(
+    user_message: str,
+    device_id: str,
+    device_info: dict,
+    all_devices: dict,
+    send_command_fn,
+    get_file_link_fn,
+    chat_history: list[dict] | None = None,
+    user_id: int = None,
+    chat_id: int = None,
+    device_profile: dict | None = None,
+    modes: dict | None = None,
+    poll_task_id: str | None = None,
+) -> dict:
+    """Pipeline Mode с субагентностью: orchestrator -> step workers -> final synthesis."""
+    cfg = load_llm_config()
+    modes = modes or {}
+    model = _pick_model(cfg, {"pipeline": True, "autonomous": bool(modes.get("autonomous"))})
+    machine_guid = (device_profile or {}).get("machine_guid") or None
+    mem_user_id = str(user_id) if user_id else (f"anon_{machine_guid}" if machine_guid else None)
+    shared = _build_pipeline_shared_context(
+        device_id=device_id,
+        device_info=device_info,
+        all_devices=all_devices,
+        device_profile=device_profile,
+        machine_guid=machine_guid,
+        mem_user_id=mem_user_id,
+    )
+
+    _set_current_step(poll_task_id, "Оркестратор строит план...")
+    history_msgs = build_chat_messages(chat_history[:-1], filter_onboarding=True)[-8:] if chat_history else []
+    plan_messages = [{"role": "system", "content": _pipeline_plan_prompt(shared, user_message)}]
+    plan_messages.extend(history_msgs)
+    plan_messages.append({"role": "user", "content": user_message})
+
+    step_results = []
+    all_commands = []
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+        planner_data = await _chat_completion_request(
+            client=client,
+            cfg=cfg,
+            model=model,
+            messages=plan_messages,
+            tools=None,
+            max_tokens=min(cfg.get("max_tokens", 4096), 2500),
+        )
+        planner_text = (planner_data["choices"][0]["message"].get("content") or "").strip()
+        normalized_plan = _normalize_pipeline_plan(
+            _extract_json_payload(planner_text),
+            fallback_goal=user_message,
+            default_device_id=device_id,
+        )
+
+        db_task_id = db.create_task(
+            user_id=user_id,
+            chat_id=chat_id,
+            device_id=device_id,
+            goal=normalized_plan["goal"],
+            steps=[step["title"] for step in normalized_plan["steps"]],
+        )
+        created_task_ids = [db_task_id]
+        _push_tasks_view(poll_task_id, created_task_ids)
+
+        pipeline_failed = False
+        failure_reason = ""
+        for idx, step in enumerate(normalized_plan["steps"]):
+            db.update_step(db_task_id, idx, "running", summary="Подзадача передана subagent-исполнителю")
+            _push_tasks_view(poll_task_id, created_task_ids)
+            _set_current_step(
+                poll_task_id,
+                f"Шаг {idx + 1}/{len(normalized_plan['steps'])}: {step['title'][:80]}"
+            )
+            try:
+                worker_result = await _run_pipeline_worker(
+                    client=client,
+                    cfg=cfg,
+                    model=model,
+                    shared=shared,
+                    overall_goal=normalized_plan["goal"],
+                    step=step,
+                    completed_steps=step_results,
+                    chat_history=chat_history,
+                    send_command_fn=send_command_fn,
+                    get_file_link_fn=get_file_link_fn,
+                    machine_guid=machine_guid,
+                    mem_user_id=mem_user_id,
+                    poll_task_id=poll_task_id,
+                )
+            except ConfirmationRequired:
+                raise
+            except Exception as e:
+                worker_result = {
+                    "status": "error",
+                    "answer": f"Ошибка subagent-исполнителя: {e}",
+                    "commands": [],
+                }
+
+            all_commands.extend(worker_result.get("commands", []))
+            step_summary = strip_markdown(worker_result.get("answer", "")).strip() or "Шаг завершён."
+            urls = [
+                cmd.get("result", {}).get("url")
+                for cmd in worker_result.get("commands", [])
+                if isinstance(cmd.get("result"), dict) and cmd["result"].get("url")
+            ]
+            if urls:
+                step_summary = f"{step_summary} Ссылки: {'; '.join(urls)}"
+
+            step_status = "done" if worker_result.get("status") == "ok" else "failed"
+            db.update_step(db_task_id, idx, step_status, summary=step_summary[:500])
+            _push_tasks_view(poll_task_id, created_task_ids)
+
+            step_results.append({
+                "idx": idx,
+                "title": step["title"],
+                "instruction": step["instruction"],
+                "device_id": step.get("device_id") or device_id,
+                "status": step_status,
+                "summary": step_summary,
+            })
+
+            if step_status != "done":
+                pipeline_failed = True
+                failure_reason = step_summary
+                break
+
+        db.finish_task(db_task_id, "failed" if pipeline_failed else "completed")
+        _push_tasks_view(poll_task_id, created_task_ids)
+        _set_current_step(poll_task_id, "Оркестратор подводит итоги...")
+
+        summary_payload = {
+            "goal": normalized_plan["goal"],
+            "pipeline_status": "failed" if pipeline_failed else "completed",
+            "failure_reason": failure_reason,
+            "steps": step_results,
+        }
+        summary_messages = [
+            {"role": "system", "content": _pipeline_summary_prompt()},
+            {"role": "user", "content": json.dumps(summary_payload, ensure_ascii=False, indent=2)},
+        ]
+        try:
+            summary_data = await _chat_completion_request(
+                client=client,
+                cfg=cfg,
+                model=cfg.get("model", "deepseek-chat"),
+                messages=summary_messages,
+                tools=None,
+                max_tokens=min(cfg.get("max_tokens", 4096), 1200),
+            )
+            final_answer = (summary_data["choices"][0]["message"].get("content") or "").strip()
+        except Exception as e:
+            print(f"[pipeline] summary error: {e}")
+            final_answer = (
+                "План выполнен не полностью." if pipeline_failed else "План выполнен."
+            )
+            if step_results:
+                final_answer += " " + " ".join(
+                    f"{s['title']}: {s['summary']}" for s in step_results[-3:]
+                )
+
+    final_answer = strip_markdown(final_answer)
+    return {
+        "answer": final_answer,
+        "commands": all_commands,
+        "tasks": _collect_tasks(created_task_ids),
+        "training_context": {
+            "os": device_info.get("os", ""),
+            "hostname": device_info.get("hostname", ""),
+            "method": "powershell" if "windows" in device_info.get("os", "").lower() else "bash",
+        },
+    }
 
 
 # ── Промпт для режима без устройств (помощник по настройке) ─────────────────
@@ -847,6 +1630,23 @@ async def process_nl_command(
     Returns:
         {"answer": str, "commands": [...], "training_context": {...}}
     """
+    modes = modes or {}
+    if modes.get("pipeline"):
+        return await _process_pipeline_subagents(
+            user_message=user_message,
+            device_id=device_id,
+            device_info=device_info,
+            all_devices=all_devices,
+            send_command_fn=send_command_fn,
+            get_file_link_fn=get_file_link_fn,
+            chat_history=chat_history,
+            user_id=user_id,
+            chat_id=chat_id,
+            device_profile=device_profile,
+            modes=modes,
+            poll_task_id=poll_task_id,
+        )
+
     cfg = load_llm_config()
 
     # Собрать промпт с информацией обо всех устройствах
@@ -886,7 +1686,6 @@ async def process_nl_command(
     )
 
     # Выбранные пользователем режимы (кнопка "+" в UI)
-    modes = modes or {}
     pipeline_forced = bool(modes.get("pipeline"))
     autonomous = bool(modes.get("autonomous"))
     if pipeline_forced or autonomous:
