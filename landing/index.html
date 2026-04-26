@@ -6,25 +6,171 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
+    <style>
+        /* ── HERO FLUID ── */
+        #cursor {
+            position: fixed;
+            width: 14px;
+            height: 14px;
+            border: 1.5px solid rgba(0, 212, 255, 0.75);
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 9999;
+            transform: translate(-50%, -50%);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        #cursor.visible { opacity: 1; }
+
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 24px;
+            position: relative;
+            overflow: hidden;
+            background: #020308;
+            cursor: none;
+        }
+        #fluid-canvas {
+            position: absolute;
+            inset: 0; width: 100%; height: 100%;
+            z-index: 0;
+        }
+        .hero::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at 50% 40%, rgba(2,5,20,0.38), rgba(2,3,8,0.70));
+            z-index: 1;
+            pointer-events: none;
+        }
+        .hero-content {
+            max-width: 640px;
+            position: relative;
+            z-index: 2;
+            text-align: center;
+            opacity: 0;
+            transform: translateY(12px);
+            animation: hero-fade-in 1.5s ease-out 0.1s forwards;
+        }
+        .hero-logo-wrap { margin-bottom: 20px; }
+        .hero-logo {
+            width: 110px;
+            height: 110px;
+            border-radius: 22px;
+            margin: 0 auto;
+            display: block;
+            filter: drop-shadow(0 0 12px rgba(0,212,255,0.30));
+            animation: logo-glow 4s ease-in-out infinite;
+        }
+        @keyframes logo-glow {
+            0%,100% { filter: drop-shadow(0 0 10px rgba(0,212,255,0.25)); }
+            50%      { filter: drop-shadow(0 0 22px rgba(0,212,255,0.55)); }
+        }
+
+        /* ── ARCHITECTURE DIAGRAM ── */
+        .arch-section {
+            padding: 80px 24px 100px;
+            background: #010103;
+            color: #ffffff;
+            border-top: 1px solid rgba(255,255,255,0.05);
+        }
+        .arch-inner {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .arch-title {
+            font-size: 28px;
+            margin-bottom: 12px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.85);
+        }
+        .arch-subtitle {
+            font-size: 15px;
+            color: rgba(255,255,255,0.45);
+            margin-bottom: 48px;
+            letter-spacing: 0.02em;
+        }
+        .arch-canvas-wrap {
+            position: relative;
+            width: 100%;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        #arch-canvas {
+            width: 100%;
+            display: block;
+            border-radius: 0;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+        /* Tooltip */
+        .arch-tooltip {
+            position: absolute;
+            pointer-events: none;
+            background: rgba(5,10,25,0.96);
+            border: 1px solid rgba(0,212,255,0.35);
+            border-radius: 10px;
+            padding: 12px 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            color: #00d4ff;
+            white-space: nowrap;
+            opacity: 0;
+            transition: opacity 0.18s ease;
+            z-index: 10;
+            box-shadow: 0 4px 24px rgba(0,212,255,0.15);
+            line-height: 1.6;
+        }
+        .arch-tooltip.visible { opacity: 1; }
+        /* Legend */
+        .arch-legend {
+            display: flex;
+            gap: 28px;
+            flex-wrap: wrap;
+            margin-top: 28px;
+            justify-content: center;
+        }
+        .arch-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            color: rgba(255,255,255,0.55);
+            letter-spacing: 0.05em;
+        }
+        .arch-legend-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+    </style>
 </head>
 <body>
-<header class="site-header">
-    <!-- потом можно добавить меню -->
-</header>
+
+<div id="cursor"></div>
+
+<header class="site-header"></header>
 <main>
     <section class="hero">
+        <canvas id="fluid-canvas"></canvas>
         <div class="hero-content">
-            <div class="hero-header">
+            <div class="hero-logo-wrap">
                 <img src="assets/IruIcon.ico" alt="Логотип ИРУ" class="hero-logo">
-                <div class="hero-text">
-                    <span class="hero-top-text">Просто управлять...</span>
-                    <h1 class="hero-title">
-                        <span>Везде.</span>
-                        <span>Уверенно.</span>
-                        <span class="accent">Безопасно.</span>
-                    </h1>
-                    <p>Новый взгляд на взаимодействие с устройствами.</p>
-                </div>
+            </div>
+            <div class="hero-text">
+                <span class="hero-top-text">Просто управлять...</span>
+                <h1 class="hero-title">
+                    <span>Везде.</span>
+                    <span>Уверенно.</span>
+                    <span class="accent">Безопасно.</span>
+                </h1>
+                <p>Новый взгляд на взаимодействие с устройствами.</p>
             </div>
             <div class="hero-actions">
                 <a href="https://irumode.ru" class="hero-cta">Перейти на irumode.ru</a>
@@ -34,18 +180,15 @@
     <section class="benefits">
         <div class="benefits-inner">
             <h2 class="benefits-title">ИРУ обеспечивает</h2>
-
             <div class="benefits-grid">
                 <div class="benefit-card">
                     <h3>Прямую работу с системой</h3>
                     <p>ИРУ взаимодействует с устройством как с машиной — через системные команды и интерфейсы, без эмуляции кликов и движений мыши.</p>
                 </div>
-
                 <div class="benefit-card">
                     <h3>Безопасные действия</h3>
                     <p>Потенциально опасные операции блокируются или требуют явного подтверждения — ассистент не сможет удалить ваши данные сам по себе.</p>
                 </div>
-
                 <div class="benefit-card">
                     <h3>Доступ на расстоянии</h3>
                     <p>Вы сохраняете контроль над устройствами, даже находясь далеко — ИРУ доступен с ваших привычных устройств, в любом месте.</p>
@@ -57,109 +200,76 @@
         <div class="audience-inner">
             <h2 class="audience-title">ИРУ подходит</h2>
         </div>
-
         <div class="audience-marquee audience-marquee--top">
-            <span>Сисадмин</span>
-            <span>Разработчик</span>
-            <span>Фрилансер</span>
-            <span>IT‑поддержка</span>
-            <span>Сын в другом городе</span>
-            <span>DevOps</span>
-            <span>Power‑user</span>
-            <span>Удалённый админ</span>
-            <span>Настройка ПК для родных</span>
-            <span>Админ малого бизнеса</span>
-            <span>Инженер по автоматизации</span>
-            <span>Админ школы</span>
-            <span>Админ университета</span>
-            <span>Админ в госкомпании</span>
-            <span>Техспециалист на аутсорсе</span>
+            <span>Сисадмин</span><span>Разработчик</span><span>Фрилансер</span><span>IT‑поддержка</span>
+            <span>Сын в другом городе</span><span>DevOps</span><span>Power‑user</span>
+            <span>Удалённый админ</span><span>Настройка ПК для родных</span>
+            <span>Админ малого бизнеса</span><span>Инженер по автоматизации</span>
+            <span>Админ школы</span><span>Админ университета</span>
+            <span>Админ в госкомпании</span><span>Техспециалист на аутсорсе</span>
         </div>
-
         <div class="audience-marquee audience-marquee--middle">
-            <span>Техподдержка</span>
-            <span>Тимлид</span>
-            <span>IT‑инфраструктура</span>
-            <span>Домашний ПК</span>
-            <span>Удалённая работа</span>
-            <span>Малый бизнес</span>
-            <span>Офисный ноутбук</span>
-            <span>Сервер в дата‑центре</span>
-            <span>Ноутбук на работе</span>
-            <span>ПК родителей</span>
-            <span>ПК в другом городе</span>
-            <span>Рабочий ноутбук в офисе</span>
-            <span>Компьютер на даче</span>
-            <span>ПК ребёнка</span>
-            <span>ПК в кабинете директора</span>
+            <span>Техподдержка</span><span>Тимлид</span><span>IT‑инфраструктура</span>
+            <span>Домашний ПК</span><span>Удалённая работа</span><span>Малый бизнес</span>
+            <span>Офисный ноутбук</span><span>Сервер в дата‑центре</span>
+            <span>Ноутбук на работе</span><span>ПК родителей</span>
+            <span>ПК в другом городе</span><span>Рабочий ноутбук в офисе</span>
+            <span>Компьютер на даче</span><span>ПК ребёнка</span><span>ПК в кабинете директора</span>
         </div>
-
         <div class="audience-marquee audience-marquee--bottom">
-            <span>IT‑админ</span>
-            <span>Инженер</span>
-            <span>Гейминг‑ПК</span>
-            <span>Ноутбук в офисе</span>
-            <span>Сервер</span>
-            <span>Рабочая станция</span>
-            <span>Helpdesk</span>
-            <span>Техдиректор</span>
-            <span>Старший админ</span>
-            <span>Сетевой инженер</span>
-            <span>DevRel</span>
-            <span>Security‑инженер</span>
-            <span>IT‑консультант</span>
-            <span>Админ филиала</span>
-            <span>Дежурный по смене</span>
+            <span>IT‑админ</span><span>Инженер</span><span>Гейминг‑ПК</span>
+            <span>Ноутбук в офисе</span><span>Сервер</span><span>Рабочая станция</span>
+            <span>Helpdesk</span><span>Техдиректор</span><span>Старший админ</span>
+            <span>Сетевой инженер</span><span>DevRel</span><span>Security‑инженер</span>
+            <span>IT‑консультант</span><span>Админ филиала</span><span>Дежурный по смене</span>
         </div>
     </section>
-    <section class="how-it-works">
-        <div class="how-inner">
-            <h2 class="how-title">Как работает ИРУ</h2>
 
-            <div class="how-grid">
-                <div class="how-card">
-                    <h3>Устанавливайте</h3>
-                    <p>Ставите агент ИРУ на тот компьютер, которым хотите управлять — дома, в офисе или в другом городе.</p>
+    <!-- ── ARCHITECTURE DIAGRAM ── -->
+    <section class="arch-section">
+        <div class="arch-inner">
+            <h2 class="arch-title">Как работает ИРУ</h2>
+            <p class="arch-subtitle">Наведите на узел — увидите подробности</p>
+            <div class="arch-canvas-wrap">
+                <canvas id="arch-canvas" height="560"></canvas>
+                <div class="arch-tooltip" id="arch-tooltip"></div>
+            </div>
+            <div class="arch-legend">
+                <div class="arch-legend-item">
+                    <div class="arch-legend-dot" style="background:#00d4ff;box-shadow:0 0 6px #00d4ff88;"></div>
+                    HTTPS / WSS 443
                 </div>
-
-                <div class="how-card">
-                    <h3>Подключайтесь</h3>
-                    <p>Авторизуетесь в веб‑интерфейсе, выбираете своё устройство и подтверждаете доступ к нему.</p>
+                <div class="arch-legend-item">
+                    <div class="arch-legend-dot" style="background:#00ff9d;box-shadow:0 0 6px #00ff9d88;"></div>
+                    WebSocket heartbeat
                 </div>
-
-                <div class="how-card"> 
-                    <h3>Управляйте</h3>
-                    <p>Даёте команды — ИРУ переводит их в системные действия и выполняет безопасно, без эмуляции кликов.</p>
+                <div class="arch-legend-item">
+                    <div class="arch-legend-dot" style="background:#ff6b35;box-shadow:0 0 6px #ff6b3588;"></div>
+                    Системные команды
                 </div>
             </div>
         </div>
     </section>
+
     <section class="cta-bottom">
         <div class="cta-inner">
             <h2 class="cta-title">Начните с вашего компьютера</h2>
-            <p class="cta-text">
-                Сейчас агент ИРУ доступен для Windows 10 и 11. Установите его на основной компьютер, чтобы управлять им из любой точки.
-            </p>
-            <button class="cta-button" onclick="window.scrollTo({ top: 0, behavior: 'smooth' });">
-                Вернуться к скачиванию
-            </button>
+            <p class="cta-text">Сейчас агент ИРУ доступен для Windows 10 и 11. Установите его на основной компьютер, чтобы управлять им из любой точки.</p>
+            <button class="cta-button" onclick="window.scrollTo({ top: 0, behavior: 'smooth' });">Вернуться к скачиванию</button>
         </div>
     </section>
     <section class="security">
         <div class="security-inner">
             <h2 class="security-title">Безопасность и контроль</h2>
-
             <div class="security-grid">
                 <div class="security-item">
                     <h3>Может ли ИРУ удалить мои данные без меня?</h3>
                     <p>Нет. Потенциально опасные действия помечаются и блокируются или требуют явного подтверждения с вашей стороны. ИРУ не удаляет данные самостоятельно.</p>
                 </div>
-
                 <div class="security-item">
                     <h3>Кто принимает финальное решение?</h3>
                     <p>ИРУ выполняет только те действия, которые вы явно разрешили. Система остаётся инструментом: человек принимает решения, машина их исполняет.</p>
                 </div>
-
                 <div class="security-item">
                     <h3>Чем ИРУ отличается от эмуляции пользователя?</h3>
                     <p>ИРУ не двигает мышь и не жмёт кнопки за вас. Он работает с системой напрямую — через команды и интерфейсы, где каждое действие прозрачно и контролируемо.</p>
@@ -170,22 +280,276 @@
     <section class="founder">
         <div class="founder-inner">
             <h2 class="founder-title">О создателе ИРУ</h2>
-            <p class="founder-text">
-                ИРУ — это личный проект Руслана Сайгушкина, разработчика, который верит, что машина должна оставаться машиной.
-                Вместо эмуляции действий пользователя, ИРУ работает с системой напрямую — через понятные и контролируемые команды.
-            </p>
-            <p class="founder-text">
-                Если вы хотите поделиться идеями, фидбеком или обсудить ИРУ, вы можете написать:
-                <br></p>
+            <p class="founder-text">ИРУ — это личный проект Руслана Сайгушкина, разработчика, который верит, что машина должна оставаться машиной. Вместо эмуляции действий пользователя, ИРУ работает с системой напрямую — через понятные и контролируемые команды.</p>
+            <p class="founder-text">Если вы хотите поделиться идеями, фидбеком или обсудить ИРУ, вы можете написать:<br></p>
             <div class="contacts">
                 <span class="contact-item">Email: <a href="mailto:russaygushkin@gmail.com">russaygushkin@gmail.com</a></span>
                 <span class="contact-item">Telegram: <a href="https://t.me/IRU_Founder" target="_blank">@IRU_Founder</a></span>
             </div>
-            
         </div>
     </section>
 </main>
 
 <script src="main.js"></script>
+
+<!-- ── ARCHITECTURE DIAGRAM SCRIPT ── -->
+<script>
+(function () {
+    const canvas = document.getElementById('arch-canvas');
+    const tooltip = document.getElementById('arch-tooltip');
+    const ctx = canvas.getContext('2d');
+    let W, H, dpr;
+
+    const NODES = [
+        { id: 'user',   label: 'Браузер / Телефон', sublabel: 'Вы',                  icon: '🖥',  xr: 0.08, yr: 0.46, color: '#00d4ff', tip: 'Веб-интерфейс · любое устройство\nJWT авторизация · HTTPS' },
+        { id: 'caddy',  label: 'Caddy',             sublabel: 'Reverse Proxy + SSL', icon: '🔒',  xr: 0.33, yr: 0.46, color: '#00d4ff', tip: 'Терминирует TLS/SSL\nПроксирует на FastAPI :8000\nАвтоматический HTTPS-сертификат' },
+        { id: 'server', label: 'FastAPI',           sublabel: 'Сервер на VPS',       icon: '⚡',  xr: 0.58, yr: 0.46, color: '#00d4ff', tip: 'FastAPI + Uvicorn · порт 8000\nDeepSeek LLM · SQLite\nJWT · WebSocket-хаб · Rate Limiting' },
+        { id: 'agent',  label: 'Агент ИРУ',         sublabel: 'Windows / Linux ПК',  icon: '🤖',  xr: 0.82, yr: 0.46, color: '#00ff9d', tip: 'agent.py · Python\nПостоянное WebSocket-соединение\nHeartbeat · автообновление' },
+        { id: 'os',     label: 'ОС',                sublabel: 'PowerShell / bash',   icon: '⚙',  xr: 0.82, yr: 0.80, color: '#ff6b35', tip: 'PowerShell (Windows)\nbash (Linux)\nWMI · системные вызовы' },
+    ];
+
+    const EDGES = [
+        { from: 'user',   to: 'caddy',  label: 'HTTPS / WSS :443', color: '#00d4ff', bidirectional: true },
+        { from: 'caddy',  to: 'server', label: 'HTTP / WS :8000',  color: '#00d4ff', bidirectional: true },
+        { from: 'server', to: 'agent',  label: 'WebSocket',        color: '#00ff9d', bidirectional: true },
+        { from: 'agent',  to: 'os',     label: 'Команды',          color: '#ff6b35', bidirectional: false },
+    ];
+
+    const particles = [];
+    const MAX_PARTICLES = 50;
+
+    function nodeById(id) { return NODES.find(n => n.id === id); }
+
+    function spawnParticle(edge) {
+        const a = nodeById(edge.from), b = nodeById(edge.to);
+        const reverse = edge.bidirectional && Math.random() < 0.5;
+        const src = reverse ? b : a, dst = reverse ? a : b;
+        particles.push({ edge, sx: src.xr, sy: src.yr, ex: dst.xr, ey: dst.yr, t: 0,
+            speed: 0.0022 + Math.random() * 0.0013, color: edge.color,
+            size: 4 + Math.random() * 2.5, trail: [] });
+    }
+
+    EDGES.forEach(e => {
+        for (let i = 0; i < 4; i++) {
+            particles.push({ edge: e,
+                sx: nodeById(e.from).xr, sy: nodeById(e.from).yr,
+                ex: nodeById(e.to).xr,   ey: nodeById(e.to).yr,
+                t: Math.random(), speed: 0.0022 + Math.random() * 0.0013,
+                color: e.color, size: 4 + Math.random() * 2.5, trail: [] });
+        }
+    });
+
+    let hoveredNode = null;
+    function nodeRadius() { return Math.min(W, H) * 0.095; }
+    function getNodePos(node) { return { x: node.xr * W, y: node.yr * H }; }
+    function hitTest(mx, my) {
+        const r = nodeRadius() + 10;
+        for (const n of NODES) {
+            const p = getNodePos(n), dx = mx - p.x, dy = my - p.y;
+            if (dx*dx + dy*dy < r*r) return n;
+        }
+        return null;
+    }
+
+    function drawEdge(edge) {
+        const a = getNodePos(nodeById(edge.from)), b = getNodePos(nodeById(edge.to));
+        const isVertical = edge.from === 'agent' && edge.to === 'os';
+        ctx.save();
+        ctx.shadowColor = edge.color; ctx.shadowBlur = 10;
+        ctx.strokeStyle = edge.color; ctx.globalAlpha = 0.22;
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([8, 7]);
+        ctx.lineDashOffset = -(Date.now() / 35) % 15;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        ctx.save();
+        ctx.font = `500 13px 'JetBrains Mono', monospace`;
+        ctx.fillStyle = edge.color; ctx.globalAlpha = 0.65; ctx.textAlign = 'center';
+        ctx.fillText(edge.label, mx + (isVertical ? 58 : 0), my + (isVertical ? 0 : -18));
+        ctx.restore();
+    }
+
+    function drawNode(node, hovered) {
+        const { x, y } = getNodePos(node), r = nodeRadius();
+        ctx.save();
+        if (hovered) {
+            ctx.shadowColor = node.color; ctx.shadowBlur = 36;
+            ctx.beginPath(); ctx.arc(x, y, r + 8, 0, Math.PI * 2);
+            ctx.strokeStyle = node.color; ctx.globalAlpha = 0.55; ctx.lineWidth = 2.5; ctx.stroke();
+            ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+        }
+        const grad = ctx.createRadialGradient(x - r*0.25, y - r*0.25, r*0.1, x, y, r);
+        grad.addColorStop(0, hovered ? 'rgba(0,212,255,0.25)' : 'rgba(10,20,50,0.90)');
+        grad.addColorStop(1, 'rgba(2,4,14,0.95)');
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = grad; ctx.shadowColor = node.color; ctx.shadowBlur = hovered ? 28 : 14; ctx.fill();
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = node.color; ctx.globalAlpha = hovered ? 0.95 : 0.50;
+        ctx.lineWidth = hovered ? 2.5 : 2; ctx.stroke();
+        ctx.restore();
+        ctx.save();
+        ctx.font = `${Math.round(r * 0.58)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(node.icon, x, y - r * 0.18);
+        ctx.restore();
+        ctx.save();
+        ctx.font = `600 ${Math.max(12, Math.round(r * 0.27))}px 'JetBrains Mono', monospace`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+        ctx.fillStyle = hovered ? node.color : 'rgba(255,255,255,0.90)';
+        ctx.shadowColor = node.color; ctx.shadowBlur = hovered ? 10 : 0;
+        ctx.fillText(node.label, x, y + r * 0.32);
+        ctx.restore();
+        ctx.save();
+        ctx.font = `400 ${Math.max(10, Math.round(r * 0.21))}px 'JetBrains Mono', monospace`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+        ctx.fillStyle = 'rgba(255,255,255,0.42)';
+        ctx.fillText(node.sublabel, x, y + r * 0.56);
+        ctx.restore();
+    }
+
+    function drawParticles() {
+        for (const p of particles) {
+            const px = p.sx * W + (p.ex * W - p.sx * W) * p.t;
+            const py = p.sy * H + (p.ey * H - p.sy * H) * p.t;
+            p.trail.push({ x: px, y: py });
+            if (p.trail.length > 12) p.trail.shift();
+            for (let i = 1; i < p.trail.length; i++) {
+                ctx.save(); ctx.globalAlpha = (i / p.trail.length) * 0.38;
+                ctx.strokeStyle = p.color; ctx.lineWidth = p.size * (i / p.trail.length) * 0.65;
+                ctx.beginPath(); ctx.moveTo(p.trail[i-1].x, p.trail[i-1].y);
+                ctx.lineTo(p.trail[i].x, p.trail[i].y); ctx.stroke(); ctx.restore();
+            }
+            ctx.save(); ctx.shadowColor = p.color; ctx.shadowBlur = 12;
+            ctx.beginPath(); ctx.arc(px, py, p.size, 0, Math.PI * 2);
+            ctx.fillStyle = p.color; ctx.globalAlpha = 0.92; ctx.fill(); ctx.restore();
+        }
+    }
+
+    function updateParticles() {
+        for (let i = particles.length - 1; i >= 0; i--) {
+            particles[i].t += particles[i].speed;
+            if (particles[i].t >= 1) {
+                particles.splice(i, 1);
+                spawnParticle(EDGES[Math.floor(Math.random() * EDGES.length)]);
+            }
+        }
+        while (particles.length < MAX_PARTICLES)
+            spawnParticle(EDGES[Math.floor(Math.random() * EDGES.length)]);
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, W, H);
+        // subtle grid
+        ctx.save(); ctx.globalAlpha = 0.04; ctx.strokeStyle = '#00d4ff'; ctx.lineWidth = 0.5;
+        const step = Math.round(W / 20);
+        for (let gx = 0; gx <= W; gx += step) { ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,H); ctx.stroke(); }
+        for (let gy = 0; gy <= H; gy += step) { ctx.beginPath(); ctx.moveTo(0,gy); ctx.lineTo(W,gy); ctx.stroke(); }
+        ctx.restore();
+        EDGES.forEach(drawEdge);
+        drawParticles();
+        NODES.forEach(n => drawNode(n, hoveredNode && hoveredNode.id === n.id));
+        updateParticles();
+        requestAnimationFrame(draw);
+    }
+
+    function resize() {
+        dpr = window.devicePixelRatio || 1;
+        W = canvas.getBoundingClientRect().width;
+        H = 560;
+        canvas.width = W * dpr; canvas.height = H * dpr;
+        canvas.style.height = H + 'px';
+        ctx.scale(dpr, dpr);
+    }
+    resize();
+    window.addEventListener('resize', () => { ctx.setTransform(1,0,0,1,0,0); resize(); });
+
+    function showTooltip(node) {
+        tooltip.textContent = '';
+        node.tip.split('\n').forEach((line, i) => {
+            if (i > 0) tooltip.appendChild(document.createElement('br'));
+            tooltip.appendChild(document.createTextNode(line));
+        });
+        const { x, y } = getNodePos(node), r = nodeRadius();
+        let tx = x + r + 16, ty = y - 24;
+        if (tx + 260 > W) tx = x - r - 270;
+        if (ty + 90 > H)  ty = H - 100;
+        tooltip.style.left = tx + 'px'; tooltip.style.top = ty + 'px';
+        tooltip.classList.add('visible');
+    }
+    function hideTooltip() { tooltip.classList.remove('visible'); }
+
+    canvas.addEventListener('mousemove', e => {
+        const rect = canvas.getBoundingClientRect();
+        const n = hitTest(e.clientX - rect.left, e.clientY - rect.top);
+        hoveredNode = n || null;
+        canvas.style.cursor = n ? 'pointer' : 'default';
+        n ? showTooltip(n) : hideTooltip();
+    });
+    canvas.addEventListener('mouseleave', () => { hoveredNode = null; hideTooltip(); });
+    canvas.addEventListener('touchstart', e => {
+        const rect = canvas.getBoundingClientRect(), t = e.touches[0];
+        const n = hitTest(t.clientX - rect.left, t.clientY - rect.top);
+        hoveredNode = n || null;
+        n ? showTooltip(n) : hideTooltip();
+    });
+
+    requestAnimationFrame(draw);
+})();
+</script>
+
+<script>
+(function () {
+    const canvas = document.getElementById('fluid-canvas');
+    const cursorEl = document.getElementById('cursor');
+    let gl = canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (!gl) return;
+    let W = 0, H = 0;
+    function resize() { W = canvas.clientWidth; H = canvas.clientHeight; if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; } }
+    resize(); window.addEventListener('resize', () => { resize(); initBuffers(); });
+    let heroVisible = true;
+    const observer = new IntersectionObserver(entries => { heroVisible = entries[0].isIntersecting; }, { threshold: 0.01 });
+    observer.observe(canvas);
+    const VS = `attribute vec2 a_pos; varying vec2 v_uv; void main(){ v_uv=a_pos*0.5+0.5; gl_Position=vec4(a_pos,0,1); }`;
+    const FS_ADVECT = `precision highp float; varying vec2 v_uv; uniform sampler2D u_vel,u_src; uniform vec2 u_texel; uniform float u_dt,u_diss; void main(){ vec2 vel=texture2D(u_vel,v_uv).xy; vec2 c=v_uv-vel*u_dt*u_texel; gl_FragColor=u_diss*texture2D(u_src,c); }`;
+    const FS_DIV = `precision highp float; varying vec2 v_uv; uniform sampler2D u_vel; uniform vec2 u_texel; void main(){ float L=texture2D(u_vel,v_uv-vec2(u_texel.x,0)).x,R=texture2D(u_vel,v_uv+vec2(u_texel.x,0)).x,B=texture2D(u_vel,v_uv-vec2(0,u_texel.y)).y,T=texture2D(u_vel,v_uv+vec2(0,u_texel.y)).y; gl_FragColor=vec4(0.5*(R-L+T-B),0,0,1); }`;
+    const FS_PRES = `precision highp float; varying vec2 v_uv; uniform sampler2D u_pressure,u_div; uniform vec2 u_texel; void main(){ float L=texture2D(u_pressure,v_uv-vec2(u_texel.x,0)).x,R=texture2D(u_pressure,v_uv+vec2(u_texel.x,0)).x,B=texture2D(u_pressure,v_uv-vec2(0,u_texel.y)).x,T=texture2D(u_pressure,v_uv+vec2(0,u_texel.y)).x,d=texture2D(u_div,v_uv).x; gl_FragColor=vec4((L+R+B+T-d)*0.25,0,0,1); }`;
+    const FS_SUB = `precision highp float; varying vec2 v_uv; uniform sampler2D u_pressure,u_vel; uniform vec2 u_texel; void main(){ float L=texture2D(u_pressure,v_uv-vec2(u_texel.x,0)).x,R=texture2D(u_pressure,v_uv+vec2(u_texel.x,0)).x,B=texture2D(u_pressure,v_uv-vec2(0,u_texel.y)).x,T=texture2D(u_pressure,v_uv+vec2(0,u_texel.y)).x; vec2 vel=texture2D(u_vel,v_uv).xy; gl_FragColor=vec4(vel-vec2(R-L,T-B)*0.5,0,1); }`;
+    const FS_CURL = `precision highp float; varying vec2 v_uv; uniform sampler2D u_vel; uniform vec2 u_texel; void main(){ float T=texture2D(u_vel,v_uv+vec2(0,u_texel.y)).x,B=texture2D(u_vel,v_uv-vec2(0,u_texel.y)).x,R=texture2D(u_vel,v_uv+vec2(u_texel.x,0)).y,L=texture2D(u_vel,v_uv-vec2(u_texel.x,0)).y; gl_FragColor=vec4((R-L-T+B)*0.5,0,0,1); }`;
+    const FS_VORT = `precision highp float; varying vec2 v_uv; uniform sampler2D u_vel,u_curl; uniform vec2 u_texel; uniform float u_str,u_dt; void main(){ float T=texture2D(u_curl,v_uv+vec2(0,u_texel.y)).x,B=texture2D(u_curl,v_uv-vec2(0,u_texel.y)).x,R=texture2D(u_curl,v_uv+vec2(u_texel.x,0)).x,L=texture2D(u_curl,v_uv-vec2(u_texel.x,0)).x,C=texture2D(u_curl,v_uv).x; vec2 f=vec2(abs(T)-abs(B),abs(R)-abs(L)); f/=length(f)+0.0001; f*=u_str*C; f.y*=-1.0; gl_FragColor=vec4(texture2D(u_vel,v_uv).xy+f*u_dt,0,1); }`;
+    const FS_REPULSE = `precision highp float; varying vec2 v_uv; uniform sampler2D u_target; uniform vec2 u_point; uniform vec3 u_color; uniform float u_radius,u_aspect,u_force; uniform int u_mode; void main(){ vec2 p=v_uv-u_point; p.x*=u_aspect; float d2=dot(p,p); float f=exp(-d2/u_radius); vec4 base=texture2D(u_target,v_uv); if(u_mode==0){ vec2 dir=normalize(p+vec2(0.00001)); gl_FragColor=vec4(base.xy+dir*f*u_force,0,1); } else { float rim=f*(1.0-exp(-d2/(u_radius*0.3))); gl_FragColor=vec4(base.rgb+u_color*rim*0.5,1); } }`;
+    const FS_INJECT = `precision highp float; varying vec2 v_uv; uniform sampler2D u_target; uniform vec2 u_point,u_vel_add; uniform float u_radius,u_aspect; void main(){ vec2 p=v_uv-u_point; p.x*=u_aspect; float f=exp(-dot(p,p)/u_radius); vec4 base=texture2D(u_target,v_uv); gl_FragColor=vec4(base.xy+u_vel_add*f,0,1); }`;
+    const FS_DYE = `precision highp float; varying vec2 v_uv; uniform sampler2D u_target; uniform vec2 u_point; uniform vec3 u_color; uniform float u_radius,u_aspect; void main(){ vec2 p=v_uv-u_point; p.x*=u_aspect; float f=exp(-dot(p,p)/u_radius); vec4 base=texture2D(u_target,v_uv); gl_FragColor=vec4(base.rgb+u_color*f*0.55,1); }`;
+    const FS_DISPLAY = `precision highp float; varying vec2 v_uv; uniform sampler2D u_dye; void main(){ vec3 d=texture2D(u_dye,v_uv).rgb; float lum=dot(d,vec3(0.2,0.5,0.3)); vec3 col=vec3(d.r*0.04+d.b*0.12,d.g*0.30+d.b*0.50+lum*0.06,d.b*1.0+d.r*0.22); gl_FragColor=vec4(vec3(0.008,0.010,0.030)+col*2.1,1); }`;
+    function shader(type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);return s;}
+    function program(fs){const p=gl.createProgram(); gl.attachShader(p,shader(gl.VERTEX_SHADER,VS));gl.attachShader(p,shader(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(p);const u={};const n=gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS); for(let i=0;i<n;i++){const name=gl.getActiveUniform(p,i).name;u[name]=gl.getUniformLocation(p,name);} p.u=u;return p;}
+    const prog={advect:program(FS_ADVECT),div:program(FS_DIV),pres:program(FS_PRES),sub:program(FS_SUB),curl:program(FS_CURL),vort:program(FS_VORT),repulse:program(FS_REPULSE),inject:program(FS_INJECT),dye:program(FS_DYE),display:program(FS_DISPLAY)};
+    const quad=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,quad);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,-1,1,1,1,1,-1]),gl.STATIC_DRAW);
+    const qidx=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,qidx);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array([0,1,2,0,2,3]),gl.STATIC_DRAW);
+    function bq(p){gl.bindBuffer(gl.ARRAY_BUFFER,quad);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,qidx);const l=gl.getAttribLocation(p,'a_pos');gl.enableVertexAttribArray(l);gl.vertexAttribPointer(l,2,gl.FLOAT,false,0,0);}
+    function tx(p,name,src,unit){gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,src.tex||src);gl.uniform1i(p.u[name],unit);}
+    function blit(t){if(t){gl.bindFramebuffer(gl.FRAMEBUFFER,t.fbo);gl.viewport(0,0,t.w,t.h);}else{gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,W,H);}gl.drawElements(gl.TRIANGLES,6,gl.UNSIGNED_SHORT,0);}
+    function makeFBO(w,h){const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,null);const fbo=gl.createFramebuffer();gl.bindFramebuffer(gl.FRAMEBUFFER,fbo);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,tex,0);gl.viewport(0,0,w,h);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);return{tex,fbo,w,h};}
+    function makeDB(w,h){let a=makeFBO(w,h),b=makeFBO(w,h);return{get read(){return a;},get write(){return b;},swap(){[a,b]=[b,a];},w,h};}
+    let vel,dye_buf,pres,div_buf,curl_buf;
+    function initBuffers(){const ar=W/H,sw=Math.round(192*Math.max(ar,1)),sh=Math.round(192/Math.min(ar,1));const dw=Math.round(384*Math.max(ar,1)),dh=Math.round(384/Math.min(ar,1));vel=makeDB(sw,sh);dye_buf=makeDB(dw,dh);pres=makeDB(sw,sh);div_buf=makeFBO(sw,sh);curl_buf=makeFBO(sw,sh);}
+    initBuffers();
+    const SRCS=Array.from({length:4},(_,i)=>({angle:(i/4)*Math.PI*2,speed:0.15+Math.random()*0.10,rx:0.28+Math.random()*0.18,ry:0.16+Math.random()*0.12,cx:0.2+Math.random()*0.6,cy:0.25+Math.random()*0.5,phase:Math.random()*Math.PI*2}));
+    function autonomousStep(){const ar=W/H;SRCS.forEach(s=>{s.angle+=s.speed*0.004;const px=s.cx+Math.cos(s.angle+s.phase)*s.rx;const py=s.cy+Math.sin(s.angle+s.phase*0.65)*s.ry;const vx=Math.cos(s.angle+Math.PI*0.5)*0.008;const vy=Math.sin(s.angle+Math.PI*0.5)*0.008;gl.useProgram(prog.inject);bq(prog.inject);tx(prog.inject,'u_target',vel.read,0);gl.uniform2f(prog.inject.u['u_point'],px,1-py);gl.uniform2f(prog.inject.u['u_vel_add'],vx*80,vy*80);gl.uniform1f(prog.inject.u['u_radius'],0.0014);gl.uniform1f(prog.inject.u['u_aspect'],ar);blit(vel.write);vel.swap();if(Math.random()<0.03){gl.useProgram(prog.dye);bq(prog.dye);tx(prog.dye,'u_target',dye_buf.read,0);gl.uniform2f(prog.dye.u['u_point'],px,1-py);gl.uniform3f(prog.dye.u['u_color'],0.04+Math.random()*0.04,0.40+Math.random()*0.20,0.78+Math.random()*0.22);gl.uniform1f(prog.dye.u['u_radius'],0.0022);gl.uniform1f(prog.dye.u['u_aspect'],ar);blit(dye_buf.write);dye_buf.swap();}});}
+    setTimeout(()=>{const ar=W/H;for(let i=0;i<20;i++){const px=Math.random(),py=Math.random();gl.useProgram(prog.dye);bq(prog.dye);tx(prog.dye,'u_target',dye_buf.read,0);gl.uniform2f(prog.dye.u['u_point'],px,py);gl.uniform3f(prog.dye.u['u_color'],0.05+Math.random()*0.04,0.38+Math.random()*0.22,0.75+Math.random()*0.25);gl.uniform1f(prog.dye.u['u_radius'],0.006);gl.uniform1f(prog.dye.u['u_aspect'],ar);blit(dye_buf.write);dye_buf.swap();}for(let i=0;i<10;i++){const px=Math.random(),py=Math.random();gl.useProgram(prog.inject);bq(prog.inject);tx(prog.inject,'u_target',vel.read,0);gl.uniform2f(prog.inject.u['u_point'],px,py);gl.uniform2f(prog.inject.u['u_vel_add'],(Math.random()-0.5)*4,(Math.random()-0.5)*4);gl.uniform1f(prog.inject.u['u_radius'],0.003);gl.uniform1f(prog.inject.u['u_aspect'],ar);blit(vel.write);vel.swap();}},60);
+    let mx=-1,my=-1,mActive=false;
+    function doRepulse(x,y){const px=x/W,py=1-(y/H),ar=W/H;gl.useProgram(prog.repulse);bq(prog.repulse);tx(prog.repulse,'u_target',vel.read,0);gl.uniform2f(prog.repulse.u['u_point'],px,py);gl.uniform1f(prog.repulse.u['u_radius'],0.0006);gl.uniform1f(prog.repulse.u['u_aspect'],ar);gl.uniform1f(prog.repulse.u['u_force'],32.0);gl.uniform3f(prog.repulse.u['u_color'],0,0,0);gl.uniform1i(prog.repulse.u['u_mode'],0);blit(vel.write);vel.swap();tx(prog.repulse,'u_target',dye_buf.read,0);gl.uniform1f(prog.repulse.u['u_radius'],0.0010);gl.uniform1f(prog.repulse.u['u_force'],0);gl.uniform1i(prog.repulse.u['u_mode'],1);gl.uniform3f(prog.repulse.u['u_color'],0.06,0.55,0.90);blit(dye_buf.write);dye_buf.swap();}
+    const hero=document.querySelector('.hero');
+    hero.addEventListener('mouseenter',()=>cursorEl.classList.add('visible'));
+    hero.addEventListener('mouseleave',()=>{cursorEl.classList.remove('visible');mActive=false;});
+    document.addEventListener('mousemove',e=>{cursorEl.style.left=e.clientX+'px';cursorEl.style.top=e.clientY+'px';const r=canvas.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;if(x>=0&&y>=0&&x<=W&&y<=H){mx=x;my=y;mActive=true;}else mActive=false;});
+    canvas.addEventListener('touchmove',e=>{e.preventDefault();const r=canvas.getBoundingClientRect(),t=e.touches[0];mx=t.clientX-r.left;my=t.clientY-r.top;mActive=true;},{passive:false});
+    function step(dt){const sw=vel.w,sh=vel.h,txS=1/sw,tyS=1/sh;const dw=dye_buf.w,dh=dye_buf.h,txD=1/dw,tyD=1/dh;gl.disable(gl.BLEND);if(mActive)doRepulse(mx,my);autonomousStep();gl.useProgram(prog.curl);bq(prog.curl);tx(prog.curl,'u_vel',vel.read,0);gl.uniform2f(prog.curl.u['u_texel'],txS,tyS);blit(curl_buf);gl.useProgram(prog.vort);bq(prog.vort);tx(prog.vort,'u_vel',vel.read,0);tx(prog.vort,'u_curl',curl_buf,1);gl.uniform2f(prog.vort.u['u_texel'],txS,tyS);gl.uniform1f(prog.vort.u['u_str'],24.0);gl.uniform1f(prog.vort.u['u_dt'],dt);blit(vel.write);vel.swap();gl.useProgram(prog.div);bq(prog.div);tx(prog.div,'u_vel',vel.read,0);gl.uniform2f(prog.div.u['u_texel'],txS,tyS);blit(div_buf);gl.useProgram(prog.pres);bq(prog.pres);tx(prog.pres,'u_div',div_buf,1);gl.uniform2f(prog.pres.u['u_texel'],txS,tyS);for(let i=0;i<12;i++){tx(prog.pres,'u_pressure',pres.read,0);blit(pres.write);pres.swap();}gl.useProgram(prog.sub);bq(prog.sub);tx(prog.sub,'u_pressure',pres.read,0);tx(prog.sub,'u_vel',vel.read,1);gl.uniform2f(prog.sub.u['u_texel'],txS,tyS);blit(vel.write);vel.swap();gl.useProgram(prog.advect);bq(prog.advect);tx(prog.advect,'u_vel',vel.read,0);tx(prog.advect,'u_src',vel.read,1);gl.uniform2f(prog.advect.u['u_texel'],txS,tyS);gl.uniform1f(prog.advect.u['u_dt'],dt);gl.uniform1f(prog.advect.u['u_diss'],0.990);blit(vel.write);vel.swap();tx(prog.advect,'u_vel',vel.read,0);tx(prog.advect,'u_src',dye_buf.read,1);gl.uniform2f(prog.advect.u['u_texel'],txD,tyD);gl.uniform1f(prog.advect.u['u_dt'],dt);gl.uniform1f(prog.advect.u['u_diss'],0.982);blit(dye_buf.write);dye_buf.swap();}
+    let last=performance.now();
+    function render(now){if(!heroVisible){last=now;requestAnimationFrame(render);return;}const dt=Math.min((now-last)/1000,0.033);last=now;step(dt);gl.disable(gl.BLEND);gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,W,H);gl.useProgram(prog.display);bq(prog.display);tx(prog.display,'u_dye',dye_buf.read,0);gl.drawElements(gl.TRIANGLES,6,gl.UNSIGNED_SHORT,0);requestAnimationFrame(render);}
+    requestAnimationFrame(render);
+})();
+</script>
 </body>
 </html>

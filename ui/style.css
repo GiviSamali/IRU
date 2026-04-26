@@ -354,6 +354,30 @@ html, body {
 .cmd-details::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .cmd-entry.open .cmd-details { display: block; }
 
+/* Grouped commands */
+.cmd-group { margin-bottom: 4px; border-left: 2px solid var(--border); padding-left: 8px; }
+.cmd-group:hover { border-left-color: var(--accent-dim); }
+.cmd-group-header {
+  display: flex; align-items: center; gap: 6px; font-size: 10px;
+  color: var(--text-muted); cursor: pointer; padding: 3px 0;
+  min-width: 0;
+}
+.cmd-group-arrow {
+  font-size: 10px; flex-shrink: 0; display: inline-block;
+  transition: transform 0.2s ease;
+}
+.cmd-group.open .cmd-group-arrow { transform: rotate(180deg); }
+.cmd-group-text {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--accent-dim);
+  font-family: 'JetBrains Mono', monospace;
+}
+.cmd-group-extra {
+  font-size: 9px; color: var(--text-muted); flex-shrink: 0; white-space: nowrap;
+}
+.cmd-group-body { display: none; margin-top: 4px; padding-left: 4px; }
+.cmd-group.open .cmd-group-body { display: block; }
+
 /* Confirm actions — Point 7: blueprint theme */
 .confirm-actions {
   display: flex; gap: 12px; margin-top: 10px;
