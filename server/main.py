@@ -398,8 +398,18 @@ async def send_command_to_agent(device_id: str, action: str, params: dict,
     })
     await dev["ws"].send_text(msg)
 
+    wait_timeout = 60.0
+    if action == "execute_cmd":
+        try:
+            cmd_timeout = int(params.get("timeout", 30) or 30)
+        except Exception:
+            cmd_timeout = 30
+        wait_timeout = max(60.0, float(cmd_timeout) + 15.0)
+    elif action == "write_content":
+        wait_timeout = 90.0
+
     try:
-        result = await asyncio.wait_for(future, timeout=60.0)
+        result = await asyncio.wait_for(future, timeout=wait_timeout)
     except asyncio.TimeoutError:
         dev["pending"].pop(cmd_id, None)
         raise RuntimeError("Таймаут ожидания ответа от агента")
@@ -1836,6 +1846,13 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
         # (защита от race condition при быстром reconnect)
         current = devices.get(dk)
         if current and current.get("ws") is ws:
+            pending = current.get("pending", {})
+            for cmd_id, future in list(pending.items()):
+                if future and not future.done():
+                    future.set_result({
+                        "error": f"AGENT_DISCONNECTED: устройство '{device_id}' отключилось во время выполнения команды"
+                    })
+                pending.pop(cmd_id, None)
             devices.pop(dk, None)
             print(f"[ws] device removed: {device_id}")
         else:

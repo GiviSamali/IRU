@@ -495,7 +495,7 @@ function renderMessages() {
     // Plan suggestion banner
     let planHTML = '';
     // TODO: persist planDismissed/planDeclined на сервере, чтобы после F5 плашка не возвращалась
-    if (m.planSuggestion && !m.autoPlan && !m.planDismissed && !m.planDeclined) {
+    if (m.planSuggestion && !m.planDismissed && !m.planDeclined) {
       if (m.planTrialUsed) {
         planHTML = `<div class="plan-suggest-block" id="ps-${mi}">
           <div class="plan-suggest-text" style="color:#888;">Режим План доступен на Pro-тарифе. Вы уже использовали пробный запуск.</div>
@@ -506,7 +506,7 @@ function renderMessages() {
         planHTML = `<div class="plan-suggest-block" id="ps-${mi}" data-chat-id="${state.currentChatId}" data-orig-req="${origReq}">
           <div class="plan-suggest-text">Задача непростая: ${desc}. В режиме План ИРУ составит и выполнит пошаговое решение.</div>
           <div class="plan-suggest-actions">
-            <button class="plan-suggest-accept" onclick="acceptPlanSuggestion(document.getElementById('ps-${mi}'))">Попробовать разово</button>
+            <button class="plan-suggest-accept" onclick="acceptPlanSuggestion(document.getElementById('ps-${mi}'))">Запустить план</button>
             <button class="plan-suggest-decline" onclick="declinePlanSuggestion(document.getElementById('ps-${mi}'))">Без плана</button>
           </div>
           <div class="plan-suggest-warning" style="font-size:11px;color:#888;margin-top:6px;">Команды плана будут выполнены без отдельного подтверждения. Нажимайте, только если доверяете задаче.</div>
@@ -652,10 +652,6 @@ async function pollTask(taskId, msgIndex) {
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
         // Update memory badge (Point 10)
         if (task.memory_stats) updateMemoryBadge(task.memory_stats);
-        // Auto-plan for pro users
-        if (task.auto_plan && task.plan_original_request) {
-          runPlan(state.currentChatId, task.plan_original_request);
-        }
         renderMessages();
         loadChats();
         return;

@@ -707,15 +707,20 @@ async def run_agent():
                         func = ACTIONS.get(action_name)
                         if func is None:
                             raise ValueError(f"Неизвестное действие: {action_name}")
-                        result = func(**params)
+                        # Не блокируем event loop во время долгих действий:
+                        # иначе агент перестаёт отвечать на ping/pong и теряет WS-соединение.
+                        result = await asyncio.to_thread(func, **params)
                         payload = {"id": cmd_id, "status": "ok", "result": result}
                     except Exception as e:
                         payload = {"id": cmd_id, "status": "error", "error": str(e)}
 
                     await ws.send(json.dumps({"type": "result", "payload": payload}))
 
+        except websockets.ConnectionClosed as e:
+            print(f"[agent] websocket closed: code={e.code}, reason={e.reason!r}, reconnecting in 3s...")
+            await asyncio.sleep(3)
         except Exception as e:
-            print(f"[agent] disconnected: {e}, reconnecting in 3s...")
+            print(f"[agent] disconnected: {type(e).__name__}: {e}, reconnecting in 3s...")
             await asyncio.sleep(3)
 
 
