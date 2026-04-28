@@ -1976,9 +1976,14 @@ async function sendMessageDirect(text) {
   state.messages.push({ role: 'assistant', loading: true, currentStep: 'ИРУ думает...' });
   renderMessages();
   try {
-    const body = { message: text, device_id: state.selectedDevice, modes: {} };
+    const body = {
+      message: text,
+      device_id: state.selectedDevice,
+      chat_id: state.currentChatId,
+      modes: {},
+    };
     if (state.sendTarget === 'all') body.broadcast = true;
-    const resp = await apiFetch(`${API}/nl_command?chat_id=${state.currentChatId}`, {
+    const resp = await apiFetch(`${API}/nl_command`, {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify(body),
     });
