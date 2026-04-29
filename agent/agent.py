@@ -5,7 +5,7 @@ Responsibilities:
 - load and migrate config
 - initialize logging and diagnostics state
 - collect first-run setup if config is incomplete
-- run pre-flight update check
+- run update check before headless start or inside the Windows shell flow
 - launch the Windows shell or headless runtime
 """
 
@@ -87,19 +87,31 @@ def main() -> int:
     if not config:
         return 1
 
-    if check_for_update(config["server_url"], agent_version, paths, logger, state):
-        logger.info("[agent] updater launched, exiting current process")
-        return 0
-
     runtime = AgentRuntime(config=config, agent_version=agent_version, logger=logger, state=state)
 
     if should_launch_windows_shell():
         try:
             from ui.shell import launch_windows_shell
 
-            return int(launch_windows_shell(runtime, state, config, paths, logger))
+            def startup_update_check() -> bool:
+                return check_for_update(config["server_url"], agent_version, paths, logger, state)
+
+            return int(
+                launch_windows_shell(
+                    runtime,
+                    state,
+                    config,
+                    paths,
+                    logger,
+                    startup_update_check=startup_update_check,
+                )
+            )
         except Exception:
             logger.exception("[agent] failed to launch Windows shell, falling back to headless mode")
+
+    if check_for_update(config["server_url"], agent_version, paths, logger, state):
+        logger.info("[agent] updater launched, exiting current process")
+        return 0
 
     runtime.run_headless()
     return 0
@@ -107,4 +119,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
