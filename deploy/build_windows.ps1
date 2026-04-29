@@ -14,7 +14,7 @@
 #
 # Требования:
 #   - Python 3.11+ в PATH
-#   - agent\agent.py и ui\IruIcon.ico в репозитории
+#   - agent\agent.py и иконка agent\IruIcon.ico (или fallback ui\IruIcon.ico)
 #
 # КОДИРОВКА: UTF-8 с BOM (обязательно для PowerShell 5.1 на русской Windows)
 
@@ -36,7 +36,8 @@ $ErrorActionPreference = "Stop"
 # -- Пути ------------------------------------------------------------------
 $repoRoot  = (Get-Item -Path "$PSScriptRoot\..").FullName
 $agentDir  = Join-Path $repoRoot "agent"
-$iconPath  = Join-Path $repoRoot "ui\IruIcon.ico"
+$iconPath  = Join-Path $agentDir "IruIcon.ico"
+$fallbackIconPath = Join-Path $repoRoot "ui\IruIcon.ico"
 $distDir   = Join-Path $repoRoot "dist"
 $buildDir  = Join-Path $repoRoot "build"
 $specPath  = Join-Path $repoRoot "IruAgent.spec"
@@ -45,8 +46,12 @@ if (-not (Test-Path "$agentDir\agent.py")) {
     throw "Не найден agent\agent.py. Запускайте скрипт из репозитория IRU."
 }
 if (-not (Test-Path $iconPath)) {
-    Write-Warning "Иконка $iconPath не найдена — собираем без иконки."
-    $iconPath = $null
+    if (Test-Path $fallbackIconPath) {
+        $iconPath = $fallbackIconPath
+    } else {
+        Write-Warning "Иконка не найдена ни в agent, ни в ui — собираем без иконки."
+        $iconPath = $null
+    }
 }
 
 $modeLabel = if ($DebugBuild) { "DEBUG/console" } else { "windowed" }
@@ -58,8 +63,15 @@ $py = (Get-Command python -ErrorAction SilentlyContinue)
 if (-not $py) { throw "Python не найден в PATH." }
 
 Write-Host "Python: $($py.Source)"
-& python -m pip install --upgrade pip | Out-Null
-& python -m pip install --upgrade pyinstaller websockets httpx | Out-Null
+Write-Host "Обновляем pip..."
+& python -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "pip upgrade завершился с кодом $LASTEXITCODE" }
+
+Write-Host "Устанавливаем зависимости сборки (pyinstaller, websockets, httpx, PySide6)..."
+& python -m pip install --upgrade pyinstaller websockets httpx PySide6
+if ($LASTEXITCODE -ne 0) { throw "pip install завершился с кодом $LASTEXITCODE" }
+
+Write-Host "Зависимости установлены." -ForegroundColor DarkGray
 
 # -- Очистка ----------------------------------------------------------------
 if (Test-Path $distDir)  { Remove-Item -Recurse -Force $distDir }
@@ -75,7 +87,12 @@ $pyiArgs = @(
     "--workpath", $buildDir,
     "--specpath", $repoRoot,
     "--noconfirm",
+    "--collect-submodules", "core",
+    "--collect-submodules", "ui",
     "--collect-submodules", "platforms",
+    "--collect-all", "PySide6",
+    "--hidden-import", "core",
+    "--hidden-import", "ui",
     "--hidden-import", "platforms",
     "--hidden-import", "platforms.windows",
     "--hidden-import", "platforms.linux"

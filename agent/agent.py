@@ -1,30 +1,36 @@
 """
-agent.py — универсальный агент-исполнитель ИРУ v3.5
+Thin entrypoint for the IRU agent runtime.
 
-Подключается к серверу по WebSocket с токеном пользователя и выполняет команды:
-- execute_cmd: выполнить команду в PowerShell/bash (с корректной кириллицей)
-- list_dir: показать содержимое директории (для проводника UI)
-- get_file_content: прочитать файл в base64 (для скачивания)
-- автообновление: проверяет версию при запуске, обновляет exe если есть новая версия
+Responsibilities:
+- load and migrate config
+- initialize logging and diagnostics state
+- collect first-run setup if config is incomplete
+- run pre-flight update check
+- launch the Windows shell or headless runtime
 """
 
-import json
-import asyncio
-import subprocess
-import websockets
-import platform
-import os
-import sys
-import base64
-import time
-import tempfile
-from pathlib import Path
-import zipfile
-import shutil
-from urllib.request import urlopen, Request
-from urllib.error import URLError
+from __future__ import annotations
 
-# Windows: stdout/stderr по умолчанию cp866, print() выдаёт мусор вместо кириллицы
+import os
+import platform
+import sys
+
+from core.config import (
+    DEFAULT_CONFIG,
+    detect_paths,
+    is_config_complete,
+    load_config,
+    merge_config,
+    save_config,
+)
+from core.logging_utils import configure_logging
+from core.runtime import AgentRuntime
+from core.state import AgentSnapshot, AgentState
+from core.update import check_for_update
+from core.version import read_agent_version
+from ui.setup import collect_setup, gui_available
+
+
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -32,697 +38,73 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-from platforms import get_platform
-platform_mod = get_platform()
 
-def _read_agent_version() -> str:
-    """Читает версию из VERSION.txt рядом с exe (PyInstaller) или из дерева проекта (dev)."""
-    candidates = []
-    if getattr(sys, 'frozen', False):
-        candidates.append(Path(sys.executable).parent / "VERSION.txt")
-    candidates.append(Path(__file__).parent / "VERSION.txt")
-    candidates.append(Path(__file__).parent.parent / "VERSION.txt")
-    for p in candidates:
-        try:
-            if p.exists():
-                return p.read_text(encoding="utf-8-sig").strip()
-        except Exception:
-            continue
-    return "3.11"
-
-
-AGENT_VERSION = _read_agent_version()
-
-# Для PyInstaller: определяем путь к exe, а не к временной папке
-if getattr(sys, 'frozen', False):
-    BASE_DIR = Path(sys.executable).parent
-else:
-    BASE_DIR = Path(__file__).parent
-
-CONFIG_PATH = BASE_DIR / "config.json"
-
-
-DEFAULT_CONFIG = {
-    "device_id": "",
-    "server_url": "wss://irumode.ru",
-    "user_token": "",
-}
-
-
-def load_config():
-    """Загрузить конфигурацию агента. Если файла нет — создать дефолтный."""
-    if not CONFIG_PATH.exists():
-        save_config(DEFAULT_CONFIG)
-        return dict(DEFAULT_CONFIG)
-    data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
-    return data
-
-
-def save_config(data: dict):
-    """Сохранить конфигурацию агента."""
-    CONFIG_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+def build_state(agent_version: str, config: dict, paths) -> AgentState:
+    return AgentState(
+        AgentSnapshot(
+            version=agent_version,
+            device_id=config.get("device_id", ""),
+            server_url=config.get("server_url", ""),
+            config_path=str(paths.config_path),
+            logs_dir=str(paths.logs_dir),
+            log_path=str(paths.log_path),
+        )
     )
 
 
-def ask_setup_gui(need_token: bool = True, need_device: bool = True) -> dict | None:
-    """
-    Окно первоначальной настройки: токен + имя устройства.
-    Возвращает {"token": ..., "device_id": ...} или None (закрыли окно).
-    """
-    import tkinter as tk
-    import re
+def ensure_config(config: dict, paths, logger, state: AgentState) -> dict | None:
+    merged = merge_config(config)
+    if is_config_complete(merged):
+        return merged
 
-    result = [None]
+    logger.info("[agent] config is incomplete, opening setup flow")
+    setup = collect_setup(merged or DEFAULT_CONFIG)
+    if not setup:
+        state.mark_config_error("Настройка отменена пользователем.")
+        logger.warning("[agent] setup cancelled by user")
+        return None
 
-    root = tk.Tk()
-    root.title("ИРУ — Первый запуск")
-    root.configure(bg="#0a0e17")
-    root.resizable(False, False)
-
-    w, h = 420, 340
-    x = (root.winfo_screenwidth() - w) // 2
-    y = (root.winfo_screenheight() - h) // 2
-    root.geometry(f"{w}x{h}+{x}+{y}")
-
-    entry_style = dict(
-        font=("Consolas", 12), width=36,
-        bg="#141b2a", fg="#e2e8f0", insertbackground="#00d4ff",
-        relief="flat", bd=0, highlightthickness=1,
-        highlightbackground="#1e293b", highlightcolor="#00d4ff",
-    )
-
-    tk.Label(
-        root, text="ИРУ — Интеллектуальный Режим Управления",
-        fg="#00d4ff", bg="#0a0e17", font=("Segoe UI", 11, "bold"),
-    ).pack(pady=(20, 12))
-
-    # ── Имя устройства ──
-    tk.Label(
-        root, text="Имя устройства (латиница, без пробелов):",
-        fg="#94a3b8", bg="#0a0e17", font=("Segoe UI", 9),
-    ).pack(anchor="w", padx=40)
-
-    device_entry = tk.Entry(root, **entry_style)
-    device_entry.insert(0, platform.node())  # hostname по умолчанию
-    device_entry.pack(pady=(2, 8), ipady=5)
-    device_entry.focus_set()
-
-    # ── Токен ──
-    tk.Label(
-        root, text="Токен доступа (получить у администратора):",
-        fg="#94a3b8", bg="#0a0e17", font=("Segoe UI", 9),
-    ).pack(anchor="w", padx=40)
-
-    token_entry = tk.Entry(root, **entry_style)
-    token_entry.pack(pady=(2, 4), ipady=5)
-
-    error_label = tk.Label(
-        root, text="", fg="#ef4444", bg="#0a0e17", font=("Segoe UI", 9),
-    )
-    error_label.pack()
-
-    def on_submit(event=None):
-        dev = device_entry.get().strip()
-        tok = token_entry.get().strip()
-
-        if not dev:
-            error_label.config(text="Введите имя устройства")
-            return
-        # Только латиница, цифры, дефис, подчёркивание
-        if not re.match(r'^[A-Za-z0-9_\-]+$', dev):
-            error_label.config(text="Имя: только латиница, цифры, - и _")
-            return
-        if not tok:
-            error_label.config(text="Введите токен доступа")
-            return
-
-        result[0] = {"token": tok, "device_id": dev}
-        root.destroy()
-
-    def on_close():
-        root.destroy()
-
-    btn = tk.Button(
-        root, text="Подключиться", command=on_submit,
-        bg="#00d4ff", fg="#0a0e17", font=("Segoe UI", 10, "bold"),
-        activebackground="#00b8d4", activeforeground="#0a0e17",
-        relief="flat", cursor="hand2", padx=20, pady=4,
-    )
-    btn.pack(pady=8)
-
-    # Явные биндинги Ctrl+V/C/A + перехват для русской раскладки
-    def _paste(e):
-        try:
-            e.widget.event_generate('<<Paste>>')
-        except Exception:
-            pass
-        return 'break'
-
-    def _copy(e):
-        try:
-            e.widget.event_generate('<<Copy>>')
-        except Exception:
-            pass
-        return 'break'
-
-    def _select_all(e):
-        e.widget.select_range(0, tk.END)
-        return 'break'
-
-    def _key_handler(e):
-        """Перехват Ctrl+клавиша на любой раскладке через keycode."""
-        # keycode 86=V, 67=C, 65=A (одинаково на любой раскладке)
-        if e.state & 0x4:  # Ctrl зажат
-            if e.keycode == 86:  # V
-                return _paste(e)
-            elif e.keycode == 67:  # C
-                return _copy(e)
-            elif e.keycode == 65:  # A
-                return _select_all(e)
-
-    for entry_w in (device_entry, token_entry):
-        entry_w.bind('<Key>', _key_handler)
-
-    root.bind("<Return>", on_submit)
-    root.protocol("WM_DELETE_WINDOW", on_close)
-    root.mainloop()
-
-    return result[0]
+    merged = save_config(paths, {**merged, **setup}, logger=logger)
+    state.set_config(merged.get("device_id", ""), merged.get("server_url", ""))
+    logger.info("[agent] setup finished, config saved")
+    return merged
 
 
-def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
-    """Делегирует выполнение команды платформенному модулю."""
-    return platform_mod.execute_cmd(command, timeout=timeout, shell=shell)
-
-
-def list_dir(path: str = None) -> dict:
-    """Содержимое директории для проводника UI."""
-    if not path:
-        path = _get_desktop_path()
-
-    target = Path(path)
-    if not target.exists():
-        return {"error": f"Не найдено: {path}"}
-    if not target.is_dir():
-        return {"error": f"Не директория: {path}"}
-
-    dirs_list = []
-    files_list = []
-    try:
-        for entry in os.scandir(target):
-            try:
-                stat = entry.stat()
-                info = {
-                    "name": entry.name,
-                    "path": str(Path(entry.path)),
-                    "size": stat.st_size if entry.is_file() else None,
-                    "is_dir": entry.is_dir(),
-                }
-                if entry.is_dir():
-                    dirs_list.append(info)
-                else:
-                    files_list.append(info)
-            except OSError:
-                pass
-    except PermissionError:
-        return {"error": f"Нет доступа: {path}"}
-
-    dirs_list.sort(key=lambda x: x["name"].lower())
-    files_list.sort(key=lambda x: x["name"].lower())
-
-    return {
-        "path": str(target),
-        "dirs": dirs_list,
-        "files": files_list,
-        "dirs_count": len(dirs_list),
-        "files_count": len(files_list),
-    }
-
-
-def write_content(path: str, content: str, append: bool = False, encoding: str = "utf-8") -> dict:
-    """Напрямую записать текст в файл.
-
-    Альтернатива для длинных текстов, чтобы не гонять через шелл (экранирование,
-    here-string, кодировка). Работает одинаково на Windows и Linux.
-
-    Args:
-        path: путь к файлу
-        content: текстовое содержимое
-        append: True — дописать в конец файла; False — перезаписать
-        encoding: кодировка (по умолчанию utf-8)
-    """
-    try:
-        p = Path(path)
-        # Создать родительскую директорию при необходимости
-        p.parent.mkdir(parents=True, exist_ok=True)
-        mode = "a" if append else "w"
-        with open(p, mode, encoding=encoding, newline="") as f:
-            f.write(content)
-        return {
-            "path": str(p),
-            "bytes_written": len(content.encode(encoding, errors="replace")),
-            "mode": "append" if append else "overwrite",
-            "total_size": p.stat().st_size,
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
-
-def get_file_content(path: str, max_size: int = 50_000_000) -> dict:
-    """Прочитать файл и вернуть содержимое в base64."""
-    try:
-        p = Path(path)
-        if not p.exists():
-            return {"error": f"Файл не найден: {path}"}
-        if not p.is_file():
-            return {"error": f"Не файл: {path}"}
-        if p.stat().st_size > max_size:
-            return {"error": f"Файл слишком большой: {p.stat().st_size} байт (макс. {max_size})"}
-
-        data = p.read_bytes()
-        return {
-            "filename": p.name,
-            "size": len(data),
-            "data_b64": base64.b64encode(data).decode("ascii"),
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
-
-
-def _get_desktop_path() -> str:
-    """Делегирует определение Desktop платформенному модулю."""
-    return platform_mod.get_desktop_path()
-
-def collect_system_info() -> dict:
-    """Собрать информацию о системе для device profile.
-    Общие поля формируются здесь, платформо-специфичные — через platform_mod."""
-    info = {
-        "device_id": "",   # заполняется позже
-        "os": platform.system(),
-        "os_version": platform.version(),
-        "hostname": platform.node(),
-        "username": platform_mod.get_username(),
-        "desktop_path": platform_mod.get_desktop_path(),
-        "machine_guid": platform_mod.get_machine_guid(),
-        "cpu": "",
-        "gpu": "",
-        "ram_gb": 0,
-        "disks": [],
-    }
-
-    # CPU, GPU, RAM, диски — от платформенного модуля
-    sys_info = platform_mod.get_system_info()
-    info.update(sys_info)
-
-    return info
-
-
-# Реестр доступных действий
-ACTIONS = {
-    "execute_cmd": lambda **p: execute_cmd(**p),
-    "list_dir": lambda **p: list_dir(**p),
-    "get_file_content": lambda **p: get_file_content(**p),
-    "write_content": lambda **p: write_content(**p),
-}
-
-
-def _version_tuple(v: str):
-    """Преобразовать строку версии в кортеж для сравнения."""
-    try:
-        return tuple(int(x) for x in v.strip().split("."))
-    except (ValueError, AttributeError):
-        return (0, 0)
-
-
-def check_for_update(server_url: str) -> bool:
-    """Проверить наличие обновления и выполнить его.
-    Поддерживает kind="exe" (старый путь) и kind="zip" (новый onedir).
-    Возвращает True если обновление запущено (нужно завершить процесс)."""
-    # Преобразовать wss:// в https:// для HTTP-запросов
-    http_url = server_url.replace("wss://", "https://").replace("ws://", "http://")
-
-    try:
-        print(f"[update] проверка обновлений... (текущая: {AGENT_VERSION})")
-        req = Request(f"{http_url}/api/agent/version", headers={"User-Agent": f"IRU-Agent/{AGENT_VERSION}"})
-        resp = urlopen(req, timeout=10)
-        data = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        print(f"[update] не удалось проверить: {e}")
-        return False
-
-    server_version = data.get("version", "0.0")
-    download_url = data.get("download_url", "")
-    # Обратная совместимость: если kind не указан — exe
-    kind = data.get("kind", "exe")
-
-    if _version_tuple(server_version) <= _version_tuple(AGENT_VERSION):
-        print(f"[update] актуальная версия ({AGENT_VERSION})")
-        return False
-
-    if not download_url:
-        print(f"[update] новая версия {server_version}, но нет ссылки на скачивание")
-        return False
-
-    # Скачать новую версию
-    print(f"[update] скачиваем {server_version} (kind={kind})...")
-    full_url = f"{http_url}{download_url}" if download_url.startswith("/") else download_url
-    try:
-        req = Request(full_url, headers={"User-Agent": f"IRU-Agent/{AGENT_VERSION}"})
-        resp = urlopen(req, timeout=120)
-        new_data = resp.read()
-    except Exception as e:
-        print(f"[update] ошибка скачивания: {e}")
-        return False
-
-    if len(new_data) < 1000:
-        print(f"[update] скачанный файл слишком маленький ({len(new_data)} байт), пропуск")
-        return False
-
-    # Только для скомпилированного exe (PyInstaller) на Windows
-    if not getattr(sys, 'frozen', False):
-        print(f"[update] новая версия {server_version} доступна, но автообновление работает только для exe")
-        return False
+def should_launch_windows_shell() -> bool:
     if platform.system() != "Windows":
-        print(f"[update] авто-обновление пока только для Windows. Обновите бинарник вручную.")
         return False
-
-    if kind == "zip":
-        return _update_zip(new_data, server_version)
-    else:
-        return _update_exe(new_data, server_version)
+    return gui_available()
 
 
-def _update_exe(new_data: bytes, server_version: str) -> bool:
-    """Обновление через подмену одиночного exe (старый путь, fallback)."""
-    exe_path = Path(sys.executable)
-    new_exe = exe_path.parent / "agent_new.exe"
-    old_exe = exe_path.parent / "agent_old.exe"
+def main() -> int:
+    paths = detect_paths()
+    logger = configure_logging(paths)
+    config = load_config(paths, logger=logger)
+    agent_version = read_agent_version()
+    state = build_state(agent_version, config, paths)
 
-    try:
-        new_exe.write_bytes(new_data)
-    except Exception as e:
-        print(f"[update] ошибка записи: {e}")
-        return False
+    config = ensure_config(config, paths, logger, state)
+    if not config:
+        return 1
 
-    print(f"[update] скачано {len(new_data)} байт, запускаем обновление (exe)...")
+    if check_for_update(config["server_url"], agent_version, paths, logger, state):
+        logger.info("[agent] updater launched, exiting current process")
+        return 0
 
-    bat_path = exe_path.parent / "_update.bat"
-    pid = os.getpid()
-    bat_content = f"""@echo off
-chcp 65001 >nul
-echo [обновление] Ждём завершения старого процесса...
-:wait_loop
-tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
-if not errorlevel 1 (
-    timeout /t 1 /nobreak >nul
-    goto wait_loop
-)
-echo [обновление] Подменяем файл...
-if exist "{old_exe}" del /f "{old_exe}"
-move /y "{exe_path}" "{old_exe}"
-move /y "{new_exe}" "{exe_path}"
-echo [обновление] Запускаем новую версию...
-start "" "{exe_path}"
-if exist "{old_exe}" del /f "{old_exe}"
-del /f "%~f0"
-"""
-    try:
-        bat_path.write_text(bat_content, encoding="utf-8")
-        subprocess.Popen(
-            ["cmd", "/c", str(bat_path)],
-            creationflags=0x08000000,  # CREATE_NO_WINDOW
-            close_fds=True,
-        )
-        print(f"[update] обновление запущено, завершаем текущий процесс")
-        return True
-    except Exception as e:
-        print(f"[update] ошибка запуска обновления (exe): {e}")
+    runtime = AgentRuntime(config=config, agent_version=agent_version, logger=logger, state=state)
+
+    if should_launch_windows_shell():
         try:
-            new_exe.unlink(missing_ok=True)
-            bat_path.unlink(missing_ok=True)
+            from ui.shell import launch_windows_shell
+
+            return int(launch_windows_shell(runtime, state, config, paths, logger))
         except Exception:
-            pass
-        return False
+            logger.exception("[agent] failed to launch Windows shell, falling back to headless mode")
 
-
-def _update_zip(new_data: bytes, server_version: str) -> bool:
-    """Обновление через ZIP: распаковка в staging, атомарная подмена папки через .bat."""
-    # Проверить ZIP-сигнатуру
-    if new_data[:4] != b"PK\x03\x04":
-        print(f"[update] скачанный файл не является ZIP, пропуск")
-        return False
-
-    parent_dir = BASE_DIR.parent
-    zip_path = parent_dir / f"agent_update_{server_version}.zip"
-    staging_dir = parent_dir / f"agent_new_{server_version}"
-
-    # Записать zip
-    try:
-        zip_path.write_bytes(new_data)
-    except Exception as e:
-        print(f"[update] ошибка записи zip: {e}")
-        return False
-
-    print(f"[update] скачано {len(new_data)} байт, распаковываем...")
-
-    # Создать staging (удалить если существует)
-    if staging_dir.exists():
-        shutil.rmtree(staging_dir, ignore_errors=True)
-    staging_dir.mkdir(parents=True, exist_ok=True)
-
-    # Распаковать
-    try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(staging_dir)
-    except Exception as e:
-        print(f"[update] ошибка распаковки: {e}")
-        try:
-            zip_path.unlink(missing_ok=True)
-            shutil.rmtree(staging_dir, ignore_errors=True)
-        except Exception:
-            pass
-        return False
-
-    # Проверить наличие IruAgent.exe в staging (плоская или вложенная структура)
-    staging_exe = staging_dir / "IruAgent.exe"
-    nested_dir = staging_dir / "IruAgent"
-    if not staging_exe.exists() and nested_dir.is_dir():
-        # ZIP содержит папку IruAgent/ — поднимаем содержимое на уровень выше
-        nested_exe = nested_dir / "IruAgent.exe"
-        if nested_exe.exists():
-            print(f"[update] обнаружена вложенная структура IruAgent/, поднимаем файлы")
-            for item in list(nested_dir.iterdir()):
-                dest = staging_dir / item.name
-                if dest.exists():
-                    if dest.is_dir():
-                        shutil.rmtree(dest, ignore_errors=True)
-                    else:
-                        dest.unlink()
-                shutil.move(str(item), str(dest))
-            nested_dir.rmdir()
-            staging_exe = staging_dir / "IruAgent.exe"
-    if not staging_exe.exists():
-        print(f"[update] в архиве не найден IruAgent.exe, пропуск")
-        try:
-            zip_path.unlink(missing_ok=True)
-            shutil.rmtree(staging_dir, ignore_errors=True)
-        except Exception:
-            pass
-        return False
-
-    # Проверить VERSION.txt (если есть)
-    staging_version_file = staging_dir / "VERSION.txt"
-    if staging_version_file.exists():
-        ver_text = staging_version_file.read_text(encoding="utf-8-sig").strip()
-        if ver_text != server_version:
-            print(f"[update] предупреждение: VERSION.txt={ver_text}, ожидалось {server_version}")
-
-    print(f"[update] распаковано, запускаем подмену папки...")
-
-    # Атомарная подмена через .bat
-    pid = os.getpid()
-    ts = int(time.time())
-    backup_dir = parent_dir / f"agent_old_{ts}"
-    new_exe_path = BASE_DIR / "IruAgent.exe"
-    bat_path = parent_dir / "_update_zip.bat"
-    log_path = os.path.join(tempfile.gettempdir(), "iru_agent_update.log")
-    config_src = BASE_DIR / "config.json"
-    config_dst = staging_dir / "config.json"
-
-    bat_content = f"""@echo off
-chcp 65001 >nul
-set LOG="{log_path}"
-echo [%date% %time%] Начало обновления v{server_version} >> %LOG%
-
-echo [обновление] Ждём завершения старого процесса (PID {pid})...
-:wait_loop
-tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
-if not errorlevel 1 (
-    timeout /t 1 /nobreak >nul
-    goto wait_loop
-)
-echo [%date% %time%] Процесс завершён >> %LOG%
-
-echo [обновление] Переименовываем старую папку...
-move /y "{BASE_DIR}" "{backup_dir}"
-if errorlevel 1 (
-    echo [%date% %time%] ОШИБКА: не удалось переименовать старую папку >> %LOG%
-    echo [обновление] ОШИБКА: не удалось переименовать старую папку
-    goto restore
-)
-echo [%date% %time%] Старая папка -> {backup_dir} >> %LOG%
-
-echo [обновление] Переименовываем staging в рабочую папку...
-move /y "{staging_dir}" "{BASE_DIR}"
-if errorlevel 1 (
-    echo [%date% %time%] ОШИБКА: не удалось переименовать staging >> %LOG%
-    echo [обновление] ОШИБКА: не удалось переименовать staging
-    goto restore
-)
-echo [%date% %time%] Staging -> {BASE_DIR} >> %LOG%
-
-echo [обновление] Копируем config.json из бэкапа...
-if exist "{backup_dir}\\config.json" (
-    if not exist "{BASE_DIR}\\config.json" (
-        copy /y "{backup_dir}\\config.json" "{BASE_DIR}\\config.json" >nul
-        echo [%date% %time%] config.json скопирован >> %LOG%
-    ) else (
-        copy /y "{backup_dir}\\config.json" "{BASE_DIR}\\config.json" >nul
-        echo [%date% %time%] config.json перезаписан из бэкапа >> %LOG%
-    )
-)
-
-echo [обновление] Запускаем новую версию...
-echo [%date% %time%] Запуск {BASE_DIR}\\IruAgent.exe >> %LOG%
-start "" "{BASE_DIR}\\IruAgent.exe"
-
-echo [обновление] Удаляем временные файлы...
-if exist "{zip_path}" del /f "{zip_path}"
-echo [%date% %time%] Обновление завершено успешно >> %LOG%
-goto cleanup
-
-:restore
-echo [обновление] Восстановление из бэкапа...
-echo [%date% %time%] Восстановление... >> %LOG%
-if not exist "{BASE_DIR}" (
-    if exist "{backup_dir}" (
-        move /y "{backup_dir}" "{BASE_DIR}"
-        echo [%date% %time%] Восстановлено из бэкапа >> %LOG%
-    )
-)
-if exist "{zip_path}" del /f "{zip_path}"
-if exist "{staging_dir}" rmdir /s /q "{staging_dir}"
-echo [%date% %time%] Откат завершён >> %LOG%
-
-:cleanup
-del /f "%~f0"
-"""
-
-    try:
-        bat_path.write_text(bat_content, encoding="utf-8")
-        subprocess.Popen(
-            ["cmd", "/c", str(bat_path)],
-            creationflags=0x08000000,  # CREATE_NO_WINDOW
-            close_fds=True,
-        )
-        print(f"[update] обновление (zip) запущено, завершаем текущий процесс")
-        return True
-    except Exception as e:
-        print(f"[update] ошибка запуска обновления (zip): {e}")
-        try:
-            zip_path.unlink(missing_ok=True)
-            shutil.rmtree(staging_dir, ignore_errors=True)
-            bat_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        return False
-
-
-async def run_agent():
-    """Основной цикл агента: подключение к серверу и обработка команд."""
-    cfg = load_config()
-    device_id = cfg["device_id"]
-    server_url = cfg["server_url"]
-    user_token = cfg.get("user_token", "")
-
-    # Первый запуск: токен или device_id пустые — показать окно настройки
-    if not user_token or not device_id:
-        setup = ask_setup_gui()
-        if not setup:
-            print("[agent] настройка отменена, выход")
-            return
-        cfg["user_token"] = setup["token"]
-        cfg["device_id"] = setup["device_id"]
-        save_config(cfg)
-        user_token = setup["token"]
-        device_id = setup["device_id"]
-        print(f"[agent] настройки сохранены в {CONFIG_PATH}")
-
-    # Проверка обновлений перед подключением
-    if check_for_update(server_url):
-        # Обновление запущено, завершаем процесс
-        sys.exit(0)
-
-    # Добавить токен в URL
-    ws_url = f"{server_url}/ws/{device_id}?user_token={user_token}"
-    print(f"[agent] device={device_id}, connecting to {server_url}/ws/{device_id}")
-
-    # Собрать системную информацию один раз перед подключением
-    print("[agent] collecting system info...")
-    sys_info = collect_system_info()
-    sys_info["device_id"] = device_id
-    sys_info["agent_version"] = AGENT_VERSION
-    print(f"[agent] system info collected: cpu={sys_info.get('cpu', '?')}, "
-          f"ram={sys_info.get('ram_gb', '?')}GB, disks={len(sys_info.get('disks', []))}")
-
-    async for ws in websockets.connect(
-        ws_url,
-        ping_interval=30,
-        ping_timeout=60,
-        max_size=2**23,  # 8MB на сообщение
-    ):
-        try:
-            print(f"[agent] connected")
-            # Отправить полный профиль устройства
-            await ws.send(json.dumps({
-                "type": "register",
-                "payload": sys_info
-            }))
-
-            while True:
-                msg = await ws.recv()
-                data = json.loads(msg)
-                if data.get("type") == "command":
-                    cmd = data["payload"]
-                    cmd_id = cmd["id"]
-                    action_name = cmd["action"]
-                    params = cmd.get("params", {})
-
-                    print(f"[agent] executing: {action_name} | {params}")
-
-                    try:
-                        func = ACTIONS.get(action_name)
-                        if func is None:
-                            raise ValueError(f"Неизвестное действие: {action_name}")
-                        # Не блокируем event loop во время долгих действий:
-                        # иначе агент перестаёт отвечать на ping/pong и теряет WS-соединение.
-                        result = await asyncio.to_thread(func, **params)
-                        payload = {"id": cmd_id, "status": "ok", "result": result}
-                    except Exception as e:
-                        payload = {"id": cmd_id, "status": "error", "error": str(e)}
-
-                    await ws.send(json.dumps({"type": "result", "payload": payload}))
-
-        except websockets.ConnectionClosed as e:
-            print(f"[agent] websocket closed: code={e.code}, reason={e.reason!r}, reconnecting in 3s...")
-            await asyncio.sleep(3)
-        except Exception as e:
-            print(f"[agent] disconnected: {type(e).__name__}: {e}, reconnecting in 3s...")
-            await asyncio.sleep(3)
+    runtime.run_headless()
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(run_agent())
+    raise SystemExit(main())
+

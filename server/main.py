@@ -407,6 +407,8 @@ async def send_command_to_agent(device_id: str, action: str, params: dict,
         wait_timeout = max(60.0, float(cmd_timeout) + 15.0)
     elif action == "write_content":
         wait_timeout = 90.0
+    elif action == "get_file_content":
+        wait_timeout = 90.0
 
     try:
         result = await asyncio.wait_for(future, timeout=wait_timeout)
@@ -1433,7 +1435,19 @@ async def download_file(token: str):
         return {"status": "error", "error": str(e)}
 
     if "error" in result and result["error"]:
-        return {"status": "error", "error": result["error"]}
+        error_text = str(result["error"])
+        if error_text.startswith("FILE_TOO_LARGE:"):
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "status": "error",
+                    "error": error_text.replace("FILE_TOO_LARGE:", "", 1).strip(),
+                },
+            )
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "error": error_text},
+        )
 
     data = base64.b64decode(result["data_b64"])
     filename = result.get("filename", "file")
