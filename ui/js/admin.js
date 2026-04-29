@@ -1,4 +1,4 @@
-﻿function toggleAdmin() {
+function toggleAdmin() {
   const panel = document.getElementById('adminPanel');
   const isOpen = panel.classList.toggle('open');
   document.getElementById('btnAdmin').classList.toggle('active', isOpen);
@@ -30,12 +30,12 @@ function filterAdminUsers() {
 
   const list = document.getElementById('adminList');
   if (!filtered.length) {
-    list.innerHTML = '<div class="admin-empty">' + (q ? 'РќРёС‡РµРіРѕ РЅРµ РЅР°Р№РґРµРЅРѕ' : 'РќРµС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№') + '</div>';
+    list.innerHTML = '<div class="admin-empty">' + (q ? 'Ничего не найдено' : 'Нет пользователей') + '</div>';
     document.getElementById('adminStats').textContent = '';
     return;
   }
 
-  // Р“СЂСѓРїРїРёСЂРѕРІРєР° РїРѕ РїР»Р°РЅР°Рј
+  // Группировка по планам
   const groups = { pro: [], business: [], free: [] };
   filtered.forEach(u => {
     const plan = u.plan || 'free';
@@ -54,13 +54,13 @@ function filterAdminUsers() {
   }
 
   list.innerHTML = html;
-  document.getElementById('adminStats').textContent = 'Р’СЃРµРіРѕ: ' + _allAdminUsers.length + (q ? ' (РїРѕРєР°Р·Р°РЅРѕ: ' + filtered.length + ')' : '');
+  document.getElementById('adminStats').textContent = 'Всего: ' + _allAdminUsers.length + (q ? ' (показано: ' + filtered.length + ')' : '');
 }
 
 function renderAdminUserItem(u) {
   const isAdmin = u.id === 1;
   const deleteBtn = isAdmin ? '' : `
-    <button class="admin-user-delete" onclick="adminDeleteUser(${u.id}, '${escapeAttr(u.name)}')" title="РЈРґР°Р»РёС‚СЊ">
+    <button class="admin-user-delete" onclick="adminDeleteUser(${u.id}, '${escapeAttr(u.name)}')" title="Удалить">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
     </button>`;
   const badge = isAdmin ? '<span class="admin-badge">admin</span>' : '';
@@ -76,7 +76,7 @@ function renderAdminUserItem(u) {
     <div class="admin-user-info">
       <div class="admin-user-name">${escapeHTML(u.name)}${badge}</div>
       <div class="admin-user-meta">
-        <span class="admin-user-token" title="РќР°Р¶РјРёС‚Рµ С‡С‚РѕР±С‹ СЃРєРѕРїРёСЂРѕРІР°С‚СЊ" onclick="navigator.clipboard.writeText('${escapeAttr(u.token)}');showToast('РўРѕРєРµРЅ СЃРєРѕРїРёСЂРѕРІР°РЅ')">${u.token}</span>
+        <span class="admin-user-token" title="Нажмите чтобы скопировать" onclick="navigator.clipboard.writeText('${escapeAttr(u.token)}');showToast('Токен скопирован')">${u.token}</span>
         ${planSelect}
       </div>
     </div>
@@ -92,13 +92,13 @@ async function adminSetPlan(userId, plan) {
     });
     const data = await r.json();
     if (data.status === 'ok') {
-      showToast(`РџР»Р°РЅ РёР·РјРµРЅС‘РЅ: ${plan}`);
+      showToast(`План изменён: ${plan}`);
       loadAdminUsers();
     } else {
-      showToast(data.error || 'РћС€РёР±РєР°', true);
+      showToast(data.error || 'Ошибка', true);
       loadAdminUsers();
     }
-  } catch (e) { showToast('РћС€РёР±РєР°: ' + e.message, true); }
+  } catch (e) { showToast('Ошибка: ' + e.message, true); }
 }
 
 async function adminCreateUser() {
@@ -114,32 +114,32 @@ async function adminCreateUser() {
     if (data.status === 'ok') {
       input.value = '';
       const tok = data.user.token || '';
-      showToast(`РЎРѕР·РґР°РЅ: ${data.user.name}`);
+      showToast(`Создан: ${data.user.name}`);
       if (tok) {
-        prompt('РўРѕРєРµРЅ РґР»СЏ ' + data.user.name + ' (СЃРєРѕРїРёСЂСѓР№С‚Рµ, РїРѕРєР°Р·С‹РІР°РµС‚СЃСЏ РѕРґРёРЅ СЂР°Р·):', tok);
+        prompt('Токен для ' + data.user.name + ' (скопируйте, показывается один раз):', tok);
       }
       loadAdminUsers();
     } else {
-      showToast(data.detail || 'РћС€РёР±РєР°', true);
+      showToast(data.detail || 'Ошибка', true);
     }
-  } catch (e) { showToast('РћС€РёР±РєР°: ' + e.message, true); }
+  } catch (e) { showToast('Ошибка: ' + e.message, true); }
 }
 
 async function adminDeleteUser(userId, userName) {
-  if (!confirm(`РЈРґР°Р»РёС‚СЊ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ "${userName}"? Р’СЃРµ РµРіРѕ С‡Р°С‚С‹ Рё РґР°РЅРЅС‹Рµ Р±СѓРґСѓС‚ СѓРґР°Р»РµРЅС‹.`)) return;
+  if (!confirm(`Удалить пользователя "${userName}"? Все его чаты и данные будут удалены.`)) return;
   try {
     const r = await apiFetch(`${API}/api/admin/users/${userId}`, {
       method: 'DELETE', headers: authHeaders(),
     });
     const data = await r.json();
     if (data.status === 'ok') {
-      showToast(`РЈРґР°Р»С‘РЅ: ${userName}`);
+      showToast(`Удалён: ${userName}`);
       loadAdminUsers();
     }
-  } catch (e) { showToast('РћС€РёР±РєР°: ' + e.message, true); }
+  } catch (e) { showToast('Ошибка: ' + e.message, true); }
 }
 
-// в”Ђв”Ђ AUDIT LOG (ADMIN) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── AUDIT LOG (ADMIN) ─────────────────────────────────
 async function loadAuditLog(offset = 0) {
   try {
     const r = await apiFetch(`${API}/api/admin/audit?limit=50&offset=${offset}`, { headers: authHeaders() });
@@ -153,7 +153,7 @@ function renderAuditLog(logs, total, offset) {
   const container = document.getElementById('auditLogList');
   if (!container) return;
   if (!logs || logs.length === 0) {
-    container.innerHTML = '<div class="admin-empty">РќРµС‚ Р·Р°РїРёСЃРµР№</div>';
+    container.innerHTML = '<div class="admin-empty">Нет записей</div>';
     return;
   }
   const actionColors = {
@@ -210,7 +210,7 @@ function switchAdminTab(tab) {
 // compat alias
 function toggleAuditTab(tab) { switchAdminTab(tab); }
 
-// в”Ђв”Ђ DEVICE PROFILES (ADMIN) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── DEVICE PROFILES (ADMIN) ───────────────────────────────
 
 async function loadDeviceProfiles() {
   try {
@@ -225,7 +225,7 @@ function renderDeviceProfiles(profiles) {
   const container = document.getElementById('adminDevicesList');
   if (!container) return;
   if (!profiles || profiles.length === 0) {
-    container.innerHTML = '<div class="admin-empty">РќРµС‚ РїСЂРѕС„РёР»РµР№ СѓСЃС‚СЂРѕР№СЃС‚РІ</div>';
+    container.innerHTML = '<div class="admin-empty">Нет профилей устройств</div>';
     return;
   }
   const cards = profiles.map(p => {
@@ -234,26 +234,26 @@ function renderDeviceProfiles(profiles) {
       hour: '2-digit', minute: '2-digit'
     }) : '?';
     const disks = (p.disks && Array.isArray(p.disks)) ? p.disks.map(d =>
-      `${d.drive || '?'} ${d.total_gb || 0}Р“Р‘ / ${d.free_gb || 0}Р“Р‘ СЃРІРѕР±.`
-    ).join(', ') : 'вЂ”';
+      `${d.drive || '?'} ${d.total_gb || 0}ГБ / ${d.free_gb || 0}ГБ своб.`
+    ).join(', ') : '—';
     const ver = p.agent_version ? `v${escapeHTML(p.agent_version)}` : '?';
     return `<div class="device-card">
       <div class="device-card-header">
         <span class="device-card-name">${escapeHTML(p.hostname || '?')}</span>
         <span class="device-card-ver">${ver}</span>
       </div>
-      <div class="device-card-id" title="РќР°Р¶РјРёС‚Рµ С‡С‚РѕР±С‹ СЃРєРѕРїРёСЂРѕРІР°С‚СЊ" onclick="navigator.clipboard.writeText('${escapeAttr(p.device_id || '')}');showToast('ID СЃРєРѕРїРёСЂРѕРІР°РЅ')">${escapeHTML(p.device_id || '?')}</div>
+      <div class="device-card-id" title="Нажмите чтобы скопировать" onclick="navigator.clipboard.writeText('${escapeAttr(p.device_id || '')}');showToast('ID скопирован')">${escapeHTML(p.device_id || '?')}</div>
       <div class="device-card-grid">
-        <div class="device-card-label">РћРЎ</div><div class="device-card-value">${escapeHTML(p.os || '?')} ${escapeHTML(p.os_version || '')}</div>
-        <div class="device-card-label">РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ</div><div class="device-card-value">${escapeHTML(p.username || 'вЂ”')}</div>
-        <div class="device-card-label">Р Р°Р±. СЃС‚РѕР»</div><div class="device-card-value">${escapeHTML(p.desktop_path || 'вЂ”')}</div>
-        <div class="device-card-label">CPU</div><div class="device-card-value">${escapeHTML(p.cpu || 'вЂ”')}</div>
-        <div class="device-card-label">GPU</div><div class="device-card-value">${escapeHTML(p.gpu || 'вЂ”')}</div>
-        <div class="device-card-label">RAM</div><div class="device-card-value">${p.ram_gb ? p.ram_gb + ' Р“Р‘' : 'вЂ”'}</div>
-        <div class="device-card-label">Р”РёСЃРєРё</div><div class="device-card-value">${escapeHTML(disks)}</div>
-        <div class="device-card-label">GUID</div><div class="device-card-value device-card-guid">${escapeHTML(p.machine_guid || 'вЂ”')}</div>
+        <div class="device-card-label">ОС</div><div class="device-card-value">${escapeHTML(p.os || '?')} ${escapeHTML(p.os_version || '')}</div>
+        <div class="device-card-label">Пользователь</div><div class="device-card-value">${escapeHTML(p.username || '—')}</div>
+        <div class="device-card-label">Раб. стол</div><div class="device-card-value">${escapeHTML(p.desktop_path || '—')}</div>
+        <div class="device-card-label">CPU</div><div class="device-card-value">${escapeHTML(p.cpu || '—')}</div>
+        <div class="device-card-label">GPU</div><div class="device-card-value">${escapeHTML(p.gpu || '—')}</div>
+        <div class="device-card-label">RAM</div><div class="device-card-value">${p.ram_gb ? p.ram_gb + ' ГБ' : '—'}</div>
+        <div class="device-card-label">Диски</div><div class="device-card-value">${escapeHTML(disks)}</div>
+        <div class="device-card-label">GUID</div><div class="device-card-value device-card-guid">${escapeHTML(p.machine_guid || '—')}</div>
       </div>
-      <div class="device-card-footer">РћР±РЅРѕРІР»РµРЅРѕ: ${updated}</div>
+      <div class="device-card-footer">Обновлено: ${updated}</div>
     </div>`;
   }).join('');
   container.innerHTML = `<div class="device-cards-grid">${cards}</div>`;
@@ -261,14 +261,14 @@ function renderDeviceProfiles(profiles) {
 
 function copyToken(token) {
   navigator.clipboard.writeText(token).then(() => {
-    showToast('РўРѕРєРµРЅ СЃРєРѕРїРёСЂРѕРІР°РЅ');
+    showToast('Токен скопирован');
   }).catch(() => {
     // Fallback
     const ta = document.createElement('textarea');
     ta.value = token; document.body.appendChild(ta);
     ta.select(); document.execCommand('copy'); ta.remove();
-    showToast('РўРѕРєРµРЅ СЃРєРѕРїРёСЂРѕРІР°РЅ');
+    showToast('Токен скопирован');
   });
 }
 
-// в”Ђв”Ђ TERMS AGREEMENT в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── TERMS AGREEMENT ─────────────────────────────────────────

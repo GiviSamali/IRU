@@ -1,4 +1,4 @@
-﻿const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
 let isRecording = false;
 
@@ -6,7 +6,7 @@ const voiceBtn = document.getElementById('voiceBtn');
 if (!SpeechRecognition) {
   if (voiceBtn) {
     voiceBtn.disabled = true;
-    voiceBtn.title = 'Р“РѕР»РѕСЃРѕРІРѕР№ РІРІРѕРґ РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ СЌС‚РёРј Р±СЂР°СѓР·РµСЂРѕРј. РћС‚РєСЂРѕР№С‚Рµ РІ Chrome РёР»Рё Edge';
+    voiceBtn.title = 'Голосовой ввод не поддерживается этим браузером. Откройте в Chrome или Edge';
   }
 } else if (voiceBtn) {
   voiceBtn.addEventListener('click', toggleVoice);
@@ -36,7 +36,7 @@ function startVoice() {
   recognition.onstart = () => {
     isRecording = true;
     voiceBtn.classList.add('recording');
-    voiceBtn.setAttribute('aria-label', 'РћСЃС‚Р°РЅРѕРІРёС‚СЊ Р·Р°РїРёСЃСЊ');
+    voiceBtn.setAttribute('aria-label', 'Остановить запись');
   };
 
   recognition.onresult = (event) => {
@@ -61,7 +61,7 @@ function startVoice() {
   recognition.onerror = (event) => {
     console.warn('Speech recognition error:', event.error);
     if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-      alert('Р”РѕСЃС‚СѓРї Рє РјРёРєСЂРѕС„РѕРЅСѓ Р·Р°РїСЂРµС‰С‘РЅ. Р Р°Р·СЂРµС€РёС‚Рµ РІ РЅР°СЃС‚СЂРѕР№РєР°С… Р±СЂР°СѓР·РµСЂР°.');
+      alert('Доступ к микрофону запрещён. Разрешите в настройках браузера.');
     }
     stopVoice();
   };
@@ -69,7 +69,7 @@ function startVoice() {
   recognition.onend = () => { stopVoice(); };
 
   try { recognition.start(); } catch (err) {
-    console.warn('РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ СЂР°СЃРїРѕР·РЅР°РІР°РЅРёРµ:', err);
+    console.warn('Не удалось запустить распознавание:', err);
     stopVoice();
   }
 }
@@ -78,7 +78,7 @@ function stopVoice() {
   isRecording = false;
   if (voiceBtn) {
     voiceBtn.classList.remove('recording');
-    voiceBtn.setAttribute('aria-label', 'Р’РєР»СЋС‡РёС‚СЊ РјРёРєСЂРѕС„РѕРЅ');
+    voiceBtn.setAttribute('aria-label', 'Включить микрофон');
   }
   if (recognition) {
     try { recognition.stop(); } catch (_) {}

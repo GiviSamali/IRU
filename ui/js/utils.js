@@ -1,4 +1,4 @@
-﻿function stripUtfPrefix(cmd) {
+function stripUtfPrefix(cmd) {
   return (cmd || '').replace(/^\s*\[Console\]::OutputEncoding\s*=\s*\[System\.Text\.Encoding\]::UTF8;\s*\$OutputEncoding\s*=\s*\[System\.Text\.Encoding\]::UTF8;\s*/i, '');
 }
 function escapeHTML(s) { return s ? s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
@@ -17,6 +17,6 @@ function showToast(msg, isError) {
   setTimeout(() => { t.className = 'toast'; }, 3000);
 }
 function linkify(text) {
-  return text.replace(/(\/api\/download\/[a-f0-9-]+)/g, '<a href="$1" target="_blank">\ud83d\udce5 РЎРєР°С‡Р°С‚СЊ С„Р°Р№Р»</a>');
+  return text.replace(/(\/api\/download\/[a-f0-9-]+)/g, '<a href="$1" target="_blank">\ud83d\udce5 Скачать файл</a>');
 }
 

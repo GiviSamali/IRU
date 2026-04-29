@@ -1,6 +1,6 @@
-﻿}
+}
 
-/* в”Ђв”Ђ AUDIT LOG в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── AUDIT LOG ───────────────────────────────── */
 .audit-log-list {
   flex: 1; padding: 6px; overflow-y: auto;
 }
@@ -33,7 +33,7 @@
 }
 .audit-nav button:hover { background: var(--accent-glow); }
 
-/* в”Ђв”Ђ DEVICE PROFILE CARDS в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── DEVICE PROFILE CARDS ───────────────────────── */
 .device-cards-grid { display: flex; flex-direction: column; gap: 10px; padding: 8px 0; }
 .device-card {
   background: rgba(0,212,255,0.04); border: 1px solid rgba(0,212,255,0.12);
@@ -68,7 +68,7 @@
 .admin-devices-list::-webkit-scrollbar { width: 4px; }
 .admin-devices-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-/* в”Ђв”Ђ CONSENT MODAL в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── CONSENT MODAL ──────────────────────────── */
 .consent-modal {
   display: none; position: fixed; inset: 0; z-index: 500;
   background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
@@ -96,7 +96,7 @@
 .btn-menu-mobile { display: none; }
 @media (max-width: 768px) { .btn-menu-mobile { display: flex; } }
 
-/* в”Ђв”Ђ MOBILE RESPONSIVE в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── MOBILE RESPONSIVE ────────────────────────── */
 @media (max-width: 768px) {
   :root { --sidebar-w: 100%; }
 
@@ -122,7 +122,7 @@
   .btn-header-link { display: none; }
   .sidebar-mobile-links { display: flex; }
   
-  /* в”Ђв”Ђ MOBILE CHAT INPUT вЂ” Telegram/ChatGPT style (Point 6) в”Ђв”Ђ */
+  /* ── MOBILE CHAT INPUT — Telegram/ChatGPT style (Point 6) ── */
   .chat-input-area {
     padding: 0;
     position: sticky; bottom: 0; z-index: 10;
@@ -140,7 +140,7 @@
     background: transparent; border: none; box-shadow: none;
   }
   .chat-input-wrap:focus-within { border-color: transparent; box-shadow: none; }
-  /* Hide device/mode/attach/voice in main row вЂ” moved to mobile-plus popover */
+  /* Hide device/mode/attach/voice in main row — moved to mobile-plus popover */
   .input-device-select,
   .input-mode-select,
   .attach-btn { display: none; }
@@ -179,7 +179,7 @@
   }
   .chat-input-wrap::before { display: none; }
   .char-count { display: none; }
-  /* Voice & send вЂ” circular Telegram style */
+  /* Voice & send — circular Telegram style */
   .voice-btn {
     width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
     border: 1px solid rgba(0, 212, 255, 0.2); background: rgba(0, 212, 255, 0.06);
@@ -191,7 +191,7 @@
   }
   .btn-send.hidden-mobile { display: none; }
 
-  /* Confirm buttons mobile вЂ” stack vertically */
+  /* Confirm buttons mobile — stack vertically */
   .confirm-actions { flex-direction: column; }
   .btn-confirm-yes, .btn-confirm-no { width: 100%; text-align: center; }
 
@@ -227,7 +227,7 @@
     width: 100%; position: fixed; right: 0; top: 0; bottom: 0; z-index: 201;
   }
 
-  /* Attachments bar mobile вЂ” horizontal scroll */
+  /* Attachments bar mobile — horizontal scroll */
   .attachments-bar {
     padding: 4px 10px 0; overflow-x: auto; flex-wrap: nowrap;
   }
@@ -237,7 +237,7 @@
   }
 }
 
-/* в”Ђв”Ђ EXTRA-NARROW (в‰¤480px) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── EXTRA-NARROW (≤480px) ───────────────────── */
 @media (max-width: 480px) {
   .chat-input-wrap {
     gap: 6px; padding: 6px 8px;
@@ -256,7 +256,7 @@
   }
 }
 
-/* в”Ђв”Ђ DEV MODE PANEL в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── DEV MODE PANEL ──────────────────────────────────────────────── */
 .devmode-panel {
   width: 0; overflow: hidden; border-left: 1px solid var(--border);
   background: var(--bg-secondary); transition: width 0.25s ease;
@@ -351,7 +351,7 @@
 }
 .devmode-input:focus { border-color: var(--accent); }
 
-/* в”Ђв”Ђ TERMS MODAL в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── TERMS MODAL ────────────────────────────────────────────────── */
 .terms-modal {
   display: none; position: fixed; inset: 0; z-index: 10000;
   background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
@@ -415,7 +415,7 @@ img[src*="iru_logo"] {
   animation: logoGlow 3s ease-in-out infinite;
 }
 
-/* ===== Live Progress (Р¶РёРІРѕР№ СЃС‚Р°С‚СѓСЃ) ===== */
+/* ===== Live Progress (живой статус) ===== */
 .msg-thinking .live-status {
   display: flex;
   align-items: center;
@@ -447,7 +447,7 @@ img[src*="iru_logo"] {
 }
 .task-block-live[hidden] { display: none; }
 
-/* ===== Task Block (РєРѕРЅРІРµР№РµСЂ) ===== */
+/* ===== Task Block (конвейер) ===== */
 .task-block {
   margin-top: 10px;
   border: 1px solid var(--border);
@@ -530,7 +530,7 @@ img[src*="iru_logo"] {
   word-break: break-word;
 }
 
-/* в”Ђв”Ђ VOICE BUTTON в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── VOICE BUTTON ──────────────────────────────── */
 .voice-btn {
   background: transparent;
   border: 1px solid #1e2a3d;
@@ -564,7 +564,7 @@ img[src*="iru_logo"] {
   cursor: not-allowed;
 }
 
-/* в”Ђв”Ђ ATTACH BUTTON в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── ATTACH BUTTON ─────────────────────────────── */
 .attach-btn {
   background: transparent;
   border: 1px solid #1e2a3d;
@@ -584,7 +584,7 @@ img[src*="iru_logo"] {
   color: #00d4ff;
 }
 
-/* в”Ђв”Ђ ATTACHMENTS BAR в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── ATTACHMENTS BAR ───────────────────────────── */
 .attachments-bar {
   display: flex;
   flex-wrap: wrap;
@@ -625,11 +625,11 @@ img[src*="iru_logo"] {
   color: #ff6b6b;
 }
 
-/* в”Ђв”Ђ MOBILE PLUS BUTTON (hidden on desktop) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── MOBILE PLUS BUTTON (hidden on desktop) ────── */
 .mobile-plus-btn { display: none; }
 .mobile-plus-popover { display: none; }
 
-/* в”Ђв”Ђ MEMORY BADGE (Point 10) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── MEMORY BADGE (Point 10) ─────────────────────── */
 .memory-badge {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 3px 10px; background: rgba(0, 212, 255, 0.06);
@@ -667,7 +667,7 @@ img[src*="iru_logo"] {
 .memory-popover::-webkit-scrollbar { width: 4px; }
 .memory-popover::-webkit-scrollbar-thumb { background: rgba(0, 212, 255, 0.15); border-radius: 2px; }
 
-/* в”Ђв”Ђ CHAT RENAME (Point 11) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── CHAT RENAME (Point 11) ──────────────────────── */
 .chat-item-rename {
   display: none; width: 16px; height: 16px;
   align-items: center; justify-content: center;
@@ -687,7 +687,7 @@ img[src*="iru_logo"] {
   .chat-item-rename { display: flex; } /* always visible on touch */
 }
 
-/* в”Ђв”Ђ SUGGEST MEMORY (Point 12) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── SUGGEST MEMORY (Point 12) ───────────────────── */
 .suggest-fact-block {
   margin-top: 8px; padding: 10px 12px;
   background: rgba(0, 212, 255, 0.04); border: 1px solid rgba(0, 212, 255, 0.12);
@@ -710,7 +710,7 @@ img[src*="iru_logo"] {
 .suggest-fact-decline:hover { border-color: var(--accent); }
 .suggest-fact-done { color: var(--success); font-size: 11px; }
 
-/* в”Ђв”Ђ PLAN SUGGESTION BANNER в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── PLAN SUGGESTION BANNER ────────────────────── */
 .plan-suggest-block {
   margin-top: 8px; padding: 10px 12px;
   background: rgba(0, 212, 255, 0.05); border: 1px solid rgba(0, 212, 255, 0.3);
@@ -731,7 +731,7 @@ img[src*="iru_logo"] {
 }
 .plan-suggest-decline:hover { border-color: var(--accent); }
 
-/* в”Ђв”Ђ DRAG & DROP OVERLAY в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── DRAG & DROP OVERLAY ───────────────────────── */
 .drag-over {
   outline: 2px dashed #00d4ff;
   outline-offset: -10px;

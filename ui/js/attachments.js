@@ -1,4 +1,4 @@
-﻿// в”Ђв”Ђ РџСЂРёРєСЂРµРїР»РµРЅРёРµ С‚РµРєСЃС‚РѕРІС‹С… С„Р°Р№Р»РѕРІ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Прикрепление текстовых файлов ───────────────────────────
 const ALLOWED_EXT = new Set([
   'txt','md','csv','json','xml','yml','yaml','py','js','ts','html','css',
   'sql','log','ini','conf','sh','ps1','bat','go','rs','java','cpp','c','h'
@@ -43,7 +43,7 @@ const _dragTarget = document.body;
   });
 });
 
-// Paste С„Р°Р№Р»РѕРІ РІ РїРѕР»Рµ РІРІРѕРґР°
+// Paste файлов в поле ввода
 (function() {
   const ci = document.getElementById('chatInput');
   if (ci) {
@@ -60,20 +60,20 @@ function handleFiles(files) {
   for (const file of files) {
     const ext = (file.name.split('.').pop() || '').toLowerCase();
     if (!ALLOWED_EXT.has(ext)) {
-      alert(`Р¤Р°Р№Р» "${file.name}" РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ. РџСЂРёРЅРёРјР°СЋС‚СЃСЏ С‚РѕР»СЊРєРѕ С‚РµРєСЃС‚РѕРІС‹Рµ С„Р°Р№Р»С‹ (.txt, .md, .csv, .json, .py Рё С‚.Рї.)`);
+      alert(`Файл "${file.name}" не поддерживается. Принимаются только текстовые файлы (.txt, .md, .csv, .json, .py и т.п.)`);
       continue;
     }
     if (file.size > MAX_FILE_SIZE) {
-      alert(`Р¤Р°Р№Р» "${file.name}" СЃР»РёС€РєРѕРј Р±РѕР»СЊС€РѕР№ (${Math.round(file.size/1024)} РљР‘). РњР°РєСЃРёРјСѓРј 500 РљР‘.`);
+      alert(`Файл "${file.name}" слишком большой (${Math.round(file.size/1024)} КБ). Максимум 500 КБ.`);
       continue;
     }
     if (attachedFiles.length >= MAX_FILES) {
-      alert(`РњРѕР¶РЅРѕ РїСЂРёРєСЂРµРїРёС‚СЊ РјР°РєСЃРёРјСѓРј ${MAX_FILES} С„Р°Р№Р»РѕРІ.`);
+      alert(`Можно прикрепить максимум ${MAX_FILES} файлов.`);
       return;
     }
     const totalSize = attachedFiles.reduce((s, f) => s + f.size, 0);
     if (totalSize + file.size > MAX_TOTAL_SIZE) {
-      alert('РЎСѓРјРјР°СЂРЅС‹Р№ СЂР°Р·РјРµСЂ С„Р°Р№Р»РѕРІ РїСЂРµРІС‹СЃРёС‚ 2 РњР‘. РЈРґР°Р»РёС‚Рµ РЅРµРЅСѓР¶РЅС‹Рµ.');
+      alert('Суммарный размер файлов превысит 2 МБ. Удалите ненужные.');
       return;
     }
     const reader = new FileReader();
@@ -81,7 +81,7 @@ function handleFiles(files) {
       attachedFiles.push({ name: file.name, size: file.size, content: ev.target.result });
       renderAttachments();
     };
-    reader.onerror = () => { alert(`РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕС‡РёС‚Р°С‚СЊ С„Р°Р№Р» "${file.name}"`); };
+    reader.onerror = () => { alert(`Не удалось прочитать файл "${file.name}"`); };
     reader.readAsText(file, 'UTF-8');
   }
 }
@@ -98,7 +98,7 @@ function renderAttachments() {
     <div class="attachment-chip">
       <span class="chip-name" title="${escapeHTML(f.name)}">${escapeHTML(f.name)}</span>
       <span class="chip-size">${formatAttachSize(f.size)}</span>
-      <button class="chip-remove" data-idx="${idx}" aria-label="РЈРґР°Р»РёС‚СЊ">\u00d7</button>
+      <button class="chip-remove" data-idx="${idx}" aria-label="Удалить">\u00d7</button>
     </div>
   `).join('');
   attachmentsBar.querySelectorAll('.chip-remove').forEach(btn => {
@@ -110,19 +110,19 @@ function renderAttachments() {
 }
 
 function formatAttachSize(bytes) {
-  if (bytes < 1024) return bytes + ' Р‘';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' РљР‘';
-  return (bytes / 1024 / 1024).toFixed(2) + ' РњР‘';
+  if (bytes < 1024) return bytes + ' Б';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' КБ';
+  return (bytes / 1024 / 1024).toFixed(2) + ' МБ';
 }
 
 function buildMessageWithAttachments(userText) {
   if (attachedFiles.length === 0) return userText;
-  const parts = ['=== РџСЂРёРєСЂРµРїР»С‘РЅРЅС‹Рµ С„Р°Р№Р»С‹ ==='];
+  const parts = ['=== Прикреплённые файлы ==='];
   for (const f of attachedFiles) {
-    parts.push(`\n[${f.name}, ${f.size} Р±Р°Р№С‚]`);
+    parts.push(`\n[${f.name}, ${f.size} байт]`);
     parts.push(f.content);
   }
-  parts.push('\n=== РЎРѕРѕР±С‰РµРЅРёРµ ===');
+  parts.push('\n=== Сообщение ===');
   parts.push(userText);
   return parts.join('\n');
 }
@@ -132,4 +132,4 @@ function clearAttachments() {
   renderAttachments();
 }
 
-// в”Ђв”Ђ MOBILE PLUS POPOVER (Point 6) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── MOBILE PLUS POPOVER (Point 6) ─────────────────────────────

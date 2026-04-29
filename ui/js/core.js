@@ -1,4 +1,4 @@
-﻿// в”Ђв”Ђ STATE в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── STATE ────────────────────────────────────────────
 const state = {
   user: null,        // {id, name, token}
   chats: [],         // [{id, title, created_at, updated_at}]
@@ -7,7 +7,7 @@ const state = {
   devices: {},
   selectedDevice: null,
   sendTarget: 'single', // 'single' = selected device, 'all' = all devices
-  modes: { pipeline: false, autonomous: false }, // С„Р»Р°РіРё СЂРµР¶РёРјРѕРІ РґР»СЏ СЃР»РµРґСѓСЋС‰РµРіРѕ Р·Р°РїСЂРѕСЃР°
+  modes: { pipeline: false, autonomous: false }, // флаги режимов для следующего запроса
   explorerOpen: false,
   explorerPath: null,
   explorerHistory: [],
@@ -26,7 +26,7 @@ function plural(n, one, few, many) {
   return many;
 }
 
-// в”Ђв”Ђ JWT TOKEN MANAGEMENT в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── JWT TOKEN MANAGEMENT ────────────────────────────────
 
 let _accessToken = localStorage.getItem('iru_access_token') || '';
 let _refreshToken = localStorage.getItem('iru_refresh_token') || '';
@@ -55,16 +55,16 @@ function _clearTokens() {
 function _scheduleRefresh() {
   if (_refreshTimer) clearTimeout(_refreshTimer);
   if (!_accessToken) return;
-  // РћР±РЅРѕРІР»СЏРµРј Р·Р° 5 РјРёРЅСѓС‚ РґРѕ РёСЃС‚РµС‡РµРЅРёСЏ (access = 8С‡, РѕР±РЅРѕРІР»СЏРµРј РєР°Р¶РґС‹Рµ 7С‡4РјРёРЅ55СЃ)
+  // Обновляем за 5 минут до истечения (access = 8ч, обновляем каждые 7ч4мин55с)
   try {
     const payload = JSON.parse(atob(_accessToken.split('.')[1]));
-    const expiresIn = (payload.exp * 1000) - Date.now() - 300000; // 5 РјРёРЅ Р·Р°РїР°СЃ
+    const expiresIn = (payload.exp * 1000) - Date.now() - 300000; // 5 мин запас
     if (expiresIn > 0) {
       _refreshTimer = setTimeout(_doRefresh, expiresIn);
     } else {
       _doRefresh();
     }
-  } catch { /* РЅРµРІР°Р»РёРґРЅС‹Р№ С‚РѕРєРµРЅ */ }
+  } catch { /* невалидный токен */ }
 }
 
 async function _doRefresh() {
@@ -83,7 +83,7 @@ async function _doRefresh() {
       return true;
     }
   } catch {}
-  // Refresh РЅРµ СѓРґР°Р»СЃСЏ вЂ” РІС‹Р»РѕРіРёРЅРёС‚СЊ
+  // Refresh не удался — вылогинить
   doLogout();
   return false;
 }
@@ -93,12 +93,12 @@ function authHeaders() {
   if (_accessToken) {
     h['Authorization'] = 'Bearer ' + _accessToken;
   } else if (state.user?.token) {
-    h['X-Token'] = state.user.token;  // fallback РґР»СЏ РѕР±СЂР°С‚РЅРѕР№ СЃРѕРІРјРµСЃС‚РёРјРѕСЃС‚Рё
+    h['X-Token'] = state.user.token;  // fallback для обратной совместимости
   }
   return h;
 }
 
-// РћР±С‘СЂС‚РєР° fetch СЃ Р°РІС‚РѕРѕР±РЅРѕРІР»РµРЅРёРµРј С‚РѕРєРµРЅР°
+// Обёртка fetch с автообновлением токена
 async function apiFetch(url, opts = {}) {
   if (!opts.headers) opts.headers = authHeaders();
   let r = await fetch(url, opts);
@@ -112,7 +112,7 @@ async function apiFetch(url, opts = {}) {
   return r;
 }
 
-// в”Ђв”Ђ AUTH в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── AUTH ─────────────────────────────────────────────
 async function doAuth() {
   const input = document.getElementById('authInput');
   const token = input.value.trim();
@@ -135,16 +135,16 @@ async function doAuth() {
       _saveTokens(data.access_token, data.refresh_token);
       showApp();
     } else {
-      document.getElementById('authError').textContent = data.error || 'РћС€РёР±РєР° Р°РІС‚РѕСЂРёР·Р°С†РёРё';
+      document.getElementById('authError').textContent = data.error || 'Ошибка авторизации';
     }
   } catch (e) {
-    document.getElementById('authError').textContent = 'РћС€РёР±РєР° СЃРµС‚Рё: ' + e.message;
+    document.getElementById('authError').textContent = 'Ошибка сети: ' + e.message;
   }
   document.getElementById('authBtn').disabled = false;
 }
 
 function doLogout() {
-  // РћС‚Р·С‹РІ refresh token РЅР° СЃРµСЂРІРµСЂРµ
+  // Отзыв refresh token на сервере
   if (_refreshToken) {
     fetch(`${API}/api/logout`, {
       method: 'POST',
@@ -173,11 +173,11 @@ function doLogout() {
 }
 
 async function tryAutoLogin() {
-  // РЎРЅР°С‡Р°Р»Р° РїСЂРѕР±СѓРµРј JWT refresh
+  // Сначала пробуем JWT refresh
   if (_refreshToken) {
     const ok = await _doRefresh();
     if (ok && _accessToken) {
-      // РџРѕР»СѓС‡РёРј user info РёР· С‚РѕРєРµРЅР°
+      // Получим user info из токена
       try {
         const payload = JSON.parse(atob(_accessToken.split('.')[1]));
         state.user = { id: parseInt(payload.sub), name: payload.name, token: localStorage.getItem('iru_token') || '', data_consent: localStorage.getItem('iru_data_consent') === '1' };
@@ -186,7 +186,7 @@ async function tryAutoLogin() {
       } catch {}
     }
   }
-  // Fallback: СЃС‚Р°СЂС‹Р№ С‚РѕРєРµРЅ
+  // Fallback: старый токен
   const token = localStorage.getItem('iru_token');
   if (!token) return;
   try {

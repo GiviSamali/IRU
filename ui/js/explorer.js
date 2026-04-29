@@ -1,4 +1,4 @@
-﻿function toggleExplorer() {
+function toggleExplorer() {
   state.explorerOpen = !state.explorerOpen;
   document.getElementById('explorerPanel').classList.toggle('open', state.explorerOpen);
   document.getElementById('explorerToggle').classList.toggle('active', state.explorerOpen);
@@ -10,7 +10,7 @@
 
 async function explorerNavigate(path) {
   if (!state.selectedDevice) {
-    document.getElementById('explorerList').innerHTML = '<div class="explorer-empty">РќРµС‚ СѓСЃС‚СЂРѕР№СЃС‚РІР°</div>';
+    document.getElementById('explorerList').innerHTML = '<div class="explorer-empty">Нет устройства</div>';
     return;
   }
   try {
@@ -36,7 +36,7 @@ async function explorerNavigate(path) {
     renderExplorerPath(result.path);
     renderExplorerList(result.dirs, result.files);
   } catch (e) {
-    document.getElementById('explorerList').innerHTML = `<div class="explorer-empty">РћС€РёР±РєР°: ${e.message}</div>`;
+    document.getElementById('explorerList').innerHTML = `<div class="explorer-empty">Ошибка: ${e.message}</div>`;
   }
 }
 
@@ -57,7 +57,7 @@ function renderExplorerPath(pathStr) {
 function renderExplorerList(dirs, files) {
   const container = document.getElementById('explorerList');
   if ((!dirs || !dirs.length) && (!files || !files.length)) {
-    container.innerHTML = '<div class="explorer-empty">РџСѓСЃС‚Р°СЏ РґРёСЂРµРєС‚РѕСЂРёСЏ</div>';
+    container.innerHTML = '<div class="explorer-empty">Пустая директория</div>';
     return;
   }
   let html = '';
@@ -66,7 +66,7 @@ function renderExplorerList(dirs, files) {
       <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
       <span class="name">${escapeHTML(d.name)}</span>
       <div class="file-actions">
-        <div class="file-action-btn" onclick="event.stopPropagation(); openOnDevice('${escapeAttr(d.path)}')" title="РћС‚РєСЂС‹С‚СЊ РЅР° РџРљ">
+        <div class="file-action-btn" onclick="event.stopPropagation(); openOnDevice('${escapeAttr(d.path)}')" title="Открыть на ПК">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
         </div>
       </div>
@@ -79,10 +79,10 @@ function renderExplorerList(dirs, files) {
       <span class="name">${escapeHTML(f.name)}</span>
       <span class="size">${size}</span>
       <div class="file-actions">
-        <div class="file-action-btn" onclick="event.stopPropagation(); openOnDevice('${escapeAttr(f.path)}')" title="РћС‚РєСЂС‹С‚СЊ РЅР° РџРљ">
+        <div class="file-action-btn" onclick="event.stopPropagation(); openOnDevice('${escapeAttr(f.path)}')" title="Открыть на ПК">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
         </div>
-        <div class="file-action-btn" onclick="event.stopPropagation(); downloadFile('${escapeAttr(f.path)}')" title="РЎРєР°С‡Р°С‚СЊ">
+        <div class="file-action-btn" onclick="event.stopPropagation(); downloadFile('${escapeAttr(f.path)}')" title="Скачать">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         </div>
       </div>
@@ -109,7 +109,7 @@ function explorerUp() {
 }
 function explorerRefresh() { explorerNavigate(state.explorerPath); }
 
-// в”Ђв”Ђ FILE ACTIONS в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── FILE ACTIONS ─────────────────────────────────────
 async function openOnDevice(filePath) {
   if (!state.selectedDevice) return;
   try {
@@ -121,13 +121,13 @@ async function openOnDevice(filePath) {
         params: { command: `Start-Process "${filePath}"`, timeout: 10 }
       }),
     });
-    showToast('РћС‚РєСЂС‹РІР°СЋ...');
-  } catch (e) { showToast('РћС€РёР±РєР°: ' + e.message, true); }
+    showToast('Открываю...');
+  } catch (e) { showToast('Ошибка: ' + e.message, true); }
 }
 
 async function downloadFile(filePath) {
   if (!state.selectedDevice) return;
-  showToast('РџРѕРґРіРѕС‚РѕРІРєР° Рє СЃРєР°С‡РёРІР°РЅРёСЋ...');
+  showToast('Подготовка к скачиванию...');
   try {
     const r = await apiFetch(`${API}/api/download_request`, {
       method: 'POST', headers: authHeaders(),
@@ -142,9 +142,9 @@ async function downloadFile(filePath) {
       a.click();
       a.remove();
     } else {
-      showToast(data.error || 'РћС€РёР±РєР°', true);
+      showToast(data.error || 'Ошибка', true);
     }
-  } catch (e) { showToast('РћС€РёР±РєР°: ' + e.message, true); }
+  } catch (e) { showToast('Ошибка: ' + e.message, true); }
 }
 
-// в”Ђв”Ђ UTILS в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── UTILS ────────────────────────────────────────────

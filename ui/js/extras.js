@@ -1,4 +1,4 @@
-﻿function toggleMobilePlusPopover() {
+function toggleMobilePlusPopover() {
   document.getElementById('mobilePlusPopover').classList.toggle('show');
 }
 function closeMobilePlusPopover() {
@@ -32,7 +32,7 @@ function updateMobileSendVoice() {
   window.addEventListener('resize', updateMobileSendVoice);
 })();
 
-// в”Ђв”Ђ MEMORY BADGE & POPOVER (Point 10) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── MEMORY BADGE & POPOVER (Point 10) ──────────────────────────
 let _memoryStats = { facts: 0, commands: 0, facts_list: [] };
 
 function updateMemoryBadge(stats) {
@@ -47,8 +47,8 @@ function updateMemoryBadge(stats) {
   badge.style.display = 'inline-flex';
   const cLabel = c > 20 ? '20+' : c;
   const fLabel = f > 20 ? '20+' : f;
-  const fWord = f > 20 ? 'С„Р°РєС‚РѕРІ' : plural(f, 'С„Р°РєС‚', 'С„Р°РєС‚Р°', 'С„Р°РєС‚РѕРІ');
-  const cWord = c > 20 ? 'РєРѕРјР°РЅРґ' : plural(c, 'РєРѕРјР°РЅРґР°', 'РєРѕРјР°РЅРґС‹', 'РєРѕРјР°РЅРґ');
+  const fWord = f > 20 ? 'фактов' : plural(f, 'факт', 'факта', 'фактов');
+  const cWord = c > 20 ? 'команд' : plural(c, 'команда', 'команды', 'команд');
   text.textContent = `${fLabel} ${fWord}, ${cLabel} ${cWord}`;
 }
 
@@ -69,7 +69,7 @@ function renderMemoryPopover() {
   if (!list) return;
   const facts = _memoryStats.facts_list || [];
   if (facts.length === 0) {
-    list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:8px 0">РќРµС‚ Р·Р°РєСЂРµРїР»С‘РЅРЅС‹С… С„Р°РєС‚РѕРІ</div>';
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:8px 0">Нет закреплённых фактов</div>';
     return;
   }
   list.innerHTML = facts.map(f => `<div class="memory-popover-item">
@@ -78,7 +78,7 @@ function renderMemoryPopover() {
   </div>`).join('');
 }
 
-// в”Ђв”Ђ CHAT RENAME (Point 11) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── CHAT RENAME (Point 11) ──────────────────────────────────────
 function startRenameChat(chatId, event) {
   event.stopPropagation();
   const item = event.target.closest('.chat-item');
@@ -110,7 +110,7 @@ function startRenameChat(chatId, event) {
         if (state.currentChatId === chatId) {
           document.getElementById('headerTitle').textContent = newTitle;
         }
-      } catch (e) { showToast('РћС€РёР±РєР° РїРµСЂРµРёРјРµРЅРѕРІР°РЅРёСЏ', true); }
+      } catch (e) { showToast('Ошибка переименования', true); }
     }
     renderChatList();
   };
@@ -122,7 +122,7 @@ function startRenameChat(chatId, event) {
   input.addEventListener('blur', () => finish(true));
 }
 
-// в”Ђв”Ђ SUGGEST MEMORY (Point 12) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── SUGGEST MEMORY (Point 12) ───────────────────────────────────
 async function acceptSuggestedFact(taskId, text, category, el) {
   try {
     const resp = await apiFetch(`${API}/api/tasks/${taskId}/remember`, {
@@ -130,23 +130,23 @@ async function acceptSuggestedFact(taskId, text, category, el) {
       body: JSON.stringify({ text, category }),
     });
     const data = await resp.json();
-    // РћР±РЅРѕРІРёС‚СЊ Р»РѕРєР°Р»СЊРЅС‹Р№ _memoryStats С‡С‚РѕР±С‹ Р±РµР№РґР¶ Рё popover Р±С‹Р»Рё СЃРёРЅС…СЂРѕРЅРЅС‹
+    // Обновить локальный _memoryStats чтобы бейдж и popover были синхронны
     if (data.status === 'ok') {
       _memoryStats.facts_list = _memoryStats.facts_list || [];
       _memoryStats.facts_list.push({ id: data.fact_id, text: text, category: category || '' });
       _memoryStats.facts = _memoryStats.facts_list.length;
       updateMemoryBadge(_memoryStats);
     }
-    el.innerHTML = '<span class="suggest-fact-done">Р—Р°РїРѕРјРЅРµРЅРѕ</span>';
+    el.innerHTML = '<span class="suggest-fact-done">Запомнено</span>';
     setTimeout(() => { if (el.parentNode) el.remove(); }, 2000);
-  } catch (e) { showToast('РћС€РёР±РєР° СЃРѕС…СЂР°РЅРµРЅРёСЏ С„Р°РєС‚Р°', true); }
+  } catch (e) { showToast('Ошибка сохранения факта', true); }
 }
 
 function declineSuggestedFact(el) {
   el.remove();
 }
 
-// в”Ђв”Ђ PLAN SUGGESTION в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── PLAN SUGGESTION ───────────────────────────────────────
 async function runPlan(chatId, originalRequest) {
   try {
     const resp = await apiFetch(`${API}/api/run_plan/${chatId}`, {
@@ -155,17 +155,17 @@ async function runPlan(chatId, originalRequest) {
     });
     const data = await resp.json();
     if (!resp.ok) {
-      showToast(data.detail || 'РћС€РёР±РєР° Р·Р°РїСѓСЃРєР° РїР»Р°РЅР°', true);
+      showToast(data.detail || 'Ошибка запуска плана', true);
       return;
     }
     if (data.task_id) {
       const msgIndex = state.messages.length;
-      state.messages.push({ role: 'assistant', loading: true, currentStep: 'Р—Р°РїСѓСЃРє РїР»Р°РЅР°...' });
+      state.messages.push({ role: 'assistant', loading: true, currentStep: 'Запуск плана...' });
       state.pendingTasks.push({ task_id: data.task_id, msgIndex });
       renderMessages();
       pollTask(data.task_id, msgIndex);
     }
-  } catch (e) { showToast('РћС€РёР±РєР° Р·Р°РїСѓСЃРєР° РїР»Р°РЅР°', true); }
+  } catch (e) { showToast('Ошибка запуска плана', true); }
 }
 
 function acceptPlanSuggestion(el) {
@@ -188,7 +188,7 @@ function declinePlanSuggestion(el) {
 async function sendMessageDirect(text) {
   if (!text || !state.currentChatId) return;
   const msgIndex = state.messages.length;
-  state.messages.push({ role: 'assistant', loading: true, currentStep: 'РР РЈ РґСѓРјР°РµС‚...' });
+  state.messages.push({ role: 'assistant', loading: true, currentStep: 'ИРУ думает...' });
   renderMessages();
   try {
     const body = {
@@ -208,26 +208,26 @@ async function sendMessageDirect(text) {
       pollTask(data.task_id, msgIndex);
     }
   } catch (e) {
-    state.messages[msgIndex] = { role: 'assistant', content: 'РћС€РёР±РєР°: ' + (e.message || e) };
+    state.messages[msgIndex] = { role: 'assistant', content: 'Ошибка: ' + (e.message || e) };
     renderMessages();
   }
 }
 
-// в”Ђв”Ђ INIT в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-// Mobile keyboard fix вЂ” resize app when virtual keyboard opens
+// ── INIT ───────────────────────────────────────────────────
+// Mobile keyboard fix — resize app when virtual keyboard opens
 if (window.visualViewport) {
   const resizeApp = () => {
     const app = document.querySelector('.app');
     if (!app) return;
     const vh = window.visualViewport.height;
     app.style.height = vh + 'px';
-    // РџСЂРѕРєСЂСѓС‚РёС‚СЊ СЃС‚СЂР°РЅРёС†Сѓ РІРІРµСЂС…, С‡С‚РѕР±С‹ РєР»Р°РІРёР°С‚СѓСЂР° РЅРµ СЃРґРІРёРіР°Р»Р° viewport
+    // Прокрутить страницу вверх, чтобы клавиатура не сдвигала viewport
     window.scrollTo(0, 0);
     document.documentElement.scrollTop = 0;
   };
   window.visualViewport.addEventListener('resize', resizeApp);
   window.visualViewport.addEventListener('scroll', resizeApp);
-  // РўР°РєР¶Рµ РїСЂРё С„РѕРєСѓСЃРµ РЅР° input вЂ” РїСЂРѕРєСЂСѓС‚РёС‚СЊ Рє РЅРµРјСѓ
+  // Также при фокусе на input — прокрутить к нему
   document.addEventListener('focusin', (e) => {
     if (e.target.matches('.chat-input')) {
       setTimeout(() => {

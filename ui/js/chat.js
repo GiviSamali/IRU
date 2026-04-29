@@ -1,18 +1,18 @@
-﻿async function loadChats() {
+async function loadChats() {
   try {
     const r = await apiFetch(`${API}/api/chats`, { headers: authHeaders() });
     const data = await r.json();
     state.chats = data.chats || [];
     renderChatList();
 
-    // Р•СЃР»Рё РµСЃС‚СЊ С‡Р°С‚С‹ Рё РЅРµС‚ Р°РєС‚РёРІРЅРѕРіРѕ вЂ” РѕС‚РєСЂС‹С‚СЊ РїРµСЂРІС‹Р№
+    // Если есть чаты и нет активного — открыть первый
     if (state.chats.length > 0 && !state.currentChatId) {
       openChat(state.chats[0].id);
     } else if (state.chats.length === 0) {
       state.currentChatId = null;
       state.messages = [];
       renderMessages();
-      document.getElementById('headerTitle').textContent = 'РќРѕРІС‹Р№ С‡Р°С‚';
+      document.getElementById('headerTitle').textContent = 'Новый чат';
     }
   } catch (e) { console.error('loadChats:', e); }
 }
@@ -28,7 +28,7 @@ async function createNewChat() {
       await loadChats();
       openChat(data.chat.id);
     }
-  } catch (e) { showToast('РћС€РёР±РєР°: ' + e.message, true); }
+  } catch (e) { showToast('Ошибка: ' + e.message, true); }
 }
 
 async function openChat(chatId) {
@@ -37,9 +37,9 @@ async function openChat(chatId) {
   renderChatList();
 
   const chat = state.chats.find(c => c.id === chatId);
-  document.getElementById('headerTitle').textContent = chat ? chat.title : 'Р§Р°С‚';
+  document.getElementById('headerTitle').textContent = chat ? chat.title : 'Чат';
 
-  // Р—Р°РіСЂСѓР·РёС‚СЊ СЃРѕРѕР±С‰РµРЅРёСЏ
+  // Загрузить сообщения
   try {
     const r = await apiFetch(`${API}/api/chats/${chatId}/messages`, { headers: authHeaders() });
     const data = await r.json();
@@ -61,13 +61,13 @@ async function deleteChat(chatId, event) {
       renderMessages();
     }
     await loadChats();
-  } catch (e) { showToast('РћС€РёР±РєР°: ' + e.message, true); }
+  } catch (e) { showToast('Ошибка: ' + e.message, true); }
 }
 
 function renderChatList() {
   const list = document.getElementById('chatList');
   if (state.chats.length === 0) {
-    list.innerHTML = '<div class="sidebar-empty">РќРµС‚ С‡Р°С‚РѕРІ</div>';
+    list.innerHTML = '<div class="sidebar-empty">Нет чатов</div>';
     return;
   }
   list.innerHTML = state.chats.map(c => {
@@ -75,17 +75,17 @@ function renderChatList() {
     return `<div class="chat-item${active}" onclick="openChat(${c.id})">
       <svg class="chat-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
       <span class="chat-item-text">${escapeHTML(c.title)}</span>
-      <button class="chat-item-rename" onclick="startRenameChat(${c.id}, event)" title="РџРµСЂРµРёРјРµРЅРѕРІР°С‚СЊ">
+      <button class="chat-item-rename" onclick="startRenameChat(${c.id}, event)" title="Переименовать">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 3a2.83 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
       </button>
-      <button class="chat-item-delete" onclick="deleteChat(${c.id}, event)" title="РЈРґР°Р»РёС‚СЊ">
+      <button class="chat-item-delete" onclick="deleteChat(${c.id}, event)" title="Удалить">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>`;
   }).join('');
 }
 
-// в”Ђв”Ђ DEVICES в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── DEVICES ──────────────────────────────────────────
 
 function renderMessages() {
   const container = document.getElementById('chatMessages');
@@ -93,20 +93,20 @@ function renderMessages() {
   if (state.messages.length === 0) {
     const hasDevices = Object.keys(state.devices).length > 0;
     const subtitle = hasDevices
-      ? 'РћРїРёС€Рё Р·Р°РґР°С‡Сѓ РЅР° РµСЃС‚РµСЃС‚РІРµРЅРЅРѕРј СЏР·С‹РєРµ вЂ” РР РЈ РІС‹РїРѕР»РЅРёС‚ РЅР° С‚РІРѕС‘Рј СѓСЃС‚СЂРѕР№СЃС‚РІРµ.'
-      : 'РќРµС‚ РїРѕРґРєР»СЋС‡С‘РЅРЅС‹С… СѓСЃС‚СЂРѕР№СЃС‚РІ. РќР°РїРёС€Рё СЃРѕРѕР±С‰РµРЅРёРµ вЂ” СЏ РїРѕРјРѕРіСѓ РЅР°СЃС‚СЂРѕРёС‚СЊ РїРѕРґРєР»СЋС‡РµРЅРёРµ.';
+      ? 'Опиши задачу на естественном языке — ИРУ выполнит на твоём устройстве.'
+      : 'Нет подключённых устройств. Напиши сообщение — я помогу настроить подключение.';
     const hints = hasDevices
-      ? `<div class="hint-chip" onclick="sendHint(this)">РћС‚РєСЂРѕР№ Р±СЂР°СѓР·РµСЂ</div>
-          <div class="hint-chip" onclick="sendHint(this)">РџРѕРєР°Р¶Рё IP Р°РґСЂРµСЃ</div>
-          <div class="hint-chip" onclick="sendHint(this)">РЎРІРѕР±РѕРґРЅРѕРµ РјРµСЃС‚Рѕ РЅР° РґРёСЃРєРµ</div>
-          <div class="hint-chip" onclick="sendHint(this)">Р—Р°РїСѓС‰РµРЅРЅС‹Рµ РїСЂРѕС†РµСЃСЃС‹</div>`
-      : `<div class="hint-chip" onclick="downloadAgent()">в¬‡ РЎРєР°С‡Р°С‚СЊ Р°РіРµРЅС‚</div>
-          <div class="hint-chip" onclick="sendHint(this)">РљР°Рє РїРѕРґРєР»СЋС‡РёС‚СЊ РєРѕРјРїСЊСЋС‚РµСЂ?</div>
-          <div class="hint-chip" onclick="sendHint(this)">Р§С‚Рѕ С‚С‹ СѓРјРµРµС€СЊ?</div>`;
+      ? `<div class="hint-chip" onclick="sendHint(this)">Открой браузер</div>
+          <div class="hint-chip" onclick="sendHint(this)">Покажи IP адрес</div>
+          <div class="hint-chip" onclick="sendHint(this)">Свободное место на диске</div>
+          <div class="hint-chip" onclick="sendHint(this)">Запущенные процессы</div>`
+      : `<div class="hint-chip" onclick="downloadAgent()">⬇ Скачать агент</div>
+          <div class="hint-chip" onclick="sendHint(this)">Как подключить компьютер?</div>
+          <div class="hint-chip" onclick="sendHint(this)">Что ты умеешь?</div>`;
     container.innerHTML = `
       <div class="chat-welcome">
-        <img src="/static/IruIcon.ico" alt="РР РЈ">
-        <h2>РР РЈ вЂ” РРЅС‚РµР»Р»РµРєС‚СѓР°Р»СЊРЅС‹Р№ Р РµР¶РёРј РЈРїСЂР°РІР»РµРЅРёСЏ</h2>
+        <img src="/static/IruIcon.ico" alt="ИРУ">
+        <h2>ИРУ — Интеллектуальный Режим Управления</h2>
         <p>${subtitle}</p>
         <div class="hints">${hints}</div>
       </div>`;
@@ -116,22 +116,22 @@ function renderMessages() {
   let html = '';
   for (let mi = 0; mi < state.messages.length; mi++) {
     const m = state.messages[mi];
-    const roleLabel = m.role === 'user' ? 'РІС‹' : 'РёСЂСѓ';
+    const roleLabel = m.role === 'user' ? 'вы' : 'иру';
     let bodyHTML = linkify(escapeHTML(m.content || m.text || ''));
 
-    // Р‘Р»РѕРє Р·Р°РґР°С‡ (РєРѕРЅРІРµР№РµСЂ)
+    // Блок задач (конвейер)
     bodyHTML += renderTaskBlock(m.tasks);
 
     const commands = m.commands;
     if (commands && commands.length > 0) {
       bodyHTML += '<div class="cmd-log">';
       if (commands.length === 1) {
-        // РћРґРЅР° РєРѕРјР°РЅРґР° вЂ” РѕР±С‹С‡РЅР°СЏ РїР»Р°С€РєР°, РЅРѕ СЃ stripUtfPrefix
+        // Одна команда — обычная плашка, но с stripUtfPrefix
         const c = commands[0];
         const stdout = c.result?.stdout || '';
         const stderr = c.result?.stderr || '';
         const errMsg = c.result?.error || '';
-        const output = stdout || stderr || errMsg || '(РЅРµС‚ РІС‹РІРѕРґР°)';
+        const output = stdout || stderr || errMsg || '(нет вывода)';
         const isOk = !errMsg && (c.result?.returncode === 0 || c.result?.returncode == null);
         const statusCls = isOk ? 'ok' : 'err';
         const statusTxt = isOk ? '\u2713' : '\u2717';
@@ -148,7 +148,7 @@ function renderMessages() {
             <div class="cmd-details">${escapeHTML(output)}</div>
           </div>`;
       } else {
-        // Р“СЂСѓРїРїР° РєРѕРјР°РЅРґ вЂ” СЃРІС‘СЂРЅСѓС‚Р°СЏ РїР»Р°С€РєР°
+        // Группа команд — свёрнутая плашка
         const groupId = 'cmdgrp-' + mi;
         const lastCmd = commands[commands.length - 1];
         const lastClean = stripUtfPrefix(lastCmd.command || '');
@@ -165,7 +165,7 @@ function renderMessages() {
               <span class="cmd-group-text">${escapeHTML(lastTrunc)}</span>
               ${lastDevice}
               <span class="cmd-status ${lastStatusCls}">${lastStatusTxt}</span>
-              <span class="cmd-group-extra">(+${extra} РµС‰С‘)</span>
+              <span class="cmd-group-extra">(+${extra} ещё)</span>
             </div>
             <div class="cmd-group-body">`;
         for (let i = 0; i < commands.length; i++) {
@@ -173,7 +173,7 @@ function renderMessages() {
           const stdout = c.result?.stdout || '';
           const stderr = c.result?.stderr || '';
           const errMsg = c.result?.error || '';
-          const output = stdout || stderr || errMsg || '(РЅРµС‚ РІС‹РІРѕРґР°)';
+          const output = stdout || stderr || errMsg || '(нет вывода)';
           const isOk = !errMsg && (c.result?.returncode === 0 || c.result?.returncode == null);
           const statusCls = isOk ? 'ok' : 'err';
           const statusTxt = isOk ? '\u2713' : '\u2717';
@@ -196,12 +196,12 @@ function renderMessages() {
       }
       bodyHTML += '</div>';
     }
-    // РљРЅРѕРїРєРё РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ
+    // Кнопки подтверждения
     let confirmBtns = '';
     if (m.confirmTaskId) {
       confirmBtns = `<div class="confirm-actions">
-        <button class="btn-confirm-yes" onclick="confirmTask('${m.confirmTaskId}', ${mi})">\u2713 Р’С‹РїРѕР»РЅРёС‚СЊ</button>
-        <button class="btn-confirm-no" onclick="denyTask('${m.confirmTaskId}', ${mi})">вњ— РћС‚РјРµРЅРёС‚СЊ</button>
+        <button class="btn-confirm-yes" onclick="confirmTask('${m.confirmTaskId}', ${mi})">\u2713 Выполнить</button>
+        <button class="btn-confirm-no" onclick="denyTask('${m.confirmTaskId}', ${mi})">✗ Отменить</button>
       </div>`;
     }
 
@@ -211,42 +211,42 @@ function renderMessages() {
       const sf = m.suggestedFact;
       const tid = m._taskId || '';
       suggestHTML = `<div class="suggest-fact-block" id="sf-${mi}">
-        <div class="suggest-fact-label">РР РЈ РїСЂРµРґР»Р°РіР°РµС‚ Р·Р°РїРѕРјРЅРёС‚СЊ:</div>
+        <div class="suggest-fact-label">ИРУ предлагает запомнить:</div>
         <div class="suggest-fact-text">${escapeHTML(sf.text)}</div>
         <div class="suggest-fact-actions">
-          <button class="suggest-fact-accept" onclick="acceptSuggestedFact('${tid}','${escapeAttr(sf.text)}','${escapeAttr(sf.category || '')}',document.getElementById('sf-${mi}'))">Р—Р°РїРѕРјРЅРёС‚СЊ</button>
-          <button class="suggest-fact-decline" onclick="declineSuggestedFact(document.getElementById('sf-${mi}'))">РќРµ РЅР°РґРѕ</button>
+          <button class="suggest-fact-accept" onclick="acceptSuggestedFact('${tid}','${escapeAttr(sf.text)}','${escapeAttr(sf.category || '')}',document.getElementById('sf-${mi}'))">Запомнить</button>
+          <button class="suggest-fact-decline" onclick="declineSuggestedFact(document.getElementById('sf-${mi}'))">Не надо</button>
         </div>
       </div>`;
     }
 
     // Plan suggestion banner
     let planHTML = '';
-    // TODO: persist planDismissed/planDeclined РЅР° СЃРµСЂРІРµСЂРµ, С‡С‚РѕР±С‹ РїРѕСЃР»Рµ F5 РїР»Р°С€РєР° РЅРµ РІРѕР·РІСЂР°С‰Р°Р»Р°СЃСЊ
+    // TODO: persist planDismissed/planDeclined на сервере, чтобы после F5 плашка не возвращалась
     if (m.planSuggestion && !m.planDismissed && !m.planDeclined) {
       if (m.planTrialUsed) {
         planHTML = `<div class="plan-suggest-block" id="ps-${mi}">
-          <div class="plan-suggest-text" style="color:#888;">Р РµР¶РёРј РџР»Р°РЅ РґРѕСЃС‚СѓРїРµРЅ РЅР° Pro-С‚Р°СЂРёС„Рµ. Р’С‹ СѓР¶Рµ РёСЃРїРѕР»СЊР·РѕРІР°Р»Рё РїСЂРѕР±РЅС‹Р№ Р·Р°РїСѓСЃРє.</div>
+          <div class="plan-suggest-text" style="color:#888;">Режим План доступен на Pro-тарифе. Вы уже использовали пробный запуск.</div>
         </div>`;
       } else {
         const desc = escapeHTML(m.planSuggestion);
         const origReq = escapeAttr(m.planOriginalRequest || '');
         planHTML = `<div class="plan-suggest-block" id="ps-${mi}" data-chat-id="${state.currentChatId}" data-orig-req="${origReq}">
-          <div class="plan-suggest-text">Р—Р°РґР°С‡Р° РЅРµРїСЂРѕСЃС‚Р°СЏ: ${desc}. Р’ СЂРµР¶РёРјРµ РџР»Р°РЅ РР РЈ СЃРѕСЃС‚Р°РІРёС‚ Рё РІС‹РїРѕР»РЅРёС‚ РїРѕС€Р°РіРѕРІРѕРµ СЂРµС€РµРЅРёРµ.</div>
+          <div class="plan-suggest-text">Задача непростая: ${desc}. В режиме План ИРУ составит и выполнит пошаговое решение.</div>
           <div class="plan-suggest-actions">
-            <button class="plan-suggest-accept" onclick="acceptPlanSuggestion(document.getElementById('ps-${mi}'))">Р—Р°РїСѓСЃС‚РёС‚СЊ РїР»Р°РЅ</button>
-            <button class="plan-suggest-decline" onclick="declinePlanSuggestion(document.getElementById('ps-${mi}'))">Р‘РµР· РїР»Р°РЅР°</button>
+            <button class="plan-suggest-accept" onclick="acceptPlanSuggestion(document.getElementById('ps-${mi}'))">Запустить план</button>
+            <button class="plan-suggest-decline" onclick="declinePlanSuggestion(document.getElementById('ps-${mi}'))">Без плана</button>
           </div>
-          <div class="plan-suggest-warning" style="font-size:11px;color:#888;margin-top:6px;">РљРѕРјР°РЅРґС‹ РїР»Р°РЅР° Р±СѓРґСѓС‚ РІС‹РїРѕР»РЅРµРЅС‹ Р±РµР· РѕС‚РґРµР»СЊРЅРѕРіРѕ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ. РќР°Р¶РёРјР°Р№С‚Рµ, С‚РѕР»СЊРєРѕ РµСЃР»Рё РґРѕРІРµСЂСЏРµС‚Рµ Р·Р°РґР°С‡Рµ.</div>
+          <div class="plan-suggest-warning" style="font-size:11px;color:#888;margin-top:6px;">Команды плана будут выполнены без отдельного подтверждения. Нажимайте, только если доверяете задаче.</div>
         </div>`;
       }
     }
 
     if (m.loading) {
-      const stepText = escapeHTML(m.currentStep || 'РР РЈ РґСѓРјР°РµС‚...');
+      const stepText = escapeHTML(m.currentStep || 'ИРУ думает...');
       const liveTasksHTML = renderTaskBlock(m.liveTasks);
       const taskBlockAttr = (m.liveTasks && m.liveTasks.length > 0) ? '' : ' hidden';
-      html += `<div class="msg assistant msg-thinking"><div class="msg-role">РёСЂСѓ</div><div class="msg-body"><div class="live-status"><span class="live-dot"></span><span class="live-text">${stepText}</span></div><div class="task-block-live"${taskBlockAttr}>${liveTasksHTML}</div></div></div>`;
+      html += `<div class="msg assistant msg-thinking"><div class="msg-role">иру</div><div class="msg-body"><div class="live-status"><span class="live-dot"></span><span class="live-text">${stepText}</span></div><div class="task-block-live"${taskBlockAttr}>${liveTasksHTML}</div></div></div>`;
     } else {
       html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}${confirmBtns}${suggestHTML}${planHTML}</div></div>`;
     }
@@ -263,7 +263,7 @@ async function sendMessage() {
   const text = input.value.trim();
   if (!text) return;
   if (text.length > MAX_INPUT_LENGTH) {
-    showToast(`РњР°РєСЃРёРјСѓРј ${MAX_INPUT_LENGTH} СЃРёРјРІРѕР»РѕРІ`, true);
+    showToast(`Максимум ${MAX_INPUT_LENGTH} символов`, true);
     return;
   }
   const ids = Object.keys(state.devices);
@@ -275,11 +275,11 @@ async function sendMessage() {
   autoGrow(input);
   clearAttachments();
 
-  // Р”РѕР±Р°РІРёС‚СЊ СЃРѕРѕР±С‰РµРЅРёРµ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РІ UI СЃСЂР°Р·Сѓ
+  // Добавить сообщение пользователя в UI сразу
   state.messages.push({ role: 'user', content: text });
-  // Р”РѕР±Р°РІРёС‚СЊ placeholder РґР»СЏ РѕС‚РІРµС‚Р° (live-СЃС‚Р°С‚СѓСЃ РІРјРµСЃС‚Рѕ С‚РѕС‡РµРє Р·Р°РіСЂСѓР·РєРё)
+  // Добавить placeholder для ответа (live-статус вместо точек загрузки)
   const msgIndex = state.messages.length;
-  state.messages.push({ role: 'assistant', content: '', loading: true, currentStep: 'РР РЈ РґСѓРјР°РµС‚...', liveTasks: [] });
+  state.messages.push({ role: 'assistant', content: '', loading: true, currentStep: 'ИРУ думает...', liveTasks: [] });
   renderMessages();
 
   try {
@@ -304,21 +304,21 @@ async function sendMessage() {
     }
 
     if (data.status === 'ok' && data.task_id) {
-      // Р—Р°РґР°С‡Р° Р·Р°РїСѓС‰РµРЅР° РІ С„РѕРЅРµ вЂ” РЅР°С‡РёРЅР°РµРј polling
+      // Задача запущена в фоне — начинаем polling
       state.pendingTasks.push({ task_id: data.task_id, msgIndex });
       pollTask(data.task_id, msgIndex);
     } else {
-      // РћС€РёР±РєР° РґРѕ Р·Р°РїСѓСЃРєР° Р·Р°РґР°С‡Рё
+      // Ошибка до запуска задачи
       state.messages[msgIndex] = {
         role: 'assistant',
-        content: `РћС€РёР±РєР°: ${data.error || 'РќРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°'}`,
+        content: `Ошибка: ${data.error || 'Неизвестная ошибка'}`,
       };
       renderMessages();
     }
   } catch (e) {
     state.messages[msgIndex] = {
       role: 'assistant',
-      content: `РћС€РёР±РєР° СЃРµС‚Рё: ${e.message}`,
+      content: `Ошибка сети: ${e.message}`,
     };
     renderMessages();
   }
@@ -326,12 +326,12 @@ async function sendMessage() {
 
 async function pollTask(taskId, msgIndex) {
   const startTime = Date.now();
-  const MAX_POLL_MS = 600000; // 10 РјРёРЅСѓС‚ РјР°РєСЃ (РґР»СЏ РґР»РёРЅРЅС‹С… РєРѕРЅРІРµР№РµСЂРѕРІ)
+  const MAX_POLL_MS = 600000; // 10 минут макс (для длинных конвейеров)
   let stopped = false;
   const poll = async () => {
     if (stopped) return;
     if (Date.now() - startTime > MAX_POLL_MS) {
-      state.messages[msgIndex] = { role: 'assistant', content: 'РСЃС‚РµРєР»Рѕ РІСЂРµРјСЏ РѕР¶РёРґР°РЅРёСЏ РѕС‚РІРµС‚Р°.' };
+      state.messages[msgIndex] = { role: 'assistant', content: 'Истекло время ожидания ответа.' };
       state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
       renderMessages();
       return;
@@ -340,7 +340,7 @@ async function pollTask(taskId, msgIndex) {
       const r = await apiFetch(`${API}/api/tasks/${taskId}`, { headers: authHeaders() });
       if (!r.ok) {
         stopped = true;
-        state.messages[msgIndex] = { role: 'assistant', content: 'Р—Р°РґР°С‡Р° РЅРµ РЅР°Р№РґРµРЅР°.' };
+        state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена.' };
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
         renderMessages();
         return;
@@ -354,7 +354,7 @@ async function pollTask(taskId, msgIndex) {
         const cmdText = cd.command || '';
         state.messages[msgIndex] = {
           role: 'assistant',
-          content: `РљРѕРјР°РЅРґР° С‚СЂРµР±СѓРµС‚ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ:\n${cmdText}`,
+          content: `Команда требует подтверждения:\n${cmdText}`,
           commands: task.commands,
           tasks: task.tasks || [],
           confirmTaskId: taskId,
@@ -366,7 +366,7 @@ async function pollTask(taskId, msgIndex) {
         stopped = true;
         const msg = {
           role: 'assistant',
-          content: task.answer || 'Р“РѕС‚РѕРІРѕ.',
+          content: task.answer || 'Готово.',
           commands: task.commands,
           tasks: task.tasks || [],
         };
@@ -384,7 +384,7 @@ async function pollTask(taskId, msgIndex) {
         loadChats();
         return;
       }
-      // Р•С‰С‘ РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ вЂ” РѕР±РЅРѕРІРёС‚СЊ live-СЃС‚Р°С‚СѓСЃ
+      // Ещё выполняется — обновить live-статус
       const msg = state.messages[msgIndex];
       if (msg && msg.loading) {
         let needRender = false;
@@ -398,7 +398,7 @@ async function pollTask(taskId, msgIndex) {
         }
         if (needRender) renderMessages();
       }
-      // РџРѕРІС‚РѕСЂРёС‚СЊ С‡РµСЂРµР· 800РјСЃ РїРѕРєР° Р·Р°РґР°С‡Р° running
+      // Повторить через 800мс пока задача running
       if (!stopped) setTimeout(poll, 800);
     } catch (e) {
       if (stopped) return;
@@ -406,7 +406,7 @@ async function pollTask(taskId, msgIndex) {
       poll._retries++;
       if (poll._retries > 30) {
         stopped = true;
-        state.messages[msgIndex] = { role: 'assistant', content: 'Р—Р°РґР°С‡Р° РЅРµ РЅР°Р№РґРµРЅР° РёР»Рё РёСЃС‚РµРєР»Р°.' };
+        state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена или истекла.' };
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
         renderMessages();
         return;
@@ -417,7 +417,7 @@ async function pollTask(taskId, msgIndex) {
   setTimeout(poll, 800);
 }
 
-// в”Ђв”Ђ INPUT DEVICE SELECTOR в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── INPUT DEVICE SELECTOR ──────────────────────────────
 function toggleInputDeviceDropdown() {
   document.getElementById('inputDeviceDropdown').classList.toggle('show');
 }
@@ -429,7 +429,7 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.input-mode-select')) closeInputModeDropdown();
 });
 
-// РљРЅРѕРїРєР° СЂРµР¶РёРјРѕРІ (РєРѕРЅРІРµР№РµСЂ / Р°РІС‚РѕРЅРѕРјРЅС‹Р№)
+// Кнопка режимов (конвейер / автономный)
 function toggleInputModeDropdown() {
   document.getElementById('inputModeDropdown').classList.toggle('show');
 }
@@ -446,11 +446,11 @@ function renderInputModeBtn() {
   const badges = document.getElementById('inputModeBadges');
   if (!btn || !badges) return;
   const active = [];
-  if (state.modes.pipeline)   active.push('РџР»Р°РЅ');
-  if (state.modes.autonomous) active.push('РђРІС‚Рѕ');
+  if (state.modes.pipeline)   active.push('План');
+  if (state.modes.autonomous) active.push('Авто');
   btn.classList.toggle('active', active.length > 0);
-  badges.textContent = active.join(' В· ');
-  // РЎРёРЅС…СЂРѕРЅРёР·РёСЂСѓРµРј С‡РµРєР±РѕРєСЃС‹ СЃ state (РЅР° СЃР»СѓС‡Р°Р№ РІРЅРµС€РЅРµРіРѕ РёР·РјРµРЅРµРЅРёСЏ)
+  badges.textContent = active.join(' · ');
+  // Синхронизируем чекбоксы с state (на случай внешнего изменения)
   const p = document.getElementById('modePipeline');
   const a = document.getElementById('modeAutonomous');
   if (p) p.checked = !!state.modes.pipeline;
@@ -469,7 +469,7 @@ function selectInputDevice(mode, deviceId) {
   closeInputDeviceDropdown();
   // Update placeholder
   const input = document.getElementById('chatInput');
-  input.placeholder = state.sendTarget === 'all' ? 'РћРїРёС€Рё Р·Р°РґР°С‡Сѓ (РІСЃРµ СѓСЃС‚СЂРѕР№СЃС‚РІР°)...' : 'РћРїРёС€Рё Р·Р°РґР°С‡Сѓ...';
+  input.placeholder = state.sendTarget === 'all' ? 'Опиши задачу (все устройства)...' : 'Опиши задачу...';
   if (state.explorerOpen && mode !== 'all') explorerNavigate(state.explorerPath);
 }
 
@@ -483,11 +483,11 @@ function renderInputDeviceSelector() {
     dot.className = 'dot';
     dot.style.background = 'var(--text-muted)';
     dot.style.boxShadow = 'none';
-    label.textContent = 'РќРµС‚ СѓСЃС‚СЂРѕР№СЃС‚РІ';
-    dropdown.innerHTML = '<div class="input-device-dropdown-item" style="color:var(--text-muted);cursor:default">РћР¶РёРґР°РЅРёРµ РїРѕРґРєР»СЋС‡РµРЅРёСЏ...</div>';
-    // РћРЅР±РѕСЂРґРёРЅРі-РїР»РµР№СЃС…РѕР»РґРµСЂ
+    label.textContent = 'Нет устройств';
+    dropdown.innerHTML = '<div class="input-device-dropdown-item" style="color:var(--text-muted);cursor:default">Ожидание подключения...</div>';
+    // Онбординг-плейсхолдер
     const chatInput = document.getElementById('chatInput');
-    if (chatInput) chatInput.placeholder = 'РЎРїСЂРѕСЃРё, РєР°Рє РїРѕРґРєР»СЋС‡РёС‚СЊ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ...';
+    if (chatInput) chatInput.placeholder = 'Спроси, как подключить устройство...';
     return;
   }
 
@@ -496,13 +496,13 @@ function renderInputDeviceSelector() {
     dot.className = 'dot all';
     dot.style.background = '';
     dot.style.boxShadow = '';
-    label.textContent = 'Р’СЃРµ СѓСЃС‚СЂРѕР№СЃС‚РІР° (' + ids.length + ')';
+    label.textContent = 'Все устройства (' + ids.length + ')';
   } else {
     dot.className = 'dot';
     dot.style.background = '';
     dot.style.boxShadow = '';
     const dev = state.devices[state.selectedDevice];
-    label.textContent = dev ? (dev.info?.hostname || state.selectedDevice) : 'Р’С‹Р±РµСЂРёС‚Рµ';
+    label.textContent = dev ? (dev.info?.hostname || state.selectedDevice) : 'Выберите';
   }
 
   // Dropdown items
@@ -511,7 +511,7 @@ function renderInputDeviceSelector() {
   const allSel = state.sendTarget === 'all' ? ' selected' : '';
   html += `<div class="input-device-dropdown-item${allSel}" onclick="selectInputDevice('all')">
     <span class="dot all" style="width:5px;height:5px;border-radius:50%;background:var(--accent);box-shadow:0 0 4px var(--accent)"></span>
-    <div>Р’СЃРµ СѓСЃС‚СЂРѕР№СЃС‚РІР° (${ids.length})</div>
+    <div>Все устройства (${ids.length})</div>
   </div>`;
   // Individual devices
   for (const id of ids) {
@@ -520,24 +520,24 @@ function renderInputDeviceSelector() {
     const info = d.info || {};
     html += `<div class="input-device-dropdown-item${sel}" onclick="selectInputDevice('single','${id}')">
       <span style="width:5px;height:5px;border-radius:50%;background:var(--success);box-shadow:0 0 4px var(--success);flex-shrink:0"></span>
-      <div><div>${info.hostname || id}</div><div class="dev-os">${info.os || '?'} вЂ” ${id}</div></div>
+      <div><div>${info.hostname || id}</div><div class="dev-os">${info.os || '?'} — ${id}</div></div>
     </div>`;
   }
   dropdown.innerHTML = html;
 }
 
-// в”Ђв”Ђ LIVE PROGRESS в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── LIVE PROGRESS ─────────────────────────────────────
 function renderTaskBlock(tasks) {
   if (!tasks || tasks.length === 0) return '';
   let html = '';
   for (const t of tasks) {
     const st = t.status || 'running';
-    const statusLabel = st === 'completed' ? 'Р·Р°РІРµСЂС€РµРЅРѕ'
-      : st === 'failed' ? 'РѕС€РёР±РєР°'
-      : st === 'cancelled' ? 'РѕС‚РјРµРЅРµРЅРѕ'
-      : 'РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ';
+    const statusLabel = st === 'completed' ? 'завершено'
+      : st === 'failed' ? 'ошибка'
+      : st === 'cancelled' ? 'отменено'
+      : 'выполняется';
     html += `<div class="task-block task-${st}">`;
-    html += `<div class="task-goal"><span class="task-goal-label">Р—Р°РґР°С‡Р°:</span> ${escapeHTML(t.goal || '')} <span class="task-badge task-badge-${st}">${statusLabel}</span></div>`;
+    html += `<div class="task-goal"><span class="task-goal-label">Задача:</span> ${escapeHTML(t.goal || '')} <span class="task-badge task-badge-${st}">${statusLabel}</span></div>`;
     const steps = t.steps || [];
     if (steps.length > 0) {
       html += '<ul class="task-steps">';
@@ -564,28 +564,28 @@ function sendHint(el) {
 }
 
 function downloadAgent() {
-  // РќР• Р·Р°РґР°С‘Рј a.download вЂ” Р±СЂР°СѓР·РµСЂ РІРѕР·СЊРјС‘С‚ РёРјСЏ РёР· Content-Disposition СЃРµСЂРІРµСЂР°.
-  // Р­С‚Рѕ СЂР°Р±РѕС‚Р°РµС‚ Рё РґР»СЏ IruAgent.zip, Рё РґР»СЏ IruAgent.exe.
+  // НЕ задаём a.download — браузер возьмёт имя из Content-Disposition сервера.
+  // Это работает и для IruAgent.zip, и для IruAgent.exe.
   const a = document.createElement('a');
   a.href = `${API}/api/agent/download`;
   document.body.appendChild(a);
   a.click();
   a.remove();
 }
-// в”Ђв”Ђ CONFIRM / DENY в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── CONFIRM / DENY ───────────────────────────────────────────
 async function confirmTask(taskId, msgIndex) {
   try {
     await apiFetch(`${API}/api/tasks/${taskId}/confirm`, {
       method: 'POST', headers: authHeaders(),
     });
-    // РЈР±РёСЂР°РµРј РєРЅРѕРїРєРё, РїРѕРєР°Р·С‹РІР°РµРј Р»РѕР°РґРµСЂ
+    // Убираем кнопки, показываем лоадер
     state.messages[msgIndex].confirmTaskId = null;
     state.messages[msgIndex].loading = true;
     state.messages[msgIndex].content = '';
     renderMessages();
-    // РџРѕР»Р»РёРј Р·Р°РґР°С‡Сѓ РґРѕ Р·Р°РІРµСЂС€РµРЅРёСЏ
+    // Поллим задачу до завершения
     pollTask(taskId, msgIndex);
-  } catch (e) { showToast('РћС€РёР±РєР° РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ', true); }
+  } catch (e) { showToast('Ошибка подтверждения', true); }
 }
 
 async function denyTask(taskId, msgIndex) {
@@ -594,10 +594,10 @@ async function denyTask(taskId, msgIndex) {
       method: 'POST', headers: authHeaders(),
     });
     state.messages[msgIndex].confirmTaskId = null;
-    state.messages[msgIndex].content = 'РљРѕРјР°РЅРґР° РѕС‚РјРµРЅРµРЅР°.';
+    state.messages[msgIndex].content = 'Команда отменена.';
     state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
     renderMessages();
-  } catch (e) { showToast('РћС€РёР±РєР°', true); }
+  } catch (e) { showToast('Ошибка', true); }
 }
 
 function handleInputKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }

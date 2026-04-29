@@ -1,4 +1,4 @@
-﻿function toggleMobileSidebar() {
+function toggleMobileSidebar() {
   const sidebar = document.querySelector('.sidebar');
   const overlay = document.getElementById('sidebarOverlay');
   sidebar.classList.toggle('open');
@@ -9,7 +9,7 @@ function closeMobileSidebar() {
   document.getElementById('sidebarOverlay').classList.remove('show');
 }
 
-// в”Ђв”Ђ CONSENT в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── CONSENT ────────────────────────────────────────────
 function checkConsent() {
   if (state.user && !state.user.data_consent) {
     document.getElementById('consentModal').classList.add('show');
@@ -28,7 +28,7 @@ async function setConsent(value) {
   document.getElementById('consentModal').classList.remove('show');
 }
 
-// в”Ђв”Ђ ADMIN PANEL в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── ADMIN PANEL ─────────────────────────────────────────
 
 async function checkTermsStatus() {
   try {
@@ -49,7 +49,7 @@ async function acceptTerms() {
   document.getElementById('termsModal').classList.remove('show');
 }
 
-// в”Ђв”Ђ USER INFO & DEV MODE в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── USER INFO & DEV MODE ────────────────────────────────────
 async function fetchUserInfo() {
   try {
     const r = await apiFetch(`${API}/api/user_info`, { headers: authHeaders() });

@@ -1,4 +1,4 @@
-﻿async function fetchDevices() {
+async function fetchDevices() {
   if (!state.user) return;
   try {
     const r = await apiFetch(`${API}/api/devices`, { headers: authHeaders() });
@@ -19,7 +19,7 @@ function renderDevices() {
     empty.style.display = 'block';
     list.innerHTML = '';
     dot.className = 'device-dot';
-    label.textContent = 'РќРµС‚ СѓСЃС‚СЂРѕР№СЃС‚РІ';
+    label.textContent = 'Нет устройств';
     state.selectedDevice = null;
     renderInputDeviceSelector();
     renderInputModeBtn();
@@ -38,7 +38,7 @@ function renderDevices() {
     const info = d.info || {};
     return `<div class="device-dropdown-item${sel}" onclick="selectDevice('${id}')">
       <span class="device-dot online"></span>
-      <div><div>${info.hostname || id}</div><div class="device-os">${info.os || '?'} вЂ” ${id}</div></div>
+      <div><div>${info.hostname || id}</div><div class="device-os">${info.os || '?'} — ${id}</div></div>
     </div>`;
   }).join('');
   renderInputDeviceSelector();
@@ -58,7 +58,7 @@ function toggleDeviceDropdown() {
 function closeDeviceDropdown() { document.getElementById('deviceDropdown').classList.remove('show'); }
 document.addEventListener('click', e => { if (!e.target.closest('.device-select')) closeDeviceDropdown(); });
 
-// в”Ђв”Ђ CHAT MESSAGES в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── CHAT MESSAGES ────────────────────────────────────
 
 function toggleInputDeviceDropdown() {
   document.getElementById('inputDeviceDropdown').classList.toggle('show');
@@ -71,7 +71,7 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.input-mode-select')) closeInputModeDropdown();
 });
 
-// РљРЅРѕРїРєР° СЂРµР¶РёРјРѕРІ (РєРѕРЅРІРµР№РµСЂ / Р°РІС‚РѕРЅРѕРјРЅС‹Р№)
+// Кнопка режимов (конвейер / автономный)
 function toggleInputModeDropdown() {
   document.getElementById('inputModeDropdown').classList.toggle('show');
 }
@@ -88,11 +88,11 @@ function renderInputModeBtn() {
   const badges = document.getElementById('inputModeBadges');
   if (!btn || !badges) return;
   const active = [];
-  if (state.modes.pipeline)   active.push('РџР»Р°РЅ');
-  if (state.modes.autonomous) active.push('РђРІС‚Рѕ');
+  if (state.modes.pipeline)   active.push('План');
+  if (state.modes.autonomous) active.push('Авто');
   btn.classList.toggle('active', active.length > 0);
-  badges.textContent = active.join(' В· ');
-  // РЎРёРЅС…СЂРѕРЅРёР·РёСЂСѓРµРј С‡РµРєР±РѕРєСЃС‹ СЃ state (РЅР° СЃР»СѓС‡Р°Р№ РІРЅРµС€РЅРµРіРѕ РёР·РјРµРЅРµРЅРёСЏ)
+  badges.textContent = active.join(' · ');
+  // Синхронизируем чекбоксы с state (на случай внешнего изменения)
   const p = document.getElementById('modePipeline');
   const a = document.getElementById('modeAutonomous');
   if (p) p.checked = !!state.modes.pipeline;
@@ -111,7 +111,7 @@ function selectInputDevice(mode, deviceId) {
   closeInputDeviceDropdown();
   // Update placeholder
   const input = document.getElementById('chatInput');
-  input.placeholder = state.sendTarget === 'all' ? 'РћРїРёС€Рё Р·Р°РґР°С‡Сѓ (РІСЃРµ СѓСЃС‚СЂРѕР№СЃС‚РІР°)...' : 'РћРїРёС€Рё Р·Р°РґР°С‡Сѓ...';
+  input.placeholder = state.sendTarget === 'all' ? 'Опиши задачу (все устройства)...' : 'Опиши задачу...';
   if (state.explorerOpen && mode !== 'all') explorerNavigate(state.explorerPath);
 }
 
@@ -125,11 +125,11 @@ function renderInputDeviceSelector() {
     dot.className = 'dot';
     dot.style.background = 'var(--text-muted)';
     dot.style.boxShadow = 'none';
-    label.textContent = 'РќРµС‚ СѓСЃС‚СЂРѕР№СЃС‚РІ';
-    dropdown.innerHTML = '<div class="input-device-dropdown-item" style="color:var(--text-muted);cursor:default">РћР¶РёРґР°РЅРёРµ РїРѕРґРєР»СЋС‡РµРЅРёСЏ...</div>';
-    // РћРЅР±РѕСЂРґРёРЅРі-РїР»РµР№СЃС…РѕР»РґРµСЂ
+    label.textContent = 'Нет устройств';
+    dropdown.innerHTML = '<div class="input-device-dropdown-item" style="color:var(--text-muted);cursor:default">Ожидание подключения...</div>';
+    // Онбординг-плейсхолдер
     const chatInput = document.getElementById('chatInput');
-    if (chatInput) chatInput.placeholder = 'РЎРїСЂРѕСЃРё, РєР°Рє РїРѕРґРєР»СЋС‡РёС‚СЊ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ...';
+    if (chatInput) chatInput.placeholder = 'Спроси, как подключить устройство...';
     return;
   }
 
@@ -138,13 +138,13 @@ function renderInputDeviceSelector() {
     dot.className = 'dot all';
     dot.style.background = '';
     dot.style.boxShadow = '';
-    label.textContent = 'Р’СЃРµ СѓСЃС‚СЂРѕР№СЃС‚РІР° (' + ids.length + ')';
+    label.textContent = 'Все устройства (' + ids.length + ')';
   } else {
     dot.className = 'dot';
     dot.style.background = '';
     dot.style.boxShadow = '';
     const dev = state.devices[state.selectedDevice];
-    label.textContent = dev ? (dev.info?.hostname || state.selectedDevice) : 'Р’С‹Р±РµСЂРёС‚Рµ';
+    label.textContent = dev ? (dev.info?.hostname || state.selectedDevice) : 'Выберите';
   }
 
   // Dropdown items
@@ -153,7 +153,7 @@ function renderInputDeviceSelector() {
   const allSel = state.sendTarget === 'all' ? ' selected' : '';
   html += `<div class="input-device-dropdown-item${allSel}" onclick="selectInputDevice('all')">
     <span class="dot all" style="width:5px;height:5px;border-radius:50%;background:var(--accent);box-shadow:0 0 4px var(--accent)"></span>
-    <div>Р’СЃРµ СѓСЃС‚СЂРѕР№СЃС‚РІР° (${ids.length})</div>
+    <div>Все устройства (${ids.length})</div>
   </div>`;
   // Individual devices
   for (const id of ids) {
@@ -162,11 +162,11 @@ function renderInputDeviceSelector() {
     const info = d.info || {};
     html += `<div class="input-device-dropdown-item${sel}" onclick="selectInputDevice('single','${id}')">
       <span style="width:5px;height:5px;border-radius:50%;background:var(--success);box-shadow:0 0 4px var(--success);flex-shrink:0"></span>
-      <div><div>${info.hostname || id}</div><div class="dev-os">${info.os || '?'} вЂ” ${id}</div></div>
+      <div><div>${info.hostname || id}</div><div class="dev-os">${info.os || '?'} — ${id}</div></div>
     </div>`;
   }
   dropdown.innerHTML = html;
 }
 
-// в”Ђв”Ђ LIVE PROGRESS в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── LIVE PROGRESS ─────────────────────────────────────
 

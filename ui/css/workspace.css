@@ -1,4 +1,4 @@
-﻿.content { flex: 1; display: flex; overflow: hidden; position: relative; }
+.content { flex: 1; display: flex; overflow: hidden; position: relative; }
 
 /* CHAT */
 .chat-view { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -118,7 +118,7 @@
 .cmd-group-body { display: none; margin-top: 4px; padding-left: 4px; }
 .cmd-group.open .cmd-group-body { display: block; }
 
-/* Confirm actions вЂ” Point 7: blueprint theme */
+/* Confirm actions — Point 7: blueprint theme */
 .confirm-actions {
   display: flex; gap: 12px; margin-top: 10px;
 }
@@ -394,7 +394,7 @@
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
 .toast.error { border-color: var(--error); color: var(--error); }
 
-/* в”Ђв”Ђ ADMIN PANEL в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── ADMIN PANEL ────────────────────────────── */
 .admin-panel {
   width: 0; overflow: hidden; border-left: 1px solid var(--border);
   background: var(--bg-secondary); transition: width 0.25s ease;
@@ -495,7 +495,7 @@
   font-size: 9px; color: var(--accent); margin-left: 4px;
 }
 
-/* в”Ђв”Ђ ADMIN TABS в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */
+/* ── ADMIN TABS ─────────────────────────────── */
 /* Tab containers: fill remaining space, scroll internally */
 #adminUsersTab, #adminDevicesTab, #adminAuditTab {
   flex: 1; display: flex !important; flex-direction: column; overflow: hidden; min-height: 0;

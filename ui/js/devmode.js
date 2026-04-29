@@ -1,4 +1,4 @@
-﻿function toggleDevMode() {
+function toggleDevMode() {
   state.devModeOpen = !state.devModeOpen;
   const panel = document.getElementById('devModePanel');
   panel.classList.toggle('open', state.devModeOpen);
@@ -15,7 +15,7 @@ function updateDevModeDevices() {
   const ids = Object.keys(state.devices);
   sel.innerHTML = '';
   if (ids.length === 0) {
-    sel.innerHTML = '<option value="">РќРµС‚ СѓСЃС‚СЂРѕР№СЃС‚РІ</option>';
+    sel.innerHTML = '<option value="">Нет устройств</option>';
     return;
   }
   for (const id of ids) {
@@ -47,7 +47,7 @@ async function sendDevCommand() {
   const deviceId = document.getElementById('devModeDeviceSelect').value;
 
   if (!isBroadcast && !deviceId) {
-    appendDevEntry(cmd, [{ device: '---', text: 'Р’С‹Р±РµСЂРёС‚Рµ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ', status: 'error' }]);
+    appendDevEntry(cmd, [{ device: '---', text: 'Выберите устройство', status: 'error' }]);
     return;
   }
 
@@ -76,23 +76,23 @@ async function sendDevCommand() {
       let text, status;
       if (res.status === 'ok') {
         const r = res.result || {};
-        text = r.stdout || r.stderr || r.error || '(РЅРµС‚ РІС‹РІРѕРґР°)';
+        text = r.stdout || r.stderr || r.error || '(нет вывода)';
         status = (r.returncode === 0 || r.returncode == null) ? 'ok' : 'err';
       } else if (res.status === 'blocked') {
-        text = res.error || 'Р—Р°Р±Р»РѕРєРёСЂРѕРІР°РЅРѕ';
+        text = res.error || 'Заблокировано';
         status = 'blocked';
       } else if (res.status === 'confirm_required') {
-        text = res.error || 'РўСЂРµР±СѓРµС‚СЃСЏ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ';
+        text = res.error || 'Требуется подтверждение';
         status = 'confirm';
       } else {
-        text = res.error || 'РќРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°';
+        text = res.error || 'Неизвестная ошибка';
         status = 'error';
       }
       items.push({ device: devName, text: text.trim(), status });
     }
     fillDevEntry(entryEl, items);
   } catch (e) {
-    fillDevEntry(entryEl, [{ device: '---', text: 'РћС€РёР±РєР° СЃРµС‚Рё: ' + e.message, status: 'error' }]);
+    fillDevEntry(entryEl, [{ device: '---', text: 'Ошибка сети: ' + e.message, status: 'error' }]);
   }
 }
 
@@ -110,7 +110,7 @@ function appendDevEntry(cmd, items) {
     fillDevEntry(entry, items);
   } else {
     entry.querySelector('.devmode-devices').innerHTML =
-      '<div class="devmode-loading">Р’С‹РїРѕР»РЅСЏРµС‚СЃСЏ...</div>';
+      '<div class="devmode-loading">Выполняется...</div>';
   }
 
   output.appendChild(entry);
@@ -157,4 +157,4 @@ function handleDevModeKey(e) {
   }
 }
 
-// в”Ђв”Ђ Р“РѕР»РѕСЃРѕРІРѕР№ РІРІРѕРґ (Web Speech API) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Голосовой ввод (Web Speech API) ──────────────────────────
