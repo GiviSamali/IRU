@@ -1,0 +1,247 @@
+import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+try:
+    from . import database as db  # type: ignore
+except ImportError:
+    import database as db  # type: ignore
+
+
+_MONTHS_RU = [
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+]
+_WEEKDAYS_RU = [
+    "понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье",
+]
+
+MAX_MEMORY_BLOCK = 2048
+
+ONBOARDING_MARKERS = [
+    "нет подключённых устройств",
+    "нет подключенных устройств",
+    "подключить устройство",
+    "запустить IruAgent.exe",
+    "скачать agent",
+    "список доступных устройств пуст",
+]
+
+
+def current_datetime_msk() -> str:
+    """Текущая дата/время в московской таймзоне, на русском языке."""
+    now = datetime.now(ZoneInfo("Europe/Moscow"))
+    weekday = _WEEKDAYS_RU[now.weekday()]
+    month = _MONTHS_RU[now.month - 1]
+    return f"{weekday}, {now.day} {month} {now.year}, {now.strftime('%H:%M')} MSK"
+
+
+def strip_markdown(text: str) -> str:
+    """Убрать markdown-разметку из текста LLM перед отправкой пользователю."""
+    if not text:
+        return text
+    text = re.sub(r"\*\*([^*]+)\*\*", lambda m: m.group(1).upper(), text)
+    text = re.sub(r"(?<![*\w])\*([^*\n]+)\*(?!\w)", r"\1", text)
+    text = re.sub(r"^\s*#{1,6}\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^(\s*)[-*]\s+", r"\1— ", text, flags=re.MULTILINE)
+    text = re.sub(r"`([^`\n]+)`", r"\1", text)
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
+    return text
+
+
+def collect_tasks(task_ids: list[int]) -> list[dict]:
+    """Подгрузить текущее состояние задач для ответа UI."""
+    result = []
+    for tid in task_ids:
+        try:
+            task = db.get_task(tid)
+            if task:
+                result.append({
+                    "id": task["id"],
+                    "goal": task["goal"],
+                    "status": task["status"],
+                    "steps": [
+                        {
+                            "idx": step["idx"],
+                            "description": step["description"],
+                            "status": step["status"],
+                            "summary": step.get("summary"),
+                        }
+                        for step in task["steps"]
+                    ],
+                })
+        except Exception as exc:
+            print(f"[llm] collect_tasks error for task {tid}: {exc}")
+    return result
+
+
+def set_current_step(poll_task_id: str | None, text: str) -> None:
+    """Обновить task.current_step для отображения live-прогресса в UI."""
+    if not poll_task_id:
+        return
+    try:
+        from main import tasks  # локальный импорт — избегаем циклических зависимостей
+
+        task = tasks.get(poll_task_id)
+        if task:
+            task["current_step"] = text
+    except Exception:
+        pass
+
+
+def push_tasks_view(poll_task_id: str | None, task_ids: list[int]) -> None:
+    """Обновить task['tasks'] для live-отображения шагов плана в UI."""
+    if not poll_task_id or not task_ids:
+        return
+    try:
+        from main import tasks
+
+        task = tasks.get(poll_task_id)
+        if task:
+            task["tasks"] = collect_tasks(task_ids)
+    except Exception:
+        pass
+
+
+class ConfirmationRequired(Exception):
+    """Команда требует подтверждения пользователя."""
+
+    def __init__(self, command: str, device_id: str, params: dict, answer: str, commands_log: list):
+        self.command = command
+        self.device_id = device_id
+        self.params = params
+        self.answer = answer
+        self.commands_log = commands_log
+        super().__init__(f"Подтверждение: {command[:80]}")
+
+
+def build_devices_block(all_devices: dict) -> str:
+    """Сформировать текстовый список устройств для промпта."""
+    if not all_devices:
+        return "Нет подключённых устройств."
+
+    lines = []
+    for did, dev in all_devices.items():
+        info = dev.get("info", {})
+        hostname = info.get("hostname", "?")
+        os_name = info.get("os", "?")
+        os_ver = info.get("os_version", "")
+        lines.append(f"- {did}: hostname={hostname}, ОС={os_name} ({os_ver})")
+    return "\n".join(lines)
+
+
+def build_device_profile_block(profile: dict | None) -> str:
+    """Сформировать блок профиля устройства для промпта."""
+    if not profile:
+        return ""
+
+    lines = ["\n## Профиль устройства"]
+
+    if profile.get("username"):
+        lines.append(f"Пользователь: {profile['username']}")
+    if profile.get("desktop_path"):
+        lines.append(f"Рабочий стол: {profile['desktop_path']}")
+    if profile.get("cpu"):
+        lines.append(f"Процессор: {profile['cpu']}")
+    if profile.get("gpu"):
+        lines.append(f"Видеокарта: {profile['gpu']}")
+    if profile.get("ram_gb"):
+        lines.append(f"Оперативная память: {profile['ram_gb']} ГБ")
+
+    disks = profile.get("disks")
+    if disks and isinstance(disks, list):
+        disk_lines = []
+        for disk in disks:
+            drive = disk.get("drive", "?")
+            total = disk.get("total_gb", 0)
+            free = disk.get("free_gb", 0)
+            disk_lines.append(f"{drive} {total} ГБ всего, {free} ГБ свободно")
+        lines.append(f"Диски: {'; '.join(disk_lines)}")
+
+    if len(lines) <= 1:
+        return ""
+
+    return "\n".join(lines)
+
+
+def build_memory_block(machine_guid: str | None, user_id: str | None = None) -> str:
+    """Собрать блок памяти для промпта (≤2048 символов)."""
+    if not machine_guid and not user_id:
+        return ""
+
+    user_facts = db.get_user_facts(user_id) if user_id else []
+    commands = db.get_recent_commands(machine_guid, user_id, 20) if machine_guid else []
+
+    if not user_facts and not commands:
+        return ""
+
+    facts_lines = []
+    if user_facts:
+        facts_lines.append("Факты обо мне, пользователе:")
+        for fact in user_facts:
+            category = f"[{fact['category']}] " if fact.get("category") else ""
+            facts_lines.append(f"- id={fact['id']} {category}{fact['fact_text']}")
+
+    def command_line(command: dict, preview_limit: int) -> str:
+        tag = "[OK]" if command["success"] else "[FAIL]"
+        intent_part = f" — (intent: {command['intent']})" if command.get("intent") else ""
+        if command["success"]:
+            preview = (command.get("stdout_preview") or "")[:preview_limit]
+            output_part = f" — stdout: {preview}" if preview else ""
+        else:
+            preview = (command.get("stderr_preview") or "")[:preview_limit]
+            output_part = f" — stderr: {preview}" if preview else ""
+        return f"- {tag} {command['command']} — exit={command['exit_code']}{intent_part}{output_part}"
+
+    def assemble(command_lines: list[str]) -> str:
+        parts = ["## Память", ""]
+        if facts_lines:
+            parts.extend(facts_lines)
+            parts.append("")
+        if command_lines:
+            parts.append("Последние команды на этом устройстве:")
+            parts.extend(command_lines)
+        return "\n".join(parts) + "\n"
+
+    command_lines = [command_line(command, 200) for command in commands]
+    block = assemble(command_lines)
+    if len(block) <= MAX_MEMORY_BLOCK:
+        return block
+
+    command_lines = [command_line(command, 100) for command in commands]
+    block = assemble(command_lines)
+    if len(block) <= MAX_MEMORY_BLOCK:
+        return block
+
+    while command_lines:
+        command_lines.pop()
+        block = assemble(command_lines)
+        if len(block) <= MAX_MEMORY_BLOCK:
+            return block
+
+    return assemble([])
+
+
+def is_onboarding_message(content: str) -> bool:
+    """Проверить, является ли сообщение онбординговым."""
+    lower = content.lower()
+    return sum(1 for marker in ONBOARDING_MARKERS if marker in lower) >= 2
+
+
+def build_chat_messages(chat_history: list[dict], filter_onboarding: bool = False) -> list[dict]:
+    """
+    Конвертировать историю чата в формат messages для API.
+    Только role='user' и role='assistant', без tool-вызовов из прошлых сессий.
+    """
+    messages = []
+    for msg in chat_history:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if not content or role not in ("user", "assistant"):
+            continue
+        if filter_onboarding and role == "assistant" and is_onboarding_message(content):
+            if messages and messages[-1]["role"] == "user":
+                messages.pop()
+            continue
+        messages.append({"role": role, "content": content})
+    return messages
