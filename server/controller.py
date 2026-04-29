@@ -31,10 +31,12 @@ try:
         _CLASSIFY_SYSTEM,
     )
     from .controller_shared import (  # type: ignore
+        ConfirmationRequired,
         build_device_profile_block,
         build_devices_block,
         build_memory_block,
         current_datetime_msk as _current_datetime_msk,
+        strip_markdown,
     )
     from .controller_tools import TOOLSET_REGISTRY  # type: ignore
 except ImportError:
@@ -48,10 +50,12 @@ except ImportError:
         _CLASSIFY_SYSTEM,
     )
     from controller_shared import (  # type: ignore
+        ConfirmationRequired,
         build_device_profile_block,
         build_devices_block,
         build_memory_block,
         current_datetime_msk as _current_datetime_msk,
+        strip_markdown,
     )
     from controller_tools import TOOLSET_REGISTRY  # type: ignore
 import asyncio
