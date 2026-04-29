@@ -6,170 +6,104 @@
 <title>ИРУ — О системе</title>
 <link rel="icon" type="image/x-icon" href="/static/IruIcon.ico">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #020308; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; font-size: 15px; line-height: 1.75; padding: 48px 20px; }
-.container { max-width: 760px; margin: 0 auto; }
-.page-header { margin-bottom: 40px; }
-h1 { color: #00d4ff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 10px; }
-.subtitle { color: #ffffff; font-size: 15px; font-weight: 400; opacity: 0.85; }
-h2 { color: #00d4ff; font-size: 20px; font-weight: 600; margin: 36px 0 14px; padding-bottom: 8px; border-bottom: 1px solid #1e293b; }
-p { margin-bottom: 14px; color: #ffffff; opacity: 0.9; }
-strong { color: #ffffff; font-weight: 600; }
-ul { padding-left: 20px; margin-bottom: 16px; color: #ffffff; opacity: 0.9; }
-li { margin-bottom: 8px; }
-a { color: #00d4ff; text-decoration: none; border-bottom: 1px dashed #00d4ff80; }
-a:hover { border-bottom-style: solid; }
-
-/* Philosophy block */
-.philosophy { background: #0a0e17; border: 1px solid #1e3a5f; border-left: 4px solid #00d4ff; border-radius: 0 10px 10px 0; padding: 18px 22px; margin: 18px 0 28px; }
-.philosophy p { color: #ffffff; font-style: italic; margin: 0 0 10px; }
-.philosophy p:last-child { margin: 0; }
-.philosophy .no-emu { color: #e2e8f0; font-size: 13px; margin: 0; font-style: normal; }
-
-/* Architecture image */
-.arch-img-wrap { margin: 18px 0 28px; }
-.arch-img-wrap img { width: 100%; max-width: 100%; border-radius: 10px; border: 1px solid #1e3a5f; box-shadow: 0 8px 32px rgba(0,212,255,0.10), 0 2px 8px rgba(0,0,0,0.5); display: block; }
-
-/* Roadmap stage cards */
-.stages { display: flex; flex-direction: column; gap: 12px; margin: 18px 0 28px; }
-.stage-card { background: #0a0e17; border: 1px solid #1e293b; border-radius: 10px; padding: 16px 20px; display: flex; align-items: flex-start; gap: 16px; }
-.stage-card.done { border-left: 3px solid #00d4ff; }
-.stage-card.coming { border-left: 3px solid #f59e0b; }
-.stage-badge { flex-shrink: 0; font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 6px; white-space: nowrap; }
-.stage-badge.done { background: #00d4ff18; border: 1px solid #00d4ff40; color: #00d4ff; }
-.stage-badge.coming { background: #f59e0b18; border: 1px solid #f59e0b40; color: #f59e0b; }
-.stage-content { flex: 1; }
-.stage-title { color: #ffffff; font-weight: 600; font-size: 15px; margin-bottom: 2px; }
-.stage-desc { color: #e2e8f0; font-size: 13px; opacity: 0.85; }
-
-/* Plan cards */
-.plans { display: flex; flex-direction: column; gap: 10px; margin: 18px 0 28px; }
-.plan-card { background: #0a0e17; border: 1px solid #1e293b; border-radius: 10px; padding: 14px 20px; display: flex; align-items: center; gap: 16px; }
-.plan-card.active { border-color: #00d4ff40; }
-.plan-name { color: #00d4ff; font-weight: 600; font-size: 15px; min-width: 80px; }
-.plan-desc { color: #e2e8f0; font-size: 13px; opacity: 0.85; }
-.plan-beta { font-size: 11px; color: #f59e0b; background: #f59e0b18; border: 1px solid #f59e0b40; padding: 2px 8px; border-radius: 4px; margin-left: auto; white-space: nowrap; }
-
-/* Tech stack table */
-.tech-table { width: 100%; border-collapse: collapse; margin: 18px 0 28px; }
-.tech-table tr { border-bottom: 1px solid #1e293b; }
-.tech-table tr:last-child { border-bottom: none; }
-.tech-table td { padding: 10px 14px; font-size: 14px; }
-.tech-table td:first-child { color: #00d4ff; font-weight: 600; width: 42%; }
-.tech-table td:last-child { color: #ffffff; }
-.tech-table tr:nth-child(even) { background: #0a0e17; }
-
-/* Footer */
-.footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
-.footer-brand { color: #e2e8f0; font-size: 12px; }
-.footer-link { color: #00d4ff; font-size: 13px; text-decoration: none; border-bottom: 1px dashed #00d4ff80; }
-.footer-link:hover { border-bottom-style: solid; }
-</style>
+<link rel="stylesheet" href="/static/css/static-pages.css">
 </head>
-<body>
+<body class="static-page about-page">
 <div class="container">
 
 <div class="page-header">
-<h1>Об ИРУ — Интеллектуальный Режим Управления</h1>
-<div class="subtitle">Система удалённого управления компьютерами через естественный язык</div>
+  <h1>Об ИРУ — Интеллектуальный Режим Управления</h1>
+  <div class="subtitle">Система удалённого управления компьютерами через естественный язык</div>
 </div>
 
 <h2>Что такое ИРУ?</h2>
-<p>ИРУ — система, в которой пользователь описывает задачу на естественном языке, языковая модель (LLM) переводит её в команды CMD/PowerShell, а агент выполняет их непосредственно на устройстве.</p>
+<p>ИРУ — это система, в которой пользователь описывает задачу на естественном языке, языковая модель переводит её в реальные команды, а агент выполняет их непосредственно на устройстве. Это не эмуляция действий пользователя и не набор макросов: ИРУ работает как программный управляющий слой поверх машины.</p>
 <div class="philosophy">
-<p>Философия: «научить машину быть машиной»</p>
-<p class="no-emu">Никакой эмуляции действий пользователя. Никаких скриншотов, кликов или pyautogui. Только прямые программные вызовы: COM-объекты, WMI, UI Automation API, DevTools Protocol. Машина управляется как машина.</p>
+  <p>Философия: «научить машину быть машиной».</p>
+  <p class="no-emu">Без скриншотной имитации, ручных кликов и pyautogui. Приоритет — прямые системные вызовы, безопасные инструменты и детерминированное выполнение.</p>
 </div>
 
 <h2>Архитектура системы</h2>
 <div class="arch-img-wrap">
-<img src="/static/architecture.jpg" alt="Архитектура ИРУ">
+  <img src="/static/architecture.jpg" alt="Архитектура ИРУ">
 </div>
 
 <h2>Тарифные планы</h2>
-<p>Во время бета-тестирования все участники получают план Pro бесплатно.</p>
+<p>Во время beta-тестирования участники получают расширенный доступ, но сама модель продукта уже рассчитана на живой боевой домен и публичный запуск.</p>
 <div class="plans">
-<div class="plan-card">
-<span class="plan-name">Free</span>
-<span class="plan-desc">1 устройство, 30 команд/день, 7 дней история</span>
-</div>
-<div class="plan-card active">
-<span class="plan-name">Pro</span>
-<span class="plan-desc">Безлимитные устройства и команды, проводник, DEV MODE</span>
-<span class="plan-beta">БЕТА</span>
-</div>
-<div class="plan-card">
-<span class="plan-name">Business</span>
-<span class="plan-desc">Мультипользовательская админка, аудит-логи, API, приоритетная поддержка</span>
-</div>
+  <div class="plan-card">
+    <span class="plan-name">Free</span>
+    <span class="plan-desc">1 устройство, базовый лимит команд, короткая история взаимодействий</span>
+  </div>
+  <div class="plan-card active">
+    <span class="plan-name">Pro</span>
+    <span class="plan-desc">Расширенные лимиты, проводник, DEV MODE, более глубокая работа с задачами</span>
+    <span class="plan-beta">BETA</span>
+  </div>
+  <div class="plan-card">
+    <span class="plan-name">Business</span>
+    <span class="plan-desc">Мультипользовательская админка, аудит, API и командная эксплуатация</span>
+  </div>
 </div>
 
 <h2>DEV MODE</h2>
-<p>Прямой доступ к командной строке устройства без участия LLM. Команды отправляются напрямую в PowerShell/CMD агента. Доступен на плане Pro и выше.</p>
+<p>DEV MODE даёт прямой доступ к командам устройства без участия оркестратора. Это рабочий инструмент для диагностики и ручного вмешательства, а не демонстрационная опция.</p>
 <ul>
-<li>Аккордеон-вывод с группировкой по устройствам</li>
-<li>Автоматическая UTF-8 кодировка вывода</li>
-<li>Кнопка рядом с проводником в интерфейсе</li>
-<li>Чат не сохраняется на сервере</li>
+  <li>Прямой raw-command контур в отдельной панели</li>
+  <li>Группировка результата по устройствам</li>
+  <li>Поддержка одиночного и broadcast-сценария</li>
+  <li>Без лишнего сохранения диалога как обычного чата</li>
 </ul>
 
-<h2>Этапы разработки</h2>
+<h2>Этапы развития</h2>
 <div class="stages">
-
-<div class="stage-card done">
-<span class="stage-badge done">&#x2705; Этап 1</span>
-<div class="stage-content">
-<div class="stage-title">Умный ассистент (Текст → Команды)</div>
-<div class="stage-desc">NL-управление одним и несколькими устройствами одновременно, параллельное выполнение, broadcast-режим</div>
-</div>
-</div>
-
-<div class="stage-card done">
-<span class="stage-badge done">&#x2705; Этап 2</span>
-<div class="stage-content">
-<div class="stage-title">Сбор данных (Обучающая выборка)</div>
-<div class="stage-desc">Автоматическая запись training data с согласия пользователя для последующего обучения модели</div>
-</div>
-</div>
-
-<div class="stage-card coming">
-<span class="stage-badge coming">&#x1F51C; Этап 3</span>
-<div class="stage-content">
-<div class="stage-title">Обучение модели (Собственный ИИ)</div>
-<div class="stage-desc">Fine-tuning собственной модели на реальных данных, собранных на этапе 2</div>
-</div>
-</div>
-
-<div class="stage-card coming">
-<span class="stage-badge coming">&#x1F51C; Этап 4</span>
-<div class="stage-content">
-<div class="stage-title">Запуск (Публичный релиз)</div>
-<div class="stage-desc">Выход собственной модели и публичный релиз системы ИРУ</div>
-</div>
-</div>
-
+  <div class="stage-card done">
+    <span class="stage-badge done">Готово</span>
+    <div class="stage-content">
+      <div class="stage-title">Текст → команды</div>
+      <div class="stage-desc">Естественный язык, выполнение на одном или нескольких устройствах, рабочий pipeline-режим и живой control surface.</div>
+    </div>
+  </div>
+  <div class="stage-card done">
+    <span class="stage-badge done">Готово</span>
+    <div class="stage-content">
+      <div class="stage-title">Сбор полезного контекста</div>
+      <div class="stage-desc">Training data, профили устройств, память и история выполнения — всё, что делает ИРУ практичнее на реальных задачах.</div>
+    </div>
+  </div>
+  <div class="stage-card coming">
+    <span class="stage-badge coming">Дальше</span>
+    <div class="stage-content">
+      <div class="stage-title">Собственная модель</div>
+      <div class="stage-desc">Дообучение на реальных сценариях эксплуатации и постепенный уход от чисто внешнего LLM-контура.</div>
+    </div>
+  </div>
+  <div class="stage-card coming">
+    <span class="stage-badge coming">Дальше</span>
+    <div class="stage-content">
+      <div class="stage-title">Публичный релиз</div>
+      <div class="stage-desc">Доведение продукта до зрелого продакшн-сценария на уже подключённом домене и серверной инфраструктуре.</div>
+    </div>
+  </div>
 </div>
 
 <h2>Технологический стек</h2>
 <table class="tech-table">
-<tr><td>Сервер</td><td>FastAPI + Uvicorn</td></tr>
-<tr><td>LLM</td><td>DeepSeek API (deepseek-chat)</td></tr>
-<tr><td>Агент</td><td>Python (WebSocket client, .exe)</td></tr>
-<tr><td>Фронтенд</td><td>Vanilla JS + HTML + CSS</td></tr>
-<tr><td>База данных</td><td>SQLite</td></tr>
-<tr><td>Протокол</td><td>WebSocket (двунаправленный, реальное время)</td></tr>
-<tr><td>ОС агента</td><td>Windows 10/11 (PowerShell / CMD)</td></tr>
-<tr><td>Хостинг</td><td>VPS + Caddy (HTTPS)</td></tr>
+  <tr><td>Сервер</td><td>FastAPI + Uvicorn</td></tr>
+  <tr><td>LLM-оркестрация</td><td>DeepSeek API + tool-calling</td></tr>
+  <tr><td>Агент</td><td>Python, WebSocket client, Windows-oriented runtime</td></tr>
+  <tr><td>Интерфейс</td><td>Vanilla JS + HTML + CSS</td></tr>
+  <tr><td>Хранилище</td><td>SQLite</td></tr>
+  <tr><td>Продакшн-контур</td><td>VPS + Caddy + HTTPS</td></tr>
 </table>
 
 <h2>Контакты</h2>
-<p>Сайт: <a href="https://irumode.online" target="_blank">irumode.online</a></p>
+<p>Боевой домен: <a href="https://irumode.ru" target="_blank" rel="noreferrer">irumode.ru</a></p>
 <p>Почта: <a href="mailto:russaygushkin@gmail.com">russaygushkin@gmail.com</a></p>
 
 <div class="footer">
-<span class="footer-brand">ИРУ v3.7 — Интеллектуальный Режим Управления</span>
-<a href="/" class="footer-link">&#x2190; Вернуться в ИРУ</a>
+  <span class="footer-brand">ИРУ v3.7 — Интеллектуальный Режим Управления</span>
+  <a href="/" class="footer-link">← Вернуться в ИРУ</a>
 </div>
 
 </div>

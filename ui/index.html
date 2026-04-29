@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
-<title>ИРУ v3.7 — Интеллектуальный Режим Управления</title>
+<title>РР РЈ v3.7 вЂ” РРЅС‚РµР»Р»РµРєС‚СѓР°Р»СЊРЅС‹Р№ Р РµР¶РёРј РЈРїСЂР°РІР»РµРЅРёСЏ</title>
 <link rel="icon" type="image/x-icon" href="IruIcon.ico">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -15,21 +15,21 @@
 <div class="auth-screen" id="authScreen">
   <div class="auth-box">
     <div class="auth-logo">
-      <img src="IruIcon.ico" alt="ИРУ">
+      <img src="IruIcon.ico" alt="РР РЈ">
       <div>
         <div class="auth-logo-text">
-          <span><span class="accent-letter">И</span>нтелектуальный</span>
-          <span><span class="accent-letter">Р</span>ежим</span>
-          <span><span class="accent-letter">У</span>правления</span>
+          <span><span class="accent-letter">Р</span>РЅС‚РµР»РµРєС‚СѓР°Р»СЊРЅС‹Р№</span>
+          <span><span class="accent-letter">Р </span>РµР¶РёРј</span>
+          <span><span class="accent-letter">РЈ</span>РїСЂР°РІР»РµРЅРёСЏ</span>
         </div>
         <div class="auth-logo-ver">v3.7</div>
       </div>
     </div>
-    <div class="auth-desc">Введите токен доступа для входа в систему</div>
-    <input type="text" class="auth-input" id="authInput" placeholder="Вставьте токен..."
-      onkeydown="if(event.key==='Enter')doAuth()" autocomplete="off" spellcheck="false">
-    <button class="auth-btn" id="authBtn" onclick="doAuth()">Войти</button>
-    <div class="auth-contact">Во время beta-тестирования для получения токена обращаться на <a href="mailto:russaygushkin@gmail.com">почту</a> или <a href="https://t.me/IRU_Founder">Telegramm</a> разработчика</div>
+    <div class="auth-desc">Р’РІРµРґРёС‚Рµ С‚РѕРєРµРЅ РґРѕСЃС‚СѓРїР° РґР»СЏ РІС…РѕРґР° РІ СЃРёСЃС‚РµРјСѓ</div>
+    <input type="text" class="auth-input" id="authInput" placeholder="Р’СЃС‚Р°РІСЊС‚Рµ С‚РѕРєРµРЅ..."
+      autocomplete="off" spellcheck="false">
+    <button class="auth-btn" id="authBtn">Р’РѕР№С‚Рё</button>
+    <div class="auth-contact">Р’Рѕ РІСЂРµРјСЏ beta-С‚РµСЃС‚РёСЂРѕРІР°РЅРёСЏ РґР»СЏ РїРѕР»СѓС‡РµРЅРёСЏ С‚РѕРєРµРЅР° РѕР±СЂР°С‰Р°С‚СЊСЃСЏ РЅР° <a href="mailto:russaygushkin@gmail.com">РїРѕС‡С‚Сѓ</a> РёР»Рё <a href="https://t.me/IRU_Founder">Telegramm</a> СЂР°Р·СЂР°Р±РѕС‚С‡РёРєР°</div>
     <div class="auth-error" id="authError"></div>
   </div>
 </div>
@@ -40,13 +40,13 @@
   <aside class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-logo">
-        <img src="IruIcon.ico" alt="ИРУ">
+        <img src="IruIcon.ico" alt="РР РЈ">
         <div>
-          <div class="sidebar-logo-text">ИРУ</div>
+          <div class="sidebar-logo-text">РР РЈ</div>
           <div class="sidebar-logo-ver">v3.7</div>
         </div>
       </div>
-      <button class="btn-new-chat" onclick="createNewChat()" title="Новый чат">
+      <button class="btn-new-chat" id="btnNewChat" title="РќРѕРІС‹Р№ С‡Р°С‚">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
           <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
         </svg>
@@ -54,78 +54,78 @@
     </div>
 
     <div class="chat-list" id="chatList">
-      <div class="sidebar-empty">Нет чатов</div>
+      <div class="sidebar-empty">РќРµС‚ С‡Р°С‚РѕРІ</div>
     </div>
 
     <div class="sidebar-mobile-links">
-      <a href="#" onclick="downloadAgent(); return false;" title="Скачать агент (zip-архив — распакуйте и запустите IruAgent.exe)">Скачать агент</a>
-      <a href="/about" target="_blank">Об ИРУ</a>
-      <a href="/instruction" target="_blank">Инструкция</a>
-      <a href="/terms" target="_blank">Соглашение</a>
+      <a href="#" data-download-agent title="РЎРєР°С‡Р°С‚СЊ Р°РіРµРЅС‚ (zip-Р°СЂС…РёРІ вЂ” СЂР°СЃРїР°РєСѓР№С‚Рµ Рё Р·Р°РїСѓСЃС‚РёС‚Рµ IruAgent.exe)">РЎРєР°С‡Р°С‚СЊ Р°РіРµРЅС‚</a>
+      <a href="/about" target="_blank">РћР± РР РЈ</a>
+      <a href="/instruction" target="_blank">РРЅСЃС‚СЂСѓРєС†РёСЏ</a>
+      <a href="/terms" target="_blank">РЎРѕРіР»Р°С€РµРЅРёРµ</a>
     </div>
     <div class="sidebar-footer">
       <div class="sidebar-user">
         <span class="sidebar-user-dot"></span>
-        <span id="userName">—</span>
+        <span id="userName">вЂ”</span>
       </div>
-      <button class="btn-logout" onclick="doLogout()">Выйти</button>
+      <button class="btn-logout" id="btnLogout">Р’С‹Р№С‚Рё</button>
     </div>
   </aside>
-  <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeMobileSidebar()"></div>
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
   <!-- MAIN -->
   <div class="main-area">
     <header class="header">
       <div class="header-left">
-        <button class="btn-icon btn-menu-mobile" id="btnMenuMobile" onclick="toggleMobileSidebar()" title="Меню">
+        <button class="btn-icon btn-menu-mobile" id="btnMenuMobile" title="РњРµРЅСЋ">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
-        <div class="header-title" id="headerTitle">Новый чат</div>
+        <div class="header-title" id="headerTitle">РќРѕРІС‹Р№ С‡Р°С‚</div>
       </div>
       <div class="header-right">
-        <a class="btn-header-link" href="#" onclick="downloadAgent(); return false;" title="Скачать агент (zip-архив — распакуйте и запустите IruAgent.exe)">
+        <a class="btn-header-link" href="#" data-download-agent title="РЎРєР°С‡Р°С‚СЊ Р°РіРµРЅС‚ (zip-Р°СЂС…РёРІ вЂ” СЂР°СЃРїР°РєСѓР№С‚Рµ Рё Р·Р°РїСѓСЃС‚РёС‚Рµ IruAgent.exe)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          <span>Скачать агент</span>
+          <span>РЎРєР°С‡Р°С‚СЊ Р°РіРµРЅС‚</span>
         </a>
-        <a class="btn-header-link" href="/about" target="_blank" title="Об ИРУ">
+        <a class="btn-header-link" href="/about" target="_blank" title="РћР± РР РЈ">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-          <span>Об ИРУ</span>
+          <span>РћР± РР РЈ</span>
         </a>
-        <a class="btn-header-link" href="/instruction" target="_blank" title="Инструкция">
+        <a class="btn-header-link" href="/instruction" target="_blank" title="РРЅСЃС‚СЂСѓРєС†РёСЏ">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-          <span>Инструкция</span>
+          <span>РРЅСЃС‚СЂСѓРєС†РёСЏ</span>
         </a>
-        <a class="btn-header-link" href="/terms" target="_blank" title="Соглашение">
+        <a class="btn-header-link" href="/terms" target="_blank" title="РЎРѕРіР»Р°С€РµРЅРёРµ">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-          <span>Соглашение</span>
+          <span>РЎРѕРіР»Р°С€РµРЅРёРµ</span>
         </a>
-        <button class="btn-icon" id="btnAdmin" onclick="toggleAdmin()" title="Пользователи" style="display:none">
+        <button class="btn-icon" id="btnAdmin" title="РџРѕР»СЊР·РѕРІР°С‚РµР»Рё" style="display:none">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4-4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
         </button>
-        <div class="memory-badge" id="memoryBadge" onclick="toggleMemoryPopover()" style="display:none">
+        <div class="memory-badge" id="memoryBadge" style="display:none">
           <span class="memory-badge-icon">&#129504;</span>
-          <span id="memoryBadgeText">0 фактов, 0 команд</span>
+          <span id="memoryBadgeText">0 С„Р°РєС‚РѕРІ, 0 РєРѕРјР°РЅРґ</span>
           <div class="memory-popover" id="memoryPopover">
-            <div class="memory-popover-title">Закреплённые факты</div>
+            <div class="memory-popover-title">Р—Р°РєСЂРµРїР»С‘РЅРЅС‹Рµ С„Р°РєС‚С‹</div>
             <div id="memoryPopoverList"></div>
-            <div class="memory-popover-hint">Память обновляется автоматически на основе выполненных команд</div>
+            <div class="memory-popover-hint">РџР°РјСЏС‚СЊ РѕР±РЅРѕРІР»СЏРµС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РЅР° РѕСЃРЅРѕРІРµ РІС‹РїРѕР»РЅРµРЅРЅС‹С… РєРѕРјР°РЅРґ</div>
           </div>
         </div>
         <div class="device-select">
-          <div class="device-indicator" id="deviceBtn" onclick="toggleDeviceDropdown()">
+          <div class="device-indicator" id="deviceBtn">
             <span class="device-dot" id="deviceDot"></span>
-            <span id="deviceLabel">Нет устройств</span>
+            <span id="deviceLabel">РќРµС‚ СѓСЃС‚СЂРѕР№СЃС‚РІ</span>
             <svg width="8" height="8" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3.5L5 6.5L8 3.5"/></svg>
           </div>
           <div class="device-dropdown" id="deviceDropdown">
-            <div class="device-dropdown-empty" id="deviceListEmpty">Ожидание...</div>
+            <div class="device-dropdown-empty" id="deviceListEmpty">РћР¶РёРґР°РЅРёРµ...</div>
             <div id="deviceList"></div>
           </div>
         </div>
-        <button class="btn-icon" id="devModeToggle" onclick="toggleDevMode()" title="Режим разработчика" style="display:none">
+        <button class="btn-icon" id="devModeToggle" title="Р РµР¶РёРј СЂР°Р·СЂР°Р±РѕС‚С‡РёРєР°" style="display:none">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
         </button>
-        <button class="btn-icon" id="explorerToggle" onclick="toggleExplorer()" title="Проводник">
+        <button class="btn-icon" id="explorerToggle" title="РџСЂРѕРІРѕРґРЅРёРє">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
         </button>
       </div>
@@ -137,59 +137,59 @@
         <div class="chat-input-area">
           <div id="attachmentsBar" class="attachments-bar" hidden></div>
           <div class="chat-input-wrap">
-            <button class="mobile-plus-btn" id="mobilePlusBtn" onclick="toggleMobilePlusPopover()" type="button" title="Ещё">+</button>
+            <button class="mobile-plus-btn" id="mobilePlusBtn" type="button" title="Р•С‰С‘">+</button>
             <div class="mobile-plus-popover" id="mobilePlusPopover">
-              <div class="mobile-plus-popover-item" onclick="toggleInputDeviceDropdown(); closeMobilePlusPopover();">
+              <div class="mobile-plus-popover-item" id="mobilePlusDeviceAction">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                <span id="mobilePlusDeviceLabel">Сменить устройство</span>
+                <span id="mobilePlusDeviceLabel">РЎРјРµРЅРёС‚СЊ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ</span>
               </div>
-              <div class="mobile-plus-popover-item" onclick="toggleInputModeDropdown(); closeMobilePlusPopover();">
+              <div class="mobile-plus-popover-item" id="mobilePlusModeAction">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-                <span>Режим выполнения</span>
+                <span>Р РµР¶РёРј РІС‹РїРѕР»РЅРµРЅРёСЏ</span>
               </div>
-              <div class="mobile-plus-popover-item" onclick="document.getElementById('fileInput').click(); closeMobilePlusPopover();">
+              <div class="mobile-plus-popover-item" id="mobilePlusAttachAction">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
-                <span>Прикрепить файл</span>
+                <span>РџСЂРёРєСЂРµРїРёС‚СЊ С„Р°Р№Р»</span>
               </div>
             </div>
             <div class="input-device-select">
-              <button class="input-device-btn" id="inputDeviceBtn" onclick="toggleInputDeviceDropdown()" title="Выбрать устройство">
+              <button class="input-device-btn" id="inputDeviceBtn" title="Р’С‹Р±СЂР°С‚СЊ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ">
                 <span class="dot" id="inputDeviceDot"></span>
-                <span id="inputDeviceLabel">Нет устройств</span>
+                <span id="inputDeviceLabel">РќРµС‚ СѓСЃС‚СЂРѕР№СЃС‚РІ</span>
                 <svg viewBox="0 0 10 10" fill="currentColor"><path d="M2 3.5L5 6.5L8 3.5"/></svg>
               </button>
               <div class="input-device-dropdown" id="inputDeviceDropdown"></div>
             </div>
             <div class="input-mode-select">
-              <button class="input-mode-btn" id="inputModeBtn" onclick="toggleInputModeDropdown()" title="Режим выполнения">
+              <button class="input-mode-btn" id="inputModeBtn" title="Р РµР¶РёРј РІС‹РїРѕР»РЅРµРЅРёСЏ">
                 <span class="mode-plus">+</span>
                 <span class="mode-badges" id="inputModeBadges"></span>
               </button>
               <div class="input-mode-dropdown" id="inputModeDropdown">
                 <label class="input-mode-item">
-                  <input type="checkbox" id="modePipeline" onchange="setMode('pipeline', this.checked)">
+                  <input type="checkbox" id="modePipeline">
                   <div class="mode-info">
-                    <div class="mode-title">План</div>
-                    <div class="mode-desc">Составить пошаговый план и выполнить по нему</div>
+                    <div class="mode-title">РџР»Р°РЅ</div>
+                    <div class="mode-desc">РЎРѕСЃС‚Р°РІРёС‚СЊ РїРѕС€Р°РіРѕРІС‹Р№ РїР»Р°РЅ Рё РІС‹РїРѕР»РЅРёС‚СЊ РїРѕ РЅРµРјСѓ</div>
                   </div>
                 </label>
                 <label class="input-mode-item">
-                  <input type="checkbox" id="modeAutonomous" onchange="setMode('autonomous', this.checked)">
+                  <input type="checkbox" id="modeAutonomous">
                   <div class="mode-info">
-                    <div class="mode-title">Автономный режим</div>
-                    <div class="mode-desc">Без подтверждений даже на опасных командах</div>
+                    <div class="mode-title">РђРІС‚РѕРЅРѕРјРЅС‹Р№ СЂРµР¶РёРј</div>
+                    <div class="mode-desc">Р‘РµР· РїРѕРґС‚РІРµСЂР¶РґРµРЅРёР№ РґР°Р¶Рµ РЅР° РѕРїР°СЃРЅС‹С… РєРѕРјР°РЅРґР°С…</div>
                   </div>
                 </label>
               </div>
             </div>
-            <button id="attachBtn" class="attach-btn" type="button" title="Прикрепить текстовый файл" aria-label="Прикрепить файл">
+            <button id="attachBtn" class="attach-btn" type="button" title="РџСЂРёРєСЂРµРїРёС‚СЊ С‚РµРєСЃС‚РѕРІС‹Р№ С„Р°Р№Р»" aria-label="РџСЂРёРєСЂРµРїРёС‚СЊ С„Р°Р№Р»">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
               </svg>
             </button>
             <input type="file" id="fileInput" multiple hidden
                    accept=".txt,.md,.csv,.json,.xml,.yml,.yaml,.py,.js,.ts,.html,.css,.sql,.log,.ini,.conf,.sh,.ps1,.bat,.go,.rs,.java,.cpp,.c,.h">
-            <button id="voiceBtn" class="voice-btn" type="button" title="Голосовой ввод (Ctrl+Shift+M)" aria-label="Включить микрофон">
+            <button id="voiceBtn" class="voice-btn" type="button" title="Р“РѕР»РѕСЃРѕРІРѕР№ РІРІРѕРґ (Ctrl+Shift+M)" aria-label="Р’РєР»СЋС‡РёС‚СЊ РјРёРєСЂРѕС„РѕРЅ">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
                 <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
@@ -197,10 +197,10 @@
                 <line x1="8" y1="23" x2="16" y2="23"/>
               </svg>
             </button>
-            <textarea class="chat-input" id="chatInput" placeholder="Опиши задачу..." rows="1" maxlength="500"
-              onkeydown="handleInputKey(event)" oninput="autoGrow(this); updateCharCount()"></textarea>
+            <textarea class="chat-input" id="chatInput" placeholder="РћРїРёС€Рё Р·Р°РґР°С‡Сѓ..." rows="1" maxlength="500"
+             ></textarea>
             <span class="char-count" id="charCount">0/500</span>
-            <button class="btn-send" id="btnSend" onclick="sendMessage()" title="Отправить">
+            <button class="btn-send" id="btnSend" title="РћС‚РїСЂР°РІРёС‚СЊ">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
             </button>
           </div>
@@ -209,25 +209,25 @@
 
       <div class="explorer-panel" id="explorerPanel">
         <div class="explorer-header">
-          <h3>Проводник</h3>
-          <button class="btn-icon" onclick="toggleExplorer()" title="Закрыть" style="width:24px;height:24px">
+          <h3>РџСЂРѕРІРѕРґРЅРёРє</h3>
+          <button class="btn-icon" id="explorerCloseBtn" title="Р—Р°РєСЂС‹С‚СЊ" style="width:24px;height:24px">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
         <div class="explorer-nav">
-          <button class="btn-icon" onclick="explorerBack()" title="Назад" style="width:26px;height:26px">
+          <button class="btn-icon" id="explorerBackBtn" title="РќР°Р·Р°Рґ" style="width:26px;height:26px">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
           </button>
-          <button class="btn-icon" onclick="explorerUp()" title="Вверх" style="width:26px;height:26px">
+          <button class="btn-icon" id="explorerUpBtn" title="Р’РІРµСЂС…" style="width:26px;height:26px">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
           </button>
-          <button class="btn-icon" onclick="explorerRefresh()" title="Обновить" style="width:26px;height:26px">
+          <button class="btn-icon" id="explorerRefreshBtn" title="РћР±РЅРѕРІРёС‚СЊ" style="width:26px;height:26px">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
           </button>
         </div>
         <div class="explorer-path" id="explorerPath"></div>
         <div class="explorer-list" id="explorerList">
-          <div class="explorer-empty">Подключите устройство</div>
+          <div class="explorer-empty">РџРѕРґРєР»СЋС‡РёС‚Рµ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ</div>
         </div>
       </div>
 
@@ -237,24 +237,24 @@
           <h3>CMD</h3>
           <div class="devmode-target">
             <select class="devmode-device-select" id="devModeDeviceSelect">
-              <option value="">-- Устройство --</option>
+              <option value="">-- РЈСЃС‚СЂРѕР№СЃС‚РІРѕ --</option>
             </select>
             <label class="devmode-broadcast">
-              <input type="checkbox" id="devModeBroadcast" onchange="toggleDevBroadcast()">
-              <span>Все устройства</span>
+              <input type="checkbox" id="devModeBroadcast">
+              <span>Р’СЃРµ СѓСЃС‚СЂРѕР№СЃС‚РІР°</span>
             </label>
           </div>
-          <button class="btn-icon" onclick="toggleDevMode()" title="Закрыть" style="width:24px;height:24px">
+          <button class="btn-icon" id="devModeCloseBtn" title="Р—Р°РєСЂС‹С‚СЊ" style="width:24px;height:24px">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
         <div class="devmode-output" id="devModeOutput">
-          <div class="devmode-placeholder">Введите команду ниже</div>
+          <div class="devmode-placeholder">Р’РІРµРґРёС‚Рµ РєРѕРјР°РЅРґСѓ РЅРёР¶Рµ</div>
         </div>
         <div class="devmode-input-area">
           <textarea class="devmode-input" id="devModeInput" placeholder="ipconfig /all" rows="1"
-            onkeydown="handleDevModeKey(event)" oninput="autoGrow(this)"></textarea>
-          <button class="btn-send" onclick="sendDevCommand()" title="Выполнить">
+           ></textarea>
+          <button class="btn-send" id="devModeSendBtn" title="Р’С‹РїРѕР»РЅРёС‚СЊ">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
           </button>
         </div>
@@ -264,35 +264,35 @@
       <div class="admin-panel" id="adminPanel">
         <div class="admin-header">
           <div class="admin-tabs">
-            <button class="admin-tab active" id="tabBtnUsers" onclick="switchAdminTab('users')">Пользователи</button>
-            <button class="admin-tab" id="tabBtnDevices" onclick="switchAdminTab('devices')">Устройства</button>
-            <button class="admin-tab" id="tabBtnAudit" onclick="switchAdminTab('audit')">Аудит-лог</button>
+            <button class="admin-tab active" id="tabBtnUsers">РџРѕР»СЊР·РѕРІР°С‚РµР»Рё</button>
+            <button class="admin-tab" id="tabBtnDevices">РЈСЃС‚СЂРѕР№СЃС‚РІР°</button>
+            <button class="admin-tab" id="tabBtnAudit">РђСѓРґРёС‚-Р»РѕРі</button>
           </div>
-          <button class="btn-icon" onclick="toggleAdmin()" title="Закрыть" style="width:24px;height:24px">
+          <button class="btn-icon" id="adminCloseBtn" title="Р—Р°РєСЂС‹С‚СЊ" style="width:24px;height:24px">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
         <div id="adminUsersTab">
           <div class="admin-search">
-            <input type="text" class="admin-input" id="adminSearch" placeholder="Поиск..." oninput="filterAdminUsers()">
+            <input type="text" class="admin-input" id="adminSearch" placeholder="РџРѕРёСЃРє...">
           </div>
           <div class="admin-create">
-            <input type="text" class="admin-input" id="adminNewName" placeholder="Имя нового пользователя..." onkeydown="if(event.key==='Enter')adminCreateUser()">
-            <button class="admin-create-btn" onclick="adminCreateUser()">Создать</button>
+            <input type="text" class="admin-input" id="adminNewName" placeholder="РРјСЏ РЅРѕРІРѕРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ...">
+            <button class="admin-create-btn" id="adminCreateBtn">РЎРѕР·РґР°С‚СЊ</button>
           </div>
           <div class="admin-list" id="adminList">
-            <div class="admin-empty">Загрузка...</div>
+            <div class="admin-empty">Р—Р°РіСЂСѓР·РєР°...</div>
           </div>
           <div class="admin-stats" id="adminStats"></div>
         </div>
         <div id="adminDevicesTab" style="display:none">
           <div class="admin-devices-list" id="adminDevicesList">
-            <div class="admin-empty">Загрузка...</div>
+            <div class="admin-empty">Р—Р°РіСЂСѓР·РєР°...</div>
           </div>
         </div>
         <div id="adminAuditTab" style="display:none">
           <div class="audit-log-list" id="auditLogList">
-            <div class="admin-empty">Загрузка...</div>
+            <div class="admin-empty">Р—Р°РіСЂСѓР·РєР°...</div>
           </div>
         </div>
       </div>
@@ -311,23 +311,23 @@
         <line x1="16" y1="17" x2="8" y2="17"/>
       </svg>
     </div>
-    <h3 class="terms-title">Пользовательское соглашение</h3>
+    <h3 class="terms-title">РџРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРѕРµ СЃРѕРіР»Р°С€РµРЅРёРµ</h3>
     <div class="terms-content" id="termsContent">
-      <p>1. Общие положения</p>
-      <p>ИРУ (Интеллектуальный Режим Управления) — система удалённого управления компьютерами через естественный язык. Используя сервис, вы принимаете условия настоящего соглашения.</p>
-      <p>2. Ответственность</p>
-      <p>Пользователь несёт полную ответственность за команды, отправленные на свои устройства. Система выполняет команды от имени пользователя. Разработчик не несёт ответственности за последствия выполнения команд.</p>
-      <p>3. Безопасность</p>
-      <p>Токен доступа является ключом к вашим устройствам. Не передавайте его третьим лицам. При компрометации токена немедленно сообщите администратору.</p>
-      <p>4. Обработка данных</p>
-      <p>Мы храним: email, имя пользователя, историю команд. Мы НЕ передаём ваши персональные данные третьим лицам. При согласии на сбор данных обучения, команды используются для улучшения ИИ-модели. Вы можете запросить удаление своих данных.</p>
-      <p>5. Отказ от гарантий</p>
-      <p>Сервис предоставляется «как есть» (as is). Это бета-версия. Возможны ошибки и перерывы в работе. Разработчик не гарантирует бесперебойную работу.</p>
-      <p>6. Ограничения</p>
-      <p>Запрещено использовать систему для: несанкционированного доступа к чужим устройствам, распространения вредоносного ПО, нарушения законодательства РФ.</p>
+      <p>1. РћР±С‰РёРµ РїРѕР»РѕР¶РµРЅРёСЏ</p>
+      <p>РР РЈ (РРЅС‚РµР»Р»РµРєС‚СѓР°Р»СЊРЅС‹Р№ Р РµР¶РёРј РЈРїСЂР°РІР»РµРЅРёСЏ) вЂ” СЃРёСЃС‚РµРјР° СѓРґР°Р»С‘РЅРЅРѕРіРѕ СѓРїСЂР°РІР»РµРЅРёСЏ РєРѕРјРїСЊСЋС‚РµСЂР°РјРё С‡РµСЂРµР· РµСЃС‚РµСЃС‚РІРµРЅРЅС‹Р№ СЏР·С‹Рє. РСЃРїРѕР»СЊР·СѓСЏ СЃРµСЂРІРёСЃ, РІС‹ РїСЂРёРЅРёРјР°РµС‚Рµ СѓСЃР»РѕРІРёСЏ РЅР°СЃС‚РѕСЏС‰РµРіРѕ СЃРѕРіР»Р°С€РµРЅРёСЏ.</p>
+      <p>2. РћС‚РІРµС‚СЃС‚РІРµРЅРЅРѕСЃС‚СЊ</p>
+      <p>РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµСЃС‘С‚ РїРѕР»РЅСѓСЋ РѕС‚РІРµС‚СЃС‚РІРµРЅРЅРѕСЃС‚СЊ Р·Р° РєРѕРјР°РЅРґС‹, РѕС‚РїСЂР°РІР»РµРЅРЅС‹Рµ РЅР° СЃРІРѕРё СѓСЃС‚СЂРѕР№СЃС‚РІР°. РЎРёСЃС‚РµРјР° РІС‹РїРѕР»РЅСЏРµС‚ РєРѕРјР°РЅРґС‹ РѕС‚ РёРјРµРЅРё РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ. Р Р°Р·СЂР°Р±РѕС‚С‡РёРє РЅРµ РЅРµСЃС‘С‚ РѕС‚РІРµС‚СЃС‚РІРµРЅРЅРѕСЃС‚Рё Р·Р° РїРѕСЃР»РµРґСЃС‚РІРёСЏ РІС‹РїРѕР»РЅРµРЅРёСЏ РєРѕРјР°РЅРґ.</p>
+      <p>3. Р‘РµР·РѕРїР°СЃРЅРѕСЃС‚СЊ</p>
+      <p>РўРѕРєРµРЅ РґРѕСЃС‚СѓРїР° СЏРІР»СЏРµС‚СЃСЏ РєР»СЋС‡РѕРј Рє РІР°С€РёРј СѓСЃС‚СЂРѕР№СЃС‚РІР°Рј. РќРµ РїРµСЂРµРґР°РІР°Р№С‚Рµ РµРіРѕ С‚СЂРµС‚СЊРёРј Р»РёС†Р°Рј. РџСЂРё РєРѕРјРїСЂРѕРјРµС‚Р°С†РёРё С‚РѕРєРµРЅР° РЅРµРјРµРґР»РµРЅРЅРѕ СЃРѕРѕР±С‰РёС‚Рµ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂСѓ.</p>
+      <p>4. РћР±СЂР°Р±РѕС‚РєР° РґР°РЅРЅС‹С…</p>
+      <p>РњС‹ С…СЂР°РЅРёРј: email, РёРјСЏ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ, РёСЃС‚РѕСЂРёСЋ РєРѕРјР°РЅРґ. РњС‹ РќР• РїРµСЂРµРґР°С‘Рј РІР°С€Рё РїРµСЂСЃРѕРЅР°Р»СЊРЅС‹Рµ РґР°РЅРЅС‹Рµ С‚СЂРµС‚СЊРёРј Р»РёС†Р°Рј. РџСЂРё СЃРѕРіР»Р°СЃРёРё РЅР° СЃР±РѕСЂ РґР°РЅРЅС‹С… РѕР±СѓС‡РµРЅРёСЏ, РєРѕРјР°РЅРґС‹ РёСЃРїРѕР»СЊР·СѓСЋС‚СЃСЏ РґР»СЏ СѓР»СѓС‡С€РµРЅРёСЏ РР-РјРѕРґРµР»Рё. Р’С‹ РјРѕР¶РµС‚Рµ Р·Р°РїСЂРѕСЃРёС‚СЊ СѓРґР°Р»РµРЅРёРµ СЃРІРѕРёС… РґР°РЅРЅС‹С….</p>
+      <p>5. РћС‚РєР°Р· РѕС‚ РіР°СЂР°РЅС‚РёР№</p>
+      <p>РЎРµСЂРІРёСЃ РїСЂРµРґРѕСЃС‚Р°РІР»СЏРµС‚СЃСЏ В«РєР°Рє РµСЃС‚СЊВ» (as is). Р­С‚Рѕ Р±РµС‚Р°-РІРµСЂСЃРёСЏ. Р’РѕР·РјРѕР¶РЅС‹ РѕС€РёР±РєРё Рё РїРµСЂРµСЂС‹РІС‹ РІ СЂР°Р±РѕС‚Рµ. Р Р°Р·СЂР°Р±РѕС‚С‡РёРє РЅРµ РіР°СЂР°РЅС‚РёСЂСѓРµС‚ Р±РµСЃРїРµСЂРµР±РѕР№РЅСѓСЋ СЂР°Р±РѕС‚Сѓ.</p>
+      <p>6. РћРіСЂР°РЅРёС‡РµРЅРёСЏ</p>
+      <p>Р—Р°РїСЂРµС‰РµРЅРѕ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ СЃРёСЃС‚РµРјСѓ РґР»СЏ: РЅРµСЃР°РЅРєС†РёРѕРЅРёСЂРѕРІР°РЅРЅРѕРіРѕ РґРѕСЃС‚СѓРїР° Рє С‡СѓР¶РёРј СѓСЃС‚СЂРѕР№СЃС‚РІР°Рј, СЂР°СЃРїСЂРѕСЃС‚СЂР°РЅРµРЅРёСЏ РІСЂРµРґРѕРЅРѕСЃРЅРѕРіРѕ РџРћ, РЅР°СЂСѓС€РµРЅРёСЏ Р·Р°РєРѕРЅРѕРґР°С‚РµР»СЊСЃС‚РІР° Р Р¤.</p>
     </div>
     <div class="terms-buttons">
-      <button class="terms-btn terms-btn-accept" onclick="acceptTerms()">Принимаю</button>
+      <button class="terms-btn terms-btn-accept" id="termsAcceptBtn">РџСЂРёРЅРёРјР°СЋ</button>
     </div>
   </div>
 </div>
@@ -341,18 +341,18 @@
         <path d="M12 8v4M12 16h.01" stroke-linecap="round"/>
       </svg>
     </div>
-    <h3 class="consent-title">Сбор данных для обучения</h3>
+    <h3 class="consent-title">РЎР±РѕСЂ РґР°РЅРЅС‹С… РґР»СЏ РѕР±СѓС‡РµРЅРёСЏ</h3>
     <p class="consent-text">
-      ИРУ собирает анонимизированные данные о выполненных командах для улучшения 
-      системы и обучения собственной модели ИИ. Собираются: текст запроса, тип ОС, 
-      выполненные команды и результат (успех/ошибка). Персональные данные не собираются.
+      РР РЈ СЃРѕР±РёСЂР°РµС‚ Р°РЅРѕРЅРёРјРёР·РёСЂРѕРІР°РЅРЅС‹Рµ РґР°РЅРЅС‹Рµ Рѕ РІС‹РїРѕР»РЅРµРЅРЅС‹С… РєРѕРјР°РЅРґР°С… РґР»СЏ СѓР»СѓС‡С€РµРЅРёСЏ 
+      СЃРёСЃС‚РµРјС‹ Рё РѕР±СѓС‡РµРЅРёСЏ СЃРѕР±СЃС‚РІРµРЅРЅРѕР№ РјРѕРґРµР»Рё РР. РЎРѕР±РёСЂР°СЋС‚СЃСЏ: С‚РµРєСЃС‚ Р·Р°РїСЂРѕСЃР°, С‚РёРї РћРЎ, 
+      РІС‹РїРѕР»РЅРµРЅРЅС‹Рµ РєРѕРјР°РЅРґС‹ Рё СЂРµР·СѓР»СЊС‚Р°С‚ (СѓСЃРїРµС…/РѕС€РёР±РєР°). РџРµСЂСЃРѕРЅР°Р»СЊРЅС‹Рµ РґР°РЅРЅС‹Рµ РЅРµ СЃРѕР±РёСЂР°СЋС‚СЃСЏ.
     </p>
     <p class="consent-text" style="color:var(--text-muted);font-size:10px;margin-top:8px;">
-      Вы можете изменить это решение в любое время.
+      Р’С‹ РјРѕР¶РµС‚Рµ РёР·РјРµРЅРёС‚СЊ СЌС‚Рѕ СЂРµС€РµРЅРёРµ РІ Р»СЋР±РѕРµ РІСЂРµРјСЏ.
     </p>
     <div class="consent-buttons">
-      <button class="consent-btn consent-btn-accept" onclick="setConsent(true)">Согласен</button>
-      <button class="consent-btn consent-btn-decline" onclick="setConsent(false)">Отклонить</button>
+      <button class="consent-btn consent-btn-accept" id="consentAcceptBtn">РЎРѕРіР»Р°СЃРµРЅ</button>
+      <button class="consent-btn consent-btn-decline" id="consentDeclineBtn">РћС‚РєР»РѕРЅРёС‚СЊ</button>
     </div>
   </div>
 </div>
@@ -360,6 +360,18 @@
 <div class="toast" id="toast"></div>
 
 
-<script src="app.js"></script>
+<script src="js/core.js" defer></script>
+<script src="js/utils.js" defer></script>
+<script src="js/devices.js" defer></script>
+<script src="js/chat.js" defer></script>
+<script src="js/explorer.js" defer></script>
+<script src="js/shell.js" defer></script>
+<script src="js/admin.js" defer></script>
+<script src="js/devmode.js" defer></script>
+<script src="js/voice.js" defer></script>
+<script src="js/attachments.js" defer></script>
+<script src="js/extras.js" defer></script>
+<script src="app.js" defer></script>
 </body>
 </html>
+
