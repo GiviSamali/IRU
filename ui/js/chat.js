@@ -72,17 +72,32 @@ function renderChatList() {
   }
   list.innerHTML = state.chats.map(c => {
     const active = c.id === state.currentChatId ? ' active' : '';
-    return `<div class="chat-item${active}" onclick="openChat(${c.id})">
+    return `<div class="chat-item${active}" data-action="open-chat" data-chat-id="${escapeAttr(c.id)}">
       <svg class="chat-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
       <span class="chat-item-text">${escapeHTML(c.title)}</span>
-      <button class="chat-item-rename" onclick="startRenameChat(${c.id}, event)" title="Переименовать">
+      <button class="chat-item-rename" data-action="rename-chat" data-chat-id="${escapeAttr(c.id)}" title="Переименовать">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 3a2.83 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
       </button>
-      <button class="chat-item-delete" onclick="deleteChat(${c.id}, event)" title="Удалить">
+      <button class="chat-item-delete" data-action="delete-chat" data-chat-id="${escapeAttr(c.id)}" title="Удалить">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>`;
   }).join('');
+}
+
+function bindChatListActions() {
+  const list = document.getElementById('chatList');
+  if (!list || list.dataset.delegated === '1') return;
+  list.dataset.delegated = '1';
+  list.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-action]');
+    if (!target || !list.contains(target)) return;
+    const chatId = Number(target.dataset.chatId);
+    if (!chatId) return;
+    if (target.dataset.action === 'open-chat') openChat(chatId);
+    if (target.dataset.action === 'rename-chat') startRenameChat(chatId, event);
+    if (target.dataset.action === 'delete-chat') deleteChat(chatId, event);
+  });
 }
 
 // ── DEVICES ──────────────────────────────────────────
@@ -117,7 +132,7 @@ function linkifyMessageContent(text, commands) {
     usedDownloads.add(`${meta.deviceId}::${meta.filePath}`);
     const deviceId = encodeURIComponent(meta.deviceId);
     const filePath = encodeURIComponent(meta.filePath);
-    return `<button class="msg-download-link" onclick="downloadMessageFile('${deviceId}', '${filePath}', this)">Скачать файл</button>`;
+    return `<button class="msg-download-link" data-action="download-message-file" data-device-id="${escapeAttr(deviceId)}" data-file-path="${escapeAttr(filePath)}">Скачать файл</button>`;
   });
 
   return { html, usedDownloads };
@@ -143,7 +158,7 @@ function renderCommandDownloadButtons(commands, usedDownloads = new Set()) {
     const encodedFilePath = encodeURIComponent(filePath);
     const label = filePath.split(/[\\\\/]/).pop() || 'Скачать файл';
     buttons.push(
-      `<button class="msg-download-link" onclick="downloadMessageFile('${encodedDeviceId}', '${encodedFilePath}', this)">Скачать: ${escapeHTML(label)}</button>`
+      `<button class="msg-download-link" data-action="download-message-file" data-device-id="${escapeAttr(encodedDeviceId)}" data-file-path="${escapeAttr(encodedFilePath)}">Скачать: ${escapeHTML(label)}</button>`
     );
   }
 
@@ -199,13 +214,13 @@ function renderMessages() {
       ? 'Опиши задачу на естественном языке — ИРУ выполнит на твоём устройстве.'
       : 'Нет подключённых устройств. Напиши сообщение — я помогу настроить подключение.';
     const hints = hasDevices
-      ? `<div class="hint-chip" onclick="sendHint(this)">Открой браузер</div>
-          <div class="hint-chip" onclick="sendHint(this)">Покажи IP адрес</div>
-          <div class="hint-chip" onclick="sendHint(this)">Свободное место на диске</div>
-          <div class="hint-chip" onclick="sendHint(this)">Запущенные процессы</div>`
-      : `<div class="hint-chip" onclick="downloadAgent()">⬇ Скачать агент</div>
-          <div class="hint-chip" onclick="sendHint(this)">Как подключить компьютер?</div>
-          <div class="hint-chip" onclick="sendHint(this)">Что ты умеешь?</div>`;
+      ? `<div class="hint-chip" data-action="send-hint">Открой браузер</div>
+          <div class="hint-chip" data-action="send-hint">Покажи IP адрес</div>
+          <div class="hint-chip" data-action="send-hint">Свободное место на диске</div>
+          <div class="hint-chip" data-action="send-hint">Запущенные процессы</div>`
+      : `<div class="hint-chip" data-action="download-agent">⬇ Скачать агент</div>
+          <div class="hint-chip" data-action="send-hint">Как подключить компьютер?</div>
+          <div class="hint-chip" data-action="send-hint">Что ты умеешь?</div>`;
     container.innerHTML = `
       <div class="chat-welcome">
         <img src="/static/IruIcon.ico" alt="ИРУ">
@@ -243,7 +258,7 @@ function renderMessages() {
         const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
         const cmdText = escapeHTML(stripUtfPrefix(c.command || ''));
         bodyHTML += `
-          <div class="cmd-entry" onclick="this.classList.toggle('open')">
+          <div class="cmd-entry" data-action="toggle-cmd-entry">
             <div class="cmd-summary">
               <span class="cmd-icon">\u25b8</span>
               <span class="cmd-text">${cmdText}</span>
@@ -265,7 +280,7 @@ function renderMessages() {
         const extra = commands.length - 1;
         bodyHTML += `
           <div class="cmd-group" id="${groupId}">
-            <div class="cmd-group-header" onclick="document.getElementById('${groupId}').classList.toggle('open')">
+            <div class="cmd-group-header" data-action="toggle-cmd-group">
               <span class="cmd-group-arrow">\u25be</span>
               <span class="cmd-group-text">${escapeHTML(lastTrunc)}</span>
               ${lastDevice}
@@ -285,7 +300,7 @@ function renderMessages() {
           const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
           const cmdText = escapeHTML(stripUtfPrefix(c.command || ''));
           bodyHTML += `
-              <div class="cmd-entry" onclick="event.stopPropagation(); this.classList.toggle('open')">
+              <div class="cmd-entry" data-action="toggle-cmd-entry">
                 <div class="cmd-summary">
                   <span class="cmd-icon">\u25b8</span>
                   <span class="cmd-text">${cmdText}</span>
@@ -305,8 +320,8 @@ function renderMessages() {
     let confirmBtns = '';
     if (m.confirmTaskId) {
       confirmBtns = `<div class="confirm-actions">
-        <button class="btn-confirm-yes" onclick="confirmTask('${m.confirmTaskId}', ${mi})">\u2713 Выполнить</button>
-        <button class="btn-confirm-no" onclick="denyTask('${m.confirmTaskId}', ${mi})">✗ Отменить</button>
+        <button class="btn-confirm-yes" data-action="confirm-task" data-task-id="${escapeAttr(m.confirmTaskId)}" data-index="${mi}">\u2713 Выполнить</button>
+        <button class="btn-confirm-no" data-action="deny-task" data-task-id="${escapeAttr(m.confirmTaskId)}" data-index="${mi}">✗ Отменить</button>
       </div>`;
     }
 
@@ -314,13 +329,12 @@ function renderMessages() {
     let suggestHTML = '';
     if (m.suggestedFact && m.suggestedFact.text) {
       const sf = m.suggestedFact;
-      const tid = m._taskId || '';
       suggestHTML = `<div class="suggest-fact-block" id="sf-${mi}">
         <div class="suggest-fact-label">ИРУ предлагает запомнить:</div>
         <div class="suggest-fact-text">${escapeHTML(sf.text)}</div>
         <div class="suggest-fact-actions">
-          <button class="suggest-fact-accept" onclick="acceptSuggestedFact('${tid}','${escapeAttr(sf.text)}','${escapeAttr(sf.category || '')}',document.getElementById('sf-${mi}'))">Запомнить</button>
-          <button class="suggest-fact-decline" onclick="declineSuggestedFact(document.getElementById('sf-${mi}'))">Не надо</button>
+          <button class="suggest-fact-accept" data-action="accept-suggested-fact" data-index="${mi}">Запомнить</button>
+          <button class="suggest-fact-decline" data-action="decline-suggested-fact" data-index="${mi}">Не надо</button>
         </div>
       </div>`;
     }
@@ -335,12 +349,11 @@ function renderMessages() {
         </div>`;
       } else {
         const desc = escapeHTML(m.planSuggestion);
-        const origReq = escapeAttr(m.planOriginalRequest || '');
-        planHTML = `<div class="plan-suggest-block" id="ps-${mi}" data-chat-id="${state.currentChatId}" data-orig-req="${origReq}">
+        planHTML = `<div class="plan-suggest-block" id="ps-${mi}" data-chat-id="${escapeAttr(state.currentChatId)}" data-index="${mi}">
           <div class="plan-suggest-text">Задача непростая: ${desc}. В режиме План ИРУ составит и выполнит пошаговое решение.</div>
           <div class="plan-suggest-actions">
-            <button class="plan-suggest-accept" onclick="acceptPlanSuggestion(document.getElementById('ps-${mi}'))">Запустить план</button>
-            <button class="plan-suggest-decline" onclick="declinePlanSuggestion(document.getElementById('ps-${mi}'))">Без плана</button>
+            <button class="plan-suggest-accept" data-action="accept-plan-suggestion" data-index="${mi}">Запустить план</button>
+            <button class="plan-suggest-decline" data-action="decline-plan-suggestion" data-index="${mi}">Без плана</button>
           </div>
           <div class="plan-suggest-warning" style="font-size:11px;color:#888;margin-top:6px;">Команды плана будут выполнены без отдельного подтверждения. Нажимайте, только если доверяете задаче.</div>
         </div>`;
@@ -359,6 +372,67 @@ function renderMessages() {
 
   container.innerHTML = html;
   container.scrollTop = container.scrollHeight;
+}
+
+function bindChatMessageActions() {
+  const container = document.getElementById('chatMessages');
+  if (!container || container.dataset.delegated === '1') return;
+  container.dataset.delegated = '1';
+  container.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-action]');
+    if (!target || !container.contains(target)) return;
+    const action = target.dataset.action;
+
+    if (action === 'download-message-file') {
+      downloadMessageFile(target.dataset.deviceId || '', target.dataset.filePath || '', target);
+      return;
+    }
+    if (action === 'send-hint') {
+      sendHint(target);
+      return;
+    }
+    if (action === 'download-agent') {
+      downloadAgent();
+      return;
+    }
+    if (action === 'toggle-cmd-entry') {
+      target.classList.toggle('open');
+      return;
+    }
+    if (action === 'toggle-cmd-group') {
+      const group = target.closest('.cmd-group');
+      if (group) group.classList.toggle('open');
+      return;
+    }
+    if (action === 'confirm-task' || action === 'deny-task') {
+      const msgIndex = Number(target.dataset.index);
+      const taskId = target.dataset.taskId || '';
+      if (!taskId || Number.isNaN(msgIndex)) return;
+      if (action === 'confirm-task') confirmTask(taskId, msgIndex);
+      else denyTask(taskId, msgIndex);
+      return;
+    }
+    if (action === 'accept-suggested-fact' || action === 'decline-suggested-fact') {
+      const msgIndex = Number(target.dataset.index);
+      const block = document.getElementById(`sf-${msgIndex}`);
+      if (!block || Number.isNaN(msgIndex)) return;
+      if (action === 'decline-suggested-fact') {
+        declineSuggestedFact(block);
+        return;
+      }
+      const message = state.messages[msgIndex] || {};
+      const fact = message.suggestedFact || {};
+      acceptSuggestedFact(message._taskId || '', fact.text || '', fact.category || '', block);
+      return;
+    }
+    if (action === 'accept-plan-suggestion' || action === 'decline-plan-suggestion') {
+      const msgIndex = Number(target.dataset.index);
+      const block = document.getElementById(`ps-${msgIndex}`);
+      if (!block) return;
+      if (action === 'accept-plan-suggestion') acceptPlanSuggestion(block);
+      else declinePlanSuggestion(block);
+    }
+  });
 }
 
 const MAX_INPUT_LENGTH = 500;
@@ -614,7 +688,7 @@ function renderInputDeviceSelector() {
   let html = '';
   // "All devices" option
   const allSel = state.sendTarget === 'all' ? ' selected' : '';
-  html += `<div class="input-device-dropdown-item${allSel}" onclick="selectInputDevice('all')">
+  html += `<div class="input-device-dropdown-item${allSel}" data-action="select-input-device" data-mode="all">
     <span class="dot all" style="width:5px;height:5px;border-radius:50%;background:var(--accent);box-shadow:0 0 4px var(--accent)"></span>
     <div>Все устройства (${ids.length})</div>
   </div>`;
@@ -623,12 +697,25 @@ function renderInputDeviceSelector() {
     const d = state.devices[id];
     const sel = (state.sendTarget === 'single' && id === state.selectedDevice) ? ' selected' : '';
     const info = d.info || {};
-    html += `<div class="input-device-dropdown-item${sel}" onclick="selectInputDevice('single','${id}')">
+    html += `<div class="input-device-dropdown-item${sel}" data-action="select-input-device" data-mode="single" data-device-id="${escapeAttr(encodeURIComponent(id))}">
       <span style="width:5px;height:5px;border-radius:50%;background:var(--success);box-shadow:0 0 4px var(--success);flex-shrink:0"></span>
-      <div><div>${info.hostname || id}</div><div class="dev-os">${info.os || '?'} — ${id}</div></div>
+      <div><div>${escapeHTML(info.hostname || id)}</div><div class="dev-os">${escapeHTML(info.os || '?')} — ${escapeHTML(id)}</div></div>
     </div>`;
   }
   dropdown.innerHTML = html;
+}
+
+function bindInputDeviceActions() {
+  const dropdown = document.getElementById('inputDeviceDropdown');
+  if (!dropdown || dropdown.dataset.delegated === '1') return;
+  dropdown.dataset.delegated = '1';
+  dropdown.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-action="select-input-device"]');
+    if (!target || !dropdown.contains(target)) return;
+    const mode = target.dataset.mode || 'single';
+    const deviceId = mode === 'all' ? undefined : decodeURIComponent(target.dataset.deviceId || '');
+    selectInputDevice(mode, deviceId);
+  });
 }
 
 // ── LIVE PROGRESS ─────────────────────────────────────
@@ -715,4 +802,8 @@ function updateCharCount() {
   counter.textContent = `${len}/${MAX_INPUT_LENGTH}`;
   counter.classList.toggle('over', len > MAX_INPUT_LENGTH);
 }
+
+bindChatListActions();
+bindChatMessageActions();
+bindInputDeviceActions();
 
