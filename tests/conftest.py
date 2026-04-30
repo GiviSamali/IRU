@@ -4,8 +4,24 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+def _clear_runtime_state():
+    import server.runtime_state as runtime_state_module
+
+    for attr_name in ("devices", "tasks", "download_tokens", "rate_counters", "ip_rate_counters"):
+        value = getattr(runtime_state_module, attr_name, None)
+        if hasattr(value, "clear"):
+            value.clear()
+
+
+@pytest.fixture(autouse=True)
+def reset_runtime_state():
+    _clear_runtime_state()
+    yield
+    _clear_runtime_state()
+
+
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def client(tmp_path, monkeypatch, reset_runtime_state):
     db_path = tmp_path / "test.sqlite3"
     monkeypatch.setenv("IRU_DB_PATH", str(db_path))
 

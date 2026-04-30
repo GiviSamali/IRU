@@ -6,7 +6,6 @@ from server.database import (
     increment_daily_commands,
     set_user_plan,
 )
-from server.runtime_state import ip_rate_counters, rate_counters
 
 
 def _create_user_with_plan(plan: str):
@@ -19,11 +18,6 @@ def _login_headers(client, user: dict) -> dict:
     response = client.post("/api/auth", json={"token": user["token"]})
     payload = response.json()
     return {"Authorization": f"Bearer {payload['access_token']}"}
-
-
-def _reset_rate_limits():
-    ip_rate_counters.clear()
-    rate_counters.clear()
 
 
 def test_free_plan_has_expected_limits():
@@ -52,7 +46,6 @@ def test_free_plan_has_expected_limits():
 def test_pro_plan_has_paid_limits_and_dev_mode_endpoint_access(client):
     user = _create_user_with_plan("pro")
     headers = _login_headers(client, user)
-    _reset_rate_limits()
 
     assert PLAN_LIMITS["pro"]["max_devices"] > 1
     assert PLAN_LIMITS["pro"]["max_commands_per_day"] > PLAN_LIMITS["free"]["max_commands_per_day"]
@@ -83,7 +76,6 @@ def test_pro_plan_has_paid_limits_and_dev_mode_endpoint_access(client):
 def test_business_plan_behaves_like_paid_plan_not_free(client):
     user = _create_user_with_plan("business")
     headers = _login_headers(client, user)
-    _reset_rate_limits()
 
     assert PLAN_LIMITS["business"]["max_devices"] > 1
     assert PLAN_LIMITS["business"]["max_commands_per_day"] > PLAN_LIMITS["free"]["max_commands_per_day"]
@@ -112,7 +104,6 @@ def test_business_plan_behaves_like_paid_plan_not_free(client):
 
     chat_response = client.post("/api/chats", headers=headers, json={"title": "plan check"})
     chat_id = chat_response.json()["chat"]["id"]
-    _reset_rate_limits()
 
     run_plan_response = client.post(
         f"/api/run_plan/{chat_id}",
