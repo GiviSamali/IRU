@@ -1,3 +1,6 @@
+import hashlib
+
+
 def _create_test_user():
     from server.database import create_user
 
@@ -54,7 +57,7 @@ def test_refresh_flow_returns_new_access_token_and_stores_hashed_refresh_token(c
         ).fetchone()
 
     assert row is not None
-    assert row["token"] != refresh_token
+    assert row["token"] == hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
 
     refresh_response = client.post("/api/refresh", json={"refresh_token": refresh_token})
 
