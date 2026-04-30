@@ -87,6 +87,77 @@ function renderChatList() {
 
 // ── DEVICES ──────────────────────────────────────────
 
+function buildMessageDownloadMap(commands) {
+  const map = new Map();
+  if (!commands || !commands.length) return map;
+
+  for (const cmd of commands) {
+    const result = cmd?.result;
+    const url = result?.url;
+    const filePath = result?.file_path;
+    const deviceId = cmd?.device_id;
+    if (!url || !filePath || !deviceId) continue;
+    map.set(url, { deviceId, filePath });
+  }
+
+  return map;
+}
+
+function linkifyMessageContent(text, commands) {
+  const safeText = escapeHTML(text || '');
+  const downloadMap = buildMessageDownloadMap(commands);
+
+  return safeText.replace(/(\/api\/download\/[a-f0-9-]+)/g, (match) => {
+    const meta = downloadMap.get(match);
+    if (!meta) {
+      return `<a href="${escapeAttr(match)}" rel="noopener noreferrer" download>Скачать файл</a>`;
+    }
+
+    const deviceId = encodeURIComponent(meta.deviceId);
+    const filePath = encodeURIComponent(meta.filePath);
+    return `<button class="msg-download-link" onclick="downloadMessageFile('${deviceId}', '${filePath}', this)">Скачать файл</button>`;
+  });
+}
+
+async function downloadMessageFile(deviceIdEncoded, filePathEncoded, btn) {
+  const deviceId = decodeURIComponent(deviceIdEncoded);
+  const filePath = decodeURIComponent(filePathEncoded);
+  const button = btn || null;
+  const originalText = button ? button.textContent : '';
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = '...';
+  }
+
+  try {
+    const response = await apiFetch(`${API}/api/download_request`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ device_id: deviceId, file_path: filePath }),
+    });
+    const data = await response.json();
+
+    if (!response.ok || data.status !== 'ok' || !data.url) {
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+
+    const anchor = document.createElement('a');
+    anchor.href = data.url;
+    anchor.download = '';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } catch (e) {
+    showToast(e.message || 'Download failed', true);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText || 'Скачать файл';
+    }
+  }
+}
+
 function renderMessages() {
   const container = document.getElementById('chatMessages');
 
@@ -117,7 +188,7 @@ function renderMessages() {
   for (let mi = 0; mi < state.messages.length; mi++) {
     const m = state.messages[mi];
     const roleLabel = m.role === 'user' ? 'вы' : 'иру';
-    let bodyHTML = linkify(escapeHTML(m.content || m.text || ''));
+    let bodyHTML = linkifyMessageContent(m.content || m.text || '', m.commands || []);
 
     // Блок задач (конвейер)
     bodyHTML += renderTaskBlock(m.tasks);
