@@ -4,13 +4,29 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 try:
+    from ..database import PLAN_LIMITS
     from ..api_support import get_current_user
 except ImportError:
+    from database import PLAN_LIMITS
     from api_support import get_current_user
 
 
 def create_router(ui_dir: Path, agent_download_dir: Path) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/api/info")
+    async def api_info():
+        return {
+            "name": "IRU",
+            "server": "fastapi",
+            "version": "3.5",
+        }
+
+    @router.get("/api/plans")
+    async def api_plans():
+        return {
+            "plans": PLAN_LIMITS,
+        }
 
     @router.get("/", response_class=HTMLResponse)
     async def root():
