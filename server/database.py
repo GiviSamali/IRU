@@ -17,11 +17,12 @@ import sqlite3
 import uuid
 import json
 import time
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import contextmanager
 
-DB_PATH = Path(__file__).parent / "iru.db"
+DB_PATH = Path(os.environ.get("IRU_DB_PATH", Path(__file__).parent / "iru.db"))
 
 # ── Подключение ───────────────────────────────────────────────────────────────
 
