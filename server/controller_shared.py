@@ -80,7 +80,10 @@ def set_current_step(poll_task_id: str | None, text: str) -> None:
     if not poll_task_id:
         return
     try:
-        from main import tasks  # локальный импорт — избегаем циклических зависимостей
+        try:
+            from .runtime_state import tasks  # type: ignore
+        except ImportError:
+            from runtime_state import tasks  # type: ignore
 
         task = tasks.get(poll_task_id)
         if task:
@@ -94,7 +97,10 @@ def push_tasks_view(poll_task_id: str | None, task_ids: list[int]) -> None:
     if not poll_task_id or not task_ids:
         return
     try:
-        from main import tasks
+        try:
+            from .runtime_state import tasks  # type: ignore
+        except ImportError:
+            from runtime_state import tasks  # type: ignore
 
         task = tasks.get(poll_task_id)
         if task:
