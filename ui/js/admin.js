@@ -299,7 +299,7 @@ function bindAdminDelegatedActions() {
     }
     if (action === 'copy-device-id') {
       navigator.clipboard.writeText(decodeURIComponent(target.dataset.deviceId || '')).then(() => {
-        showToast('ID СЃРєРѕРїРёСЂРѕРІР°РЅ');
+        showToast('ID скопирован');
       });
     }
   });
