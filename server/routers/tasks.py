@@ -5,6 +5,7 @@ import time
 import uuid
 from io import BytesIO
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -101,6 +102,16 @@ class RawCommand(BaseModel):
     command: str
     device_id: str = ""
     broadcast: bool = False
+
+
+def _build_download_headers(filename: str) -> dict[str, str]:
+    safe_name = filename or "file"
+    ascii_name = "".join(ch if 32 <= ord(ch) < 127 and ch not in {'"', '\\'} else "_" for ch in safe_name).strip(" .")
+    if not ascii_name:
+        ascii_name = "file"
+    return {
+        "Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(safe_name)}"
+    }
 
 
 @router.post("/command")
@@ -448,7 +459,7 @@ async def download_file(token: str, request: Request):
     return StreamingResponse(
         BytesIO(data),
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers=_build_download_headers(filename),
     )
 
 
