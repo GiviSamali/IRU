@@ -7,7 +7,11 @@ def test_public_info_returns_json(client):
     payload = response.json()
     assert isinstance(payload, dict)
     assert payload
-    assert any(key in payload for key in ("name", "server", "version", "status"))
+    assert payload.get("name")
+    assert payload.get("server")
+    if "version" in payload:
+        assert isinstance(payload["version"], str)
+        assert payload["version"].strip()
 
 
 def test_public_plans_returns_expected_plan_keys(client):

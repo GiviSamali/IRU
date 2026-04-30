@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -13,14 +14,24 @@ except ImportError:
 
 def create_router(ui_dir: Path, agent_download_dir: Path) -> APIRouter:
     router = APIRouter()
+    updates_dir = Path(__file__).resolve().parent.parent / "updates"
 
     @router.get("/api/info")
     async def api_info():
-        return {
+        info = {
             "name": "IRU",
             "server": "fastapi",
-            "version": "3.5",
         }
+        version_file = updates_dir / "version.json"
+        if version_file.exists():
+            try:
+                version_data = json.loads(version_file.read_text(encoding="utf-8-sig"))
+                version = version_data.get("version")
+                if version:
+                    info["version"] = version
+            except Exception:
+                pass
+        return info
 
     @router.get("/api/plans")
     async def api_plans():
