@@ -460,11 +460,11 @@ async def download_request(body: dict, request: Request):
     if not device_id or not file_path:
         return {"status": "error", "error": "device_id и file_path обязательны"}
 
-    dl_dk = _dk(user["id"], device_id)
-    if dl_dk not in devices:
+    device_key = device_id if device_id in devices else _dk(user["id"], device_id)
+    if device_key not in devices:
         return {"status": "error", "error": "Нет доступа к устройству"}
 
-    token = create_download_token(device_id, file_path, user_id=user["id"])
+    token = create_download_token(_short_did(device_key), file_path, user_id=user["id"])
     return {"status": "ok", "url": f"/api/download/{token}"}
 
 

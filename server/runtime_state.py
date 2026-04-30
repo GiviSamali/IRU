@@ -41,7 +41,7 @@ def create_download_token(device_id: str, file_path: str, user_id: int = 0) -> s
     """Create a temporary token for file downloads."""
     token = str(uuid.uuid4())
     download_tokens[token] = {
-        "device_id": device_id,
+        "device_id": _short_did(device_id),
         "file_path": file_path,
         "user_id": user_id,
         "created": time.time(),

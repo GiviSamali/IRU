@@ -106,20 +106,24 @@ function buildMessageDownloadMap(commands) {
 function linkifyMessageContent(text, commands) {
   const safeText = escapeHTML(text || '');
   const downloadMap = buildMessageDownloadMap(commands);
+  const usedDownloads = new Set();
 
-  return safeText.replace(/(\/api\/download\/[a-f0-9-]+)/g, (match) => {
+  const html = safeText.replace(/(\/api\/download\/[a-f0-9-]+)/g, (match) => {
     const meta = downloadMap.get(match);
     if (!meta) {
       return `<a href="${escapeAttr(match)}" rel="noopener noreferrer" download>Скачать файл</a>`;
     }
 
+    usedDownloads.add(`${meta.deviceId}::${meta.filePath}`);
     const deviceId = encodeURIComponent(meta.deviceId);
     const filePath = encodeURIComponent(meta.filePath);
     return `<button class="msg-download-link" onclick="downloadMessageFile('${deviceId}', '${filePath}', this)">Скачать файл</button>`;
   });
+
+  return { html, usedDownloads };
 }
 
-function renderCommandDownloadButtons(commands) {
+function renderCommandDownloadButtons(commands, usedDownloads = new Set()) {
   if (!commands || !commands.length) return '';
 
   const seen = new Set();
@@ -132,7 +136,7 @@ function renderCommandDownloadButtons(commands) {
     if (!filePath || !deviceId) continue;
 
     const key = `${deviceId}::${filePath}`;
-    if (seen.has(key)) continue;
+    if (seen.has(key) || usedDownloads.has(key)) continue;
     seen.add(key);
 
     const encodedDeviceId = encodeURIComponent(deviceId);
@@ -216,13 +220,14 @@ function renderMessages() {
   for (let mi = 0; mi < state.messages.length; mi++) {
     const m = state.messages[mi];
     const roleLabel = m.role === 'user' ? 'вы' : 'иру';
-    let bodyHTML = linkifyMessageContent(m.content || m.text || '', m.commands || []);
+    const linkified = linkifyMessageContent(m.content || m.text || '', m.commands || []);
+    let bodyHTML = linkified.html;
 
     // Блок задач (конвейер)
     bodyHTML += renderTaskBlock(m.tasks);
 
     const commands = m.commands;
-    bodyHTML += renderCommandDownloadButtons(commands);
+    bodyHTML += renderCommandDownloadButtons(commands, linkified.usedDownloads);
     if (commands && commands.length > 0) {
       bodyHTML += '<div class="cmd-log">';
       if (commands.length === 1) {
