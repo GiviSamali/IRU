@@ -416,12 +416,15 @@ async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
 
 
 @router.get("/api/download/{token}")
-async def download_file(token: str):
-    info = download_tokens.pop(token, None)
+async def download_file(token: str, request: Request):
+    info = download_tokens.get(token)
     if not info:
         return {"status": "error", "error": "Ссылка недействительна или истекла"}
     if time.time() - info["created"] > TOKEN_TTL:
         return {"status": "error", "error": "Ссылка истекла"}
+
+    if request.method == "HEAD":
+        return StreamingResponse(BytesIO(b""), media_type="application/octet-stream")
 
     short_did = info["device_id"]
     file_path = info["file_path"]
@@ -441,6 +444,7 @@ async def download_file(token: str):
 
     data = base64.b64decode(result["data_b64"])
     filename = result.get("filename", "file")
+    download_tokens.pop(token, None)
     return StreamingResponse(
         BytesIO(data),
         media_type="application/octet-stream",
