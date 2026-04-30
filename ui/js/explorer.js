@@ -1,3 +1,15 @@
+function encodeExplorerPath(path) {
+  return encodeURIComponent(String(path || ''));
+}
+
+function decodeExplorerPath(value) {
+  try {
+    return decodeURIComponent(value || '');
+  } catch (_) {
+    return value || '';
+  }
+}
+
 function toggleExplorer() {
   state.explorerOpen = !state.explorerOpen;
   document.getElementById('explorerPanel').classList.toggle('open', state.explorerOpen);
@@ -16,7 +28,8 @@ async function explorerNavigate(path) {
   try {
     const params = path ? { path } : {};
     const r = await apiFetch(`${API}/command`, {
-      method: 'POST', headers: authHeaders(),
+      method: 'POST',
+      headers: authHeaders(),
       body: JSON.stringify({ device_id: state.selectedDevice, action: 'list_dir', params }),
     });
     const data = await r.json();
@@ -36,7 +49,7 @@ async function explorerNavigate(path) {
     renderExplorerPath(result.path);
     renderExplorerList(result.dirs, result.files);
   } catch (e) {
-    document.getElementById('explorerList').innerHTML = `<div class="explorer-empty">Ошибка: ${e.message}</div>`;
+    document.getElementById('explorerList').innerHTML = `<div class="explorer-empty">Ошибка: ${escapeHTML(e.message || String(e))}</div>`;
   }
 }
 
@@ -44,14 +57,29 @@ function renderExplorerPath(pathStr) {
   const container = document.getElementById('explorerPath');
   const sep = pathStr.includes('\\') ? '\\' : '/';
   const parts = pathStr.split(sep).filter(Boolean);
-  let html = '', accumulated = pathStr.startsWith('/') ? '/' : '';
+  let html = '';
+  let accumulated = pathStr.startsWith('/') ? '/' : '';
+
   for (let i = 0; i < parts.length; i++) {
     accumulated += parts[i] + sep;
     const target = accumulated;
-    html += `<span class="path-segment" onclick="explorerNavigate('${escapeAttr(target)}')">${escapeHTML(parts[i])}</span>`;
-    if (i < parts.length - 1) html += '<span class="path-sep">\u203a</span>';
+    html += `<button type="button" class="path-segment" data-explorer-nav="${escapeAttr(encodeExplorerPath(target))}">${escapeHTML(parts[i])}</button>`;
+    if (i < parts.length - 1) {
+      html += '<span class="path-sep">\u203a</span>';
+    }
   }
+
   container.innerHTML = html;
+  bindExplorerPathActions(container);
+}
+
+function bindExplorerPathActions(container) {
+  container.querySelectorAll('[data-explorer-nav]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const target = decodeExplorerPath(el.dataset.explorerNav);
+      explorerNavigate(target);
+    });
+  });
 }
 
 function renderExplorerList(dirs, files) {
@@ -60,18 +88,20 @@ function renderExplorerList(dirs, files) {
     container.innerHTML = '<div class="explorer-empty">Пустая директория</div>';
     return;
   }
+
   let html = '';
   for (const d of (dirs || [])) {
-    html += `<div class="explorer-item dir" onclick="explorerNavigate('${escapeAttr(d.path)}')">
+    html += `<div class="explorer-item dir" data-explorer-nav="${escapeAttr(encodeExplorerPath(d.path))}">
       <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
       <span class="name">${escapeHTML(d.name)}</span>
       <div class="file-actions">
-        <div class="file-action-btn" onclick="event.stopPropagation(); openOnDevice('${escapeAttr(d.path)}')" title="Открыть на ПК">
+        <button type="button" class="file-action-btn" data-open-on-device="${escapeAttr(encodeExplorerPath(d.path))}" title="Открыть на ПК">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-        </div>
+        </button>
       </div>
     </div>`;
   }
+
   for (const f of (files || [])) {
     const size = formatSize(f.size);
     html += `<div class="explorer-item file">
@@ -79,16 +109,43 @@ function renderExplorerList(dirs, files) {
       <span class="name">${escapeHTML(f.name)}</span>
       <span class="size">${size}</span>
       <div class="file-actions">
-        <div class="file-action-btn" onclick="event.stopPropagation(); openOnDevice('${escapeAttr(f.path)}')" title="Открыть на ПК">
+        <button type="button" class="file-action-btn" data-open-on-device="${escapeAttr(encodeExplorerPath(f.path))}" title="Открыть на ПК">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-        </div>
-        <div class="file-action-btn" onclick="event.stopPropagation(); downloadFile('${escapeAttr(f.path)}')" title="Скачать">
+        </button>
+        <button type="button" class="file-action-btn" data-download-file="${escapeAttr(encodeExplorerPath(f.path))}" title="Скачать">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        </div>
+        </button>
       </div>
     </div>`;
   }
+
   container.innerHTML = html;
+  bindExplorerListActions(container);
+}
+
+function bindExplorerListActions(container) {
+  container.querySelectorAll('[data-explorer-nav]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const target = decodeExplorerPath(el.dataset.explorerNav);
+      explorerNavigate(target);
+    });
+  });
+
+  container.querySelectorAll('[data-open-on-device]').forEach((el) => {
+    el.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const target = decodeExplorerPath(el.dataset.openOnDevice);
+      openOnDevice(target);
+    });
+  });
+
+  container.querySelectorAll('[data-download-file]').forEach((el) => {
+    el.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const target = decodeExplorerPath(el.dataset.downloadFile);
+      downloadFile(target);
+    });
+  });
 }
 
 function explorerBack() {
@@ -98,6 +155,7 @@ function explorerBack() {
     explorerNavigate(prev);
   }
 }
+
 function explorerUp() {
   if (!state.explorerPath) return;
   const sep = state.explorerPath.includes('\\') ? '\\' : '/';
@@ -107,22 +165,27 @@ function explorerUp() {
   const parent = (state.explorerPath.startsWith('/') ? '/' : '') + parts.join(sep) + sep;
   explorerNavigate(parent);
 }
-function explorerRefresh() { explorerNavigate(state.explorerPath); }
 
-// ── FILE ACTIONS ─────────────────────────────────────
+function explorerRefresh() {
+  explorerNavigate(state.explorerPath);
+}
+
 async function openOnDevice(filePath) {
   if (!state.selectedDevice) return;
   try {
     await apiFetch(`${API}/command`, {
-      method: 'POST', headers: authHeaders(),
+      method: 'POST',
+      headers: authHeaders(),
       body: JSON.stringify({
         device_id: state.selectedDevice,
         action: 'execute_cmd',
-        params: { command: `Start-Process "${filePath}"`, timeout: 10 }
+        params: { command: `Start-Process "${filePath}"`, timeout: 10 },
       }),
     });
     showToast('Открываю...');
-  } catch (e) { showToast('Ошибка: ' + e.message, true); }
+  } catch (e) {
+    showToast(`Ошибка: ${e.message}`, true);
+  }
 }
 
 async function downloadFile(filePath) {
@@ -130,7 +193,8 @@ async function downloadFile(filePath) {
   showToast('Подготовка к скачиванию...');
   try {
     const r = await apiFetch(`${API}/api/download_request`, {
-      method: 'POST', headers: authHeaders(),
+      method: 'POST',
+      headers: authHeaders(),
       body: JSON.stringify({ device_id: state.selectedDevice, file_path: filePath }),
     });
     const data = await r.json();
@@ -144,7 +208,7 @@ async function downloadFile(filePath) {
     } else {
       showToast(data.error || 'Ошибка', true);
     }
-  } catch (e) { showToast('Ошибка: ' + e.message, true); }
+  } catch (e) {
+    showToast(`Ошибка: ${e.message}`, true);
+  }
 }
-
-// ── UTILS ────────────────────────────────────────────
