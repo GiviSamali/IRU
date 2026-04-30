@@ -19,7 +19,7 @@ function showToast(msg, isError) {
 function linkify(text) {
   return text.replace(
     /(\/api\/download\/[a-f0-9-]+)/g,
-    '<a href="$1" target="_blank" rel="noopener noreferrer" download>📥 Скачать файл</a>'
+    '<a href="$1" rel="noopener noreferrer" download>Скачать файл</a>'
   );
 }
 

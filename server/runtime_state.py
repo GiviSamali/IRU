@@ -9,7 +9,7 @@ devices: dict = {}
 
 # Download tokens
 download_tokens: dict = {}
-TOKEN_TTL = 300  # 5 minutes
+TOKEN_TTL = 1800  # 30 minutes
 
 
 # In-memory task queue

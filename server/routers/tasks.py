@@ -419,9 +419,10 @@ async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
 async def download_file(token: str, request: Request):
     info = download_tokens.get(token)
     if not info:
-        return {"status": "error", "error": "Ссылка недействительна или истекла"}
+        raise HTTPException(status_code=404, detail="Ссылка недействительна или истекла")
     if time.time() - info["created"] > TOKEN_TTL:
-        return {"status": "error", "error": "Ссылка истекла"}
+        download_tokens.pop(token, None)
+        raise HTTPException(status_code=410, detail="Ссылка истекла")
 
     if request.method == "HEAD":
         return StreamingResponse(BytesIO(b""), media_type="application/octet-stream")
@@ -444,7 +445,6 @@ async def download_file(token: str, request: Request):
 
     data = base64.b64decode(result["data_b64"])
     filename = result.get("filename", "file")
-    download_tokens.pop(token, None)
     return StreamingResponse(
         BytesIO(data),
         media_type="application/octet-stream",
