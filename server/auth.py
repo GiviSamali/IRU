@@ -62,6 +62,7 @@ def create_access_token(user_id: int, name: str, plan: str) -> str:
         "sub":  str(user_id),
         "name": name,
         "plan": plan,
+        "jti":  str(uuid.uuid4()),
         "exp":  int(time.time()) + ACCESS_TTL,
         "iat":  int(time.time()),
     }).encode())
