@@ -119,6 +119,34 @@ function linkifyMessageContent(text, commands) {
   });
 }
 
+function renderCommandDownloadButtons(commands) {
+  if (!commands || !commands.length) return '';
+
+  const seen = new Set();
+  const buttons = [];
+
+  for (const cmd of commands) {
+    const result = cmd?.result;
+    const filePath = result?.file_path;
+    const deviceId = cmd?.device_id;
+    if (!filePath || !deviceId) continue;
+
+    const key = `${deviceId}::${filePath}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const encodedDeviceId = encodeURIComponent(deviceId);
+    const encodedFilePath = encodeURIComponent(filePath);
+    const label = filePath.split(/[\\\\/]/).pop() || 'Скачать файл';
+    buttons.push(
+      `<button class="msg-download-link" onclick="downloadMessageFile('${encodedDeviceId}', '${encodedFilePath}', this)">Скачать: ${escapeHTML(label)}</button>`
+    );
+  }
+
+  if (!buttons.length) return '';
+  return `<div class="msg-download-actions">${buttons.join('')}</div>`;
+}
+
 async function downloadMessageFile(deviceIdEncoded, filePathEncoded, btn) {
   const deviceId = decodeURIComponent(deviceIdEncoded);
   const filePath = decodeURIComponent(filePathEncoded);
@@ -194,6 +222,7 @@ function renderMessages() {
     bodyHTML += renderTaskBlock(m.tasks);
 
     const commands = m.commands;
+    bodyHTML += renderCommandDownloadButtons(commands);
     if (commands && commands.length > 0) {
       bodyHTML += '<div class="cmd-log">';
       if (commands.length === 1) {

@@ -67,6 +67,12 @@
   cursor: wait;
   opacity: 0.7;
 }
+.msg-download-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
 
 /* Compact command log */
 .cmd-log { margin-top: 6px; }
