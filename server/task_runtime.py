@@ -18,6 +18,7 @@ try:
         process_onboarding_message,
         strip_markdown,
     )
+    from .controller_trust import enforce_trusted_answer
     from .database import (
         add_message,
         add_training_record,
@@ -50,6 +51,7 @@ except ImportError:
         process_onboarding_message,
         strip_markdown,
     )
+    from controller_trust import enforce_trusted_answer
     from database import (
         add_message,
         add_training_record,
@@ -411,6 +413,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             combined_answer = (combined_answer[:plan_match.start()].rstrip() + combined_answer[plan_match.end():]).strip()
 
         combined_answer = strip_markdown(combined_answer)
+        combined_answer = enforce_trusted_answer(combined_answer, combined_commands)
         add_message(chat_id, "assistant", combined_answer, combined_commands)
 
         try:

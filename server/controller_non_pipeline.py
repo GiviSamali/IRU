@@ -11,6 +11,7 @@ try:
         build_chat_messages,
         set_current_step,
     )
+    from .controller_trust import enforce_trusted_answer  # type: ignore
 except ImportError:
     import database as db  # type: ignore
     from controller_shared import (  # type: ignore
@@ -18,6 +19,7 @@ except ImportError:
         build_chat_messages,
         set_current_step,
     )
+    from controller_trust import enforce_trusted_answer  # type: ignore
 
 
 def _training_context(device_info: dict) -> dict:
@@ -193,8 +195,12 @@ async def process_non_pipeline_command(
 
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
+                final_answer = enforce_trusted_answer(
+                    assistant_msg.get("content", "Готово."),
+                    commands_log,
+                )
                 return {
-                    "answer": assistant_msg.get("content", "Готово."),
+                    "answer": final_answer,
                     "commands": commands_log,
                     "tasks": [],
                     "training_context": _training_context(device_info),
@@ -268,6 +274,7 @@ async def process_non_pipeline_command(
                         tool_result = {"error": err_str}
 
                     commands_log.append({
+                        "action": fn_name,
                         "command": fn_args.get("command", ""),
                         "device_id": target_device,
                         "result": tool_result,
@@ -309,6 +316,7 @@ async def process_non_pipeline_command(
                     preview = fn_args.get("content", "")[:60]
                     mode = "append" if fn_args.get("append") else "write"
                     commands_log.append({
+                        "action": fn_name,
                         "command": f"[{mode}] {fn_args.get('path', '')} | {preview}...",
                         "device_id": target_device,
                         "result": tool_result,
@@ -324,6 +332,7 @@ async def process_non_pipeline_command(
                         tool_result = {"error": str(exc)}
 
                     commands_log.append({
+                        "action": fn_name,
                         "command": f"[скачать] {fn_args.get('file_path', '')}",
                         "device_id": target_device,
                         "result": tool_result,
@@ -335,6 +344,7 @@ async def process_non_pipeline_command(
                     max_results = min(int(fn_args.get("max_results", 5) or 5), 10)
                     tool_result = await _run_web_search(cfg, query, max_results)
                     commands_log.append({
+                        "action": fn_name,
                         "command": f"[web_search] {fn_args.get('query', '')[:80]}",
                         "device_id": target_device,
                         "result": tool_result if "error" in tool_result else {"ok": True},

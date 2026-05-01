@@ -5,8 +5,10 @@ import httpx
 
 try:
     from . import database as db  # type: ignore
+    from .controller_trust import enforce_trusted_answer  # type: ignore
 except ImportError:
     import database as db  # type: ignore
+    from controller_trust import enforce_trusted_answer  # type: ignore
 
 try:
     from .controller_shared import (
@@ -512,6 +514,7 @@ async def run_pipeline_worker(
         if not tool_calls:
             final_text = strip_markdown(assistant_msg.get("content") or "").strip()
             if final_text:
+                final_text = enforce_trusted_answer(final_text, commands_log)
                 return {
                     "status": "ok",
                     "answer": final_text,
@@ -565,6 +568,7 @@ async def run_pipeline_worker(
                     tool_result = {"error": err_str}
 
                 commands_log.append({
+                    "action": fn_name,
                     "command": fn_args.get("command", ""),
                     "device_id": target_device,
                     "result": tool_result,
@@ -604,6 +608,7 @@ async def run_pipeline_worker(
                 preview = fn_args.get("content", "")[:60]
                 mode = "append" if fn_args.get("append") else "write"
                 commands_log.append({
+                    "action": fn_name,
                     "command": f"[{mode}] {fn_args.get('path', '')} | {preview}...",
                     "device_id": target_device,
                     "result": tool_result,
@@ -620,6 +625,7 @@ async def run_pipeline_worker(
                     tool_result = {"error": str(exc)}
 
                 commands_log.append({
+                    "action": fn_name,
                     "command": f"[скачать] {fn_args.get('file_path', '')}",
                     "device_id": target_device,
                     "result": tool_result,
@@ -681,6 +687,7 @@ async def run_pipeline_worker(
                             tool_result = {"error": f"Поиск временно недоступен: {exc}"}
 
                 commands_log.append({
+                    "action": fn_name,
                     "command": f"[web_search] {fn_args.get('query', '')[:80]}",
                     "device_id": target_device,
                     "result": tool_result if not isinstance(tool_result, dict) or "error" in tool_result else {"ok": True},
@@ -873,6 +880,10 @@ async def process_pipeline_subagents(
                     "commands": [],
                 }
 
+            worker_result["answer"] = enforce_trusted_answer(
+                worker_result.get("answer", ""),
+                worker_result.get("commands", []),
+            )
             all_commands.extend(worker_result.get("commands", []))
             step_summary = strip_markdown(worker_result.get("answer", "")).strip() or "Шаг завершён."
             urls = [
@@ -935,6 +946,7 @@ async def process_pipeline_subagents(
                 )
 
     final_answer = strip_markdown(final_answer)
+    final_answer = enforce_trusted_answer(final_answer, all_commands)
     return {
         "answer": final_answer,
         "commands": all_commands,
