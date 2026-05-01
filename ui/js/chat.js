@@ -327,7 +327,7 @@ function renderMessages() {
 
     // Suggest memory block (Point 12)
     let suggestHTML = '';
-    if (m.suggestedFact && m.suggestedFact.text) {
+    if (m.suggestedFact && m.suggestedFact.text && !m.suggestedFactDeclined) {
       const sf = m.suggestedFact;
       suggestHTML = `<div class="suggest-fact-block" id="sf-${mi}">
         <div class="suggest-fact-label">ИРУ предлагает запомнить:</div>
@@ -417,12 +417,13 @@ function bindChatMessageActions() {
       const block = document.getElementById(`sf-${msgIndex}`);
       if (!block || Number.isNaN(msgIndex)) return;
       if (action === 'decline-suggested-fact') {
-        declineSuggestedFact(block);
+        const message = state.messages[msgIndex] || {};
+        declineSuggestedFact(message._taskId || '', block, msgIndex);
         return;
       }
       const message = state.messages[msgIndex] || {};
       const fact = message.suggestedFact || {};
-      acceptSuggestedFact(message._taskId || '', fact.text || '', fact.category || '', block);
+      acceptSuggestedFact(message._taskId || '', fact.text || '', fact.category || '', block, msgIndex);
       return;
     }
     if (action === 'accept-plan-suggestion' || action === 'decline-plan-suggestion') {

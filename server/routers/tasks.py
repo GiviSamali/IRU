@@ -37,6 +37,7 @@ try:
         devices,
         download_tokens,
         get_user_devices,
+        mark_suggested_fact_declined,
         mark_plan_declined,
         tasks,
         TOKEN_TTL,
@@ -68,6 +69,7 @@ except ImportError:
         devices,
         download_tokens,
         get_user_devices,
+        mark_suggested_fact_declined,
         mark_plan_declined,
         tasks,
         TOKEN_TTL,
@@ -351,6 +353,26 @@ async def api_remember_fact(task_id: str, request: Request):
     fact_id = add_user_fact(user_id=str(user["id"]), text=suggested_fact["text"], category=suggested_fact.get("category"))
     task.pop("suggested_fact", None)
     return {"status": "ok", "fact_id": fact_id}
+
+
+@router.post("/api/tasks/{task_id}/decline_fact")
+async def api_decline_fact(task_id: str, request: Request):
+    user = get_current_user(request)
+    task = tasks.get(task_id)
+    if not task or task["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    suggested_fact = task.get("suggested_fact")
+    if not suggested_fact:
+        return {"status": "ok"}
+    mark_suggested_fact_declined(
+        user["id"],
+        task.get("chat_id"),
+        suggested_fact.get("text", ""),
+        suggested_fact.get("category"),
+    )
+    task.pop("suggested_fact", None)
+    task["suggested_fact_declined"] = True
+    return {"status": "ok"}
 
 
 @router.post("/api/tasks/{task_id}/decline_plan")

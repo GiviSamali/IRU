@@ -22,6 +22,10 @@ TASK_TTL = 3600  # 1 hour
 declined_plan_requests: dict[str, float] = {}
 
 
+# Declined suggested facts keyed by user_id + chat_id + fact hash
+declined_suggested_facts: dict[str, float] = {}
+
+
 # Rate limit buckets
 rate_counters: dict[str, list[float]] = defaultdict(list)
 ip_rate_counters: dict[str, list[float]] = defaultdict(list)
@@ -73,6 +77,13 @@ def _request_hash(message: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def build_suggested_fact_hash(user_id: int, chat_id: int, text: str, category: str | None = None) -> str:
+    normalized_text = " ".join((text or "").strip().lower().split())
+    normalized_category = (category or "").strip().lower()
+    payload = f"{user_id}:{chat_id}:{normalized_category}:{normalized_text}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def mark_plan_declined(chat_id: int, message: str) -> None:
     if not chat_id or not message:
         return
@@ -86,6 +97,22 @@ def is_plan_declined(chat_id: int, message: str) -> bool:
     return f"{chat_id}:{_request_hash(message)}" in declined_plan_requests
 
 
+def mark_suggested_fact_declined(user_id: int, chat_id: int, text: str, category: str | None = None) -> str | None:
+    if not user_id or not chat_id or not text:
+        return None
+    fact_hash = build_suggested_fact_hash(user_id, chat_id, text, category)
+    declined_suggested_facts[fact_hash] = time.time()
+    return fact_hash
+
+
+def is_suggested_fact_declined(user_id: int, chat_id: int, text: str, category: str | None = None) -> bool:
+    if not user_id or not chat_id or not text:
+        return False
+    cleanup_old_tasks()
+    fact_hash = build_suggested_fact_hash(user_id, chat_id, text, category)
+    return fact_hash in declined_suggested_facts
+
+
 def cleanup_old_tasks() -> None:
     """Remove tasks older than TASK_TTL."""
     now = time.time()
@@ -95,3 +122,6 @@ def cleanup_old_tasks() -> None:
     expired_declines = [key for key, created_at in declined_plan_requests.items() if now - created_at > TASK_TTL]
     for key in expired_declines:
         declined_plan_requests.pop(key, None)
+    expired_fact_declines = [key for key, created_at in declined_suggested_facts.items() if now - created_at > TASK_TTL]
+    for key in expired_fact_declines:
+        declined_suggested_facts.pop(key, None)

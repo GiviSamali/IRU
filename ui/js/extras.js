@@ -123,7 +123,7 @@ function startRenameChat(chatId, event) {
 }
 
 // ── SUGGEST MEMORY (Point 12) ───────────────────────────────────
-async function acceptSuggestedFact(taskId, text, category, el) {
+async function acceptSuggestedFact(taskId, text, category, el, msgIndex = null) {
   try {
     const resp = await apiFetch(`${API}/api/tasks/${taskId}/remember`, {
       method: 'POST', headers: authHeaders(),
@@ -137,13 +137,38 @@ async function acceptSuggestedFact(taskId, text, category, el) {
       _memoryStats.facts = _memoryStats.facts_list.length;
       updateMemoryBadge(_memoryStats);
     }
+    if (msgIndex !== null && state.messages[msgIndex]) {
+      state.messages[msgIndex].suggestedFactDeclined = true;
+    }
     el.innerHTML = '<span class="suggest-fact-done">Запомнено</span>';
     setTimeout(() => { if (el.parentNode) el.remove(); }, 2000);
   } catch (e) { showToast('Ошибка сохранения факта', true); }
 }
 
-function declineSuggestedFact(el) {
-  el.remove();
+async function declineSuggestedFact(taskId, el, msgIndex = null) {
+  if (msgIndex !== null && state.messages[msgIndex]) {
+    state.messages[msgIndex].suggestedFactDeclined = true;
+  }
+  if (!taskId) {
+    el.remove();
+    return;
+  }
+  try {
+    const resp = await apiFetch(`${API}/api/tasks/${taskId}/decline_fact`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.status !== 'ok') {
+      throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
+    }
+    el.remove();
+  } catch (e) {
+    if (msgIndex !== null && state.messages[msgIndex]) {
+      state.messages[msgIndex].suggestedFactDeclined = false;
+    }
+    showToast(e.message || 'Ошибка отказа от факта', true);
+  }
 }
 
 // ── PLAN SUGGESTION ───────────────────────────────────────

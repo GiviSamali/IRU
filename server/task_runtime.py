@@ -41,6 +41,7 @@ try:
         devices,
         get_user_devices,
         is_plan_declined,
+        is_suggested_fact_declined,
         tasks,
     )
 except ImportError:
@@ -75,6 +76,7 @@ except ImportError:
         devices,
         get_user_devices,
         is_plan_declined,
+        is_suggested_fact_declined,
         tasks,
     )
 
@@ -399,10 +401,13 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
 
         suggest_match = _re.search(r"\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]", combined_answer)
         if suggest_match:
-            task["suggested_fact"] = {
-                "text": suggest_match.group(1).strip(),
-                "category": suggest_match.group(2).strip(),
-            }
+            fact_text = suggest_match.group(1).strip()
+            fact_category = suggest_match.group(2).strip()
+            if not is_suggested_fact_declined(user_id, chat_id, fact_text, fact_category):
+                task["suggested_fact"] = {
+                    "text": fact_text,
+                    "category": fact_category,
+                }
             combined_answer = (
                 combined_answer[:suggest_match.start()].rstrip() + combined_answer[suggest_match.end():]
             ).strip()

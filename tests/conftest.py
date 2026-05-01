@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 def _clear_runtime_state():
     import server.runtime_state as runtime_state_module
 
-    for attr_name in ("devices", "tasks", "download_tokens", "declined_plan_requests", "rate_counters", "ip_rate_counters"):
+    for attr_name in ("devices", "tasks", "download_tokens", "declined_plan_requests", "declined_suggested_facts", "rate_counters", "ip_rate_counters"):
         value = getattr(runtime_state_module, attr_name, None)
         if hasattr(value, "clear"):
             value.clear()
