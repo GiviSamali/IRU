@@ -1,4 +1,4 @@
-function toggleAdmin() {
+﻿function toggleAdmin() {
   const panel = document.getElementById('adminPanel');
   const isOpen = panel.classList.toggle('open');
   document.getElementById('btnAdmin').classList.toggle('active', isOpen);
@@ -210,7 +210,7 @@ function switchAdminTab(tab) {
 // compat alias
 function toggleAuditTab(tab) { switchAdminTab(tab); }
 
-// ── DEVICE PROFILES (ADMIN) ───────────────────────────────
+// ── DEVICE PROFILES (ADMIN) ───────────────────────────
 
 async function loadDeviceProfiles() {
   try {
@@ -234,7 +234,7 @@ function renderDeviceProfiles(profiles) {
       hour: '2-digit', minute: '2-digit'
     }) : '?';
     const disks = (p.disks && Array.isArray(p.disks)) ? p.disks.map(d =>
-      `${d.drive || '?'} ${d.total_gb || 0}ГБ / ${d.free_gb || 0}ГБ своб.`
+      `${d.drive || '?'} ${d.total_gb || 0}ГБ / ${d.free_gb || 0}ГБ свобод.`
     ).join(', ') : '—';
     const ver = p.agent_version ? `v${escapeHTML(p.agent_version)}` : '?';
     return `<div class="device-card">
@@ -313,4 +313,5 @@ function bindAdminDelegatedActions() {
 
 bindAdminDelegatedActions();
 
-// ── TERMS AGREEMENT ─────────────────────────────────────────
+// ── TERMS AGREEMENT ───────────────────────────────────
+

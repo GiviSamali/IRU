@@ -179,7 +179,21 @@ function renderInputDeviceSelector() {
   dropdown.innerHTML = html;
 }
 
+function bindInputDeviceActions() {
+  const dropdown = document.getElementById('inputDeviceDropdown');
+  if (!dropdown || dropdown.dataset.delegated === '1') return;
+  dropdown.dataset.delegated = '1';
+  dropdown.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-action="select-input-device"]');
+    if (!target || !dropdown.contains(target)) return;
+    const mode = target.dataset.mode || 'single';
+    const deviceId = mode === 'all' ? undefined : decodeURIComponent(target.dataset.deviceId || '');
+    selectInputDevice(mode, deviceId);
+  });
+}
+
 bindDeviceListActions();
+bindInputDeviceActions();
 
 // ── LIVE PROGRESS ─────────────────────────────────────
 
