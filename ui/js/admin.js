@@ -60,14 +60,14 @@ function filterAdminUsers() {
 function renderAdminUserItem(u) {
   const isAdmin = u.id === 1;
   const deleteBtn = isAdmin ? '' : `
-    <button class="admin-user-delete" onclick="adminDeleteUser(${u.id}, '${escapeAttr(u.name)}')" title="Удалить">
+    <button class="admin-user-delete" data-action="admin-delete-user" data-user-id="${escapeAttr(u.id)}" title="Удалить">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
     </button>`;
   const badge = isAdmin ? '<span class="admin-badge">admin</span>' : '';
   const plan = u.plan || 'free';
   const planClass = 'plan-' + plan;
   const planSelect = isAdmin ? '' : `
-    <select class="admin-plan-select ${planClass}" onchange="adminSetPlan(${u.id}, this.value)">
+    <select class="admin-plan-select ${planClass}" data-action="admin-set-plan" data-user-id="${escapeAttr(u.id)}">
       <option value="free"${plan === 'free' ? ' selected' : ''}>free</option>
       <option value="pro"${plan === 'pro' ? ' selected' : ''}>pro</option>
       <option value="business"${plan === 'business' ? ' selected' : ''}>business</option>
@@ -76,7 +76,7 @@ function renderAdminUserItem(u) {
     <div class="admin-user-info">
       <div class="admin-user-name">${escapeHTML(u.name)}${badge}</div>
       <div class="admin-user-meta">
-        <span class="admin-user-token" title="Нажмите чтобы скопировать" onclick="navigator.clipboard.writeText('${escapeAttr(u.token)}');showToast('Токен скопирован')">${u.token}</span>
+        <span class="admin-user-token" title="Нажмите чтобы скопировать" data-action="copy-admin-token" data-user-id="${escapeAttr(u.id)}">${escapeHTML(u.token)}</span>
         ${planSelect}
       </div>
     </div>
@@ -180,8 +180,8 @@ function renderAuditLog(logs, total, offset) {
   }).join('');
   let nav = '';
   if (offset > 0 || offset + 50 < total) {
-    const prevBtn = offset > 0 ? `<button onclick="loadAuditLog(${Math.max(0, offset - 50)})">&larr;</button>` : '';
-    const nextBtn = offset + 50 < total ? `<button onclick="loadAuditLog(${offset + 50})">&rarr;</button>` : '';
+    const prevBtn = offset > 0 ? `<button data-action="load-audit" data-offset="${Math.max(0, offset - 50)}">&larr;</button>` : '';
+    const nextBtn = offset + 50 < total ? `<button data-action="load-audit" data-offset="${offset + 50}">&rarr;</button>` : '';
     nav = `<div class="audit-nav">${prevBtn} <span>${offset + 1}-${Math.min(offset + 50, total)} / ${total}</span> ${nextBtn}</div>`;
   }
   container.innerHTML = rows + nav;
@@ -210,7 +210,7 @@ function switchAdminTab(tab) {
 // compat alias
 function toggleAuditTab(tab) { switchAdminTab(tab); }
 
-// ── DEVICE PROFILES (ADMIN) ───────────────────────────────
+// ── DEVICE PROFILES (ADMIN) ───────────────────────────
 
 async function loadDeviceProfiles() {
   try {
@@ -234,7 +234,7 @@ function renderDeviceProfiles(profiles) {
       hour: '2-digit', minute: '2-digit'
     }) : '?';
     const disks = (p.disks && Array.isArray(p.disks)) ? p.disks.map(d =>
-      `${d.drive || '?'} ${d.total_gb || 0}ГБ / ${d.free_gb || 0}ГБ своб.`
+      `${d.drive || '?'} ${d.total_gb || 0}ГБ / ${d.free_gb || 0}ГБ свобод.`
     ).join(', ') : '—';
     const ver = p.agent_version ? `v${escapeHTML(p.agent_version)}` : '?';
     return `<div class="device-card">
@@ -242,7 +242,7 @@ function renderDeviceProfiles(profiles) {
         <span class="device-card-name">${escapeHTML(p.hostname || '?')}</span>
         <span class="device-card-ver">${ver}</span>
       </div>
-      <div class="device-card-id" title="Нажмите чтобы скопировать" onclick="navigator.clipboard.writeText('${escapeAttr(p.device_id || '')}');showToast('ID скопирован')">${escapeHTML(p.device_id || '?')}</div>
+      <div class="device-card-id" title="Нажмите чтобы скопировать" data-action="copy-device-id" data-device-id="${escapeAttr(encodeURIComponent(p.device_id || ''))}">${escapeHTML(p.device_id || '?')}</div>
       <div class="device-card-grid">
         <div class="device-card-label">ОС</div><div class="device-card-value">${escapeHTML(p.os || '?')} ${escapeHTML(p.os_version || '')}</div>
         <div class="device-card-label">Пользователь</div><div class="device-card-value">${escapeHTML(p.username || '—')}</div>
@@ -271,4 +271,47 @@ function copyToken(token) {
   });
 }
 
-// ── TERMS AGREEMENT ─────────────────────────────────────────
+function bindAdminDelegatedActions() {
+  const panel = document.getElementById('adminPanel');
+  if (!panel || panel.dataset.delegated === '1') return;
+  panel.dataset.delegated = '1';
+
+  panel.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-action]');
+    if (!target || !panel.contains(target)) return;
+    const action = target.dataset.action;
+
+    if (action === 'admin-delete-user') {
+      const userId = Number(target.dataset.userId);
+      const user = _allAdminUsers.find(u => Number(u.id) === userId);
+      if (user) adminDeleteUser(userId, user.name || '');
+      return;
+    }
+    if (action === 'copy-admin-token') {
+      const userId = Number(target.dataset.userId);
+      const user = _allAdminUsers.find(u => Number(u.id) === userId);
+      if (user && user.token) copyToken(user.token);
+      return;
+    }
+    if (action === 'load-audit') {
+      loadAuditLog(Number(target.dataset.offset) || 0);
+      return;
+    }
+    if (action === 'copy-device-id') {
+      navigator.clipboard.writeText(decodeURIComponent(target.dataset.deviceId || '')).then(() => {
+        showToast('ID скопирован');
+      });
+    }
+  });
+
+  panel.addEventListener('change', (event) => {
+    const target = event.target.closest('[data-action="admin-set-plan"]');
+    if (!target || !panel.contains(target)) return;
+    adminSetPlan(Number(target.dataset.userId), target.value);
+  });
+}
+
+bindAdminDelegatedActions();
+
+// ── TERMS AGREEMENT ───────────────────────────────────
+

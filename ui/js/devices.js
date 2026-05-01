@@ -36,12 +36,23 @@ function renderDevices() {
     const d = state.devices[id];
     const sel = id === state.selectedDevice ? ' selected' : '';
     const info = d.info || {};
-    return `<div class="device-dropdown-item${sel}" onclick="selectDevice('${id}')">
+    return `<div class="device-dropdown-item${sel}" data-action="select-device" data-device-id="${escapeAttr(encodeURIComponent(id))}">
       <span class="device-dot online"></span>
-      <div><div>${info.hostname || id}</div><div class="device-os">${info.os || '?'} — ${id}</div></div>
+      <div><div>${escapeHTML(info.hostname || id)}</div><div class="device-os">${escapeHTML(info.os || '?')} — ${escapeHTML(id)}</div></div>
     </div>`;
   }).join('');
   renderInputDeviceSelector();
+}
+
+function bindDeviceListActions() {
+  const list = document.getElementById('deviceList');
+  if (!list || list.dataset.delegated === '1') return;
+  list.dataset.delegated = '1';
+  list.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-action="select-device"]');
+    if (!target || !list.contains(target)) return;
+    selectDevice(decodeURIComponent(target.dataset.deviceId || ''));
+  });
 }
 
 function selectDevice(id) {
@@ -151,7 +162,7 @@ function renderInputDeviceSelector() {
   let html = '';
   // "All devices" option
   const allSel = state.sendTarget === 'all' ? ' selected' : '';
-  html += `<div class="input-device-dropdown-item${allSel}" onclick="selectInputDevice('all')">
+  html += `<div class="input-device-dropdown-item${allSel}" data-action="select-input-device" data-mode="all">
     <span class="dot all" style="width:5px;height:5px;border-radius:50%;background:var(--accent);box-shadow:0 0 4px var(--accent)"></span>
     <div>Все устройства (${ids.length})</div>
   </div>`;
@@ -160,13 +171,29 @@ function renderInputDeviceSelector() {
     const d = state.devices[id];
     const sel = (state.sendTarget === 'single' && id === state.selectedDevice) ? ' selected' : '';
     const info = d.info || {};
-    html += `<div class="input-device-dropdown-item${sel}" onclick="selectInputDevice('single','${id}')">
+    html += `<div class="input-device-dropdown-item${sel}" data-action="select-input-device" data-mode="single" data-device-id="${escapeAttr(encodeURIComponent(id))}">
       <span style="width:5px;height:5px;border-radius:50%;background:var(--success);box-shadow:0 0 4px var(--success);flex-shrink:0"></span>
-      <div><div>${info.hostname || id}</div><div class="dev-os">${info.os || '?'} — ${id}</div></div>
+      <div><div>${escapeHTML(info.hostname || id)}</div><div class="dev-os">${escapeHTML(info.os || '?')} — ${escapeHTML(id)}</div></div>
     </div>`;
   }
   dropdown.innerHTML = html;
 }
+
+function bindInputDeviceActions() {
+  const dropdown = document.getElementById('inputDeviceDropdown');
+  if (!dropdown || dropdown.dataset.delegated === '1') return;
+  dropdown.dataset.delegated = '1';
+  dropdown.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-action="select-input-device"]');
+    if (!target || !dropdown.contains(target)) return;
+    const mode = target.dataset.mode || 'single';
+    const deviceId = mode === 'all' ? undefined : decodeURIComponent(target.dataset.deviceId || '');
+    selectInputDevice(mode, deviceId);
+  });
+}
+
+bindDeviceListActions();
+bindInputDeviceActions();
 
 // ── LIVE PROGRESS ─────────────────────────────────────
 

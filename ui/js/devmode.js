@@ -134,21 +134,31 @@ function fillDevEntry(entryEl, items) {
       '<div class="devmode-accordion-head">' +
         '<span class="devmode-accordion-name">' + escapeHTML(item.device) + '</span>' +
         '<span class="devmode-accordion-status ' + statusCls + '">' + statusIcon + '</span>' +
-        '<button class="devmode-accordion-toggle" onclick="this.closest(\'.devmode-accordion\').classList.toggle(\'.open\')">' +
+        '<button class="devmode-accordion-toggle" data-action="toggle-devmode-accordion">' +
           '<svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3.5L5 6.5L8 3.5"/></svg>' +
         '</button>' +
       '</div>' +
       '<div class="devmode-accordion-body">' + escapeHTML(item.text) + '</div>';
-    // Toggle on button click
-    acc.querySelector('.devmode-accordion-toggle').onclick = function(e) {
-      e.stopPropagation();
-      acc.classList.toggle('open');
-    };
     container.appendChild(acc);
   }
   const output = document.getElementById('devModeOutput');
   output.scrollTop = output.scrollHeight;
 }
+
+function bindDevModeDelegatedActions() {
+  const output = document.getElementById('devModeOutput');
+  if (!output || output.dataset.delegated === '1') return;
+  output.dataset.delegated = '1';
+  output.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-action="toggle-devmode-accordion"]');
+    if (!target || !output.contains(target)) return;
+    event.stopPropagation();
+    const accordion = target.closest('.devmode-accordion');
+    if (accordion) accordion.classList.toggle('open');
+  });
+}
+
+bindDevModeDelegatedActions();
 
 function handleDevModeKey(e) {
   if (e.key === 'Enter' && !e.shiftKey) {

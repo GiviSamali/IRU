@@ -170,16 +170,16 @@ async function runPlan(chatId, originalRequest) {
 
 function acceptPlanSuggestion(el) {
   const chatId = parseInt(el.dataset.chatId, 10);
-  const originalRequest = el.dataset.origReq || '';
-  const mi = parseInt(el.id.replace('ps-', ''), 10);
+  const mi = parseInt(el.dataset.index || el.id.replace('ps-', ''), 10);
+  const originalRequest = state.messages[mi]?.planOriginalRequest || el.dataset.origReq || '';
   if (state.messages[mi]) state.messages[mi].planDismissed = true;
   renderMessages();
   runPlan(chatId, originalRequest);
 }
 
 function declinePlanSuggestion(el) {
-  const originalRequest = el.dataset.origReq || '';
-  const mi = parseInt(el.id.replace('ps-', ''), 10);
+  const mi = parseInt(el.dataset.index || el.id.replace('ps-', ''), 10);
+  const originalRequest = state.messages[mi]?.planOriginalRequest || el.dataset.origReq || '';
   if (state.messages[mi]) state.messages[mi].planDeclined = true;
   renderMessages();
   sendMessageDirect(originalRequest);
