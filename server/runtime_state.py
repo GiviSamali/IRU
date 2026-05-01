@@ -1,5 +1,6 @@
 import time
 import uuid
+import hashlib
 from collections import defaultdict
 
 
@@ -15,6 +16,10 @@ TOKEN_TTL = 1800  # 30 minutes
 # In-memory task queue
 tasks: dict = {}
 TASK_TTL = 3600  # 1 hour
+
+
+# Declined plan suggestions keyed by chat_id + request hash
+declined_plan_requests: dict[str, float] = {}
 
 
 # Rate limit buckets
@@ -63,9 +68,30 @@ def create_download_link(device_id: str, file_path: str, user_id: int = 0) -> st
     return f"/api/download/{token}"
 
 
+def _request_hash(message: str) -> str:
+    normalized = (message or "").strip().lower()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def mark_plan_declined(chat_id: int, message: str) -> None:
+    if not chat_id or not message:
+        return
+    declined_plan_requests[f"{chat_id}:{_request_hash(message)}"] = time.time()
+
+
+def is_plan_declined(chat_id: int, message: str) -> bool:
+    if not chat_id or not message:
+        return False
+    cleanup_old_tasks()
+    return f"{chat_id}:{_request_hash(message)}" in declined_plan_requests
+
+
 def cleanup_old_tasks() -> None:
     """Remove tasks older than TASK_TTL."""
     now = time.time()
     expired = [tid for tid, task in tasks.items() if now - task["created_at"] > TASK_TTL]
     for task_id in expired:
         tasks.pop(task_id, None)
+    expired_declines = [key for key, created_at in declined_plan_requests.items() if now - created_at > TASK_TTL]
+    for key in expired_declines:
+        declined_plan_requests.pop(key, None)

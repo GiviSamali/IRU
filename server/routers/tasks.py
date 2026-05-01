@@ -37,6 +37,7 @@ try:
         devices,
         download_tokens,
         get_user_devices,
+        mark_plan_declined,
         tasks,
         TOKEN_TTL,
     )
@@ -67,6 +68,7 @@ except ImportError:
         devices,
         download_tokens,
         get_user_devices,
+        mark_plan_declined,
         tasks,
         TOKEN_TTL,
     )
@@ -349,6 +351,24 @@ async def api_remember_fact(task_id: str, request: Request):
     fact_id = add_user_fact(user_id=str(user["id"]), text=suggested_fact["text"], category=suggested_fact.get("category"))
     task.pop("suggested_fact", None)
     return {"status": "ok", "fact_id": fact_id}
+
+
+@router.post("/api/tasks/{task_id}/decline_plan")
+async def api_decline_plan_suggestion(task_id: str, request: Request):
+    user = get_current_user(request)
+    task = tasks.get(task_id)
+    if not task or task["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+
+    original_request = task.get("plan_original_request") or task.get("message") or ""
+    chat_id = task.get("chat_id")
+    if not chat_id or not original_request:
+        raise HTTPException(status_code=400, detail="Нет исходного запроса для отказа от плана")
+
+    mark_plan_declined(chat_id, original_request)
+    task.pop("plan_suggestion", None)
+    task["plan_declined"] = True
+    return {"status": "ok"}
 
 
 @router.post("/api/tasks/{task_id}/deny")

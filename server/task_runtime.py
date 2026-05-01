@@ -40,6 +40,7 @@ try:
         create_download_link,
         devices,
         get_user_devices,
+        is_plan_declined,
         tasks,
     )
 except ImportError:
@@ -73,6 +74,7 @@ except ImportError:
         create_download_link,
         devices,
         get_user_devices,
+        is_plan_declined,
         tasks,
     )
 
@@ -196,6 +198,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
     task = tasks[task_id]
     task["current_step"] = "ИРУ думает..."
     is_broadcast = len(device_ids) > 1
+    task_modes = task.get("modes") or {}
+    plan_declined_for_request = bool(task_modes.get("plan_declined")) or is_plan_declined(chat_id, message)
     print(f"[run_nl_task] START task={task_id[:8]}, user={user_id}, devices={device_ids}")
 
     async def run_on_device(device_id: str):
@@ -213,7 +217,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         all_devices_info = {did: {"info": value.get("info", {})} for did, value in user_devs.items()}
         chat_history = get_messages(chat_id, limit=50)
         device_profile = get_device_profile(_short_did(device_id))
-        task_modes = task.get("modes") or {}
         autonomous_flag = bool(task_modes.get("autonomous"))
 
         async def send_fn(target_device_id, action, params):
@@ -321,30 +324,31 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
 
     is_pipeline = bool((task.get("modes") or {}).get("pipeline"))
     if not is_pipeline:
-        kind, plan_desc = await classify_task_complexity(message)
-        logger.info(
-            "[classify] kind=%s plan_desc=%r user_id=%s message=%r",
-            kind,
-            plan_desc[:80] if plan_desc else "",
-            user_id,
-            message[:100],
-        )
-        if kind == "PLAN":
-            task["plan_suggestion"] = plan_desc
-            task["plan_original_request"] = message
-            user_plan = get_user_plan(user_id)
-            trial_used = get_plan_trial_used(user_id)
+        if not plan_declined_for_request:
+            kind, plan_desc = await classify_task_complexity(message)
+            logger.info(
+                "[classify] kind=%s plan_desc=%r user_id=%s message=%r",
+                kind,
+                plan_desc[:80] if plan_desc else "",
+                user_id,
+                message[:100],
+            )
+            if kind == "PLAN":
+                task["plan_suggestion"] = plan_desc
+                task["plan_original_request"] = message
+                user_plan = get_user_plan(user_id)
+                trial_used = get_plan_trial_used(user_id)
 
-            if user_plan in ("pro", "business"):
-                task["auto_plan"] = True
-            elif trial_used:
-                logger.info("[classify] FREE TRIAL EXHAUSTED — показываем upsell, user_id=%s", user_id)
+                if user_plan in ("pro", "business"):
+                    task["auto_plan"] = True
+                elif trial_used:
+                    logger.info("[classify] FREE TRIAL EXHAUSTED – показываем upsell, user_id=%s", user_id)
 
-            add_message(chat_id, "assistant", "Это сложная задача, нужен план.")
-            task["status"] = "done"
-            task["answer"] = ""
-            task["commands"] = []
-            return
+                add_message(chat_id, "assistant", "Это сложная задача, нужен план.")
+                task["status"] = "done"
+                task["answer"] = ""
+                task["commands"] = []
+                return
 
     try:
         if is_broadcast:
@@ -411,6 +415,11 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 chat_id,
             )
             combined_answer = (combined_answer[:plan_match.start()].rstrip() + combined_answer[plan_match.end():]).strip()
+
+        if plan_declined_for_request and not combined_commands:
+            normalized_answer = (combined_answer or "").strip().lower().rstrip(".!")
+            if plan_match or normalized_answer in {"", "готово"}:
+                combined_answer = "План отключён для этого запроса. Продолжите без режима плана или уточните команду."
 
         combined_answer = strip_markdown(combined_answer)
         combined_answer = enforce_trusted_answer(combined_answer, combined_commands)

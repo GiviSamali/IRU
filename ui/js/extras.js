@@ -182,10 +182,32 @@ function declinePlanSuggestion(el) {
   const originalRequest = state.messages[mi]?.planOriginalRequest || el.dataset.origReq || '';
   if (state.messages[mi]) state.messages[mi].planDeclined = true;
   renderMessages();
-  sendMessageDirect(originalRequest);
+  const taskId = state.messages[mi]?._taskId || '';
+  declinePlanAndContinue(taskId, originalRequest);
 }
 
-async function sendMessageDirect(text) {
+async function declinePlanAndContinue(taskId, originalRequest) {
+  if (!taskId) {
+    await sendMessageDirect(originalRequest, { plan_declined: true });
+    return;
+  }
+  try {
+    const resp = await apiFetch(`${API}/api/tasks/${taskId}/decline_plan`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.status !== 'ok') {
+      throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
+    }
+  } catch (e) {
+    showToast(e.message || 'Ошибка отказа от плана', true);
+    return;
+  }
+  await sendMessageDirect(originalRequest, { plan_declined: true });
+}
+
+async function sendMessageDirect(text, extraModes = {}) {
   if (!text || !state.currentChatId) return;
   const msgIndex = state.messages.length;
   state.messages.push({ role: 'assistant', loading: true, currentStep: 'ИРУ думает...' });
@@ -195,7 +217,7 @@ async function sendMessageDirect(text) {
       message: text,
       device_id: state.selectedDevice,
       chat_id: state.currentChatId,
-      modes: {},
+      modes: { ...extraModes },
     };
     if (state.sendTarget === 'all') body.broadcast = true;
     const resp = await apiFetch(`${API}/nl_command`, {
