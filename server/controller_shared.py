@@ -179,18 +179,20 @@ def build_memory_block(machine_guid: str | None, user_id: str | None = None) -> 
     if not machine_guid and not user_id:
         return ""
 
-    user_facts = db.get_user_facts(user_id) if user_id else []
+    memory_stats = db.get_memory_stats(machine_guid, user_id)
+    memory_facts = memory_stats.get("facts_list", [])
     commands = db.get_recent_commands(machine_guid, user_id, 20) if machine_guid else []
 
-    if not user_facts and not commands:
+    if not memory_facts and not commands:
         return ""
 
     facts_lines = []
-    if user_facts:
+    if memory_facts:
         facts_lines.append("Факты обо мне, пользователе:")
-        for fact in user_facts:
+        for fact in memory_facts:
             category = f"[{fact['category']}] " if fact.get("category") else ""
-            facts_lines.append(f"- id={fact['id']} {category}{fact['fact_text']}")
+            source = fact.get("source") or "user"
+            facts_lines.append(f"- source={source} id={fact['id']} {category}{fact.get('text', '')}")
 
     def command_line(command: dict, preview_limit: int) -> str:
         tag = "[OK]" if command["success"] else "[FAIL]"

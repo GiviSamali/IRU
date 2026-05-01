@@ -1015,6 +1015,28 @@ def delete_user_fact(user_id: str, fact_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def delete_memory_fact(user_id: str, fact_id: int, source: str, machine_guid: str | None = None) -> bool:
+    """Delete/unpin a fact from its explicit backend source."""
+    if source == "user":
+        return delete_user_fact(user_id, fact_id)
+
+    if source != "device" or not machine_guid:
+        return False
+
+    with get_db() as conn:
+        cur = conn.execute(
+            """UPDATE device_memory
+               SET pinned = 0
+               WHERE id = ?
+                 AND machine_guid = ?
+                 AND type = 'fact'
+                 AND pinned = 1
+                 AND (user_id = ? OR user_id IS NULL)""",
+            (fact_id, machine_guid, user_id),
+        )
+        return cur.rowcount > 0
+
+
 def get_user_facts(user_id: str) -> list[dict]:
     """Все факты пользователя (старые первыми)."""
     with get_db() as conn:

@@ -21,10 +21,12 @@ try:
         check_daily_command_limit,
         check_device_limit,
         create_chat,
+        delete_memory_fact,
         get_chat,
         get_device_profile,
         get_memory_stats,
         get_plan_trial_used,
+        get_user_device_profiles,
         get_user_plan,
         increment_daily_commands,
         set_plan_trial_used,
@@ -53,10 +55,12 @@ except ImportError:
         check_daily_command_limit,
         check_device_limit,
         create_chat,
+        delete_memory_fact,
         get_chat,
         get_device_profile,
         get_memory_stats,
         get_plan_trial_used,
+        get_user_device_profiles,
         get_user_plan,
         increment_daily_commands,
         set_plan_trial_used,
@@ -100,6 +104,30 @@ class RunPlanBody(BaseModel):
     original_request: str
     device_id: Optional[str] = None
     confirmed: bool = False
+
+
+class MemoryFactDeleteBody(BaseModel):
+    id: int
+    source: str
+    device_id: str | None = None
+
+
+def _owned_device_profile(user: dict, device_id: str | None = None, machine_guid: str | None = None) -> dict | None:
+    if device_id:
+        profile = get_device_profile(_short_did(device_id))
+        if profile and (profile.get("user_id") == user["id"] or _is_admin(user)):
+            return profile
+        return None
+
+    profiles = get_user_device_profiles(user["id"])
+    if machine_guid:
+        return next((p for p in profiles if p.get("machine_guid") == machine_guid), None)
+    return profiles[0] if profiles else None
+
+
+def _memory_stats_for_profile(user: dict, profile: dict | None) -> dict:
+    machine_guid = profile.get("machine_guid") if profile else None
+    return get_memory_stats(machine_guid, str(user["id"]) if user.get("id") else None)
 
 
 class RawCommand(BaseModel):
@@ -259,6 +287,34 @@ async def api_list_tasks(request: Request):
     }
 
 
+@router.get("/api/memory/stats")
+async def api_memory_stats(request: Request, device_id: str | None = None):
+    user = get_current_user(request)
+    profile = _owned_device_profile(user, device_id)
+    return {"status": "ok", "memory_stats": _memory_stats_for_profile(user, profile)}
+
+
+@router.post("/api/memory/facts/delete")
+async def api_delete_memory_fact(body: MemoryFactDeleteBody, request: Request):
+    user = get_current_user(request)
+    source = (body.source or "").strip().lower()
+    if source not in {"user", "device"}:
+        raise HTTPException(status_code=400, detail="Invalid memory source")
+    if source == "device" and not body.device_id:
+        raise HTTPException(status_code=400, detail="Device id required for device memory source")
+
+    profile = _owned_device_profile(user, body.device_id)
+    machine_guid = profile.get("machine_guid") if profile else None
+    if source == "device" and not machine_guid:
+        raise HTTPException(status_code=404, detail="Device memory source not found")
+
+    ok = delete_memory_fact(str(user["id"]), body.id, source, machine_guid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Memory fact not found")
+
+    return {"status": "ok", "memory_stats": _memory_stats_for_profile(user, profile)}
+
+
 @router.get("/api/tasks/{task_id}")
 async def api_get_task(task_id: str, request: Request):
     user = get_current_user(request)
@@ -352,7 +408,10 @@ async def api_remember_fact(task_id: str, request: Request):
         return {"status": "error", "error": "Нет предложенного факта"}
     fact_id = add_user_fact(user_id=str(user["id"]), text=suggested_fact["text"], category=suggested_fact.get("category"))
     task.pop("suggested_fact", None)
-    return {"status": "ok", "fact_id": fact_id}
+    profile = None
+    if task.get("device_ids"):
+        profile = _owned_device_profile(user, _short_did(task["device_ids"][0]))
+    return {"status": "ok", "fact_id": fact_id, "memory_stats": _memory_stats_for_profile(user, profile)}
 
 
 @router.post("/api/tasks/{task_id}/decline_fact")
@@ -372,7 +431,10 @@ async def api_decline_fact(task_id: str, request: Request):
     )
     task.pop("suggested_fact", None)
     task["suggested_fact_declined"] = True
-    return {"status": "ok"}
+    profile = None
+    if task.get("device_ids"):
+        profile = _owned_device_profile(user, _short_did(task["device_ids"][0]))
+    return {"status": "ok", "memory_stats": _memory_stats_for_profile(user, profile)}
 
 
 @router.post("/api/tasks/{task_id}/decline_plan")

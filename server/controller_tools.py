@@ -187,9 +187,14 @@ TOOLS = [
                     "fact_id": {
                         "type": "integer",
                         "description": "ID факта для удаления"
+                    },
+                    "source": {
+                        "type": "string",
+                        "enum": ["user", "device"],
+                        "description": "Источник факта из блока памяти: user или device"
                     }
                 },
-                "required": ["fact_id"]
+                "required": ["fact_id", "source"]
             }
         }
     }

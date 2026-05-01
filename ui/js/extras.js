@@ -75,8 +75,51 @@ function renderMemoryPopover() {
   list.innerHTML = facts.map(f => `<div class="memory-popover-item">
     <span class="fact-text">${escapeHTML(f.text || f.fact || '')}</span>
     <span class="fact-cat">${escapeHTML(f.category || '')}</span>
+    <button class="fact-delete" title="Удалить" data-action="delete-memory-fact" data-id="${escapeAttr(f.id)}" data-source="${escapeAttr(f.source || 'user')}">&times;</button>
   </div>`).join('');
 }
+
+async function refreshMemoryStats() {
+  const deviceParam = state.selectedDevice ? `?device_id=${encodeURIComponent(state.selectedDevice)}` : '';
+  const resp = await apiFetch(`${API}/api/memory/stats${deviceParam}`, { headers: authHeaders() });
+  const data = await resp.json();
+  if (!resp.ok || data.status !== 'ok') {
+    throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
+  }
+  updateMemoryBadge(data.memory_stats);
+  renderMemoryPopover();
+  return data.memory_stats;
+}
+
+async function deleteMemoryFact(id, source, btn) {
+  if (!id || !source) return;
+  if (btn) btn.disabled = true;
+  try {
+    const resp = await apiFetch(`${API}/api/memory/facts/delete`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ id: Number(id), source, device_id: state.selectedDevice }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.status !== 'ok') {
+      throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
+    }
+    updateMemoryBadge(data.memory_stats);
+    await refreshMemoryStats();
+  } catch (e) {
+    showToast(e.message || 'Ошибка удаления факта', true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+document.addEventListener('click', e => {
+  const target = e.target.closest('[data-action="delete-memory-fact"]');
+  if (!target) return;
+  e.preventDefault();
+  e.stopPropagation();
+  deleteMemoryFact(target.dataset.id, target.dataset.source, target);
+});
 
 // ── CHAT RENAME (Point 11) ──────────────────────────────────────
 function startRenameChat(chatId, event) {
@@ -130,13 +173,13 @@ async function acceptSuggestedFact(taskId, text, category, el, msgIndex = null) 
       body: JSON.stringify({ text, category }),
     });
     const data = await resp.json();
-    // Обновить локальный _memoryStats чтобы бейдж и popover были синхронны
-    if (data.status === 'ok') {
-      _memoryStats.facts_list = _memoryStats.facts_list || [];
-      _memoryStats.facts_list.push({ id: data.fact_id, text: text, category: category || '' });
-      _memoryStats.facts = _memoryStats.facts_list.length;
-      updateMemoryBadge(_memoryStats);
+    if (!resp.ok || data.status !== 'ok') {
+      throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
     }
+    if (data.memory_stats) {
+      updateMemoryBadge(data.memory_stats);
+    }
+    await refreshMemoryStats();
     if (msgIndex !== null && state.messages[msgIndex]) {
       state.messages[msgIndex].suggestedFactDeclined = true;
     }
@@ -162,6 +205,8 @@ async function declineSuggestedFact(taskId, el, msgIndex = null) {
     if (!resp.ok || data.status !== 'ok') {
       throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
     }
+    if (data.memory_stats) updateMemoryBadge(data.memory_stats);
+    await refreshMemoryStats();
     el.remove();
   } catch (e) {
     if (msgIndex !== null && state.messages[msgIndex]) {

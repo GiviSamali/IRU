@@ -696,7 +696,7 @@ async def run_pipeline_worker(
 
             elif fn_name == "remember_fact":
                 if not mem_user_id:
-                    tool_result = {"result": "Не удалось сохранить факт: пользователь не идентифицирован"}
+                    tool_result = {"error": "Не удалось сохранить факт: пользователь не идентифицирован"}
                 else:
                     try:
                         fact_id = db.add_user_fact(
@@ -704,19 +704,34 @@ async def run_pipeline_worker(
                             text=fn_args.get("text", ""),
                             category=fn_args.get("category"),
                         )
-                        tool_result = {"result": f"Запомнил факт о тебе (id={fact_id})"}
+                        tool_result = {"status": "ok", "fact_id": fact_id, "result": f"Запомнил факт о тебе (id={fact_id})"}
                     except Exception as exc:
                         tool_result = {"error": str(exc)}
+                commands_log.append({
+                    "action": fn_name,
+                    "command": "[memory] remember_fact",
+                    "device_id": target_device,
+                    "result": tool_result,
+                    "iteration": iteration + 1,
+                })
 
             elif fn_name == "forget_fact":
                 if not mem_user_id:
-                    tool_result = {"result": "Факт не найден"}
+                    tool_result = {"error": "Факт не найден"}
                 else:
                     try:
-                        ok = db.delete_user_fact(mem_user_id, int(fn_args.get("fact_id", 0)))
-                        tool_result = {"result": "Факт удалён" if ok else "Факт не найден"}
+                        source = (fn_args.get("source") or "user").strip().lower()
+                        ok = db.delete_memory_fact(mem_user_id, int(fn_args.get("fact_id", 0)), source, machine_guid)
+                        tool_result = {"status": "ok", "result": "Факт удалён"} if ok else {"error": "Факт не найден"}
                     except Exception as exc:
                         tool_result = {"error": str(exc)}
+                commands_log.append({
+                    "action": fn_name,
+                    "command": "[memory] forget_fact",
+                    "device_id": target_device,
+                    "result": tool_result,
+                    "iteration": iteration + 1,
+                })
 
             else:
                 tool_result = {"error": f"Неизвестная функция: {fn_name}"}

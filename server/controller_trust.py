@@ -11,6 +11,12 @@ _SUCCESS_CLAIM_RE = re.compile(
     r"(?iu)(готово|выполнен(?:о|а|ы)?|создан(?:о|а|ы|)\b|файл создан|держи ссылк|ссылка готова)"
 )
 _ERROR_TEXT_RE = re.compile(r"(?iu)(ошиб|не удалось|невозможно|сбой|problem|failed|error)")
+_MEMORY_REMEMBER_CLAIM_RE = re.compile(
+    r"(?iu)(\bзапомнил[аи]?\b|\bсохранил[аи]?\b.{0,40}\bпамят)"
+)
+_MEMORY_FORGET_CLAIM_RE = re.compile(
+    r"(?iu)(\bудалил[аи]?\b.{0,40}\bпамят|\bудал[её]н[ао]?\b.{0,40}\bпамят|\bстер[ла]?\b.{0,40}\bпамят|\bзабыл[аи]?\b)"
+)
 _DOWNLOAD_HOST_HINTS = (
     "storage.yandexcloud.net",
     "amazonaws.com",
@@ -140,11 +146,34 @@ def _build_failure_answer(command_entry: dict) -> str:
     return f"Действие завершилось с ошибкой: {error_text}"
 
 
+def _has_successful_memory_action(commands_log: list[dict], action_name: str) -> bool:
+    for entry in commands_log or []:
+        if _infer_action(entry) != action_name:
+            continue
+        result = entry.get("result")
+        if isinstance(result, dict) and result.get("status") == "ok" and not result.get("error"):
+            return True
+    return False
+
+
+def _sanitize_memory_claims(answer: str, commands_log: list[dict]) -> str:
+    has_remember_claim = bool(_MEMORY_REMEMBER_CLAIM_RE.search(answer or ""))
+    has_forget_claim = bool(_MEMORY_FORGET_CLAIM_RE.search(answer or ""))
+    if not has_remember_claim and not has_forget_claim:
+        return answer
+    if has_remember_claim and not _has_successful_memory_action(commands_log, "remember_fact"):
+        return "Я не менял память: для этого нужно подтверждённое действие памяти."
+    if has_forget_claim and not _has_successful_memory_action(commands_log, "forget_fact"):
+        return "Я не менял память: для этого нужно подтверждённое действие памяти."
+    return answer
+
+
 def enforce_trusted_answer(answer: str, commands_log: list[dict] | None) -> str:
     commands_log = commands_log or []
     safe_answer = _sanitize_download_urls(answer or "", commands_log)
     if safe_answer == SAFE_DOWNLOAD_LINK_ERROR:
         return safe_answer
+    safe_answer = _sanitize_memory_claims(safe_answer, commands_log)
 
     failed_actions = [entry for entry in commands_log if _is_failed_action(entry)]
     if not failed_actions:
