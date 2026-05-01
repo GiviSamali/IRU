@@ -1,4 +1,4 @@
-﻿function toggleAdmin() {
+function toggleAdmin() {
   const panel = document.getElementById('adminPanel');
   const isOpen = panel.classList.toggle('open');
   document.getElementById('btnAdmin').classList.toggle('active', isOpen);
