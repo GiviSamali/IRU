@@ -315,6 +315,7 @@ async def api_confirm_task(task_id: str, request: Request):
     chat_id = confirm_data.get("chat_id", task.get("chat_id"))
     confirm_dk = _dk(task["user_id"], short_did) if ":" not in short_did else short_did
     task["status"] = "running"
+    task.pop("confirm_data", None)
 
     async def execute_confirmed():
         try:
@@ -362,6 +363,7 @@ async def api_deny_task(task_id: str, request: Request):
     chat_id = task.get("confirm_data", {}).get("chat_id", task.get("chat_id"))
     task["status"] = "done"
     task["answer"] = "Команда отменена пользователем."
+    task.pop("confirm_data", None)
     add_message(chat_id, "assistant", task["answer"], task.get("commands", []))
     return {"status": "ok"}
 

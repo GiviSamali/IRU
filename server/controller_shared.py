@@ -27,6 +27,10 @@ ONBOARDING_MARKERS = [
     "список доступных устройств пуст",
 ]
 
+DENY_CONFIRM_MARKERS = [
+    "команда отменена пользователем",
+]
+
 
 def current_datetime_msk() -> str:
     """Текущая дата/время в московской таймзоне, на русском языке."""
@@ -234,6 +238,12 @@ def is_onboarding_message(content: str) -> bool:
     return sum(1 for marker in ONBOARDING_MARKERS if marker in lower) >= 2
 
 
+def is_transient_confirmation_message(content: str) -> bool:
+    """Проверить, является ли сообщение временным следом confirm/deny flow."""
+    lower = (content or "").strip().lower()
+    return any(marker == lower or marker == lower.rstrip(".") for marker in DENY_CONFIRM_MARKERS)
+
+
 def build_chat_messages(chat_history: list[dict], filter_onboarding: bool = False) -> list[dict]:
     """
     Конвертировать историю чата в формат messages для API.
@@ -246,6 +256,10 @@ def build_chat_messages(chat_history: list[dict], filter_onboarding: bool = Fals
         if not content or role not in ("user", "assistant"):
             continue
         if filter_onboarding and role == "assistant" and is_onboarding_message(content):
+            if messages and messages[-1]["role"] == "user":
+                messages.pop()
+            continue
+        if role == "assistant" and is_transient_confirmation_message(content):
             if messages and messages[-1]["role"] == "user":
                 messages.pop()
             continue
