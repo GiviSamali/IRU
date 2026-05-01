@@ -4,4 +4,14 @@ __pycache__/
 *.exe
 .env
 venv/
+tests_tmp/
 server/llm_config.json
+
+# Local IDE files
+.idea/
+
+# Local secrets
+server/.jwt_secret
+
+# Local Codex scratch files
+codex/

@@ -1,16 +1,43 @@
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 try:
+    from ..database import PLAN_LIMITS
     from ..api_support import get_current_user
 except ImportError:
+    from database import PLAN_LIMITS
     from api_support import get_current_user
 
 
 def create_router(ui_dir: Path, agent_download_dir: Path) -> APIRouter:
     router = APIRouter()
+    updates_dir = Path(__file__).resolve().parent.parent / "updates"
+
+    @router.get("/api/info")
+    async def api_info():
+        info = {
+            "name": "IRU",
+            "server": "fastapi",
+        }
+        version_file = updates_dir / "version.json"
+        if version_file.exists():
+            try:
+                version_data = json.loads(version_file.read_text(encoding="utf-8-sig"))
+                version = version_data.get("version")
+                if version:
+                    info["version"] = version
+            except Exception:
+                pass
+        return info
+
+    @router.get("/api/plans")
+    async def api_plans():
+        return {
+            "plans": PLAN_LIMITS,
+        }
 
     @router.get("/", response_class=HTMLResponse)
     async def root():

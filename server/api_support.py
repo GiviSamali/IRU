@@ -52,6 +52,7 @@ def check_ip_rate_limit(ip: str) -> bool:
 DANGEROUS_PATTERNS = [
     r"format\s+[a-z]:",
     r"diskpart",
+    r"bcdedit",
     r"rm\s+-rf\s+/",
     r"rmdir\s+/s\s+/q\s+[a-z]:\\\\",
     r"del\s+/[sfq].*\\windows",

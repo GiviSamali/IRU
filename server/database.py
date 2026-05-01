@@ -17,11 +17,13 @@ import sqlite3
 import uuid
 import json
 import time
+import os
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import contextmanager
 
-DB_PATH = Path(__file__).parent / "iru.db"
+DB_PATH = Path(os.environ.get("IRU_DB_PATH", Path(__file__).parent / "iru.db"))
 
 # ── Подключение ───────────────────────────────────────────────────────────────
 
@@ -284,6 +286,7 @@ def delete_user(user_id: int) -> bool:
 def store_refresh_token(user_id: int, token: str, ttl: int) -> None:
     """Save refresh token to DB."""
     now = time.time()
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     with get_db() as conn:
         # Ограничим количество активных refresh-токенов на пользователя (max 5)
         conn.execute(
@@ -294,24 +297,26 @@ def store_refresh_token(user_id: int, token: str, ttl: int) -> None:
         )
         conn.execute(
             "INSERT INTO refresh_tokens (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
-            (token, user_id, now + ttl, now)
+            (token_hash, user_id, now + ttl, now)
         )
 
 
 def get_refresh_token(token: str) -> dict | None:
     """Get refresh token record if valid (not expired). Returns dict or None."""
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     with get_db() as conn:
         row = conn.execute(
             "SELECT * FROM refresh_tokens WHERE token = ? AND expires_at > ?",
-            (token, time.time())
+            (token_hash, time.time())
         ).fetchone()
         return dict(row) if row else None
 
 
 def revoke_refresh_token(token: str) -> bool:
     """Revoke (delete) a refresh token."""
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     with get_db() as conn:
-        cursor = conn.execute("DELETE FROM refresh_tokens WHERE token = ?", (token,))
+        cursor = conn.execute("DELETE FROM refresh_tokens WHERE token = ?", (token_hash,))
         return cursor.rowcount > 0
 
 

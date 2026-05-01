@@ -143,6 +143,7 @@ async def direct_command(cmd: DirectCommand, request: Request):
 
 
 @router.post("/nl_command")
+@router.post("/api/chat")
 async def nl_command(cmd: NLCommand, request: Request):
     user = get_current_user(request)
     cleanup_old_tasks()
