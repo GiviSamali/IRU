@@ -194,6 +194,21 @@
   /* Confirm buttons mobile — stack vertically */
   .confirm-actions { flex-direction: column; }
   .btn-confirm-yes, .btn-confirm-no { width: 100%; text-align: center; }
+  .cmd-log { padding: 10px; }
+  .cmd-entry, .cmd-group { padding: 8px; }
+  .cmd-summary, .cmd-group-header { gap: 6px; }
+  .cmd-summary .cmd-text,
+  .cmd-group-text {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+  .suggest-fact-actions,
+  .plan-suggest-actions { flex-direction: column; }
+  .suggest-fact-accept,
+  .suggest-fact-decline,
+  .plan-suggest-accept,
+  .plan-suggest-decline { width: 100%; text-align: center; }
 
   .input-device-btn { font-size: 10px; padding: 4px 7px; gap: 3px; max-width: 100px; }
   .input-device-btn #inputDeviceLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -446,19 +461,48 @@ img[src*="iru_logo"] {
   margin-top: 6px;
 }
 .task-block-live[hidden] { display: none; }
+.msg-thinking .msg-body {
+  padding: 10px 12px 12px;
+  background: linear-gradient(180deg, rgba(0, 212, 255, 0.08), rgba(0, 212, 255, 0.03));
+  border-color: rgba(0, 212, 255, 0.16);
+}
+.msg-thinking .msg-body::before {
+  content: 'Статус операции';
+  display: block;
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
 
 /* ===== Task Block (конвейер) ===== */
 .task-block {
   margin-top: 10px;
-  border: 1px solid var(--border);
+  border: 1px solid rgba(0, 212, 255, 0.14);
   border-left: 3px solid var(--accent-dim);
-  border-radius: var(--radius-sm);
-  background: var(--bg-primary);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, rgba(0, 212, 255, 0.05), rgba(0, 212, 255, 0.02));
   padding: 10px 12px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+}
+.task-block::before {
+  content: 'Статус операции';
+  display: block;
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--accent);
 }
 .task-block.task-completed { border-left-color: var(--success); }
 .task-block.task-failed    { border-left-color: var(--error); }
 .task-block.task-cancelled { border-left-color: var(--text-muted); }
+.task-block.task-completed::before { color: var(--success); }
+.task-block.task-failed::before { color: var(--error); }
+.task-block.task-cancelled::before { color: var(--text-muted); }
 
 .task-goal {
   font-size: 12px;
@@ -689,13 +733,24 @@ img[src*="iru_logo"] {
 
 /* ── SUGGEST MEMORY (Point 12) ───────────────────── */
 .suggest-fact-block {
-  margin-top: 8px; padding: 10px 12px;
-  background: rgba(0, 212, 255, 0.04); border: 1px solid rgba(0, 212, 255, 0.12);
+  margin-top: 10px; padding: 10px 12px 12px;
+  background: linear-gradient(180deg, rgba(0, 212, 255, 0.06), rgba(0, 212, 255, 0.02));
+  border: 1px solid rgba(0, 212, 255, 0.16);
   border-radius: var(--radius); font-size: 11px;
 }
-.suggest-fact-label { color: var(--text-muted); margin-bottom: 4px; }
-.suggest-fact-text { color: var(--text-secondary); margin-bottom: 8px; }
-.suggest-fact-actions { display: flex; gap: 8px; }
+.suggest-fact-block::before {
+  content: 'Память';
+  display: block;
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.suggest-fact-label { color: var(--text-muted); margin-bottom: 6px; }
+.suggest-fact-text { color: var(--text-secondary); margin-bottom: 10px; }
+.suggest-fact-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .suggest-fact-accept {
   padding: 5px 14px; background: var(--accent); color: var(--bg-primary);
   border: none; border-radius: var(--radius-sm); font-family: var(--font);
@@ -712,12 +767,27 @@ img[src*="iru_logo"] {
 
 /* ── PLAN SUGGESTION BANNER ────────────────────── */
 .plan-suggest-block {
-  margin-top: 8px; padding: 10px 12px;
-  background: rgba(0, 212, 255, 0.05); border: 1px solid rgba(0, 212, 255, 0.3);
+  margin-top: 10px; padding: 10px 12px 12px;
+  background: linear-gradient(180deg, rgba(0, 212, 255, 0.08), rgba(0, 212, 255, 0.03));
+  border: 1px solid rgba(0, 212, 255, 0.24);
   border-radius: var(--radius); font-size: 12px;
 }
-.plan-suggest-text { color: var(--text-secondary); margin-bottom: 8px; line-height: 1.5; }
-.plan-suggest-actions { display: flex; gap: 8px; }
+.plan-suggest-block::before {
+  content: 'План';
+  display: block;
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.plan-suggest-text { color: var(--text-secondary); margin-bottom: 10px; line-height: 1.5; }
+.plan-suggest-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.plan-suggest-warning {
+  color: var(--text-muted) !important;
+  line-height: 1.45;
+}
 .plan-suggest-accept {
   padding: 6px 16px; background: var(--accent); color: var(--bg-primary);
   border: none; border-radius: var(--radius-sm); font-family: var(--font);
