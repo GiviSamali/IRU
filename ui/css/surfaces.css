@@ -492,6 +492,8 @@ img[src*="iru_logo"] {
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
   min-width: 0;
   word-break: normal;
+  /* FIX: сброс white-space: pre-wrap, унаследованного от .msg-body */
+  white-space: normal;
 }
 .task-block::before {
   content: 'Статус операции';
@@ -573,8 +575,8 @@ img[src*="iru_logo"] {
 .task-step .step-desc {
   flex: 1;
   min-width: 0;
-  word-break: normal;
-  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 .task-step .step-summary {
   font-size: 10px;
@@ -582,8 +584,8 @@ img[src*="iru_logo"] {
   margin-top: 2px;
   font-family: 'JetBrains Mono', monospace;
   white-space: pre-wrap;
-  word-break: normal;
-  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 /* ── VOICE BUTTON ──────────────────────────────── */
