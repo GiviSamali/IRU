@@ -5,9 +5,11 @@ import httpx
 
 try:
     from . import database as db  # type: ignore
+    from .controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from .controller_trust import enforce_trusted_answer  # type: ignore
 except ImportError:
     import database as db  # type: ignore
+    from controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from controller_trust import enforce_trusted_answer  # type: ignore
 
 try:
@@ -476,6 +478,7 @@ async def run_pipeline_worker(
     })
 
     commands_log = []
+    command_budget = CommandBudget()
     step_device_id = step.get("device_id") or shared["current_device_id"]
 
     for iteration in range(PIPELINE_WORKER_MAX_ITERATIONS):
@@ -529,11 +532,21 @@ async def run_pipeline_worker(
         for tool_call in tool_calls:
             fn_name = tool_call["function"]["name"]
             fn_args = json.loads(tool_call["function"]["arguments"] or "{}")
-            target_device = fn_args.pop("device_id", None) or step_device_id
+            fn_args.pop("device_id", None)
+            target_device = step_device_id
             print(
                 f"[pipeline/worker] tool_call: {fn_name}"
                 f"({json.dumps(fn_args, ensure_ascii=False)[:250]}) -> device={target_device}"
             )
+
+            budget_error = command_budget.register(fn_name, fn_args.get("command", ""))
+            if budget_error:
+                commands_log.append(budget_guard_entry(budget_error))
+                return {
+                    "status": "error",
+                    "answer": budget_error,
+                    "commands": commands_log,
+                }
 
             if fn_name == "execute_cmd":
                 set_current_step(poll_task_id, f"Исполняю шаг: {step.get('title', '')[:60]}")
