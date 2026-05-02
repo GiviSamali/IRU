@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 
 import httpx
 
@@ -42,6 +43,7 @@ except ImportError:
 
 PIPELINE_WORKER_MAX_ITERATIONS = 10
 PIPELINE_MAX_STEPS = 10
+logger = logging.getLogger(__name__)
 
 _PIPELINE_MULTI_STEP_MARKERS = (
     " и ",
@@ -348,12 +350,22 @@ def pipeline_worker_prompt(shared: dict, overall_goal: str, step: dict, complete
     """Промпт для subagent-исполнителя одного шага."""
     completed_block = "Нет завершённых шагов."
     if completed_steps:
-        completed_block = "\n".join(
-            f"- {item['title']}: {item['summary']}"
-            for item in completed_steps[-6:]
-        )
+        target_device_id = shared.get("target_device_id") or shared["current_device_id"]
+        completed_lines = []
+        for item in completed_steps[-6:]:
+            item_device_id = item.get("device_id") or "unknown"
+            hostname = item.get("hostname") or "unknown"
+            if item_device_id == target_device_id:
+                prefix = f"[target device_id={item_device_id} hostname={hostname}]"
+            else:
+                prefix = (
+                    f"[OTHER DEVICE device_id={item_device_id} hostname={hostname}; "
+                    "informational only, do not reuse paths as target-device paths]"
+                )
+            completed_lines.append(f"- {prefix} {item['title']}: {item['summary']}")
+        completed_block = "\n".join(completed_lines)
 
-    step_device_id = step.get("device_id") or shared["current_device_id"]
+    step_device_id = shared.get("target_device_id") or step.get("device_id") or shared["current_device_id"]
     return f"""\
 Ты — SUBAGENT-ИСПОЛНИТЕЛЬ внутри Pipeline Mode ИРУ.
 
@@ -445,6 +457,85 @@ def build_pipeline_shared_context(
     }
 
 
+def _pipeline_device_info(all_devices: dict, device_id: str, fallback_info: dict | None = None) -> dict:
+    dev = (all_devices or {}).get(device_id)
+    if isinstance(dev, dict) and isinstance(dev.get("info"), dict):
+        return dev["info"]
+    return fallback_info or {}
+
+
+def build_pipeline_other_devices_summary(all_devices: dict, target_device_id: str) -> str:
+    """Return a path-free summary of non-target devices for worker prompts."""
+    lines = []
+    for did, dev in (all_devices or {}).items():
+        if did == target_device_id:
+            continue
+        info = dev.get("info", {}) if isinstance(dev, dict) else {}
+        hostname = info.get("hostname", "?")
+        os_name = info.get("os", "?")
+        os_ver = info.get("os_version", "")
+        status = (info.get("status") or dev.get("status")) if isinstance(dev, dict) else None
+        status_part = f", status={status}" if status else ""
+        lines.append(f"- {did}: hostname={hostname}, OS={os_name} ({os_ver}){status_part}")
+    return "\n".join(lines)
+
+
+def validate_pipeline_step_device(step: dict, current_device_id: str, all_devices: dict) -> tuple[dict, str]:
+    """Validate planner-selected device id; fall back loudly when it is unknown."""
+    requested = str(step.get("device_id") or "").strip()
+    known_device_ids = set((all_devices or {}).keys())
+    if current_device_id:
+        known_device_ids.add(current_device_id)
+    target_device_id = requested or current_device_id
+    if target_device_id not in known_device_ids:
+        logger.warning(
+            "Invalid pipeline step.device_id=%s; falling back to current_device_id=%s",
+            target_device_id,
+            current_device_id,
+        )
+        target_device_id = current_device_id
+    scoped_step = dict(step)
+    scoped_step["device_id"] = target_device_id
+    return scoped_step, target_device_id
+
+
+def build_pipeline_worker_context(
+    *,
+    target_device_id: str,
+    current_device_id: str,
+    current_device_info: dict,
+    all_devices: dict,
+    current_device_profile: dict | None,
+    mem_user_id: str | None,
+    windows_rules: str,
+    linux_rules: str,
+) -> tuple[dict, str | None]:
+    """Build target-device-only context for a single pipeline worker."""
+    target_info = _pipeline_device_info(
+        all_devices,
+        target_device_id,
+        current_device_info if target_device_id == current_device_id else None,
+    )
+    target_profile = current_device_profile if target_device_id == current_device_id else db.get_device_profile(target_device_id)
+    target_machine_guid = (target_profile or {}).get("machine_guid") or target_info.get("machine_guid") or None
+    os_info = target_info.get("os", "Windows")
+    os_lower = (os_info or "").lower()
+    other_devices_summary = build_pipeline_other_devices_summary(all_devices, target_device_id)
+    return {
+        "devices_block": other_devices_summary,
+        "other_devices_summary": other_devices_summary,
+        "target_device_id": target_device_id,
+        "current_device_id": target_device_id,
+        "current_hostname": target_info.get("hostname", "unknown"),
+        "current_os": os_info,
+        "current_os_version": target_info.get("os_version", ""),
+        "device_profile_block": build_device_profile_block(target_profile),
+        "device_memory_block": build_memory_block(target_machine_guid, mem_user_id),
+        "os_rules": linux_rules if "linux" in os_lower else windows_rules,
+        "current_datetime_msk": current_datetime_msk(),
+    }, target_machine_guid
+
+
 async def run_pipeline_worker(
     client: httpx.AsyncClient,
     cfg: dict,
@@ -466,8 +557,16 @@ async def run_pipeline_worker(
     """Subagent-исполнитель одного шага pipeline."""
     worker_prompt = pipeline_worker_prompt(shared, overall_goal, step, completed_steps)
     messages = [{"role": "system", "content": worker_prompt}]
-    if chat_history:
-        messages.extend(build_chat_messages(chat_history[:-1], filter_onboarding=True)[-6:])
+    messages.append({
+        "role": "system",
+        "content": (
+            f"Device scope hard rule: target_device={shared.get('target_device_id') or shared['current_device_id']}. "
+            "Execute this step only on target_device. Do not use paths from another device. "
+            "Absolute paths from user memory are hints only and must be verified on target_device before use. "
+            "If a path is not found on target_device, report it instead of substituting a path from another device. "
+            "Completed steps marked OTHER DEVICE are informational only; do not reuse their paths as target-device paths."
+        ),
+    })
     messages.append({
         "role": "user",
         "content": (
@@ -875,6 +974,17 @@ async def process_pipeline_subagents(
         pipeline_failed = False
         failure_reason = ""
         for idx, step in enumerate(normalized_plan["steps"]):
+            step, step_device_id = validate_pipeline_step_device(step, device_id, all_devices)
+            worker_shared, worker_machine_guid = build_pipeline_worker_context(
+                target_device_id=step_device_id,
+                current_device_id=device_id,
+                current_device_info=device_info,
+                all_devices=all_devices,
+                current_device_profile=device_profile,
+                mem_user_id=mem_user_id,
+                windows_rules=windows_rules,
+                linux_rules=linux_rules,
+            )
             db.update_step(db_task_id, idx, "running", summary="Подзадача передана subagent-исполнителю")
             push_tasks_view(poll_task_id, created_task_ids)
             set_current_step(
@@ -886,14 +996,14 @@ async def process_pipeline_subagents(
                     client=client,
                     cfg=cfg,
                     model=model,
-                    shared=shared,
+                    shared=worker_shared,
                     overall_goal=normalized_plan["goal"],
                     step=step,
                     completed_steps=step_results,
                     chat_history=chat_history,
                     send_command_fn=send_command_fn,
                     get_file_link_fn=get_file_link_fn,
-                    machine_guid=machine_guid,
+                    machine_guid=worker_machine_guid,
                     mem_user_id=mem_user_id,
                     poll_task_id=poll_task_id,
                     chat_completion_request_fn=chat_completion_request_fn,
@@ -930,7 +1040,8 @@ async def process_pipeline_subagents(
                 "idx": idx,
                 "title": step["title"],
                 "instruction": step["instruction"],
-                "device_id": step.get("device_id") or device_id,
+                "device_id": step_device_id,
+                "hostname": worker_shared.get("current_hostname", "unknown"),
                 "status": step_status,
                 "summary": step_summary,
             })
