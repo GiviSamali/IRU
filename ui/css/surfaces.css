@@ -200,6 +200,8 @@
   .cmd-summary .cmd-text,
   .cmd-group-text {
     white-space: normal;
+    word-break: normal;
+    overflow-wrap: anywhere;
     overflow: visible;
     text-overflow: clip;
   }
@@ -465,6 +467,8 @@ img[src*="iru_logo"] {
   padding: 10px 12px 12px;
   background: linear-gradient(180deg, rgba(0, 212, 255, 0.08), rgba(0, 212, 255, 0.03));
   border-color: rgba(0, 212, 255, 0.16);
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .msg-thinking .msg-body::before {
   content: 'Статус операции';
@@ -486,6 +490,8 @@ img[src*="iru_logo"] {
   background: linear-gradient(180deg, rgba(0, 212, 255, 0.05), rgba(0, 212, 255, 0.02));
   padding: 10px 12px;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+  min-width: 0;
+  word-break: normal;
 }
 .task-block::before {
   content: 'Статус операции';
@@ -564,14 +570,20 @@ img[src*="iru_logo"] {
 .task-step.step-failed  .step-desc { color: var(--error); }
 .task-step.step-running .step-desc { color: var(--text-primary); font-weight: 500; }
 .task-step.step-pending .step-desc { color: var(--text-muted); }
-.task-step .step-desc { flex: 1; min-width: 0; word-break: break-word; }
+.task-step .step-desc {
+  flex: 1;
+  min-width: 0;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
 .task-step .step-summary {
   font-size: 10px;
   color: var(--text-muted);
   margin-top: 2px;
   font-family: 'JetBrains Mono', monospace;
   white-space: pre-wrap;
-  word-break: break-word;
+  word-break: normal;
+  overflow-wrap: anywhere;
 }
 
 /* ── VOICE BUTTON ──────────────────────────────── */
