@@ -252,13 +252,15 @@ function renderMessages() {
         const stderr = c.result?.stderr || '';
         const errMsg = c.result?.error || '';
         const output = stdout || stderr || errMsg || '(нет вывода)';
-        const isOk = !errMsg && (c.result?.returncode === 0 || c.result?.returncode == null);
-        const statusCls = isOk ? 'ok' : 'err';
-        const statusTxt = isOk ? '\u2713' : '\u2717';
+        const isBudgetStop = c.action === 'budget_guard' || stripUtfPrefix(c.command || '') === '[budget_guard]';
+        const isOk = !isBudgetStop && !errMsg && (c.result?.returncode === 0 || c.result?.returncode == null);
+        const statusCls = isBudgetStop ? 'stopped' : (isOk ? 'ok' : 'err');
+        const statusTxt = isBudgetStop ? '\u25a0' : (isOk ? '\u2713' : '\u2717');
         const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
         const cmdText = escapeHTML(stripUtfPrefix(c.command || ''));
+        const entryClass = isBudgetStop ? 'cmd-entry cmd-entry-budget' : 'cmd-entry';
         bodyHTML += `
-          <div class="cmd-entry" data-action="toggle-cmd-entry">
+          <div class="${entryClass}" data-action="toggle-cmd-entry">
             <div class="cmd-summary">
               <span class="cmd-icon">\u25b8</span>
               <span class="cmd-text">${cmdText}</span>
@@ -273,13 +275,15 @@ function renderMessages() {
         const lastCmd = commands[commands.length - 1];
         const lastClean = stripUtfPrefix(lastCmd.command || '');
         const lastTrunc = lastClean.length > 120 ? lastClean.slice(0, 120) + '\u2026' : lastClean;
-        const lastIsOk = !(lastCmd.result?.error) && (lastCmd.result?.returncode === 0 || lastCmd.result?.returncode == null);
-        const lastStatusCls = lastIsOk ? 'ok' : 'err';
-        const lastStatusTxt = lastIsOk ? '\u2713' : '\u2717';
+        const hasBudgetStop = commands.some((cmd) => cmd?.action === 'budget_guard' || stripUtfPrefix(cmd.command || '') === '[budget_guard]');
+        const lastIsOk = !hasBudgetStop && !(lastCmd.result?.error) && (lastCmd.result?.returncode === 0 || lastCmd.result?.returncode == null);
+        const lastStatusCls = hasBudgetStop ? 'stopped' : (lastIsOk ? 'ok' : 'err');
+        const lastStatusTxt = hasBudgetStop ? '\u25a0' : (lastIsOk ? '\u2713' : '\u2717');
         const lastDevice = lastCmd.device_id ? `<span class="cmd-device">${escapeHTML(lastCmd.device_id)}</span>` : '';
         const extra = commands.length - 1;
+        const groupClass = hasBudgetStop ? 'cmd-group cmd-group-budget' : 'cmd-group';
         bodyHTML += `
-          <div class="cmd-group" id="${groupId}">
+          <div class="${groupClass}" id="${groupId}">
             <div class="cmd-group-header" data-action="toggle-cmd-group">
               <span class="cmd-group-arrow">\u25be</span>
               <span class="cmd-group-text">${escapeHTML(lastTrunc)}</span>
@@ -294,13 +298,15 @@ function renderMessages() {
           const stderr = c.result?.stderr || '';
           const errMsg = c.result?.error || '';
           const output = stdout || stderr || errMsg || '(нет вывода)';
-          const isOk = !errMsg && (c.result?.returncode === 0 || c.result?.returncode == null);
-          const statusCls = isOk ? 'ok' : 'err';
-          const statusTxt = isOk ? '\u2713' : '\u2717';
+          const isBudgetStop = c.action === 'budget_guard' || stripUtfPrefix(c.command || '') === '[budget_guard]';
+          const isOk = !isBudgetStop && !errMsg && (c.result?.returncode === 0 || c.result?.returncode == null);
+          const statusCls = isBudgetStop ? 'stopped' : (isOk ? 'ok' : 'err');
+          const statusTxt = isBudgetStop ? '\u25a0' : (isOk ? '\u2713' : '\u2717');
           const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
           const cmdText = escapeHTML(stripUtfPrefix(c.command || ''));
+          const entryClass = isBudgetStop ? 'cmd-entry cmd-entry-budget' : 'cmd-entry';
           bodyHTML += `
-              <div class="cmd-entry" data-action="toggle-cmd-entry">
+              <div class="${entryClass}" data-action="toggle-cmd-entry">
                 <div class="cmd-summary">
                   <span class="cmd-icon">\u25b8</span>
                   <span class="cmd-text">${cmdText}</span>

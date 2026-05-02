@@ -75,37 +75,75 @@
 }
 
 /* Compact command log */
-.cmd-log { margin-top: 6px; }
+.cmd-log {
+  margin-top: 10px;
+  padding: 10px 12px 12px;
+  background: linear-gradient(180deg, rgba(0, 212, 255, 0.05), rgba(0, 212, 255, 0.02));
+  border: 1px solid rgba(0, 212, 255, 0.14);
+  border-radius: var(--radius);
+}
+.cmd-log::before {
+  content: 'Выполнение';
+  display: block;
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
 .cmd-entry {
-  margin-bottom: 4px; border-left: 2px solid var(--border);
-  padding-left: 8px; cursor: pointer;
+  margin-bottom: 6px;
+  border: 1px solid rgba(0, 212, 255, 0.1);
+  border-left: 3px solid rgba(0, 212, 255, 0.18);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: rgba(2, 3, 8, 0.55);
+  cursor: pointer;
   display: flex; flex-direction: column;
 }
-.cmd-entry:hover { border-left-color: var(--accent-dim); }
+.cmd-entry:last-child { margin-bottom: 0; }
+.cmd-entry:hover {
+  border-left-color: var(--accent-dim);
+  border-color: rgba(0, 212, 255, 0.2);
+  background: rgba(6, 12, 22, 0.92);
+}
 .cmd-summary {
-  display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-muted);
+  display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--text-muted);
   min-width: 0;
 }
 .cmd-summary .cmd-icon { font-size: 8px; transition: transform 0.15s; flex-shrink: 0; }
 .cmd-entry.open .cmd-icon { transform: rotate(90deg); }
 .cmd-summary .cmd-text {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; color: var(--accent-dim);
+  white-space: nowrap; color: var(--text-secondary);
   font-family: 'JetBrains Mono', monospace;
 }
 .cmd-entry.open .cmd-text {
   white-space: pre-wrap; word-break: break-word; overflow: visible;
 }
 .cmd-summary .cmd-device {
-  font-size: 9px; color: var(--text-muted); background: var(--bg-primary);
-  padding: 1px 5px; border-radius: 3px; flex-shrink: 0;
+  font-size: 9px; color: var(--text-muted); background: rgba(255,255,255,0.03);
+  padding: 2px 6px; border-radius: 999px; flex-shrink: 0;
+  border: 1px solid rgba(255,255,255,0.05);
 }
-.cmd-summary .cmd-status { font-size: 9px; flex-shrink: 0; }
+.cmd-summary .cmd-status {
+  font-size: 9px;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
 .cmd-status.ok { color: var(--success); }
 .cmd-status.err { color: var(--error); }
+.cmd-status.stopped { color: var(--warning); }
 .cmd-details {
   display: none; margin-top: 6px; font-size: 11px;
-  background: var(--bg-primary); border: 1px solid var(--border);
+  background: rgba(1, 2, 5, 0.82); border: 1px solid rgba(255,255,255,0.06);
   border-radius: var(--radius-sm); padding: 8px 10px;
   max-height: 200px; overflow-y: auto; color: var(--text-secondary);
   white-space: pre-wrap; word-break: break-word;
@@ -116,11 +154,23 @@
 .cmd-entry.open .cmd-details { display: block; }
 
 /* Grouped commands */
-.cmd-group { margin-bottom: 4px; border-left: 2px solid var(--border); padding-left: 8px; }
-.cmd-group:hover { border-left-color: var(--accent-dim); }
+.cmd-group {
+  margin-bottom: 6px;
+  border: 1px solid rgba(0, 212, 255, 0.1);
+  border-left: 3px solid rgba(0, 212, 255, 0.18);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: rgba(2, 3, 8, 0.55);
+}
+.cmd-group:last-child { margin-bottom: 0; }
+.cmd-group:hover {
+  border-left-color: var(--accent-dim);
+  border-color: rgba(0, 212, 255, 0.2);
+  background: rgba(6, 12, 22, 0.92);
+}
 .cmd-group-header {
-  display: flex; align-items: center; gap: 6px; font-size: 10px;
-  color: var(--text-muted); cursor: pointer; padding: 3px 0;
+  display: flex; align-items: center; gap: 8px; font-size: 10px;
+  color: var(--text-muted); cursor: pointer; padding: 0;
   min-width: 0;
 }
 .cmd-group-arrow {
@@ -130,18 +180,49 @@
 .cmd-group.open .cmd-group-arrow { transform: rotate(180deg); }
 .cmd-group-text {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; color: var(--accent-dim);
+  white-space: nowrap; color: var(--text-secondary);
   font-family: 'JetBrains Mono', monospace;
 }
 .cmd-group-extra {
   font-size: 9px; color: var(--text-muted); flex-shrink: 0; white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.05);
 }
-.cmd-group-body { display: none; margin-top: 4px; padding-left: 4px; }
+.cmd-group-body { display: none; margin-top: 8px; padding-left: 0; }
 .cmd-group.open .cmd-group-body { display: block; }
+.cmd-entry.cmd-entry-budget,
+.cmd-group.cmd-group-budget {
+  border-left-color: rgba(245, 158, 11, 0.75);
+  border-color: rgba(245, 158, 11, 0.22);
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.08), rgba(245, 158, 11, 0.03));
+}
+.cmd-entry.cmd-entry-budget .cmd-text,
+.cmd-group.cmd-group-budget .cmd-group-text {
+  color: #f8d58a;
+}
+.cmd-entry.cmd-entry-budget .cmd-details {
+  border-color: rgba(245, 158, 11, 0.18);
+}
 
 /* Confirm actions — Point 7: blueprint theme */
 .confirm-actions {
   display: flex; gap: 12px; margin-top: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px 12px;
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.08), rgba(245, 158, 11, 0.03));
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: var(--radius);
+}
+.confirm-actions::before {
+  content: 'Требуется подтверждение';
+  width: 100%;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--warning);
 }
 .btn-confirm-yes, .btn-confirm-no {
   padding: 10px 20px; border-radius: var(--radius);
