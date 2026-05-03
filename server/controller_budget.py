@@ -20,6 +20,15 @@ Hard caps (never exceeded regardless of category):
   max_environment_discovery     = 15   (environment discovery only)
   max_read_only_cmd_calls       = 30   (read-only execute_cmd only)
 
+EnvDiscoveryGuard:
+  Detects Python-environment spiral:
+    1. Once a working interpreter is confirmed (python --version exits 0),
+       further interpreter searches are blocked (MAX_POST_FOUND_INTERPRETER_SEARCHES).
+    2. Once an import-check for a package fails with ModuleNotFoundError,
+       repeating the same import-check is blocked (MAX_REPEATED_IMPORT_CHECKS).
+  The guard does NOT install packages and does NOT assume the package exists.
+  It only stops the search spiral and surfaces DEPENDENCY_MISSING_ERROR.
+
 Debug logging:
   Set env var IRU_DEBUG_BUDGET=1 to enable verbose per-call budget logs.
   Off by default — zero overhead in production.
@@ -37,7 +46,6 @@ from enum import Enum
 
 _log = logging.getLogger("iru.budget")
 
-# Cache the flag once at import time; can be overridden in tests via os.environ.
 def _debug_enabled() -> bool:
     return os.environ.get("IRU_DEBUG_BUDGET", "").strip() == "1"
 
@@ -59,7 +67,11 @@ MAX_SIMILAR_PROCESS_LAUNCH = 3
 MAX_SIMILAR_DESTRUCTIVE = 2
 MAX_SIMILAR_UNKNOWN = 3
 
-# Legacy aliases kept so existing code / tests that import them still work
+# EnvDiscoveryGuard thresholds
+MAX_POST_FOUND_INTERPRETER_SEARCHES = 2  # how many extra interpreter-find cmds after found
+MAX_REPEATED_IMPORT_CHECKS = 2           # how many times same failed import may be retried
+
+# Legacy aliases
 MAX_EXECUTE_CMD_CALLS_PER_TASK = MAX_MUTATING_CMD_CALLS
 MAX_SIMILAR_EXECUTE_CMD_CALLS_PER_TASK = MAX_SIMILAR_UNKNOWN
 MAX_SIMILAR_READONLY_CALLS_PER_TASK = MAX_SIMILAR_READ_ONLY
@@ -68,6 +80,12 @@ MAX_SIMILAR_INSTALL_CALLS_PER_TASK = MAX_SIMILAR_SETUP
 BUDGET_GUARD_ERROR = (
     "Я остановился: было выполнено несколько похожих попыток, но надёжно подтвердить результат не удалось. "
     "Чтобы не выполнять лишние команды, продолжение остановлено."
+)
+
+DEPENDENCY_MISSING_ERROR = (
+    "Python-интерпретатор найден, но модуль не установлен. "
+    "Необходимо установить зависимость через pip install. "
+    "Продолжение без установки невозможно — дальнейший поиск интерпретатора остановлен."
 )
 
 
@@ -107,17 +125,52 @@ _PROCESS_LAUNCH_VERBS: frozenset[str] = frozenset({
     "start-process", "start",
 })
 
+# Commands that indicate "I am searching for a Python interpreter"
+_INTERPRETER_SEARCH_KEYS: frozenset[str] = frozenset({
+    "python --version",
+    "python -v",
+    "where python",
+    "get-command python",
+    "which python",
+})
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _extract_primary_path(parts: list[str]) -> str:
-    """Return the first token that looks like a filesystem path."""
     for p in parts:
         if re.search(r"[/\\]", p) or re.match(r"[a-zA-Z]:", p):
             return p.lower()
     return parts[1].lower() if len(parts) > 1 else ""
+
+
+def _extract_import_package(command: str) -> str | None:
+    """
+    If the command is a Python import-check (-c "import X" or -c "import X; ..."),
+    return the normalised package name, else None.
+
+    Handles:
+      python -c "import PyQt5"
+      python3 -c 'import PyQt5; print(...)'
+      py -c "import PyQt5.QtWidgets"
+      C:\\Python39\\python.exe -c "import PyQt5"
+    """
+    m = re.search(
+        r"(?:python[0-9.]*|py(?:thon[0-9.]*)?)(?:\.exe)?\s+.*?-c\s+[\"']?import\s+([A-Za-z_][A-Za-z0-9_.]*)",
+        command,
+        re.IGNORECASE,
+    )
+    if m:
+        # Normalise to top-level package name (PyQt5.QtWidgets -> pyqt5)
+        return m.group(1).split(".")[0].lower()
+    return None
+
+
+def _is_interpreter_search_cmd(key: str) -> bool:
+    """True if the normalised key is an interpreter-search command."""
+    return key in _INTERPRETER_SEARCH_KEYS
 
 
 # ---------------------------------------------------------------------------
@@ -127,11 +180,6 @@ def _extract_primary_path(parts: list[str]) -> str:
 def normalize_execute_cmd(command: str) -> str:
     """
     Return a *similar-command key* for retry-spiral detection.
-
-    Keys are designed so that:
-    - Semantically different commands get different keys.
-    - Variants of the same intent ("Start-Process calc" / "calc.exe") collapse.
-    - Environment-discovery variants stay distinct to avoid false positives.
     """
     cleaned = re.sub(r"['\"`]", "", (command or "").lower())
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
@@ -223,10 +271,6 @@ _ENV_DISCOVERY_KEY_PATTERNS: tuple[re.Pattern, ...] = (
 
 
 def classify_cmd(command: str) -> CmdCategory:
-    """
-    Classify a raw command string into a CmdCategory.
-    Classification is based on the normalised key for consistency with spiral detection.
-    """
     key = normalize_execute_cmd(command)
     if not key:
         return CmdCategory.UNKNOWN
@@ -301,6 +345,95 @@ def budget_guard_entry(error: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# EnvDiscoveryGuard
+# ---------------------------------------------------------------------------
+
+class EnvDiscoveryGuard:
+    """
+    Stateful guard that tracks Python-environment discovery within one task.
+
+    Rules:
+    1. interpreter_found: set to True when the controller explicitly calls
+       mark_interpreter_found() after a successful python --version execution.
+       Once set, further interpreter-search commands count toward
+       post_found_searches. If that count exceeds MAX_POST_FOUND_INTERPRETER_SEARCHES
+       the guard returns DEPENDENCY_MISSING_ERROR.
+
+    2. failed_import_checks: records packages whose import-check failed
+       (ModuleNotFoundError). If the same package import is attempted again
+       after being recorded as failed, the guard returns DEPENDENCY_MISSING_ERROR.
+       Same-package retries > MAX_REPEATED_IMPORT_CHECKS are also blocked.
+
+    3. Missing package is NOT classified as "Python not found".
+
+    The guard is query-only — it never installs packages.
+    """
+
+    def __init__(
+        self,
+        max_post_found_searches: int = MAX_POST_FOUND_INTERPRETER_SEARCHES,
+        max_repeated_import_checks: int = MAX_REPEATED_IMPORT_CHECKS,
+    ) -> None:
+        self.max_post_found_searches = max_post_found_searches
+        self.max_repeated_import_checks = max_repeated_import_checks
+
+        self.interpreter_found: bool = False
+        self.post_found_searches: int = 0
+        # package_name -> number of times import-check was attempted after first failure
+        self.failed_import_retries: dict[str, int] = {}
+
+    # ------------------------------------------------------------------
+    def mark_interpreter_found(self) -> None:
+        """Call this when python --version (or equivalent) exits with code 0."""
+        self.interpreter_found = True
+
+    def record_import_failure(self, package: str) -> None:
+        """
+        Call this when an import-check command produced output containing
+        'ModuleNotFoundError' or 'No module named'.
+        """
+        pkg = package.lower()
+        self.failed_import_retries.setdefault(pkg, 0)
+
+    def check_command(self, command: str) -> str | None:
+        """
+        Called *before* executing a command.
+        Returns DEPENDENCY_MISSING_ERROR if the command should be blocked,
+        else None.
+        """
+        key = normalize_execute_cmd(command)
+        pkg = _extract_import_package(command)
+
+        # ── Rule 1: interpreter search after interpreter already found ────────
+        if self.interpreter_found and _is_interpreter_search_cmd(key):
+            self.post_found_searches += 1
+            if self.post_found_searches > self.max_post_found_searches:
+                if _debug_enabled():
+                    _log.debug(
+                        "[env_discovery BLOCK] interpreter already found, "
+                        "blocking interpreter search: key=%r post_found=%d/%d",
+                        key, self.post_found_searches, self.max_post_found_searches,
+                    )
+                return DEPENDENCY_MISSING_ERROR
+
+        # ── Rule 2: repeated import-check for a known-failed package ──────────
+        if pkg is not None and pkg in self.failed_import_retries:
+            self.failed_import_retries[pkg] += 1
+            if self.failed_import_retries[pkg] > self.max_repeated_import_checks:
+                if _debug_enabled():
+                    _log.debug(
+                        "[env_discovery BLOCK] repeated import-check for failed package %r "
+                        "attempt=%d/%d",
+                        pkg,
+                        self.failed_import_retries[pkg],
+                        self.max_repeated_import_checks,
+                    )
+                return DEPENDENCY_MISSING_ERROR
+
+        return None
+
+
+# ---------------------------------------------------------------------------
 # CommandBudget
 # ---------------------------------------------------------------------------
 
@@ -309,6 +442,7 @@ class CommandBudget:
     Tracks tool / command usage and returns an error string when a budget
     is exceeded, signalling that the agent should stop.
 
+    Includes an EnvDiscoveryGuard to stop Python-environment spiral.
     Enable IRU_DEBUG_BUDGET=1 to see per-call budget state in logs.
     """
 
@@ -324,6 +458,8 @@ class CommandBudget:
         max_environment_discovery_calls: int = MAX_ENVIRONMENT_DISCOVERY_CALLS,
         max_read_only_cmd_calls: int = MAX_READ_ONLY_CMD_CALLS,
         max_similar_environment_discovery: int = MAX_SIMILAR_ENVIRONMENT_DISCOVERY,
+        max_post_found_interpreter_searches: int = MAX_POST_FOUND_INTERPRETER_SEARCHES,
+        max_repeated_import_checks: int = MAX_REPEATED_IMPORT_CHECKS,
     ) -> None:
         self.max_tool_calls = max_tool_calls
         self.max_mutating_cmd_calls = (
@@ -347,39 +483,57 @@ class CommandBudget:
         self.read_only_cmd_count = 0
         self.cmd_key_counts: dict[str, int] = {}
 
+        # EnvDiscoveryGuard — shared instance, injectable for tests
+        self.env_guard = EnvDiscoveryGuard(
+            max_post_found_searches=max_post_found_interpreter_searches,
+            max_repeated_import_checks=max_repeated_import_checks,
+        )
+
         # Legacy aliases
         self.execute_cmd_count = 0
         self.execute_cmd_prefix_counts = self.cmd_key_counts
 
     # ------------------------------------------------------------------
+    def mark_interpreter_found(self) -> None:
+        """Proxy to env_guard — call after a successful python --version."""
+        self.env_guard.mark_interpreter_found()
+
+    def record_import_failure(self, package: str) -> None:
+        """Proxy to env_guard — call when import-check output contains ModuleNotFoundError."""
+        self.env_guard.record_import_failure(package)
+
+    # ------------------------------------------------------------------
     def register(self, fn_name: str, command: str = "") -> str | None:
         """
         Register a tool call.
-        Returns BUDGET_GUARD_ERROR if any budget is exceeded, else None.
+        Returns an error string if any budget is exceeded, else None.
         """
         debug = _debug_enabled()
 
         self.tool_calls_count += 1
         if self.tool_calls_count > self.max_tool_calls:
-            reason = (
-                f"tool_calls {self.tool_calls_count}/{self.max_tool_calls} exceeded"
-            )
+            reason = f"tool_calls {self.tool_calls_count}/{self.max_tool_calls} exceeded"
             if debug:
-                _log.debug(
-                    "[budget_guard BLOCK] fn=%s | reason: %s",
-                    fn_name, reason,
-                )
+                _log.debug("[budget_guard BLOCK] fn=%s | reason: %s", fn_name, reason)
             return BUDGET_GUARD_ERROR
 
         if fn_name != "execute_cmd":
             if debug:
                 _log.debug(
                     "[budget] fn=%s | tool_calls=%d/%d | PASS (non-execute_cmd)",
-                    fn_name,
-                    self.tool_calls_count,
-                    self.max_tool_calls,
+                    fn_name, self.tool_calls_count, self.max_tool_calls,
                 )
             return None
+
+        # ── EnvDiscoveryGuard check (before counting) ─────────────────────────
+        env_block = self.env_guard.check_command(command)
+        if env_block:
+            if debug:
+                _log.debug(
+                    "[budget BLOCK] fn=execute_cmd | cmd=%.120s | env_guard blocked",
+                    (command or "").replace("\n", " "),
+                )
+            return env_block
 
         # execute_cmd path
         self.execute_cmd_count += 1
@@ -414,7 +568,7 @@ class CommandBudget:
                     f"/{self.max_mutating_cmd_calls} exceeded"
                 )
 
-        # ── Per-key similarity check ────────────────────────────────────────
+        # ── Per-key similarity check ──────────────────────────────────────────
         same_key_count = 0
         similar_limit = self._similar_limits[category]
         if cmd_key and block_reason is None:
@@ -426,14 +580,12 @@ class CommandBudget:
                     f" (key={cmd_key!r})"
                 )
         elif cmd_key:
-            # hard cap already tripped; still update the key counter for accuracy
             self.cmd_key_counts[cmd_key] = self.cmd_key_counts.get(cmd_key, 0) + 1
             same_key_count = self.cmd_key_counts[cmd_key]
 
         # ── Debug log ─────────────────────────────────────────────────────────
         if debug:
             status = "BLOCK" if block_reason else "pass"
-            # Build per-category counter string
             if category == CmdCategory.ENVIRONMENT_DISCOVERY:
                 cat_counter = f"env_discovery={self.environment_discovery_count}/{self.max_environment_discovery_calls}"
             elif category == CmdCategory.READ_ONLY_INSPECTION:
