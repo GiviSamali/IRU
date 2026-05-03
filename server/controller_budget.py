@@ -1,7 +1,7 @@
 import re
 
-MAX_TOOL_CALLS_PER_TASK = 6
-MAX_EXECUTE_CMD_CALLS_PER_TASK = 5
+MAX_TOOL_CALLS_PER_TASK = 12
+MAX_EXECUTE_CMD_CALLS_PER_TASK = 10
 MAX_SIMILAR_EXECUTE_CMD_CALLS_PER_TASK = 3
 
 # Read-only inspection commands that should not be treated as retry spirals.
@@ -25,6 +25,17 @@ READONLY_INSPECTION_CMDS = {
 
 # Read-only commands may repeat more times before being flagged as a spiral.
 MAX_SIMILAR_READONLY_CALLS_PER_TASK = 6
+
+# Install/check commands: pip install, python -m pip, python --version, py --version
+# These are diagnostic/setup and should not be counted as a retry spiral.
+INSTALL_CHECK_CMDS = {
+    "pip",
+    "pip3",
+}
+
+# How many install/check commands are allowed before flagging as spiral.
+# (e.g. pip install X fails -> pip install X --upgrade -> still same command key)
+MAX_SIMILAR_INSTALL_CALLS_PER_TASK = 4
 
 BUDGET_GUARD_ERROR = (
     "Я остановился: было выполнено несколько похожих попыток, но надёжно подтвердить результат не удалось. "
@@ -52,6 +63,7 @@ def normalize_execute_cmd(command: str) -> str:
     - Get-Content full read vs Get-Content -Tail → different (tail flag included)
     - Different primary paths → different keys
     - Start-Process calc.exe / calc / "calc.exe" → same key (retry spiral detection)
+    - python --version vs python -c vs python -m → different keys (different sub-verb/flag)
     """
     normalized = re.sub(r"['\"`]", "", (command or "").lower())
     normalized = re.sub(r"\s+", " ", normalized).strip()
@@ -68,9 +80,30 @@ def normalize_execute_cmd(command: str) -> str:
 
     verb = parts[0]
 
-    # ── Start-Process / Get-Process / Stop-Process ─────────────────────────────
+    # ── python / python3 / py ───────────────────────────────────────────────
+    # Distinguish: python --version / python -c "code" / python -m module / python script.py
+    # The first flag or second positional becomes the differentiator.
+    if verb in {"python", "python3", "py"}:
+        # Capture the distinguishing first flag or positional arg
+        if flags:
+            first_flag = flags[0]  # e.g. --version, -c, -m
+            if first_flag in {"--version", "-version", "-v"}:
+                return f"{verb} --version"
+            if first_flag == "-c":
+                # Each -c call is a different script snippet; use full normalized form
+                # but cap at a reasonable length to avoid explosion
+                return f"{verb} -c {normalized[len(verb) + 3:][:60]}"
+            if first_flag == "-m" and len(parts) > 1:
+                return f"{verb} -m {parts[1]}"
+            return f"{verb} {first_flag}"
+        # No flags: python script.py
+        if len(parts) > 1:
+            return f"{verb} {parts[1]}"
+        return verb
+
+    # ── Start-Process / Stop-Process ─────────────────────────────────────────────
     # Normalise the target executable name so variants collapse to one key.
-    if verb in {"start-process", "get-process", "stop-process"} and len(parts) > 1:
+    if verb in {"start-process", "stop-process"} and len(parts) > 1:
         target = re.sub(r"\.exe$", "", parts[1])
         return f"{verb} {target}"
 
@@ -99,6 +132,12 @@ def _is_readonly_cmd(command_key: str) -> bool:
     return verb in READONLY_INSPECTION_CMDS
 
 
+def _is_install_check_cmd(command_key: str) -> bool:
+    """Return True when the command key belongs to a package install/check verb."""
+    verb = command_key.split(" ")[0] if command_key else ""
+    return verb in INSTALL_CHECK_CMDS
+
+
 def budget_guard_entry(error: str) -> dict:
     return {
         "action": "budget_guard",
@@ -116,11 +155,13 @@ class CommandBudget:
         max_execute_cmd_calls: int = MAX_EXECUTE_CMD_CALLS_PER_TASK,
         max_similar_execute_cmd_calls: int = MAX_SIMILAR_EXECUTE_CMD_CALLS_PER_TASK,
         max_similar_readonly_calls: int = MAX_SIMILAR_READONLY_CALLS_PER_TASK,
+        max_similar_install_calls: int = MAX_SIMILAR_INSTALL_CALLS_PER_TASK,
     ) -> None:
         self.max_tool_calls = max_tool_calls
         self.max_execute_cmd_calls = max_execute_cmd_calls
         self.max_similar_execute_cmd_calls = max_similar_execute_cmd_calls
         self.max_similar_readonly_calls = max_similar_readonly_calls
+        self.max_similar_install_calls = max_similar_install_calls
         self.tool_calls_count = 0
         self.execute_cmd_count = 0
         self.execute_cmd_prefix_counts: dict[str, int] = {}
@@ -143,11 +184,12 @@ class CommandBudget:
         )
 
         if command_key:
-            limit = (
-                self.max_similar_readonly_calls
-                if _is_readonly_cmd(command_key)
-                else self.max_similar_execute_cmd_calls
-            )
+            if _is_readonly_cmd(command_key):
+                limit = self.max_similar_readonly_calls
+            elif _is_install_check_cmd(command_key):
+                limit = self.max_similar_install_calls
+            else:
+                limit = self.max_similar_execute_cmd_calls
             if self.execute_cmd_prefix_counts[command_key] > limit:
                 return BUDGET_GUARD_ERROR
 
