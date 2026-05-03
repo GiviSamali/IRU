@@ -1,30 +1,102 @@
 import re
 
-
 MAX_TOOL_CALLS_PER_TASK = 6
 MAX_EXECUTE_CMD_CALLS_PER_TASK = 5
 MAX_SIMILAR_EXECUTE_CMD_CALLS_PER_TASK = 3
+
+# Read-only inspection commands that should not be treated as retry spirals.
+# They are safe (no side effects) and naturally appear in multi-step sequences.
+READONLY_INSPECTION_CMDS = {
+    "get-childitem",
+    "get-content",
+    "test-path",
+    "resolve-path",
+    "select-string",
+    "get-process",
+    "get-service",
+    # Unix / cmd equivalents
+    "dir",
+    "ls",
+    "cat",
+    "type",
+    "grep",
+    "findstr",
+}
+
+# Read-only commands may repeat more times before being flagged as a spiral.
+MAX_SIMILAR_READONLY_CALLS_PER_TASK = 6
+
 BUDGET_GUARD_ERROR = (
     "Я остановился: было выполнено несколько похожих попыток, но надёжно подтвердить результат не удалось. "
     "Чтобы не выполнять лишние команды, продолжение остановлено."
 )
 
 
+def _extract_primary_path(parts: list[str]) -> str:
+    """Return the first argument that looks like a file-system path."""
+    for p in parts:
+        if re.search(r"[/\\]", p) or re.match(r"[a-zA-Z]:", p):
+            return p.lower()
+    # Fall back to first non-flag token after the command name
+    if len(parts) > 1:
+        return parts[1].lower()
+    return ""
+
+
 def normalize_execute_cmd(command: str) -> str:
+    """
+    Build a *similar-command key* used to detect retry spirals.
+
+    Key design rules:
+    - Get-ChildItem vs Get-Content → different (different verb)
+    - Get-Content full read vs Get-Content -Tail → different (tail flag included)
+    - Different primary paths → different keys
+    - Start-Process calc.exe / calc / "calc.exe" → same key (retry spiral detection)
+    """
     normalized = re.sub(r"['\"`]", "", (command or "").lower())
     normalized = re.sub(r"\s+", " ", normalized).strip()
     if not normalized:
         return ""
 
-    parts = [part for part in normalized.split(" ") if not part.startswith("-")]
+    tokens = normalized.split(" ")
+    # Separate flags (start with "-") from positional args
+    flags = [t for t in tokens if t.startswith("-")]
+    parts = [t for t in tokens if not t.startswith("-")]
+
     if not parts:
         return normalized
 
-    head = parts[0]
-    if head in {"start-process", "get-process", "stop-process"} and len(parts) > 1:
+    verb = parts[0]
+
+    # ── Start-Process / Get-Process / Stop-Process ─────────────────────────────
+    # Normalise the target executable name so variants collapse to one key.
+    if verb in {"start-process", "get-process", "stop-process"} and len(parts) > 1:
         target = re.sub(r"\.exe$", "", parts[1])
-        return f"{head} {target}"
+        return f"{verb} {target}"
+
+    # ── Get-Content ─────────────────────────────────────────────────────────────
+    # Distinguish full-read from tail-read and track the actual path.
+    if verb == "get-content":
+        path = _extract_primary_path(parts)
+        tail_flag = "-tail" in flags
+        suffix = " -tail" if tail_flag else ""
+        return f"get-content {path}{suffix}"
+
+    # ── Get-ChildItem ───────────────────────────────────────────────────────────
+    # The root search path is the differentiator; include it in the key.
+    if verb == "get-childitem":
+        path = _extract_primary_path(parts)
+        return f"get-childitem {path}"
+
+    # ── Generic fallback ────────────────────────────────────────────────────────
+    # Use verb + first positional arg (same as before).
     return " ".join(parts[:2])
+
+
+def _is_readonly_cmd(command_key: str) -> bool:
+    """Return True when the command key belongs to a read-only inspection verb."""
+    verb = command_key.split(" ")[0] if command_key else ""
+    return verb in READONLY_INSPECTION_CMDS
 
 
 def budget_guard_entry(error: str) -> dict:
@@ -43,10 +115,12 @@ class CommandBudget:
         max_tool_calls: int = MAX_TOOL_CALLS_PER_TASK,
         max_execute_cmd_calls: int = MAX_EXECUTE_CMD_CALLS_PER_TASK,
         max_similar_execute_cmd_calls: int = MAX_SIMILAR_EXECUTE_CMD_CALLS_PER_TASK,
+        max_similar_readonly_calls: int = MAX_SIMILAR_READONLY_CALLS_PER_TASK,
     ) -> None:
         self.max_tool_calls = max_tool_calls
         self.max_execute_cmd_calls = max_execute_cmd_calls
         self.max_similar_execute_cmd_calls = max_similar_execute_cmd_calls
+        self.max_similar_readonly_calls = max_similar_readonly_calls
         self.tool_calls_count = 0
         self.execute_cmd_count = 0
         self.execute_cmd_prefix_counts: dict[str, int] = {}
@@ -63,8 +137,18 @@ class CommandBudget:
         if self.execute_cmd_count > self.max_execute_cmd_calls:
             return BUDGET_GUARD_ERROR
 
-        command_prefix = normalize_execute_cmd(command)
-        self.execute_cmd_prefix_counts[command_prefix] = self.execute_cmd_prefix_counts.get(command_prefix, 0) + 1
-        if command_prefix and self.execute_cmd_prefix_counts[command_prefix] > self.max_similar_execute_cmd_calls:
-            return BUDGET_GUARD_ERROR
+        command_key = normalize_execute_cmd(command)
+        self.execute_cmd_prefix_counts[command_key] = (
+            self.execute_cmd_prefix_counts.get(command_key, 0) + 1
+        )
+
+        if command_key:
+            limit = (
+                self.max_similar_readonly_calls
+                if _is_readonly_cmd(command_key)
+                else self.max_similar_execute_cmd_calls
+            )
+            if self.execute_cmd_prefix_counts[command_key] > limit:
+                return BUDGET_GUARD_ERROR
+
         return None
