@@ -3,6 +3,7 @@ import json
 
 import httpx
 
+from server.controller_budget import MAX_MUTATING_CMD_CALLS
 from server.controller_pipeline import (
     build_pipeline_worker_context,
     pipeline_worker_prompt,
@@ -83,7 +84,11 @@ def _run_worker_case(responses, send_command_fn=None, step=None):
 
 
 def test_pipeline_worker_stops_when_execute_command_budget_is_exceeded():
-    calls = [_execute_call(f"call-{idx}", f"whoami {idx}") for idx in range(6)]
+    # Use MAX_MUTATING_CMD_CALLS + 1 unknown/mutating commands so the hard
+    # mutating-budget cap fires regardless of future limit adjustments.
+    # Commands must be "unknown" category (not read-only / env-discovery).
+    n = MAX_MUTATING_CMD_CALLS
+    calls = [_execute_call(f"call-{idx}", f"whoami {idx}") for idx in range(n + 1)]
     executed = []
 
     async def _send_command_fn(device_id, action, params):
@@ -101,7 +106,7 @@ def test_pipeline_worker_stops_when_execute_command_budget_is_exceeded():
     )
 
     assert result["status"] == "error"
-    assert len(executed) == 5
+    assert len(executed) == n
     assert result["commands"][-1]["action"] == "budget_guard"
     assert result["commands"][-1]["result"]["error"] == result["answer"]
 
