@@ -79,7 +79,7 @@ def create_app() -> FastAPI:
     app.include_router(ws_router)
 
     if STATIC_DIR.exists():
-        app.mount("/", StaticFiles(directory=str(STATIC_DIR)), name="ui_root")
+        app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="ui_root")
 
     return app
 
