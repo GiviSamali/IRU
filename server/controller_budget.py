@@ -19,11 +19,27 @@ Hard caps (never exceeded regardless of category):
   max_mutating_cmd_calls        = 15   (mutating execute_cmd only)
   max_environment_discovery     = 15   (environment discovery only)
   max_read_only_cmd_calls       = 30   (read-only execute_cmd only)
+
+Debug logging:
+  Set env var IRU_DEBUG_BUDGET=1 to enable verbose per-call budget logs.
+  Off by default — zero overhead in production.
 """
 from __future__ import annotations
 
+import logging
+import os
 import re
 from enum import Enum
+
+# ---------------------------------------------------------------------------
+# Debug logger
+# ---------------------------------------------------------------------------
+
+_log = logging.getLogger("iru.budget")
+
+# Cache the flag once at import time; can be overridden in tests via os.environ.
+def _debug_enabled() -> bool:
+    return os.environ.get("IRU_DEBUG_BUDGET", "").strip() == "1"
 
 
 # ---------------------------------------------------------------------------
@@ -132,20 +148,18 @@ def normalize_execute_cmd(command: str) -> str:
 
     # ── python / python3 / py / python3.x ────────────────────────────────────
     if re.match(r"^py(thon[0-9.]*)?$", verb):
-        norm_verb = "python"  # collapse python3 / py / python3.11 to "python"
+        norm_verb = "python"
         if flags:
             first_flag = flags[0]
             if first_flag in {"-v", "-version", "--version"}:
                 return f"{norm_verb} --version"
             if first_flag == "-c":
-                # Distinguish by the actual import/call – first module name is enough
                 snippet = " ".join(p for p in parts[1:] if p)[:60]
                 return f"{norm_verb} -c {snippet}"
             if first_flag == "-m" and len(parts) > 1:
-                sub = parts[1]  # e.g. "pip"
-                # python -m pip --version  vs  python -m pip install  → different
+                sub = parts[1]
                 if sub in {"pip", "pip3"} and len(parts) > 2:
-                    sub_action = parts[2]  # "install" / "--version" / "list" …
+                    sub_action = parts[2]
                     return f"{norm_verb} -m {sub} {sub_action}"
                 return f"{norm_verb} -m {sub}"
             return f"{norm_verb} {first_flag}"
@@ -157,8 +171,7 @@ def normalize_execute_cmd(command: str) -> str:
     if verb in {"pip", "pip3"}:
         norm_verb = "pip"
         if len(parts) > 1:
-            action = parts[1]  # "install" / "--version" / "list" …
-            return f"{norm_verb} {action}"
+            return f"{norm_verb} {parts[1]}"
         if flags:
             return f"{norm_verb} {flags[0]}"
         return norm_verb
@@ -166,7 +179,6 @@ def normalize_execute_cmd(command: str) -> str:
     # ── where / Get-Command ───────────────────────────────────────────────────
     if verb in {"where", "get-command", "which"}:
         target = parts[1] if len(parts) > 1 else ""
-        # Collapse python / python3 / py  targets to a single key
         if re.match(r"^py(thon[0-9.]*)?$", target):
             target = "python"
         return f"{verb} {target}"
@@ -195,14 +207,13 @@ def normalize_execute_cmd(command: str) -> str:
 # Classification
 # ---------------------------------------------------------------------------
 
-# Environment-discovery keys are matched by prefix pattern after normalisation.
 _ENV_DISCOVERY_KEY_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"^python --version$"),
     re.compile(r"^python -v$"),
     re.compile(r"^python -m pip --version$"),
-    re.compile(r"^python -m pip$"),           # bare  python -m pip
+    re.compile(r"^python -m pip$"),
     re.compile(r"^python -m venv"),
-    re.compile(r"^python -c import "),         # import sys / import site …
+    re.compile(r"^python -c import "),
     re.compile(r"^pip --version$"),
     re.compile(r"^pip -v$"),
     re.compile(r"^where python"),
@@ -214,9 +225,7 @@ _ENV_DISCOVERY_KEY_PATTERNS: tuple[re.Pattern, ...] = (
 def classify_cmd(command: str) -> CmdCategory:
     """
     Classify a raw command string into a CmdCategory.
-
-    Classification is based on the *normalised key* produced by
-    normalize_execute_cmd() so it is consistent with spiral detection.
+    Classification is based on the normalised key for consistency with spiral detection.
     """
     key = normalize_execute_cmd(command)
     if not key:
@@ -224,31 +233,25 @@ def classify_cmd(command: str) -> CmdCategory:
 
     verb = key.split(" ")[0]
 
-    # Environment discovery check (by key pattern)
     for pattern in _ENV_DISCOVERY_KEY_PATTERNS:
         if pattern.match(key):
             return CmdCategory.ENVIRONMENT_DISCOVERY
 
-    # Read-only inspection
     if verb in _READ_ONLY_VERBS:
         return CmdCategory.READ_ONLY_INSPECTION
 
-    # Package install / setup  (pip install, python -m pip install, …)
     if verb in _INSTALL_VERBS:
         action = key.split(" ")[1] if len(key.split(" ")) > 1 else ""
         if action == "install":
             return CmdCategory.PACKAGE_INSTALL
-        # pip --version / pip list → environment discovery
         return CmdCategory.ENVIRONMENT_DISCOVERY
 
     if "python" == verb and " -m pip install" in key:
         return CmdCategory.PACKAGE_INSTALL
 
-    # Destructive
     if verb in _DESTRUCTIVE_VERBS:
         return CmdCategory.DESTRUCTIVE
 
-    # Process launch
     if verb in _PROCESS_LAUNCH_VERBS:
         return CmdCategory.PROCESS_LAUNCH
 
@@ -268,7 +271,6 @@ _CATEGORY_SIMILAR_LIMIT: dict[CmdCategory, int] = {
     CmdCategory.UNKNOWN:               MAX_SIMILAR_UNKNOWN,
 }
 
-# Categories that do NOT consume the mutating execute_cmd budget
 _NON_MUTATING_CATEGORIES: frozenset[CmdCategory] = frozenset({
     CmdCategory.ENVIRONMENT_DISCOVERY,
     CmdCategory.READ_ONLY_INSPECTION,
@@ -276,7 +278,7 @@ _NON_MUTATING_CATEGORIES: frozenset[CmdCategory] = frozenset({
 
 
 # ---------------------------------------------------------------------------
-# Public helpers (kept for backwards-compat with existing tests)
+# Public helpers (backwards-compat)
 # ---------------------------------------------------------------------------
 
 def _is_readonly_cmd(command_key: str) -> bool:
@@ -307,12 +309,7 @@ class CommandBudget:
     Tracks tool / command usage and returns an error string when a budget
     is exceeded, signalling that the agent should stop.
 
-    Counters:
-      tool_calls_count          – all tool calls (hard cap)
-      mutating_cmd_count        – mutating execute_cmd calls
-      environment_discovery_count – env-discovery execute_cmd calls
-      read_only_cmd_count       – read-only execute_cmd calls
-      cmd_key_counts            – per-key counter for spiral detection
+    Enable IRU_DEBUG_BUDGET=1 to see per-call budget state in logs.
     """
 
     def __init__(
@@ -323,13 +320,11 @@ class CommandBudget:
         max_similar_execute_cmd_calls: int = MAX_SIMILAR_UNKNOWN,
         max_similar_readonly_calls: int = MAX_SIMILAR_READ_ONLY,
         max_similar_install_calls: int = MAX_SIMILAR_SETUP,
-        # New parameters (can still be overridden in tests)
         max_mutating_cmd_calls: int | None = None,
         max_environment_discovery_calls: int = MAX_ENVIRONMENT_DISCOVERY_CALLS,
         max_read_only_cmd_calls: int = MAX_READ_ONLY_CMD_CALLS,
         max_similar_environment_discovery: int = MAX_SIMILAR_ENVIRONMENT_DISCOVERY,
     ) -> None:
-        # Legacy param alias
         self.max_tool_calls = max_tool_calls
         self.max_mutating_cmd_calls = (
             max_mutating_cmd_calls
@@ -339,7 +334,6 @@ class CommandBudget:
         self.max_environment_discovery_calls = max_environment_discovery_calls
         self.max_read_only_cmd_calls = max_read_only_cmd_calls
 
-        # Per-category similar-limits (allow test overrides via legacy params)
         self._similar_limits: dict[CmdCategory, int] = dict(_CATEGORY_SIMILAR_LIMIT)
         self._similar_limits[CmdCategory.READ_ONLY_INSPECTION] = max_similar_readonly_calls
         self._similar_limits[CmdCategory.PACKAGE_INSTALL] = max_similar_install_calls
@@ -353,51 +347,120 @@ class CommandBudget:
         self.read_only_cmd_count = 0
         self.cmd_key_counts: dict[str, int] = {}
 
-        # Legacy alias
+        # Legacy aliases
         self.execute_cmd_count = 0
         self.execute_cmd_prefix_counts = self.cmd_key_counts
 
     # ------------------------------------------------------------------
     def register(self, fn_name: str, command: str = "") -> str | None:
         """
-        Register a tool call. Returns BUDGET_GUARD_ERROR if any budget is
-        exceeded, otherwise returns None.
+        Register a tool call.
+        Returns BUDGET_GUARD_ERROR if any budget is exceeded, else None.
         """
+        debug = _debug_enabled()
+
         self.tool_calls_count += 1
         if self.tool_calls_count > self.max_tool_calls:
+            reason = (
+                f"tool_calls {self.tool_calls_count}/{self.max_tool_calls} exceeded"
+            )
+            if debug:
+                _log.debug(
+                    "[budget_guard BLOCK] fn=%s | reason: %s",
+                    fn_name, reason,
+                )
             return BUDGET_GUARD_ERROR
 
         if fn_name != "execute_cmd":
+            if debug:
+                _log.debug(
+                    "[budget] fn=%s | tool_calls=%d/%d | PASS (non-execute_cmd)",
+                    fn_name,
+                    self.tool_calls_count,
+                    self.max_tool_calls,
+                )
             return None
 
-        # Legacy counter (equals mutating+env+readonly combined)
+        # execute_cmd path
         self.execute_cmd_count += 1
 
         category = classify_cmd(command)
         cmd_key  = normalize_execute_cmd(command)
 
-        # ── Per-category hard-cap check ───────────────────────────────────
+        # ── Per-category hard-cap ─────────────────────────────────────────────
+        block_reason: str | None = None
+
         if category == CmdCategory.ENVIRONMENT_DISCOVERY:
             self.environment_discovery_count += 1
             if self.environment_discovery_count > self.max_environment_discovery_calls:
-                return BUDGET_GUARD_ERROR
+                block_reason = (
+                    f"env_discovery_count {self.environment_discovery_count}"
+                    f"/{self.max_environment_discovery_calls} exceeded"
+                )
 
         elif category == CmdCategory.READ_ONLY_INSPECTION:
             self.read_only_cmd_count += 1
             if self.read_only_cmd_count > self.max_read_only_cmd_calls:
-                return BUDGET_GUARD_ERROR
+                block_reason = (
+                    f"read_only_count {self.read_only_cmd_count}"
+                    f"/{self.max_read_only_cmd_calls} exceeded"
+                )
 
         else:
-            # All mutating categories count toward the mutating budget
             self.mutating_cmd_count += 1
             if self.mutating_cmd_count > self.max_mutating_cmd_calls:
-                return BUDGET_GUARD_ERROR
+                block_reason = (
+                    f"mutating_count {self.mutating_cmd_count}"
+                    f"/{self.max_mutating_cmd_calls} exceeded"
+                )
 
-        # ── Per-key similarity check (spiral detection) ───────────────────
-        if cmd_key:
+        # ── Per-key similarity check ────────────────────────────────────────
+        same_key_count = 0
+        similar_limit = self._similar_limits[category]
+        if cmd_key and block_reason is None:
             self.cmd_key_counts[cmd_key] = self.cmd_key_counts.get(cmd_key, 0) + 1
-            limit = self._similar_limits[category]
-            if self.cmd_key_counts[cmd_key] > limit:
-                return BUDGET_GUARD_ERROR
+            same_key_count = self.cmd_key_counts[cmd_key]
+            if same_key_count > similar_limit:
+                block_reason = (
+                    f"same_key_count {same_key_count}/{similar_limit} exceeded"
+                    f" (key={cmd_key!r})"
+                )
+        elif cmd_key:
+            # hard cap already tripped; still update the key counter for accuracy
+            self.cmd_key_counts[cmd_key] = self.cmd_key_counts.get(cmd_key, 0) + 1
+            same_key_count = self.cmd_key_counts[cmd_key]
 
+        # ── Debug log ─────────────────────────────────────────────────────────
+        if debug:
+            status = "BLOCK" if block_reason else "pass"
+            # Build per-category counter string
+            if category == CmdCategory.ENVIRONMENT_DISCOVERY:
+                cat_counter = f"env_discovery={self.environment_discovery_count}/{self.max_environment_discovery_calls}"
+            elif category == CmdCategory.READ_ONLY_INSPECTION:
+                cat_counter = f"read_only={self.read_only_cmd_count}/{self.max_read_only_cmd_calls}"
+            else:
+                cat_counter = f"mutating={self.mutating_cmd_count}/{self.max_mutating_cmd_calls}"
+
+            _log.debug(
+                "[budget %s] fn=execute_cmd | cmd=%.120s"
+                " | key=%r | category=%s"
+                " | tool_calls=%d/%d | execute_cmd=%d"
+                " | %s"
+                " | same_key=%d/%d"
+                " | block_reason=%s",
+                status,
+                (command or "").replace("\n", " "),
+                cmd_key,
+                category.value,
+                self.tool_calls_count,
+                self.max_tool_calls,
+                self.execute_cmd_count,
+                cat_counter,
+                same_key_count,
+                similar_limit,
+                block_reason or "none",
+            )
+
+        if block_reason:
+            return BUDGET_GUARD_ERROR
         return None
