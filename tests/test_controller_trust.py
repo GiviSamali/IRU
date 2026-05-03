@@ -3,6 +3,7 @@ import json
 import re
 import time
 
+from server.controller_budget import MAX_MUTATING_CMD_CALLS
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_trust import SAFE_DOWNLOAD_LINK_ERROR
 
@@ -222,7 +223,11 @@ def _execute_call(call_id, command, device_id=None):
 
 
 def test_non_pipeline_stops_when_execute_command_budget_is_exceeded():
-    calls = [_execute_call(f"call-{idx}", f"whoami {idx}") for idx in range(6)]
+    # Use MAX_MUTATING_CMD_CALLS + 1 unknown/mutating commands so the hard
+    # mutating-budget cap fires regardless of future limit adjustments.
+    # Commands must be "unknown" category (not read-only / env-discovery).
+    n = MAX_MUTATING_CMD_CALLS
+    calls = [_execute_call(f"call-{idx}", f"whoami {idx}") for idx in range(n + 1)]
     executed = []
 
     async def _send_command_fn(device_id, action, params):
@@ -239,7 +244,7 @@ def test_non_pipeline_stops_when_execute_command_budget_is_exceeded():
         send_command_fn=_send_command_fn,
     )
 
-    assert len(executed) == 5
+    assert len(executed) == n
     assert result["commands"][-1]["action"] == "budget_guard"
     assert result["commands"][-1]["result"]["error"] == result["answer"]
 
