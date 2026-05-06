@@ -1,4 +1,4 @@
-from server.controller_budget import CommandBudget
+from server.controller_budget import DEPENDENCY_MISSING_ERROR, CommandBudget
 from server.python_env import (
     EnvDiscoveryGuard,
     classify_python_env_result,
@@ -93,8 +93,7 @@ def test_no_further_interpreter_search_after_interpreter_found():
 
     stopped = budget.register("execute_cmd", "py --version")
 
-    assert stopped is not None
-    assert "Python is already confirmed" in stopped
+    assert stopped == DEPENDENCY_MISSING_ERROR
 
 
 def test_command_budget_stops_after_dependency_missing_result():
@@ -110,5 +109,4 @@ def test_command_budget_stops_after_dependency_missing_result():
         },
     )
 
-    assert stopped is not None
-    assert "package 'PyQt5' is missing" in stopped
+    assert stopped == DEPENDENCY_MISSING_ERROR

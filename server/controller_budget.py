@@ -41,9 +41,9 @@ import re
 from enum import Enum
 
 try:
-    from .python_env import EnvDiscoveryGuard
+    from .python_env import classify_python_env_result
 except ImportError:  # pragma: no cover - direct script/test import fallback
-    from python_env import EnvDiscoveryGuard  # type: ignore
+    from python_env import classify_python_env_result  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Debug logger
@@ -73,7 +73,7 @@ MAX_SIMILAR_DESTRUCTIVE = 2
 MAX_SIMILAR_UNKNOWN = 3
 
 # EnvDiscoveryGuard thresholds
-MAX_POST_FOUND_INTERPRETER_SEARCHES = 2  # how many extra interpreter-find cmds after found
+MAX_POST_FOUND_INTERPRETER_SEARCHES = 0  # how many extra interpreter-find cmds after found
 MAX_REPEATED_IMPORT_CHECKS = 2           # how many times same failed import may be retried
 
 # Legacy aliases
@@ -423,8 +423,7 @@ class EnvDiscoveryGuard:
 
         # ── Rule 2: repeated import-check for a known-failed package ──────────
         if pkg is not None and pkg in self.failed_import_retries:
-            self.failed_import_retries[pkg] += 1
-            if self.failed_import_retries[pkg] > self.max_repeated_import_checks:
+            if self.failed_import_retries[pkg] >= self.max_repeated_import_checks:
                 if _debug_enabled():
                     _log.debug(
                         "[env_discovery BLOCK] repeated import-check for failed package %r "
@@ -434,6 +433,13 @@ class EnvDiscoveryGuard:
                         self.max_repeated_import_checks,
                     )
                 return DEPENDENCY_MISSING_ERROR
+            self.failed_import_retries[pkg] += 1
+        elif pkg is not None and self.failed_import_retries:
+            # Any further import probing after a confirmed missing dependency
+            # consumes the retry window; do not let the worker wander forever
+            # across packages before returning to the original failure.
+            for failed_pkg in list(self.failed_import_retries):
+                self.failed_import_retries[failed_pkg] += 1
 
         return None
 
@@ -497,7 +503,6 @@ class CommandBudget:
         # Legacy aliases
         self.execute_cmd_count = 0
         self.execute_cmd_prefix_counts = self.cmd_key_counts
-        self.env_discovery_guard = EnvDiscoveryGuard()
 
     # ------------------------------------------------------------------
     def mark_interpreter_found(self) -> None:
@@ -548,7 +553,7 @@ class CommandBudget:
         cmd_key  = normalize_execute_cmd(command)
 
         # ── Per-category hard-cap ─────────────────────────────────────────────
-        block_reason: str | None = self.env_discovery_guard.before_execute(command)
+        block_reason: str | None = None
 
         if category == CmdCategory.ENVIRONMENT_DISCOVERY:
             self.environment_discovery_count += 1
@@ -620,8 +625,6 @@ class CommandBudget:
             )
 
         if block_reason:
-            if isinstance(block_reason, str) and block_reason.startswith("Python environment check stopped:"):
-                return block_reason
             return BUDGET_GUARD_ERROR
         return None
 
@@ -631,4 +634,14 @@ class CommandBudget:
         Observe an execute_cmd result and stop deterministic env-discovery
         spirals that are only visible after command output is known.
         """
-        return self.env_discovery_guard.observe(command, result or {})
+        classified = classify_python_env_result(command, result or {})
+        status = classified.get("status")
+        if status in {"python_found", "import_ok"}:
+            self.mark_interpreter_found()
+            return None
+        if status == "dependency_missing":
+            package = str(classified.get("package") or "").strip()
+            if package:
+                self.record_import_failure(package)
+            return DEPENDENCY_MISSING_ERROR
+        return None
