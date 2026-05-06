@@ -564,7 +564,10 @@ async def run_pipeline_worker(
             "Execute this step only on target_device. Do not use paths from another device. "
             "Absolute paths from user memory are hints only and must be verified on target_device before use. "
             "If a path is not found on target_device, report it instead of substituting a path from another device. "
-            "Completed steps marked OTHER DEVICE are informational only; do not reuse their paths as target-device paths."
+            "Completed steps marked OTHER DEVICE are informational only; do not reuse their paths as target-device paths. "
+            "Python environment contract: if Python is found and an import check returns ModuleNotFoundError / No module named, "
+            "treat it as a missing dependency, not missing Python. Do not search for another interpreter after Python was found "
+            "unless the user explicitly asked for a different interpreter. Stop and offer to install the dependency through confirmation."
         ),
     })
     messages.append({
@@ -686,6 +689,17 @@ async def run_pipeline_worker(
                     "result": tool_result,
                     "iteration": iteration + 1,
                 })
+                env_guard_error = command_budget.observe_execute_result(
+                    fn_args.get("command", ""),
+                    tool_result,
+                )
+                if env_guard_error:
+                    commands_log.append(budget_guard_entry(env_guard_error))
+                    return {
+                        "status": "error",
+                        "answer": env_guard_error,
+                        "commands": commands_log,
+                    }
                 if machine_guid and "error" not in tool_result:
                     try:
                         db.add_command_memory(

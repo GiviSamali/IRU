@@ -49,6 +49,11 @@ GUI-приложений (PyQt5, tkinter, WinForms, Electron, браузеры) 
 процессов, которые не завершаются сами. Команда запустится, подождёт 3 сек \
 и вернёт успех. НЕ указывай timeout при long_running=true.
 
+Python environment contract:
+If Python is found and an import check returns ModuleNotFoundError / No module named, treat it as a missing dependency, not as missing Python.
+Do not search for another interpreter after Python was found unless the user explicitly asked for a different interpreter.
+Stop and offer to install the missing dependency through a command that requires user confirmation.
+
 ### 2. write_content
 Напрямую записать длинный текст в файл без шелла (нет вопросов экранирования и кодировок). \
 Используй этот инструмент для любых файлов >200 символов, многострочных текстов, \

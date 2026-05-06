@@ -40,6 +40,11 @@ import os
 import re
 from enum import Enum
 
+try:
+    from .python_env import EnvDiscoveryGuard
+except ImportError:  # pragma: no cover - direct script/test import fallback
+    from python_env import EnvDiscoveryGuard  # type: ignore
+
 # ---------------------------------------------------------------------------
 # Debug logger
 # ---------------------------------------------------------------------------
@@ -492,6 +497,7 @@ class CommandBudget:
         # Legacy aliases
         self.execute_cmd_count = 0
         self.execute_cmd_prefix_counts = self.cmd_key_counts
+        self.env_discovery_guard = EnvDiscoveryGuard()
 
     # ------------------------------------------------------------------
     def mark_interpreter_found(self) -> None:
@@ -542,11 +548,11 @@ class CommandBudget:
         cmd_key  = normalize_execute_cmd(command)
 
         # ── Per-category hard-cap ─────────────────────────────────────────────
-        block_reason: str | None = None
+        block_reason: str | None = self.env_discovery_guard.before_execute(command)
 
         if category == CmdCategory.ENVIRONMENT_DISCOVERY:
             self.environment_discovery_count += 1
-            if self.environment_discovery_count > self.max_environment_discovery_calls:
+            if block_reason is None and self.environment_discovery_count > self.max_environment_discovery_calls:
                 block_reason = (
                     f"env_discovery_count {self.environment_discovery_count}"
                     f"/{self.max_environment_discovery_calls} exceeded"
@@ -554,7 +560,7 @@ class CommandBudget:
 
         elif category == CmdCategory.READ_ONLY_INSPECTION:
             self.read_only_cmd_count += 1
-            if self.read_only_cmd_count > self.max_read_only_cmd_calls:
+            if block_reason is None and self.read_only_cmd_count > self.max_read_only_cmd_calls:
                 block_reason = (
                     f"read_only_count {self.read_only_cmd_count}"
                     f"/{self.max_read_only_cmd_calls} exceeded"
@@ -562,7 +568,7 @@ class CommandBudget:
 
         else:
             self.mutating_cmd_count += 1
-            if self.mutating_cmd_count > self.max_mutating_cmd_calls:
+            if block_reason is None and self.mutating_cmd_count > self.max_mutating_cmd_calls:
                 block_reason = (
                     f"mutating_count {self.mutating_cmd_count}"
                     f"/{self.max_mutating_cmd_calls} exceeded"
@@ -614,5 +620,15 @@ class CommandBudget:
             )
 
         if block_reason:
+            if isinstance(block_reason, str) and block_reason.startswith("Python environment check stopped:"):
+                return block_reason
             return BUDGET_GUARD_ERROR
         return None
+
+    # ------------------------------------------------------------------
+    def observe_execute_result(self, command: str, result: dict | None) -> str | None:
+        """
+        Observe an execute_cmd result and stop deterministic env-discovery
+        spirals that are only visible after command output is known.
+        """
+        return self.env_discovery_guard.observe(command, result or {})

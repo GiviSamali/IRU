@@ -294,6 +294,18 @@ async def process_non_pipeline_command(
                         "result": tool_result,
                         "iteration": iteration + 1,
                     })
+                    env_guard_error = command_budget.observe_execute_result(
+                        fn_args.get("command", ""),
+                        tool_result,
+                    )
+                    if env_guard_error:
+                        commands_log.append(budget_guard_entry(env_guard_error))
+                        return {
+                            "answer": env_guard_error,
+                            "commands": commands_log,
+                            "tasks": [],
+                            "training_context": _training_context(device_info),
+                        }
 
                     if machine_guid and "error" not in tool_result:
                         try:
