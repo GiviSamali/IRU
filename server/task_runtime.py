@@ -34,7 +34,7 @@ try:
         get_user_device_profiles,
         set_plan_trial_used,
     )
-    from .path_scope import PATH_SCOPE_ERROR, validate_write_path_for_device
+    from .path_scope import PATH_SCOPE_ERROR, validate_execute_command_paths_for_device, validate_write_path_for_device
     from .runtime_state import (
         _dk,
         _short_did,
@@ -70,7 +70,7 @@ except ImportError:
         get_user_device_profiles,
         set_plan_trial_used,
     )
-    from path_scope import PATH_SCOPE_ERROR, validate_write_path_for_device
+    from path_scope import PATH_SCOPE_ERROR, validate_execute_command_paths_for_device, validate_write_path_for_device
     from runtime_state import (
         _dk,
         _short_did,
@@ -97,6 +97,11 @@ async def send_command_to_agent(
     dev = devices.get(device_id)
     if action == "execute_cmd":
         cmd_text = params.get("command", "")
+        profile = get_device_profile(_short_did(device_id))
+        try:
+            validate_execute_command_paths_for_device(cmd_text, (dev or {}).get("info", {}), profile)
+        except ValueError:
+            raise RuntimeError(f"BLOCKED: {PATH_SCOPE_ERROR}")
         if len(cmd_text) > 2000:
             raise RuntimeError(
                 "Команда слишком длинная (>2000 символов). "

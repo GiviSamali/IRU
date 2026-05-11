@@ -113,6 +113,56 @@ def test_write_content_blocks_other_windows_user_profile_path(client):
         asyncio.run(send_command_to_agent(device_key, "write_content", {"path": r"C:\Users\russa\TEST_IRU\file.txt", "content": "x"}, user_id=user["id"]))
 
 
+def test_execute_cmd_blocks_creating_other_windows_user_profile_path(client):
+    from server.database import create_user, upsert_device_profile
+    from server.runtime_state import devices
+    from server.task_runtime import send_command_to_agent
+
+    user = create_user("path-guard-exec-user")
+    device_key = f"{user['id']}:device-1"
+    info = {"hostname": "newbox", "os": "Windows", "username": "User", "home": r"C:\Users\User"}
+    upsert_device_profile("device-1", user["id"], {**info, "desktop_path": r"C:\Users\User\Desktop", "machine_guid": "machine-1"})
+    devices[device_key] = {"user_id": user["id"], "info": info, "pending": {}}
+    cmd = r'if (!(Test-Path "C:\Users\russa\TEST_IRU")) { New-Item -ItemType Directory "C:\Users\russa\TEST_IRU" }'
+
+    try:
+        with pytest.raises(RuntimeError, match=PATH_SCOPE_ERROR):
+            asyncio.run(send_command_to_agent(device_key, "execute_cmd", {"command": cmd}, user_id=user["id"]))
+    finally:
+        devices.pop(device_key, None)
+
+
+def test_execute_cmd_allows_read_only_probe_of_other_windows_user_profile_path(client):
+    from server.database import create_user, upsert_device_profile
+    import server.task_runtime as task_runtime
+
+    user = create_user("path-guard-probe-user")
+    device_key = f"{user['id']}:device-1"
+    info = {"hostname": "newbox", "os": "Windows", "username": "User", "home": r"C:\Users\User"}
+    upsert_device_profile("device-1", user["id"], {**info, "desktop_path": r"C:\Users\User\Desktop", "machine_guid": "machine-1"})
+
+    class FakeWS:
+        async def send_text(self, _msg):
+            pending = next(iter(task_runtime.devices[device_key]["pending"].values()))
+            pending.set_result({"returncode": 0, "stdout": "False", "stderr": ""})
+
+    task_runtime.devices[device_key] = {"user_id": user["id"], "info": info, "pending": {}, "ws": FakeWS()}
+
+    try:
+        result = asyncio.run(
+            task_runtime.send_command_to_agent(
+                device_key,
+                "execute_cmd",
+                {"command": r'Test-Path "C:\Users\russa\TEST_IRU"'},
+                user_id=user["id"],
+            )
+        )
+    finally:
+        task_runtime.devices.pop(device_key, None)
+
+    assert result["stdout"] == "False"
+
+
 def test_relative_preference_can_resolve_under_current_home():
     assert resolve_relative_preference("TEST_IRU", {"home": r"C:\Users\User"}, {"username": "User"}) == r"C:\Users\User\TEST_IRU"
 

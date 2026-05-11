@@ -5,6 +5,10 @@ from pathlib import PurePosixPath, PureWindowsPath
 PATH_SCOPE_ERROR = "Путь относится к другому профилю пользователя или устройству. Используйте путь текущего устройства."
 _WINDOWS_ABS_RE = re.compile(r"(?i)(?:^|[\s\"'(:])([a-z]:[\\/][^\s\"')]+)")
 _LINUX_ABS_RE = re.compile(r"(?<![\w:])(/[A-Za-z0-9._~/-]+)")
+_WINDOWS_PATH_MUTATION_RE = re.compile(
+    r"(?i)\b(mkdir|md|new-item|ni|set-content|add-content|out-file|copy-item|move-item|xcopy|robocopy)\b"
+    r"|::write(alltext|allbytes|alllines)|\bopen\s*\([^)]*,\s*['\"][wax]"
+)
 
 
 def contains_absolute_path(text: str | None) -> bool:
@@ -83,6 +87,14 @@ def validate_write_path_for_device(path: str, device_info: dict | None, profile:
     if home_path and (target_norm == home_path or target_norm.startswith(home_path + "/")):
         return
     raise ValueError(PATH_SCOPE_ERROR)
+
+
+def validate_execute_command_paths_for_device(command: str, device_info: dict | None, profile: dict | None) -> None:
+    text = command or ""
+    if not (_WINDOWS_PATH_MUTATION_RE.search(text) or ">" in text):
+        return
+    for match in _WINDOWS_ABS_RE.finditer(text):
+        validate_write_path_for_device(match.group(1).rstrip(".,;"), device_info, profile)
 
 
 def resolve_relative_preference(name: str, device_info: dict | None, profile: dict | None, *, prefer_desktop: bool = False) -> str:
