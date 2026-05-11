@@ -4,8 +4,10 @@ from zoneinfo import ZoneInfo
 
 try:
     from . import database as db  # type: ignore
+    from .path_scope import build_target_device_block, filter_memory_facts_for_device  # type: ignore
 except ImportError:
     import database as db  # type: ignore
+    from path_scope import build_target_device_block, filter_memory_facts_for_device  # type: ignore
 
 
 _MONTHS_RU = [
@@ -151,6 +153,8 @@ def build_device_profile_block(profile: dict | None) -> str:
         lines.append(f"Пользователь: {profile['username']}")
     if profile.get("desktop_path"):
         lines.append(f"Рабочий стол: {profile['desktop_path']}")
+    if profile.get("home") or profile.get("home_path"):
+        lines.append(f"Домашняя директория: {profile.get('home_path') or profile.get('home')}")
     if profile.get("cpu"):
         lines.append(f"Процессор: {profile['cpu']}")
     if profile.get("gpu"):
@@ -180,7 +184,7 @@ def build_memory_block(machine_guid: str | None, user_id: str | None = None) -> 
         return ""
 
     memory_stats = db.get_memory_stats(machine_guid, user_id)
-    memory_facts = memory_stats.get("facts_list", [])
+    memory_facts = filter_memory_facts_for_device(memory_stats.get("facts_list", []))
     commands = db.get_recent_commands(machine_guid, user_id, 20) if machine_guid else []
 
     if not memory_facts and not commands:
