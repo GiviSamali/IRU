@@ -7,6 +7,7 @@ _WINDOWS_ABS_RE = re.compile(r"(?i)(?:^|[\s\"'(:])([a-z]:[\\/][^\s\"')]+)")
 _LINUX_ABS_RE = re.compile(r"(?<![\w:])(/[A-Za-z0-9._~/-]+)")
 _WINDOWS_PATH_MUTATION_RE = re.compile(
     r"(?i)\b(mkdir|md|new-item|ni|set-content|add-content|out-file|copy-item|move-item|xcopy|robocopy)\b"
+    r"|\b(remove-item|rm|del|erase|rmdir|rd)\b"
     r"|::write(alltext|allbytes|alllines)|\bopen\s*\([^)]*,\s*['\"][wax]"
 )
 

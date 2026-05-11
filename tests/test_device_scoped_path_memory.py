@@ -132,6 +132,25 @@ def test_execute_cmd_blocks_creating_other_windows_user_profile_path(client):
         devices.pop(device_key, None)
 
 
+def test_execute_cmd_blocks_deleting_other_windows_user_profile_path(client):
+    from server.database import create_user, upsert_device_profile
+    from server.runtime_state import devices
+    from server.task_runtime import send_command_to_agent
+
+    user = create_user("path-guard-delete-user")
+    device_key = f"{user['id']}:device-1"
+    info = {"hostname": "newbox", "os": "Windows", "username": "User", "home": r"C:\Users\User"}
+    upsert_device_profile("device-1", user["id"], {**info, "desktop_path": r"C:\Users\User\Desktop", "machine_guid": "machine-1"})
+    devices[device_key] = {"user_id": user["id"], "info": info, "pending": {}}
+    cmd = r'Remove-Item -LiteralPath "C:\Users\russa\TEST_IRU" -Recurse -Force'
+
+    try:
+        with pytest.raises(RuntimeError, match=PATH_SCOPE_ERROR):
+            asyncio.run(send_command_to_agent(device_key, "execute_cmd", {"command": cmd}, user_id=user["id"]))
+    finally:
+        devices.pop(device_key, None)
+
+
 def test_execute_cmd_allows_read_only_probe_of_other_windows_user_profile_path(client):
     from server.database import create_user, upsert_device_profile
     import server.task_runtime as task_runtime
