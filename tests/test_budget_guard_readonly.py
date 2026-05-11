@@ -46,6 +46,7 @@ def _budget(
     max_similar_execute_cmd_calls: int = MAX_SIMILAR_EXECUTE_CMD_CALLS_PER_TASK,
     max_similar_readonly_calls: int = MAX_SIMILAR_READ_ONLY,
     max_similar_environment_discovery: int = MAX_SIMILAR_ENVIRONMENT_DISCOVERY,
+    max_repeated_failed_result: int = 3,
 ) -> CommandBudget:
     """Create a CommandBudget with generous caps and only the specified limits active."""
     return CommandBudget(
@@ -57,6 +58,7 @@ def _budget(
         max_similar_execute_cmd_calls=max_similar_execute_cmd_calls,
         max_similar_readonly_calls=max_similar_readonly_calls,
         max_similar_environment_discovery=max_similar_environment_discovery,
+        max_repeated_failed_result=max_repeated_failed_result,
     )
 
 
@@ -221,6 +223,7 @@ class TestCommandBudget:
     def test_readonly_inspection_sequence_not_blocked(self):
         budget = _budget(max_mutating_cmd_calls=2)  # tight mutating cap — must not fire
         cmds = [
+            r'Test-Path "C:\Users\russa\TEST_IRU"',
             r'Get-ChildItem -Path "C:\Users\russa\TEST_IRU" -Recurse -Include "*.html"',
             r'Get-Content -Path "C:\Users\russa\TEST_IRU\iru_website.html" -Encoding UTF8',
             r'Get-Content -Path "C:\Users\russa\TEST_IRU\iru_website.html" -Encoding UTF8 -Tail 200',
@@ -252,14 +255,37 @@ class TestCommandBudget:
             assert budget.register("execute_cmd", cmd) is None
         assert budget.register("execute_cmd", cmd) is not None
 
-    # ── Requirement 5: pip install is mutating ──────────────────────────
-    def test_pip_install_consumes_mutating_budget(self):
-        budget = _budget(max_mutating_cmd_calls=2)
-        budget.register("execute_cmd", "pip install PyQt5")
-        budget.register("execute_cmd", "pip install requests")
-        # third install must be blocked by mutating cap
-        result = budget.register("execute_cmd", "pip install numpy")
-        assert result is not None, "pip install must count against mutating budget"
+    def test_normal_artifact_creation_sequence_not_blocked(self):
+        budget = CommandBudget()
+        calls = [
+            ("execute_cmd", 'python -c "import PyQt5"'),
+            ("write_content", "questions.json"),
+            ("execute_cmd", r'Get-Content ".\questions.json" | ConvertFrom-Json | Out-Null'),
+            ("write_content", "test_db.py"),
+            ("execute_cmd", "python -m py_compile test_db.py"),
+        ]
+
+        for fn, command in calls:
+            assert budget.register(fn, command) is None
+
+    def test_multiple_write_content_calls_do_not_block(self):
+        budget = CommandBudget()
+        for idx in range(20):
+            assert budget.register("write_content", f"file_{idx}.txt") is None
+        for _ in range(8):
+            assert budget.register("write_content", "large_file.txt append=true") is None
+
+    def test_distinct_mutating_commands_are_not_blocked_by_ordinary_count(self):
+        budget = CommandBudget()
+        cmds = [
+            "pip install PyQt5",
+            "python -m pip install requests",
+            r'New-Item -ItemType Directory "C:\tmp\iru_a"',
+            r'Set-Content -Path "C:\tmp\iru_a\a.txt" -Value "a"',
+            r'Copy-Item "C:\tmp\iru_a\a.txt" "C:\tmp\iru_b.txt"',
+        ]
+        for cmd in cmds:
+            assert budget.register("execute_cmd", cmd) is None
 
     # ── Requirement 6: python -m pip --version is env-discovery ─────────
     def test_pip_version_does_not_consume_mutating_budget(self):
@@ -273,6 +299,28 @@ class TestCommandBudget:
             result = budget.register("execute_cmd", cmd)
             assert result is None, f"{cmd!r} must NOT consume mutating budget"
         assert budget.mutating_cmd_count == 0
+
+    def test_repeated_destructive_same_target_blocked(self):
+        budget = _budget()
+        cmds = [
+            r'Remove-Item -LiteralPath "C:\tmp\same.txt"',
+            r'del "C:\tmp\same.txt"',
+            r'rd "C:\tmp\same.txt"',
+        ]
+        results = [budget.register("execute_cmd", cmd) for cmd in cmds]
+        assert results[:2] == [None, None]
+        assert results[2] is not None
+
+    def test_same_failed_command_error_is_blocked(self):
+        budget = _budget(max_similar_execute_cmd_calls=99, max_repeated_failed_result=2)
+        cmd = "python run_task.py"
+        result = {"returncode": 1, "stdout": "", "stderr": "same deterministic failure"}
+
+        for _ in range(2):
+            assert budget.register("execute_cmd", cmd) is None
+            assert budget.observe_execute_result(cmd, result) is None
+        assert budget.register("execute_cmd", cmd) is None
+        assert budget.observe_execute_result(cmd, result) is not None
 
     # ── Hard caps still enforced ────────────────────────────────────
     def test_max_tool_calls_still_enforced(self):
@@ -329,6 +377,16 @@ def _exec_call(call_id: str, command: str) -> dict:
         "function": {
             "name": "execute_cmd",
             "arguments": json.dumps({"command": command}),
+        },
+    }
+
+
+def _write_call(call_id: str, path: str, append: bool = False) -> dict:
+    return {
+        "id": call_id,
+        "function": {
+            "name": "write_content",
+            "arguments": json.dumps({"path": path, "content": "data", "append": append}),
         },
     }
 
@@ -429,6 +487,7 @@ def test_pipeline_readonly_inspection_not_blocked():
     Req 7: Pipeline must NOT block the canonical read-only inspection sequence.
     """
     inspection_calls = [
+        _exec_call("c0", r'Test-Path "C:\Users\russa\TEST_IRU"'),
         _exec_call("c1", r'Get-ChildItem -Path "C:\Users\russa\TEST_IRU" -Recurse -Include "*.html"'),
         _exec_call("c2", r'Get-Content -Path "C:\Users\russa\TEST_IRU\iru_website.html" -Encoding UTF8'),
         _exec_call("c3", r'Get-Content -Path "C:\Users\russa\TEST_IRU\iru_website.html" -Encoding UTF8 -Tail 200'),
@@ -458,7 +517,44 @@ def test_pipeline_readonly_inspection_not_blocked():
         send_fn=_send,
     )
 
-    assert len(executed) == 4
+    assert len(executed) == 5
+    assert "budget_guard" not in [c.get("action") for c in result.get("commands", [])]
+    assert result["status"] == "ok"
+
+
+def test_pipeline_artifact_creation_sequence_not_blocked():
+    calls = [
+        _exec_call("c1", 'python -c "import PyQt5"'),
+        _write_call("c2", r"C:\work\questions.json"),
+        _exec_call("c3", r'Get-Content "C:\work\questions.json" | ConvertFrom-Json | Out-Null'),
+        _write_call("c4", r"C:\work\test_db.py"),
+        _exec_call("c5", r"python -m py_compile C:\work\test_db.py"),
+    ]
+    executed: list[tuple[str, str]] = []
+
+    async def _send(device_id, action, params):
+        executed.append((action, params.get("command") or params.get("path")))
+        return {"returncode": 0, "stdout": "ok", "stderr": ""}
+
+    result = _run_worker(
+        responses=[
+            {
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {"content": "", "tool_calls": calls},
+                }]
+            },
+            {
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": "artifact created"},
+                }]
+            },
+        ],
+        send_fn=_send,
+    )
+
+    assert len(executed) == len(calls)
     assert "budget_guard" not in [c.get("action") for c in result.get("commands", [])]
     assert result["status"] == "ok"
 

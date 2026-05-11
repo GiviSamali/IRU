@@ -14,11 +14,11 @@ Commands are classified into categories, each with its own similarity limit:
   destructive              |      2        |  YES (mutating counter)
   unknown                  |      3        |  YES (mutating counter)
 
-Hard caps (never exceeded regardless of category):
-  max_tool_calls_per_task       = 30   (all tool calls combined)
-  max_mutating_cmd_calls        = 15   (mutating execute_cmd only)
-  max_environment_discovery     = 15   (environment discovery only)
-  max_read_only_cmd_calls       = 30   (read-only execute_cmd only)
+Extreme hard caps (never exceeded regardless of category):
+  max_tool_calls_per_task       = 300  (all tool calls combined)
+  max_mutating_cmd_calls        = 200  (mutating execute_cmd only)
+  max_environment_discovery     = 200  (environment discovery only)
+  max_read_only_cmd_calls       = 200  (read-only execute_cmd only)
 
 EnvDiscoveryGuard:
   Detects Python-environment spiral:
@@ -59,10 +59,10 @@ def _debug_enabled() -> bool:
 # Hard caps
 # ---------------------------------------------------------------------------
 
-MAX_TOOL_CALLS_PER_TASK = 30
-MAX_MUTATING_CMD_CALLS = 15
-MAX_ENVIRONMENT_DISCOVERY_CALLS = 15
-MAX_READ_ONLY_CMD_CALLS = 30
+MAX_TOOL_CALLS_PER_TASK = 300
+MAX_MUTATING_CMD_CALLS = 200
+MAX_ENVIRONMENT_DISCOVERY_CALLS = 200
+MAX_READ_ONLY_CMD_CALLS = 200
 
 # Per-key similarity limits per category
 MAX_SIMILAR_ENVIRONMENT_DISCOVERY = 5
@@ -75,6 +75,7 @@ MAX_SIMILAR_UNKNOWN = 3
 # EnvDiscoveryGuard thresholds
 MAX_POST_FOUND_INTERPRETER_SEARCHES = 0  # how many extra interpreter-find cmds after found
 MAX_REPEATED_IMPORT_CHECKS = 2           # how many times same failed import may be retried
+MAX_REPEATED_FAILED_RESULT = 3
 
 # Legacy aliases
 MAX_EXECUTE_CMD_CALLS_PER_TASK = MAX_MUTATING_CMD_CALLS
@@ -121,6 +122,8 @@ _INSTALL_VERBS: frozenset[str] = frozenset({"pip", "pip3"})
 
 _DESTRUCTIVE_VERBS: frozenset[str] = frozenset({
     "remove-item", "del", "rm", "rmdir", "rd",
+    "erase", "new-item", "ni", "mkdir", "md",
+    "move-item", "copy-item", "set-content", "add-content", "out-file",
     "format", "clear-content", "clear-variable",
     "stop-process", "kill",
     "invoke-expression", "iex",
@@ -149,6 +152,30 @@ def _extract_primary_path(parts: list[str]) -> str:
         if re.search(r"[/\\]", p) or re.match(r"[a-zA-Z]:", p):
             return p.lower()
     return parts[1].lower() if len(parts) > 1 else ""
+
+
+def _extract_paths(parts: list[str]) -> list[str]:
+    return [
+        p.lower()
+        for p in parts[1:]
+        if re.search(r"[/\\]", p) or re.match(r"[a-zA-Z]:", p)
+    ]
+
+
+def _mutation_key(verb: str, parts: list[str]) -> str:
+    paths = _extract_paths(parts)
+    target = paths[-1] if verb in {"copy-item", "move-item"} and paths else _extract_primary_path(parts)
+    if verb in {"remove-item", "rm", "del", "erase", "rmdir", "rd"}:
+        action = "delete"
+    elif verb in {"new-item", "ni", "mkdir", "md"}:
+        action = "create"
+    elif verb in {"set-content", "add-content", "out-file"}:
+        action = "write"
+    elif verb in {"copy-item", "move-item"}:
+        action = verb
+    else:
+        action = verb
+    return f"{action} {target}".strip()
 
 
 def _extract_import_package(command: str) -> str | None:
@@ -241,6 +268,9 @@ def normalize_execute_cmd(command: str) -> str:
         target = re.sub(r"\.exe$", "", parts[1])
         return f"{verb} {target}"
 
+    if verb in _DESTRUCTIVE_VERBS:
+        return _mutation_key(verb, parts)
+
     # ── Get-Content ───────────────────────────────────────────────────────────
     if verb == "get-content":
         path = _extract_primary_path(parts)
@@ -298,7 +328,7 @@ def classify_cmd(command: str) -> CmdCategory:
     if "python" == verb and " -m pip install" in key:
         return CmdCategory.PACKAGE_INSTALL
 
-    if verb in _DESTRUCTIVE_VERBS:
+    if verb in _DESTRUCTIVE_VERBS or verb in {"delete", "create", "write", "copy-item", "move-item"}:
         return CmdCategory.DESTRUCTIVE
 
     if verb in _PROCESS_LAUNCH_VERBS:
@@ -471,6 +501,7 @@ class CommandBudget:
         max_similar_environment_discovery: int = MAX_SIMILAR_ENVIRONMENT_DISCOVERY,
         max_post_found_interpreter_searches: int = MAX_POST_FOUND_INTERPRETER_SEARCHES,
         max_repeated_import_checks: int = MAX_REPEATED_IMPORT_CHECKS,
+        max_repeated_failed_result: int = MAX_REPEATED_FAILED_RESULT,
     ) -> None:
         self.max_tool_calls = max_tool_calls
         self.max_mutating_cmd_calls = (
@@ -493,6 +524,8 @@ class CommandBudget:
         self.environment_discovery_count = 0
         self.read_only_cmd_count = 0
         self.cmd_key_counts: dict[str, int] = {}
+        self.failed_result_counts: dict[str, int] = {}
+        self.max_repeated_failed_result = max_repeated_failed_result
 
         # EnvDiscoveryGuard — shared instance, injectable for tests
         self.env_guard = EnvDiscoveryGuard(
@@ -644,4 +677,15 @@ class CommandBudget:
             if package:
                 self.record_import_failure(package)
             return DEPENDENCY_MISSING_ERROR
+        try:
+            returncode = int((result or {}).get("returncode", 0))
+        except Exception:
+            returncode = 0
+        if returncode != 0 or (result or {}).get("error"):
+            key = normalize_execute_cmd(command)
+            error_text = str((result or {}).get("stderr") or (result or {}).get("error") or "")[:160].strip().lower()
+            failed_key = f"{key}|{error_text}"
+            self.failed_result_counts[failed_key] = self.failed_result_counts.get(failed_key, 0) + 1
+            if self.failed_result_counts[failed_key] > self.max_repeated_failed_result:
+                return BUDGET_GUARD_ERROR
         return None
