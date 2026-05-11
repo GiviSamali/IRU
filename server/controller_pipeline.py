@@ -20,6 +20,7 @@ try:
         build_device_profile_block,
         build_devices_block,
         build_memory_block,
+        build_target_device_block,
         collect_tasks,
         current_datetime_msk,
         push_tasks_view,
@@ -33,6 +34,7 @@ except ImportError:
         build_device_profile_block,
         build_devices_block,
         build_memory_block,
+        build_target_device_block,
         collect_tasks,
         current_datetime_msk,
         push_tasks_view,
@@ -335,6 +337,9 @@ Hostname: {shared["current_hostname"]}
 Профиль устройства:
 {shared["device_profile_block"] or "Нет расширенного профиля."}
 
+Target device context:
+{shared.get("target_device_block") or "Нет расширенного target context."}
+
 Память:
 {shared["device_memory_block"] or "Нет дополнительной памяти."}
 
@@ -412,6 +417,9 @@ Hostname: {shared["current_hostname"]}
 Профиль устройства:
 {shared["device_profile_block"] or "Нет расширенного профиля."}
 
+Target device context:
+{shared.get("target_device_block") or "Нет расширенного target context."}
+
 Память:
 {shared["device_memory_block"] or "Нет дополнительной памяти."}
 
@@ -459,6 +467,7 @@ def build_pipeline_shared_context(
         "current_os": os_info,
         "current_os_version": device_info.get("os_version", ""),
         "device_profile_block": build_device_profile_block(device_profile),
+        "target_device_block": build_target_device_block(device_id, device_info, device_profile),
         "device_memory_block": build_memory_block(machine_guid, mem_user_id),
         "os_rules": linux_rules if "linux" in os_lower else windows_rules,
         "current_datetime_msk": current_datetime_msk(),
@@ -538,6 +547,7 @@ def build_pipeline_worker_context(
         "current_os": os_info,
         "current_os_version": target_info.get("os_version", ""),
         "device_profile_block": build_device_profile_block(target_profile),
+        "target_device_block": build_target_device_block(target_device_id, target_info, target_profile),
         "device_memory_block": build_memory_block(target_machine_guid, mem_user_id),
         "os_rules": linux_rules if "linux" in os_lower else windows_rules,
         "current_datetime_msk": current_datetime_msk(),
@@ -571,6 +581,7 @@ async def run_pipeline_worker(
             f"Device scope hard rule: target_device={shared.get('target_device_id') or shared['current_device_id']}. "
             "Execute this step only on target_device. Do not use paths from another device. "
             "Absolute paths from user memory are hints only and must be verified on target_device before use. "
+            "Never create missing C:\\Users\\<name> profile folders unless the user explicitly asked and confirmed. "
             "If a path is not found on target_device, report it instead of substituting a path from another device. "
             "Completed steps marked OTHER DEVICE are informational only; do not reuse their paths as target-device paths. "
             "Python environment contract: if Python is found and an import check returns ModuleNotFoundError / No module named, "

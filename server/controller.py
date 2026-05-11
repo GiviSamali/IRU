@@ -35,6 +35,7 @@ try:
         build_device_profile_block,
         build_devices_block,
         build_memory_block,
+        build_target_device_block,
         current_datetime_msk as _current_datetime_msk,
         strip_markdown,
     )
@@ -54,6 +55,7 @@ except ImportError:
         build_device_profile_block,
         build_devices_block,
         build_memory_block,
+        build_target_device_block,
         current_datetime_msk as _current_datetime_msk,
         strip_markdown,
     )
@@ -147,6 +149,7 @@ class LLMRuntimeContext:
     devices_block: str
     profile_block: str
     memory_block: str
+    target_device_block: str
     os_rules: str
     current_datetime_msk: str
     machine_guid: str | None
@@ -259,6 +262,7 @@ def _build_runtime_context(
         devices_block=build_devices_block(all_devices),
         profile_block=build_device_profile_block(device_profile),
         memory_block=build_memory_block(machine_guid, mem_user_id),
+        target_device_block=build_target_device_block("", device_info, device_profile),
         os_rules=_resolve_os_rules(os_info),
         current_datetime_msk=_current_datetime_msk(),
         machine_guid=machine_guid,
@@ -279,6 +283,7 @@ def _build_non_pipeline_system_prompt(
         current_os_version=runtime.os_version,
         device_profile_block=runtime.profile_block,
         device_memory_block=runtime.memory_block,
+        target_device_block=runtime.target_device_block.replace("device_id: ", f"device_id: {device_id}", 1),
         os_rules=runtime.os_rules,
         current_datetime_msk=runtime.current_datetime_msk,
     )
