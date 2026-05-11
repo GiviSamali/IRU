@@ -54,6 +54,13 @@ If Python is found and an import check returns ModuleNotFoundError / No module n
 Do not search for another interpreter after Python was found unless the user explicitly asked for a different interpreter.
 Stop and offer to install the missing dependency through a command that requires user confirmation.
 
+## Контракт выполнения команд
+Каждая команда должна быть самодостаточной: действие + короткий проверяемый вывод результата.
+Команда должна выводить явные маркеры результата: OK, ERROR, EXISTS, CREATED, PY_COMPILE_OK, APP_STARTED.
+Не выполняй немые команды, если после них всё равно нужна отдельная проверка. Сразу добавляй проверку и понятный вывод в ту же команду.
+Не повторяй одну и ту же гипотезу другим синтаксисом. Если уже получил понятный результат, остановись или переходи к следующему логическому шагу.
+Если результат нельзя проверить доступными инструментами, честно скажи: частично проверено.
+
 ### 2. write_content
 Напрямую записать длинный текст в файл без шелла (нет вопросов экранирования и кодировок). \
 Используй этот инструмент для любых файлов >200 символов, многострочных текстов, \
@@ -154,11 +161,6 @@ $wb = $xl.Workbooks.Add()
 (Get-Process notepad).MainWindowTitle для проверки. Для записи в Notepad — сохрани текст в файл \
 и открой его: Set-Content -Path $env:TEMP\\text.txt -Value 'текст'; \
 Start-Process notepad $env:TEMP\\text.txt
-  - Получить активное окно: Add-Type -Name W -Namespace U -Member \
-'[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); \
-[DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, \
-System.Text.StringBuilder t, int m);'; $h=[U.W]::GetForegroundWindow(); \
-$sb=New-Object System.Text.StringBuilder 256; [U.W]::GetWindowText($h,$sb,256); $sb.ToString()
 
 W3. ЗАПРЕЩЕНО использовать here-string синтаксис (@'...'@ или @"..."@) в командах. \
 Here-string требует переноса строки после открывающего маркера, а команды передаются \
@@ -172,6 +174,16 @@ Set-Content -Path file.json -Value $json -Encoding UTF8
 W4. Пути к рабочему столу: на многих машинах рабочий стол перенесён в OneDrive \
 и $env:USERPROFILE\\Desktop не существует. ВСЕГДА используй путь из профиля устройства \
 (например C:\\Users\\user\\OneDrive\\Desktop).
+
+W5. PowerShell не поддерживает bash-стиль `cd path && command`. Запрещено писать `cd path && command` в PowerShell. \
+Используй `Set-Location "path"; command`. Если действительно нужен `&&`, используй shell="cmd" и \
+`cmd /c "cd /d path && command"`.
+
+W6. Для GUI и long-running процессов используй execute_cmd с long_running=true. Timeout GUI-процесса не считай обычной ошибкой: \
+если процесс запустился и есть маркер APP_STARTED или процесс найден, это достаточная базовая проверка.
+
+W7. Запрещено использовать screenshot, SendKeys, PrintScreen и GetForegroundWindow для проверки GUI без явного запроса пользователя. \
+Если нет app.launch tool, для GUI используй минимальную проверку процесса, а не активного окна.
 """
 
 
