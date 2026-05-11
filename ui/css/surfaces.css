@@ -551,17 +551,22 @@ img[src*="iru_logo"] {
   gap: 4px;
 }
 .task-step {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  display: block;
   font-size: 11px;
   color: var(--text-secondary);
   line-height: 1.5;
+  min-width: 0;
+}
+.task-step .step-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 .task-step .step-icon {
   font-size: 11px;
-  flex-shrink: 0;
-  width: 14px;
+  width: 16px;
   text-align: center;
   color: var(--text-muted);
 }
@@ -573,19 +578,87 @@ img[src*="iru_logo"] {
 .task-step.step-running .step-desc { color: var(--text-primary); font-weight: 500; }
 .task-step.step-pending .step-desc { color: var(--text-muted); }
 .task-step .step-desc {
-  flex: 1;
   min-width: 0;
-  word-break: break-word;
+  word-break: normal;
   overflow-wrap: break-word;
 }
-.task-step .step-summary {
+.task-step .step-subdesc {
+  display: block;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+.task-step .step-status {
+  color: var(--text-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+.task-step .step-details-toggle {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(0, 212, 255, 0.16);
+  border-radius: 5px;
+  background: rgba(255,255,255,0.03);
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+.task-step .step-details-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+.task-step .step-details {
+  margin: 6px 0 2px 24px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: var(--radius-sm);
+  background: rgba(1, 2, 5, 0.68);
   font-size: 10px;
   color: var(--text-muted);
-  margin-top: 2px;
   font-family: 'JetBrains Mono', monospace;
   white-space: pre-wrap;
-  word-break: break-word;
+  word-break: normal;
   overflow-wrap: break-word;
+  max-width: 100%;
+  min-width: 0;
+}
+.task-step .step-details[hidden] {
+  display: none;
+}
+.task-step .step-detail-section + .step-detail-section {
+  margin-top: 8px;
+}
+.task-step .step-detail-label {
+  margin-bottom: 2px;
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.task-step .step-detail-text {
+  max-width: 100%;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+@media (max-width: 768px) {
+  .task-step .step-row {
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+  }
+  .task-step .step-status {
+    display: none;
+  }
+  .task-step .step-details {
+    margin-left: 0;
+  }
 }
 
 /* ── VOICE BUTTON ──────────────────────────────── */

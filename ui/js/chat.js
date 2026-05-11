@@ -410,6 +410,23 @@ function bindChatMessageActions() {
       if (group) group.classList.toggle('open');
       return;
     }
+    if (action === 'toggle-step-details') {
+      const stepEl = target.closest('.task-step');
+      if (!stepEl) return;
+      const willOpen = !stepEl.classList.contains('open');
+      stepEl.classList.toggle('open', willOpen);
+      target.setAttribute('aria-expanded', String(willOpen));
+      const arrow = target.querySelector('.step-details-arrow');
+      if (arrow) arrow.textContent = willOpen ? '\u25be' : '\u25b8';
+      const details = stepEl.querySelector('.step-details');
+      if (details) details.hidden = !willOpen;
+      const key = target.dataset.stepKey || stepEl.dataset.stepKey;
+      if (key && state.expandedStepDetails) {
+        if (willOpen) state.expandedStepDetails.add(key);
+        else state.expandedStepDetails.delete(key);
+      }
+      return;
+    }
     if (action === 'confirm-task' || action === 'deny-task') {
       const msgIndex = Number(target.dataset.index);
       const taskId = target.dataset.taskId || '';
@@ -604,10 +621,42 @@ async function pollTask(taskId, msgIndex) {
 }
 
 // ── LIVE PROGRESS ─────────────────────────────────────
+function getTaskStepKey(task, step, taskIndex, stepIndex) {
+  const taskKey = task.id || task.task_id || task.taskId || `task-${taskIndex}`;
+  const stepKey = step.id || step.step_id || step.index || step.idx || stepIndex;
+  return `${taskKey}:${stepKey}`;
+}
+
+function getStepDetailText(value) {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function renderStepDetailSection(label, value) {
+  const text = getStepDetailText(value);
+  if (!text) return '';
+  return `<div class="step-detail-section"><div class="step-detail-label">${label}</div><div class="step-detail-text">${escapeHTML(text)}</div></div>`;
+}
+
+function renderStepDetails(step) {
+  const sections = [
+    renderStepDetailSection('Summary', step.summary),
+    renderStepDetailSection('Error', step.error),
+    renderStepDetailSection('Details', step.detail || step.details || step.raw_detail || step.raw),
+  ].filter(Boolean);
+  return sections.join('');
+}
+
 function renderTaskBlock(tasks) {
   if (!tasks || tasks.length === 0) return '';
   let html = '';
-  for (const t of tasks) {
+  for (let ti = 0; ti < tasks.length; ti++) {
+    const t = tasks[ti];
     const st = t.status || 'running';
     const statusLabel = st === 'completed' ? 'завершено'
       : st === 'failed' ? 'ошибка'
@@ -618,15 +667,26 @@ function renderTaskBlock(tasks) {
     const steps = t.steps || [];
     if (steps.length > 0) {
       html += '<ul class="task-steps">';
-      for (const s of steps) {
+      for (let si = 0; si < steps.length; si++) {
+        const s = steps[si];
         const sst = s.status || 'pending';
         const icon = sst === 'done' ? '\u2713'
           : sst === 'failed' ? '\u2717'
-          : sst === 'running' ? '\u25b8'
+          : sst === 'running' ? '\u23f3'
           : sst === 'skipped' ? '\u2014'
           : '\u25cb';
-        const summary = s.summary ? `<div class="step-summary">${escapeHTML(s.summary)}</div>` : '';
-        html += `<li class="task-step step-${sst}"><span class="step-icon">${icon}</span><span class="step-desc">${escapeHTML(s.description || '')}</span>${summary}</li>`;
+        const title = s.title || s.description || `Step ${si + 1}`;
+        const description = s.title && s.description && s.description !== s.title
+          ? `<span class="step-subdesc">${escapeHTML(s.description)}</span>`
+          : '';
+        const detailsHTML = renderStepDetails(s);
+        const hasDetails = detailsHTML.length > 0;
+        const stepKey = getTaskStepKey(t, s, ti, si);
+        const isOpen = hasDetails && state.expandedStepDetails && state.expandedStepDetails.has(stepKey);
+        const toggle = hasDetails
+          ? `<button type="button" class="step-details-toggle" data-action="toggle-step-details" data-step-key="${escapeAttr(stepKey)}" aria-expanded="${isOpen ? 'true' : 'false'}" title="Toggle step details"><span class="step-details-arrow">${isOpen ? '\u25be' : '\u25b8'}</span></button>`
+          : '';
+        html += `<li class="task-step step-${sst}${isOpen ? ' open' : ''}" data-step-key="${escapeAttr(stepKey)}"><div class="step-row"><span class="step-icon">${icon}</span><span class="step-desc">${escapeHTML(title)}${description}</span><span class="step-status">${escapeHTML(sst)}</span>${toggle}</div>${hasDetails ? `<div class="step-details"${isOpen ? '' : ' hidden'}>${detailsHTML}</div>` : ''}</li>`;
       }
       html += '</ul>';
     }

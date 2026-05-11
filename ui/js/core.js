@@ -12,6 +12,7 @@ const state = {
   explorerPath: null,
   explorerHistory: [],
   pendingTasks: [],  // [{task_id, msgIndex}]
+  expandedStepDetails: new Set(),
   devModeOpen: false,
   userPlan: 'free',
   pollers: { devices: null },
