@@ -55,12 +55,13 @@ def _budget(
 # 1. Python found + PyQt5 ModuleNotFoundError -> DEPENDENCY_MISSING_ERROR
 # ---------------------------------------------------------------------------
 
-def test_python_found_then_modulenotfounderror_stops_interpreter_search():
+def test_command_budget_does_not_stop_interpreter_search_after_missing_dependency():
     """
     Sequence:
       python --version          -> OK (mark_interpreter_found)
       python -c "import PyQt5"  -> fails, record_import_failure("pyqt5")
-      where python              -> should be BLOCKED (interpreter already found)
+      where python              -> budget_guard allows it; controller should report
+                                   dependency state without a budget stop.
     """
     budget = _budget(max_post_found=0)  # 0 extra searches allowed after found
 
@@ -71,9 +72,7 @@ def test_python_found_then_modulenotfounderror_stops_interpreter_search():
     budget.record_import_failure("PyQt5")
 
     result = budget.register("execute_cmd", "where python")
-    assert result == DEPENDENCY_MISSING_ERROR, (
-        f"Expected DEPENDENCY_MISSING_ERROR, got: {result!r}"
-    )
+    assert result is None
 
 
 def test_dependency_missing_error_not_budget_guard_error():
@@ -86,7 +85,7 @@ def test_dependency_missing_error_not_budget_guard_error():
 # 2. Repeated import-check for same package -> blocked
 # ---------------------------------------------------------------------------
 
-def test_repeated_import_check_is_blocked_after_failure():
+def test_repeated_import_check_is_not_budget_blocked_after_failure():
     budget = _budget(max_import_retries=2)
 
     assert budget.register("execute_cmd", 'python -c "import PyQt5"') is None
@@ -95,9 +94,7 @@ def test_repeated_import_check_is_blocked_after_failure():
     assert budget.register("execute_cmd", 'python -c "import PyQt5"') is None
     assert budget.register("execute_cmd", 'python3 -c "import PyQt5"') is None
     result = budget.register("execute_cmd", 'py -c "import PyQt5"')
-    assert result == DEPENDENCY_MISSING_ERROR, (
-        f"Expected DEPENDENCY_MISSING_ERROR on 3rd retry, got: {result!r}"
-    )
+    assert result is None
 
 
 def test_different_packages_are_tracked_independently():
@@ -109,7 +106,7 @@ def test_different_packages_are_tracked_independently():
     assert budget.register("execute_cmd", 'python -c "import numpy"') is None
 
     result = budget.register("execute_cmd", 'python -c "import PyQt5"')
-    assert result == DEPENDENCY_MISSING_ERROR
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -175,10 +172,10 @@ def test_pip_version_does_not_count_as_mutating():
 
 
 # ---------------------------------------------------------------------------
-# 6. Existing spiral detection still works
+# 6. CommandBudget is not a spiral detector
 # ---------------------------------------------------------------------------
 
-def test_start_process_spiral_still_blocked():
+def test_start_process_spiral_not_budget_blocked():
     budget = _budget()
     cmds = [
         "Start-Process calc.exe",
@@ -187,8 +184,7 @@ def test_start_process_spiral_still_blocked():
         "Start-Process -FilePath calc.exe",
     ]
     results = [budget.register("execute_cmd", cmd) for cmd in cmds]
-    assert results[-1] == BUDGET_GUARD_ERROR
-    assert all(r is None for r in results[:-1])
+    assert results == [None, None, None, None]
 
 
 def test_interpreter_search_not_blocked_before_interpreter_found():

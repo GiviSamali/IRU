@@ -3,7 +3,6 @@ import json
 import re
 import time
 
-from server.controller_budget import MAX_MUTATING_CMD_CALLS
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_trust import SAFE_DOWNLOAD_LINK_ERROR
 
@@ -222,11 +221,8 @@ def _execute_call(call_id, command, device_id=None):
     }
 
 
-def test_non_pipeline_stops_when_execute_command_budget_is_exceeded():
-    # Use MAX_MUTATING_CMD_CALLS + 1 unknown/mutating commands so the hard
-    # mutating-budget cap fires regardless of future limit adjustments.
-    # Commands must be "unknown" category (not read-only / env-discovery).
-    n = MAX_MUTATING_CMD_CALLS
+def test_non_pipeline_does_not_stop_on_many_execute_commands():
+    n = 20
     calls = [_execute_call(f"call-{idx}", f"whoami {idx}") for idx in range(n + 1)]
     executed = []
 
@@ -235,21 +231,29 @@ def test_non_pipeline_stops_when_execute_command_budget_is_exceeded():
         return {"returncode": 0, "stdout": "ok", "stderr": ""}
 
     result = _run_non_pipeline_case(
-        responses=[{
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "message": {"content": "", "tool_calls": calls},
-            }]
-        }],
+        responses=[
+            {
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {"content": "", "tool_calls": calls},
+                }]
+            },
+            {
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": "ok"},
+                }]
+            },
+        ],
         send_command_fn=_send_command_fn,
     )
 
-    assert len(executed) == n
-    assert result["commands"][-1]["action"] == "budget_guard"
-    assert result["commands"][-1]["result"]["error"] == result["answer"]
+    assert len(executed) == n + 1
+    assert "budget_guard" not in [c.get("action") for c in result.get("commands", [])]
+    assert result["answer"] == "ok"
 
 
-def test_non_pipeline_stops_repeated_similar_execute_commands():
+def test_non_pipeline_does_not_stop_repeated_similar_execute_commands():
     calls = [
         _execute_call("call-1", "Start-Process calc.exe"),
         _execute_call("call-2", 'Start-Process -FilePath "calc.exe"'),
@@ -263,12 +267,20 @@ def test_non_pipeline_stops_repeated_similar_execute_commands():
         return {"returncode": 0, "stdout": "ok", "stderr": ""}
 
     result = _run_non_pipeline_case(
-        responses=[{
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "message": {"content": "", "tool_calls": calls},
-            }]
-        }],
+        responses=[
+            {
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {"content": "", "tool_calls": calls},
+                }]
+            },
+            {
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": "ok"},
+                }]
+            },
+        ],
         send_command_fn=_send_command_fn,
     )
 
@@ -276,8 +288,10 @@ def test_non_pipeline_stops_repeated_similar_execute_commands():
         "Start-Process calc.exe",
         'Start-Process -FilePath "calc.exe"',
         "Start-Process calc",
+        "Start-Process -FilePath calc.exe",
     ]
-    assert result["commands"][-1]["action"] == "budget_guard"
+    assert "budget_guard" not in [c.get("action") for c in result.get("commands", [])]
+    assert result["answer"] == "ok"
 
 
 def test_non_pipeline_single_execute_command_is_not_blocked():

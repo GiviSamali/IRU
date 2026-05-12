@@ -4,8 +4,8 @@ Regression tests for controller_budget.py — command classification system.
 Covers all 7 requirements:
 1. Python env-discovery sequence (10-12 cmds) does NOT trigger budget_guard.
 2. Read-only project inspection sequence does NOT trigger budget_guard.
-3. Repeated Start-Process calc variants STILL trigger budget_guard.
-4. Repeated identical unknown command STILL triggers budget_guard.
+3. Repeated Start-Process calc variants do NOT trigger budget_guard.
+4. Repeated identical unknown command does NOT trigger budget_guard.
 5. pip install classified as package_install_or_setup (mutating), not read-only.
 6. python -m pip --version classified as environment_discovery.
 7. CommandBudget used identically in non-pipeline and pipeline tests.
@@ -235,7 +235,7 @@ class TestCommandBudget:
         assert budget.mutating_cmd_count == 0
 
     # ── Requirement 3: Start-Process spiral blocked ───────────────────────
-    def test_start_process_retry_spiral_blocked(self):
+    def test_start_process_retry_spiral_not_blocked(self):
         budget = _budget()
         cmds = [
             "Start-Process calc.exe",
@@ -244,16 +244,14 @@ class TestCommandBudget:
             "Start-Process -FilePath calc.exe",   # 4th — blocked (limit=3)
         ]
         results = [budget.register("execute_cmd", c) for c in cmds]
-        assert results[:3] == [None, None, None]
-        assert results[3] is not None, "4th Start-Process calc must trigger budget_guard"
+        assert results == [None, None, None, None]
 
     # ── Requirement 4: identical unknown command blocked ─────────────────
-    def test_identical_unknown_cmd_blocked(self):
+    def test_identical_unknown_cmd_not_blocked(self):
         budget = _budget(max_similar_execute_cmd_calls=3)
         cmd = "whoami"
-        for _ in range(3):
+        for _ in range(12):
             assert budget.register("execute_cmd", cmd) is None
-        assert budget.register("execute_cmd", cmd) is not None
 
     def test_normal_artifact_creation_sequence_not_blocked(self):
         budget = CommandBudget()
@@ -300,7 +298,7 @@ class TestCommandBudget:
             assert result is None, f"{cmd!r} must NOT consume mutating budget"
         assert budget.mutating_cmd_count == 0
 
-    def test_repeated_destructive_same_target_blocked(self):
+    def test_repeated_destructive_same_target_not_budget_blocked(self):
         budget = _budget()
         cmds = [
             r'Remove-Item -LiteralPath "C:\tmp\same.txt"',
@@ -308,27 +306,23 @@ class TestCommandBudget:
             r'rd "C:\tmp\same.txt"',
         ]
         results = [budget.register("execute_cmd", cmd) for cmd in cmds]
-        assert results[:2] == [None, None]
-        assert results[2] is not None
+        assert results == [None, None, None]
 
-    def test_same_failed_command_error_is_blocked(self):
+    def test_same_failed_command_error_is_not_budget_blocked(self):
         budget = _budget(max_similar_execute_cmd_calls=99, max_repeated_failed_result=2)
         cmd = "python run_task.py"
         result = {"returncode": 1, "stdout": "", "stderr": "same deterministic failure"}
 
-        for _ in range(2):
+        for _ in range(5):
             assert budget.register("execute_cmd", cmd) is None
             assert budget.observe_execute_result(cmd, result) is None
-        assert budget.register("execute_cmd", cmd) is None
-        assert budget.observe_execute_result(cmd, result) is not None
 
     # ── Hard caps still enforced ────────────────────────────────────
-    def test_execute_cmd_extreme_cap_still_enforced(self):
+    def test_execute_cmd_extreme_cap_not_enforced(self):
         budget = CommandBudget(max_tool_calls=3, max_execute_cmd_calls=999,
                                max_mutating_cmd_calls=999)
-        for idx in range(3):
+        for idx in range(10):
             assert budget.register("execute_cmd", f"whoami {idx}") is None
-        assert budget.register("execute_cmd", "whoami 99") is not None
 
     def test_non_execute_tools_do_not_hit_budget_cap(self):
         budget = CommandBudget(max_tool_calls=3)
@@ -570,9 +564,9 @@ def test_pipeline_artifact_creation_sequence_not_blocked():
     assert result["status"] == "ok"
 
 
-def test_pipeline_start_process_spiral_still_blocked():
+def test_pipeline_start_process_spiral_not_budget_blocked():
     """
-    Req 7: Pipeline must still block Start-Process calc retry spiral.
+    Req 7: budget_guard must not block Start-Process retry loops.
     """
     spiral_calls = [
         _exec_call("c1", "Start-Process calc.exe"),
@@ -587,14 +581,23 @@ def test_pipeline_start_process_spiral_still_blocked():
         return {"returncode": 0, "stdout": "ok", "stderr": ""}
 
     result = _run_worker(
-        responses=[{
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "message": {"content": "", "tool_calls": spiral_calls},
-            }]
-        }],
+        responses=[
+            {
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {"content": "", "tool_calls": spiral_calls},
+                }]
+            },
+            {
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": "done"},
+                }]
+            },
+        ],
         send_fn=_send,
     )
 
-    assert len(executed) == 3
-    assert result["commands"][-1]["action"] == "budget_guard"
+    assert len(executed) == len(spiral_calls)
+    assert "budget_guard" not in [c.get("action") for c in result.get("commands", [])]
+    assert result["status"] == "ok"

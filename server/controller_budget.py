@@ -3,33 +3,27 @@ controller_budget.py
 
 Command budget guard shared by non-pipeline and pipeline controllers.
 
-Commands are classified into categories, but only runaway/security-like loops
-are hard-stopped. Normal file inspection and normal artifact writes are not
-budget-managed.
+Commands are classified for debug counters only.
+
+The budget guard is allow-by-default. It does not enforce retry-loop,
+similarity, total-call, unknown-command, or read/write workflow limits. Real
+security and production-safety decisions belong to trust/path/confirm/deny
+guards, which block explicitly forbidden actions instead of blocking anything
+not recognised as allowed.
 
   Category                 | Similar-limit | Counts toward mutating budget?
   ─────────────────────────|───────────────|───────────────────────────────
   environment_discovery    |  env guard    |  NO  (debug counter only)
   read_only_inspection     |     none      |  NO  (debug counter only)
-  package_install_or_setup |      4        |  YES (mutating counter)
-  process_launch           |      3        |  YES (mutating counter)
-  destructive              |      2        |  YES (mutating counter)
-  unknown                  |      3        |  YES (mutating counter)
+  package_install_or_setup |     none      |  YES (debug counter only)
+  process_launch           |     none      |  YES (debug counter only)
+  destructive              |     none      |  YES (debug counter only)
+  unknown                  |     none      |  YES (debug counter only)
 
-Extreme hard caps (never exceeded regardless of category):
-  max_tool_calls_per_task       = 300  (execute_cmd only)
-  max_mutating_cmd_calls        = 200  (mutating execute_cmd only)
-  max_environment_discovery     = debug counter only
-  max_read_only_cmd_calls       = debug counter only
-
-EnvDiscoveryGuard:
-  Detects Python-environment spiral:
-    1. Once a working interpreter is confirmed (python --version exits 0),
-       further interpreter searches are blocked (MAX_POST_FOUND_INTERPRETER_SEARCHES).
-    2. Once an import-check for a package fails with ModuleNotFoundError,
-       repeating the same import-check is blocked (MAX_REPEATED_IMPORT_CHECKS).
-  The guard does NOT install packages and does NOT assume the package exists.
-  It only stops the search spiral and surfaces DEPENDENCY_MISSING_ERROR.
+Env state:
+  CommandBudget may record Python interpreter/import outcomes for diagnostics,
+  but it no longer blocks follow-up commands. Missing dependencies should be
+  reported by the controller/worker answer, not by budget_guard.
 
 Debug logging:
   Set env var IRU_DEBUG_BUDGET=1 to enable verbose per-call budget logs.
@@ -557,7 +551,8 @@ class CommandBudget:
     def register(self, fn_name: str, command: str = "") -> str | None:
         """
         Register a tool call.
-        Returns an error string if any budget is exceeded, else None.
+        Always returns None. This guard is allow-by-default and only keeps
+        counters/debug state; explicit denials live in trust/path guards.
         """
         debug = _debug_enabled()
 
@@ -566,119 +561,52 @@ class CommandBudget:
         if fn_name != "execute_cmd":
             if debug:
                 _log.debug(
-                    "[budget] fn=%s | tool_calls=%d | PASS (non-execute_cmd unmanaged)",
+                    "[budget pass] fn=%s | tool_calls=%d | policy=allow_by_default",
                     fn_name, self.tool_calls_count,
                 )
             return None
 
-        # ── EnvDiscoveryGuard check (before counting) ─────────────────────────
-        env_block = self.env_guard.check_command(command)
-        if env_block:
-            if debug:
-                _log.debug(
-                    "[budget BLOCK] fn=execute_cmd | cmd=%.120s | env_guard blocked",
-                    (command or "").replace("\n", " "),
-                )
-            return env_block
-
-        # execute_cmd path
         self.execute_cmd_count += 1
-        if self.execute_cmd_count > self.max_tool_calls:
-            reason = f"execute_cmd_count {self.execute_cmd_count}/{self.max_tool_calls} exceeded"
-            if debug:
-                _log.debug("[budget_guard BLOCK] fn=execute_cmd | reason: %s", reason)
-            return BUDGET_GUARD_ERROR
-
         category = classify_cmd(command)
-        cmd_key  = normalize_execute_cmd(command)
+        cmd_key = normalize_execute_cmd(command)
+        if cmd_key:
+            self.cmd_key_counts[cmd_key] = self.cmd_key_counts.get(cmd_key, 0) + 1
 
         if category == CmdCategory.ENVIRONMENT_DISCOVERY:
             self.environment_discovery_count += 1
         elif category == CmdCategory.READ_ONLY_INSPECTION:
             self.read_only_cmd_count += 1
+        else:
+            self.mutating_cmd_count += 1
 
-        if category in _NO_BUDGET_CATEGORIES:
-            if debug:
-                _log.debug(
-                    "[budget pass] fn=execute_cmd | cmd=%.120s"
-                    " | key=%r | category=%s"
-                    " | tool_calls=%d | execute_cmd=%d"
-                    " | env_discovery=%d | read_only=%d"
-                    " | same_key=unmanaged | block_reason=none",
-                    (command or "").replace("\n", " "),
-                    cmd_key,
-                    category.value,
-                    self.tool_calls_count,
-                    self.execute_cmd_count,
-                    self.environment_discovery_count,
-                    self.read_only_cmd_count,
-                )
-            return None
-
-        # ── Per-category hard-cap ─────────────────────────────────────────────
-        block_reason: str | None = None
-
-        self.mutating_cmd_count += 1
-        if block_reason is None and self.mutating_cmd_count > self.max_mutating_cmd_calls:
-            block_reason = (
-                f"mutating_count {self.mutating_cmd_count}"
-                f"/{self.max_mutating_cmd_calls} exceeded"
-            )
-
-        # ── Per-key similarity check ──────────────────────────────────────────
-        same_key_count = 0
-        similar_limit = self._similar_limits[category]
-        if cmd_key and block_reason is None:
-            self.cmd_key_counts[cmd_key] = self.cmd_key_counts.get(cmd_key, 0) + 1
-            same_key_count = self.cmd_key_counts[cmd_key]
-            if same_key_count > similar_limit:
-                block_reason = (
-                    f"same_key_count {same_key_count}/{similar_limit} exceeded"
-                    f" (key={cmd_key!r})"
-                )
-        elif cmd_key:
-            self.cmd_key_counts[cmd_key] = self.cmd_key_counts.get(cmd_key, 0) + 1
-            same_key_count = self.cmd_key_counts[cmd_key]
-
-        # ── Debug log ─────────────────────────────────────────────────────────
         if debug:
-            status = "BLOCK" if block_reason else "pass"
-            if category == CmdCategory.ENVIRONMENT_DISCOVERY:
-                cat_counter = f"env_discovery={self.environment_discovery_count}/{self.max_environment_discovery_calls}"
-            elif category == CmdCategory.READ_ONLY_INSPECTION:
-                cat_counter = f"read_only={self.read_only_cmd_count}/{self.max_read_only_cmd_calls}"
-            else:
-                cat_counter = f"mutating={self.mutating_cmd_count}/{self.max_mutating_cmd_calls}"
-
             _log.debug(
-                "[budget %s] fn=execute_cmd | cmd=%.120s"
+                "[budget pass] fn=execute_cmd | cmd=%.120s"
                 " | key=%r | category=%s"
-                " | tool_calls=%d/%d | execute_cmd=%d"
-                " | %s"
-                " | same_key=%d/%d"
-                " | block_reason=%s",
-                status,
+                " | tool_calls=%d | execute_cmd=%d"
+                " | env_discovery=%d | read_only=%d | mutating=%d"
+                " | same_key=%d | block_reason=none | policy=allow_by_default",
                 (command or "").replace("\n", " "),
                 cmd_key,
                 category.value,
                 self.tool_calls_count,
-                self.max_tool_calls,
                 self.execute_cmd_count,
-                cat_counter,
-                same_key_count,
-                similar_limit,
-                block_reason or "none",
+                self.environment_discovery_count,
+                self.read_only_cmd_count,
+                self.mutating_cmd_count,
+                self.cmd_key_counts.get(cmd_key, 0),
             )
-
-        if block_reason:
-            return BUDGET_GUARD_ERROR
         return None
+
 
     # ------------------------------------------------------------------
     def observe_execute_result(self, command: str, result: dict | None) -> str | None:
         """
-        Observe an execute_cmd result and stop deterministic env-discovery
-        spirals that are only visible after command output is known.
+        Observe an execute_cmd result for diagnostics only.
+
+        This method records Python/env state and repeated failure counters, but
+        it does not block. User-visible failure handling belongs to the
+        controller response, not to budget_guard.
         """
         classified = classify_python_env_result(command, result or {})
         status = classified.get("status")
@@ -689,7 +617,7 @@ class CommandBudget:
             package = str(classified.get("package") or "").strip()
             if package:
                 self.record_import_failure(package)
-            return DEPENDENCY_MISSING_ERROR
+            return None
         try:
             returncode = int((result or {}).get("returncode", 0))
         except Exception:
@@ -702,6 +630,4 @@ class CommandBudget:
             error_text = str((result or {}).get("stderr") or (result or {}).get("error") or "")[:160].strip().lower()
             failed_key = f"{key}|{error_text}"
             self.failed_result_counts[failed_key] = self.failed_result_counts.get(failed_key, 0) + 1
-            if self.failed_result_counts[failed_key] > self.max_repeated_failed_result:
-                return BUDGET_GUARD_ERROR
         return None

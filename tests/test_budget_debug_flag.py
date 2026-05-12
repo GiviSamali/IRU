@@ -161,10 +161,10 @@ def test_debug_log_contains_required_fields(caplog, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 5. Block log record present when budget is exceeded
+# 5. Repeated commands remain pass-only in budget debug logs
 # ---------------------------------------------------------------------------
 
-def test_debug_log_block_record_on_spiral(caplog, monkeypatch):
+def test_debug_log_pass_record_on_repeated_commands(caplog, monkeypatch):
     monkeypatch.setenv("IRU_DEBUG_BUDGET", "1")
     budget = _make_budget()  # default similar limit for process_launch = 3
 
@@ -172,7 +172,7 @@ def test_debug_log_block_record_on_spiral(caplog, monkeypatch):
         "Start-Process calc.exe",
         'Start-Process -FilePath "calc.exe"',
         "Start-Process calc",
-        "Start-Process -FilePath calc.exe",  # triggers block
+        "Start-Process -FilePath calc.exe",
     ]
 
     results = []
@@ -180,13 +180,10 @@ def test_debug_log_block_record_on_spiral(caplog, monkeypatch):
         for cmd in cmds:
             results.append(budget.register("execute_cmd", cmd))
 
-    # Last result must be blocked
-    assert results[-1] == BUDGET_GUARD_ERROR
+    assert results == [None, None, None, None]
 
-    # A BLOCK record must appear in the logs
     block_records = [
         r for r in caplog.records
         if r.name == "iru.budget" and "BLOCK" in r.getMessage()
     ]
-    assert block_records, "Expected at least one [budget BLOCK] log record"
-    assert "block_reason" in block_records[-1].getMessage()
+    assert block_records == []

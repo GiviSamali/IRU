@@ -1,4 +1,4 @@
-from server.controller_budget import DEPENDENCY_MISSING_ERROR, CommandBudget
+from server.controller_budget import CommandBudget
 from server.python_env import (
     EnvDiscoveryGuard,
     classify_python_env_result,
@@ -82,7 +82,7 @@ def test_repeated_import_check_after_missing_package_is_stopped():
     assert "Missing dependency does not mean Python is missing" in second_stop
 
 
-def test_no_further_interpreter_search_after_interpreter_found():
+def test_command_budget_allows_interpreter_search_after_interpreter_found():
     budget = CommandBudget()
 
     assert budget.register("execute_cmd", "python --version") is None
@@ -91,16 +91,16 @@ def test_no_further_interpreter_search_after_interpreter_found():
         {"returncode": 0, "stdout": "Python 3.11.7\r\n", "stderr": ""},
     ) is None
 
-    stopped = budget.register("execute_cmd", "py --version")
+    result = budget.register("execute_cmd", "py --version")
 
-    assert stopped == DEPENDENCY_MISSING_ERROR
+    assert result is None
 
 
-def test_command_budget_stops_after_dependency_missing_result():
+def test_command_budget_records_dependency_missing_without_blocking():
     budget = CommandBudget()
 
     assert budget.register("execute_cmd", 'python -c "import PyQt5"') is None
-    stopped = budget.observe_execute_result(
+    result = budget.observe_execute_result(
         'python -c "import PyQt5"',
         {
             "returncode": 1,
@@ -109,4 +109,5 @@ def test_command_budget_stops_after_dependency_missing_result():
         },
     )
 
-    assert stopped == DEPENDENCY_MISSING_ERROR
+    assert result is None
+    assert "pyqt5" in budget.env_guard.failed_import_retries

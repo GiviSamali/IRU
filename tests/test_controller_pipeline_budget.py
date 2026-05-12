@@ -3,7 +3,6 @@ import json
 
 import httpx
 
-from server.controller_budget import MAX_MUTATING_CMD_CALLS
 from server.controller_pipeline import (
     build_pipeline_worker_context,
     pipeline_worker_prompt,
@@ -83,11 +82,8 @@ def _run_worker_case(responses, send_command_fn=None, step=None):
     return asyncio.run(_run())
 
 
-def test_pipeline_worker_stops_when_execute_command_budget_is_exceeded():
-    # Use MAX_MUTATING_CMD_CALLS + 1 unknown/mutating commands so the hard
-    # mutating-budget cap fires regardless of future limit adjustments.
-    # Commands must be "unknown" category (not read-only / env-discovery).
-    n = MAX_MUTATING_CMD_CALLS
+def test_pipeline_worker_does_not_stop_on_many_execute_commands():
+    n = 20
     calls = [_execute_call(f"call-{idx}", f"whoami {idx}") for idx in range(n + 1)]
     executed = []
 
@@ -96,22 +92,29 @@ def test_pipeline_worker_stops_when_execute_command_budget_is_exceeded():
         return {"returncode": 0, "stdout": "ok", "stderr": ""}
 
     result = _run_worker_case(
-        responses=[{
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "message": {"content": "", "tool_calls": calls},
-            }]
-        }],
+        responses=[
+            {
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {"content": "", "tool_calls": calls},
+                }]
+            },
+            {
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": "ok"},
+                }]
+            },
+        ],
         send_command_fn=_send_command_fn,
     )
 
-    assert result["status"] == "error"
-    assert len(executed) == n
-    assert result["commands"][-1]["action"] == "budget_guard"
-    assert result["commands"][-1]["result"]["error"] == result["answer"]
+    assert result["status"] == "ok"
+    assert len(executed) == n + 1
+    assert "budget_guard" not in [c.get("action") for c in result.get("commands", [])]
 
 
-def test_pipeline_worker_stops_repeated_similar_execute_commands():
+def test_pipeline_worker_does_not_stop_repeated_similar_execute_commands():
     calls = [
         _execute_call("call-1", "Start-Process calc.exe"),
         _execute_call("call-2", 'Start-Process -FilePath "calc.exe"'),
@@ -125,12 +128,20 @@ def test_pipeline_worker_stops_repeated_similar_execute_commands():
         return {"returncode": 0, "stdout": "ok", "stderr": ""}
 
     result = _run_worker_case(
-        responses=[{
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "message": {"content": "", "tool_calls": calls},
-            }]
-        }],
+        responses=[
+            {
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {"content": "", "tool_calls": calls},
+                }]
+            },
+            {
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": "ok"},
+                }]
+            },
+        ],
         send_command_fn=_send_command_fn,
     )
 
@@ -138,8 +149,10 @@ def test_pipeline_worker_stops_repeated_similar_execute_commands():
         "Start-Process calc.exe",
         'Start-Process -FilePath "calc.exe"',
         "Start-Process calc",
+        "Start-Process -FilePath calc.exe",
     ]
-    assert result["commands"][-1]["action"] == "budget_guard"
+    assert "budget_guard" not in [c.get("action") for c in result.get("commands", [])]
+    assert result["status"] == "ok"
 
 
 def test_pipeline_worker_single_execute_command_is_not_blocked():
