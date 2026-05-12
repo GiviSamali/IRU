@@ -3,22 +3,24 @@ controller_budget.py
 
 Command budget guard shared by non-pipeline and pipeline controllers.
 
-Commands are classified into categories, each with its own similarity limit:
+Commands are classified into categories, but only runaway/security-like loops
+are hard-stopped. Normal file inspection and normal artifact writes are not
+budget-managed.
 
   Category                 | Similar-limit | Counts toward mutating budget?
   ─────────────────────────|───────────────|───────────────────────────────
-  environment_discovery    |      5        |  NO  (own counter)
-  read_only_inspection     |      6        |  NO  (own counter)
+  environment_discovery    |  env guard    |  NO  (debug counter only)
+  read_only_inspection     |     none      |  NO  (debug counter only)
   package_install_or_setup |      4        |  YES (mutating counter)
   process_launch           |      3        |  YES (mutating counter)
   destructive              |      2        |  YES (mutating counter)
   unknown                  |      3        |  YES (mutating counter)
 
 Extreme hard caps (never exceeded regardless of category):
-  max_tool_calls_per_task       = 300  (all tool calls combined)
+  max_tool_calls_per_task       = 300  (execute_cmd only)
   max_mutating_cmd_calls        = 200  (mutating execute_cmd only)
-  max_environment_discovery     = 200  (environment discovery only)
-  max_read_only_cmd_calls       = 200  (read-only execute_cmd only)
+  max_environment_discovery     = debug counter only
+  max_read_only_cmd_calls       = debug counter only
 
 EnvDiscoveryGuard:
   Detects Python-environment spiral:
@@ -355,6 +357,11 @@ _NON_MUTATING_CATEGORIES: frozenset[CmdCategory] = frozenset({
     CmdCategory.READ_ONLY_INSPECTION,
 })
 
+_NO_BUDGET_CATEGORIES: frozenset[CmdCategory] = frozenset({
+    CmdCategory.ENVIRONMENT_DISCOVERY,
+    CmdCategory.READ_ONLY_INSPECTION,
+})
+
 
 # ---------------------------------------------------------------------------
 # Public helpers (backwards-compat)
@@ -555,17 +562,12 @@ class CommandBudget:
         debug = _debug_enabled()
 
         self.tool_calls_count += 1
-        if self.tool_calls_count > self.max_tool_calls:
-            reason = f"tool_calls {self.tool_calls_count}/{self.max_tool_calls} exceeded"
-            if debug:
-                _log.debug("[budget_guard BLOCK] fn=%s | reason: %s", fn_name, reason)
-            return BUDGET_GUARD_ERROR
 
         if fn_name != "execute_cmd":
             if debug:
                 _log.debug(
-                    "[budget] fn=%s | tool_calls=%d/%d | PASS (non-execute_cmd)",
-                    fn_name, self.tool_calls_count, self.max_tool_calls,
+                    "[budget] fn=%s | tool_calls=%d | PASS (non-execute_cmd unmanaged)",
+                    fn_name, self.tool_calls_count,
                 )
             return None
 
@@ -581,36 +583,47 @@ class CommandBudget:
 
         # execute_cmd path
         self.execute_cmd_count += 1
+        if self.execute_cmd_count > self.max_tool_calls:
+            reason = f"execute_cmd_count {self.execute_cmd_count}/{self.max_tool_calls} exceeded"
+            if debug:
+                _log.debug("[budget_guard BLOCK] fn=execute_cmd | reason: %s", reason)
+            return BUDGET_GUARD_ERROR
 
         category = classify_cmd(command)
         cmd_key  = normalize_execute_cmd(command)
 
+        if category == CmdCategory.ENVIRONMENT_DISCOVERY:
+            self.environment_discovery_count += 1
+        elif category == CmdCategory.READ_ONLY_INSPECTION:
+            self.read_only_cmd_count += 1
+
+        if category in _NO_BUDGET_CATEGORIES:
+            if debug:
+                _log.debug(
+                    "[budget pass] fn=execute_cmd | cmd=%.120s"
+                    " | key=%r | category=%s"
+                    " | tool_calls=%d | execute_cmd=%d"
+                    " | env_discovery=%d | read_only=%d"
+                    " | same_key=unmanaged | block_reason=none",
+                    (command or "").replace("\n", " "),
+                    cmd_key,
+                    category.value,
+                    self.tool_calls_count,
+                    self.execute_cmd_count,
+                    self.environment_discovery_count,
+                    self.read_only_cmd_count,
+                )
+            return None
+
         # ── Per-category hard-cap ─────────────────────────────────────────────
         block_reason: str | None = None
 
-        if category == CmdCategory.ENVIRONMENT_DISCOVERY:
-            self.environment_discovery_count += 1
-            if block_reason is None and self.environment_discovery_count > self.max_environment_discovery_calls:
-                block_reason = (
-                    f"env_discovery_count {self.environment_discovery_count}"
-                    f"/{self.max_environment_discovery_calls} exceeded"
-                )
-
-        elif category == CmdCategory.READ_ONLY_INSPECTION:
-            self.read_only_cmd_count += 1
-            if block_reason is None and self.read_only_cmd_count > self.max_read_only_cmd_calls:
-                block_reason = (
-                    f"read_only_count {self.read_only_cmd_count}"
-                    f"/{self.max_read_only_cmd_calls} exceeded"
-                )
-
-        else:
-            self.mutating_cmd_count += 1
-            if block_reason is None and self.mutating_cmd_count > self.max_mutating_cmd_calls:
-                block_reason = (
-                    f"mutating_count {self.mutating_cmd_count}"
-                    f"/{self.max_mutating_cmd_calls} exceeded"
-                )
+        self.mutating_cmd_count += 1
+        if block_reason is None and self.mutating_cmd_count > self.max_mutating_cmd_calls:
+            block_reason = (
+                f"mutating_count {self.mutating_cmd_count}"
+                f"/{self.max_mutating_cmd_calls} exceeded"
+            )
 
         # ── Per-key similarity check ──────────────────────────────────────────
         same_key_count = 0
@@ -682,6 +695,9 @@ class CommandBudget:
         except Exception:
             returncode = 0
         if returncode != 0 or (result or {}).get("error"):
+            category = classify_cmd(command)
+            if category in _NO_BUDGET_CATEGORIES:
+                return None
             key = normalize_execute_cmd(command)
             error_text = str((result or {}).get("stderr") or (result or {}).get("error") or "")[:160].strip().lower()
             failed_key = f"{key}|{error_text}"

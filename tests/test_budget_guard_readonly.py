@@ -323,31 +323,42 @@ class TestCommandBudget:
         assert budget.observe_execute_result(cmd, result) is not None
 
     # ── Hard caps still enforced ────────────────────────────────────
-    def test_max_tool_calls_still_enforced(self):
+    def test_execute_cmd_extreme_cap_still_enforced(self):
         budget = CommandBudget(max_tool_calls=3, max_execute_cmd_calls=999,
                                max_mutating_cmd_calls=999)
-        for _ in range(3):
-            budget.register("read_memory", "")
-        assert budget.register("read_memory", "") is not None
+        for idx in range(3):
+            assert budget.register("execute_cmd", f"whoami {idx}") is None
+        assert budget.register("execute_cmd", "whoami 99") is not None
 
-    def test_max_env_discovery_hard_cap(self):
+    def test_non_execute_tools_do_not_hit_budget_cap(self):
+        budget = CommandBudget(max_tool_calls=3)
+        for idx in range(20):
+            assert budget.register("write_content", f"file_{idx}.txt") is None
+
+    def test_env_discovery_count_does_not_hard_block_without_env_guard_signal(self):
         budget = _budget(max_environment_discovery_calls=3)
-        for _ in range(3):
+        for _ in range(12):
             assert budget.register("execute_cmd", "python --version") is None
-        assert budget.register("execute_cmd", "python --version") is not None
 
-    def test_max_read_only_hard_cap(self):
+    def test_read_only_count_does_not_hard_block(self):
         budget = _budget(max_read_only_cmd_calls=2)
-        assert budget.register("execute_cmd", r'Get-Content -Path "C:\a.txt"') is None
-        assert budget.register("execute_cmd", r'Get-Content -Path "C:\b.txt"') is None
-        assert budget.register("execute_cmd", r'Get-Content -Path "C:\c.txt"') is not None
+        for p in [r"C:\a.txt", r"C:\b.txt", r"C:\c.txt", r"C:\d.txt"]:
+            assert budget.register("execute_cmd", f'Get-Content -Path "{p}"') is None
 
-    def test_similar_readonly_limit(self):
+    def test_similar_readonly_limit_is_not_enforced(self):
         budget = _budget(max_similar_readonly_calls=MAX_SIMILAR_READ_ONLY)
         cmd = r'Get-Content -Path "C:\same.txt"'
-        for _ in range(MAX_SIMILAR_READ_ONLY):
+        for _ in range(MAX_SIMILAR_READ_ONLY + 20):
             assert budget.register("execute_cmd", cmd) is None
-        assert budget.register("execute_cmd", cmd) is not None
+
+    def test_repeated_failed_get_content_is_not_budget_blocked(self):
+        budget = _budget(max_repeated_failed_result=1)
+        cmd = r'Get-Content -Path "C:\missing.txt"'
+        result = {"returncode": 1, "stdout": "", "stderr": "Cannot find path"}
+
+        for _ in range(5):
+            assert budget.register("execute_cmd", cmd) is None
+            assert budget.observe_execute_result(cmd, result) is None
 
     def test_different_paths_are_separate_keys(self):
         budget = _budget()
