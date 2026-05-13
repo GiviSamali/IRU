@@ -32,7 +32,7 @@ def test_declined_suggested_fact_does_not_reappear_in_same_chat(client, monkeypa
     user, headers = _create_and_login_user(client)
     device_key = f"{user['id']}:device-1"
     request_text = "Где у меня установлен Python?"
-    suggested_text = r"Python установлен в D:\Python311"
+    suggested_text = r"Python lives in D:\Python311"
     suggested_category = "config"
 
     monkeypatch.setattr(tasks_router, "devices", runtime_state.devices)
@@ -57,7 +57,17 @@ def test_declined_suggested_fact_does_not_reappear_in_same_chat(client, monkeypa
         assert kwargs["user_message"] == request_text
         return {
             "answer": f"Проверил. [[SUGGEST_REMEMBER: {suggested_text} | {suggested_category}]]",
-            "commands": [],
+            "commands": [
+                {
+                    "action": "execute_cmd",
+                    "command": r'py -3 -c "import sys; print(sys.executable); print(sys.version)"',
+                    "result": {
+                        "stdout": r"C:\Program Files\Python311\python.exe" + "\n3.11.9 (main, Apr  2 2024)\n",
+                        "stderr": "",
+                        "returncode": 0,
+                    },
+                }
+            ],
             "tasks": [],
         }
 

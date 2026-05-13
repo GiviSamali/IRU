@@ -7,6 +7,15 @@ from typing import Any
 
 TOOLCHAIN_STATUSES = {"ok", "missing", "broken_stub", "install_required", "error"}
 
+PYTHON_TOOLCHAIN_DISCOVERY_GUIDANCE = "\n".join(
+    [
+        "Python resolver discovery order on Windows:",
+        'A. py -3 -c "import sys; print(sys.executable); print(sys.version)"',
+        r"B. common paths: C:\Program Files\Python*\python.exe and C:\Users\<user>\AppData\Local\Programs\Python\Python*\python.exe",
+        "C. bare python/python3 only if it is not WindowsApps stub and returns sys.executable with a valid version.",
+    ]
+)
+
 
 @dataclass
 class PythonToolchainReceipt:
@@ -38,6 +47,8 @@ class PythonToolchainReceipt:
         receipt.site_packages = list(receipt.site_packages or [])
         receipt.packages = dict(receipt.packages or {})
         receipt.raw_evidence = list(receipt.raw_evidence or [])
+        if receipt.status == "ok" and not is_verified_python_receipt(receipt):
+            receipt.status = "error"
         return receipt
 
 
@@ -63,6 +74,8 @@ def get_cached_python_toolchain(device_context: dict[str, Any] | None) -> Python
 
 
 def remember_python_toolchain(receipt: PythonToolchainReceipt) -> None:
+    if receipt.status == "ok" and not is_verified_python_receipt(receipt):
+        return
     if receipt.status not in {"ok", "broken_stub", "install_required"}:
         return
     if receipt.device_id:
@@ -92,11 +105,28 @@ def _normalize_path(value: str | None) -> str:
     return (value or "").strip().strip('"').replace("/", "\\").lower()
 
 
+def _is_absolute_path(path: str | None) -> bool:
+    value = (path or "").strip().strip('"')
+    return bool(re.match(r"^[a-zA-Z]:[\\/]", value) or value.startswith("/") or value.startswith("\\\\"))
+
+
 def is_windowsapps_stub_path(path: str | None) -> bool:
     normalized = _normalize_path(path)
     return bool(
         normalized.endswith("\\appdata\\local\\microsoft\\windowsapps\\python.exe")
         or normalized.endswith("\\appdata\\local\\microsoft\\windowsapps\\python3.exe")
+    )
+
+
+def is_verified_python_receipt(receipt: PythonToolchainReceipt | None) -> bool:
+    if not receipt or receipt.status != "ok":
+        return False
+    return bool(
+        receipt.interpreter_path
+        and _is_absolute_path(receipt.interpreter_path)
+        and not is_windowsapps_stub_path(receipt.interpreter_path)
+        and receipt.version
+        and receipt.confidence >= 0.9
     )
 
 
@@ -249,7 +279,7 @@ def resolve_python_toolchain(
     pip_version = cached.pip_version if cached else None
     site_packages = list(cached.site_packages if cached else [])
 
-    if cached and cached.status == "ok" and cached.interpreter_path and not is_windowsapps_stub_path(cached.interpreter_path):
+    if cached and is_verified_python_receipt(cached):
         candidates.append((0, cached))
         raw_evidence.extend(cached.raw_evidence[-4:])
 
@@ -294,11 +324,11 @@ def resolve_python_toolchain(
             broken_aliases.add((launcher or "python").split()[0])
             raw_evidence.append(f"broken_alias:{launcher or 'python'}:{evidence}")
             continue
-        if version and (rc == 0 or executable):
+        if version and executable and _is_absolute_path(executable) and not is_windowsapps_stub_path(executable) and rc == 0:
             receipt = PythonToolchainReceipt(
                 device_id=device_id,
                 status="ok",
-                interpreter_path=executable or launcher,
+                interpreter_path=executable,
                 launcher=launcher,
                 version=version,
                 pip_available=pip_available,
@@ -319,6 +349,14 @@ def resolve_python_toolchain(
         winner.packages = packages
         winner.raw_evidence = [*winner.raw_evidence, *raw_evidence][-12:]
         winner.confidence = max(winner.confidence, 0.9)
+        if not is_verified_python_receipt(winner):
+            return PythonToolchainReceipt(
+                device_id=device_id,
+                status="missing",
+                packages=packages,
+                raw_evidence=[*winner.raw_evidence, *raw_evidence][-12:],
+                confidence=0.0,
+            )
         remember_python_toolchain(winner)
         return winner
 
@@ -375,39 +413,90 @@ def build_python_toolchain_block(receipt: PythonToolchainReceipt | None) -> str:
             f"packages: {packages}",
             "Use resolved_python_path, not bare python, if provided.",
             'For PowerShell use: & "<resolved_python_path>" -m pip ... and & "<resolved_python_path>" script.py',
+            PYTHON_TOOLCHAIN_DISCOVERY_GUIDANCE,
         ]
     )
 
 
+def _split_powershell_statements(command: str) -> list[str]:
+    statements: list[str] = []
+    current: list[str] = []
+    quote: str | None = None
+    escaped = False
+    for ch in command:
+        if escaped:
+            current.append(ch)
+            escaped = False
+            continue
+        if ch == "`":
+            current.append(ch)
+            escaped = True
+            continue
+        if quote:
+            current.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            current.append(ch)
+            continue
+        if ch == ";":
+            statements.append("".join(current))
+            current = []
+            continue
+        current.append(ch)
+    statements.append("".join(current))
+    return statements
+
+
+def _rewrite_python_statement(statement: str, interpreter_path: str) -> str | None:
+    stripped = statement.strip()
+    leading = statement[: len(statement) - len(statement.lstrip())]
+    match = re.match(r"^(python3?|py(?:\s+-3)?|pip3?)\b\s*(.*)$", stripped, re.IGNORECASE)
+    if not match:
+        return None
+    launcher = match.group(1).lower()
+    rest = match.group(2).strip()
+    ps_python = f'& "{interpreter_path}"'
+    if launcher.startswith("pip"):
+        return f"{leading}{ps_python} -m pip{(' ' + rest) if rest else ''}"
+    return f"{leading}{ps_python}{(' ' + rest) if rest else ''}"
+
+
+def _contains_bare_python_invocation(command: str) -> bool:
+    for statement in _split_powershell_statements(_command_text(command)):
+        if re.match(r"^\s*(python3?|py(?:\s+-3)?|pip3?)\b", statement, re.IGNORECASE):
+            return True
+    return False
+
+
 def rewrite_python_command(command: str, receipt: PythonToolchainReceipt | None) -> tuple[str, str | None]:
-    if not command or not receipt or receipt.status != "ok" or not receipt.interpreter_path:
-        if receipt and receipt.status == "broken_stub":
-            stripped = _command_text(command)
-            if re.match(r"^(python3?|pip3?)\b", stripped, re.IGNORECASE):
-                return command, "Python command blocked: bare python/pip alias is a known WindowsApps stub; resolve or install real Python first."
+    if not command:
+        return command, None
+    if not receipt or receipt.status != "ok" or not receipt.interpreter_path:
+        if receipt and receipt.status == "broken_stub" and _contains_bare_python_invocation(command):
+            return command, "Python command blocked: bare python/pip alias is a known WindowsApps stub; resolve or install real Python first."
+        return command, None
+    if not is_verified_python_receipt(receipt):
+        if _contains_bare_python_invocation(command):
+            return command, "Python command blocked: resolved Python receipt is not verified."
         return command, None
 
-    prefix_match = re.match(
-        r"^(\[Console\]::OutputEncoding\s*=\s*\[System\.Text\.Encoding\]::UTF8;\s*"
-        r"\$OutputEncoding\s*=\s*\[System\.Text\.Encoding\]::UTF8;\s*)(.*)$",
-        command.strip(),
-        re.IGNORECASE,
-    )
-    prefix = prefix_match.group(1) if prefix_match else ""
-    body = (prefix_match.group(2) if prefix_match else command).strip()
-    path = receipt.interpreter_path
-    ps_python = f'& "{path}"'
-
-    match = re.match(r"^(python3?|py(?:\s+-3)?)\b\s*(.*)$", body, re.IGNORECASE)
-    if match:
-        rest = match.group(2).strip()
-        return f"{prefix}{ps_python}{(' ' + rest) if rest else ''}", None
-
-    match = re.match(r"^(pip3?)\b\s*(.*)$", body, re.IGNORECASE)
-    if match:
-        rest = match.group(2).strip()
-        return f"{prefix}{ps_python} -m pip{(' ' + rest) if rest else ''}", None
-
+    statements = _split_powershell_statements(command)
+    changed = False
+    rewritten: list[str] = []
+    for statement in statements:
+        replacement = _rewrite_python_statement(statement, receipt.interpreter_path)
+        if replacement is None:
+            rewritten.append(statement)
+        else:
+            rewritten.append(replacement)
+            changed = True
+    if changed:
+        return ";".join(rewritten), None
+    if _contains_bare_python_invocation(command):
+        return command, "Python command blocked: bare python/pip invocation could not be safely rewritten."
     return command, None
 
 
@@ -419,14 +508,10 @@ def validate_toolchain_fact_against_receipt(
     if not text:
         return False, None
     lower = text.lower()
-    needs_receipt = bool(
-        "pyqt" in lower
-        or re.search(r"\bpython\s+\d+\.\d+", text, re.IGNORECASE)
-        or re.search(r"(python|pyqt5?).{0,40}(not installed|не установлен|не установлены|не найден)", lower)
-    )
+    needs_receipt = bool("python" in lower or "pyqt" in lower or "pyqt5" in lower or "toolchain" in lower)
     if not needs_receipt:
         return True, text
-    if not receipt or receipt.status != "ok" or not receipt.interpreter_path or not receipt.version:
+    if not is_verified_python_receipt(receipt):
         return False, None
 
     corrected = text
@@ -434,11 +519,19 @@ def validate_toolchain_fact_against_receipt(
     if version_match and version_match.group(1) != receipt.version:
         corrected = corrected[:version_match.start(1)] + receipt.version + corrected[version_match.end(1):]
 
-    if re.search(r"(python|pyqt5?).{0,40}(not installed|не установлен|не установлены|не найден)", lower):
+    negative_markers = (
+        "not installed",
+        "not found",
+        "не установлен",
+        "не установлены",
+        "не найден",
+        "не найдена",
+    )
+    if any(marker in lower for marker in negative_markers):
         return False, None
 
     pyqt_status = (receipt.packages or {}).get("PyQt5") or (receipt.packages or {}).get("pyqt5")
-    if "pyqt" in lower and "install" in lower and pyqt_status != "installed":
+    if "pyqt" in lower and pyqt_status != "installed":
         return False, None
 
     if "python" in lower and receipt.interpreter_path not in corrected and re.search(r"установ|install|available|доступ", lower):

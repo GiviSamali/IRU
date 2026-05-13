@@ -69,6 +69,7 @@ def test_rewrite_uses_explicit_interpreter_after_resolve():
         status="ok",
         interpreter_path=r"C:\Program Files\Python311\python.exe",
         version="3.11.9",
+        confidence=0.95,
     )
 
     pip_cmd, err = rewrite_python_command("python -m pip install PyQt5 numpy matplotlib", receipt)
@@ -127,6 +128,7 @@ def test_memory_fact_wrong_python_version_is_corrected_from_receipt():
         interpreter_path=r"C:\Program Files\Python311\python.exe",
         version="3.11.9",
         packages={"PyQt5": "installed"},
+        confidence=0.95,
     )
 
     allowed, corrected = validate_toolchain_fact_against_receipt(
@@ -145,6 +147,7 @@ def test_memory_fact_python_not_installed_rejected_when_receipt_ok():
         status="ok",
         interpreter_path=r"C:\Program Files\Python311\python.exe",
         version="3.11.9",
+        confidence=0.95,
     )
 
     allowed, corrected = validate_toolchain_fact_against_receipt(
@@ -167,6 +170,7 @@ def test_non_pipeline_prompt_includes_resolved_python_path_from_receipt():
             version="3.11.9",
             pip_available=True,
             packages={"PyQt5": "installed"},
+            confidence=0.95,
         )
     )
     runtime = LLMRuntimeContext(
@@ -192,3 +196,115 @@ def test_non_pipeline_prompt_includes_resolved_python_path_from_receipt():
     assert "resolved_python_path: C:\\Program Files\\Python311\\python.exe" in prompt
     assert "python_version: 3.11.9" in prompt
     assert "packages: PyQt5=installed" in prompt
+
+
+def test_real_log_windowsapps_python_version_only_is_not_ok():
+    receipt = resolve_python_toolchain(
+        {"device_id": "desktop-ja4oseo-version-only"},
+        [
+            _cmd(
+                "Get-Command python",
+                stdout=r"C:\Users\Zerkxxx\AppData\Local\Microsoft\WindowsApps\python.exe Source version 0.0.0.0",
+                returncode=0,
+            ),
+            _cmd(
+                "$env:Path='C:\\Program Files\\Python311'; python --version",
+                stdout="Python 3.11.9",
+                returncode=0,
+            ),
+        ],
+    )
+
+    assert receipt.status == "broken_stub"
+    assert receipt.interpreter_path is None
+
+
+def test_version_only_python_output_without_sys_executable_is_missing():
+    receipt = resolve_python_toolchain(
+        {"device_id": "win-version-only"},
+        [
+            _cmd(
+                "$env:Path='C:\\Program Files\\Python311'; python --version",
+                stdout="Python 3.11.9",
+                returncode=0,
+            ),
+        ],
+    )
+
+    assert receipt.status == "missing"
+    assert receipt.interpreter_path is None
+
+
+def test_py_discovery_produces_verified_canonical_receipt():
+    receipt = resolve_python_toolchain(
+        {"device_id": "desktop-ja4oseo-py"},
+        [
+            _cmd("python --version", stdout="Python", returncode=1),
+            _cmd(
+                'py -3 -c "import sys; print(sys.executable); print(sys.version)"',
+                stdout=r"C:\Program Files\Python311\python.exe" + "\n3.11.9 (main, Apr  2 2024)\n",
+                returncode=0,
+            ),
+        ],
+    )
+
+    assert receipt.status == "ok"
+    assert receipt.interpreter_path == r"C:\Program Files\Python311\python.exe"
+    assert receipt.version == "3.11.9"
+    assert receipt.confidence >= 0.9
+
+
+def test_rewrite_prefixed_powershell_python_commands():
+    receipt = PythonToolchainReceipt(
+        device_id="win-prefix",
+        status="ok",
+        interpreter_path=r"C:\Program Files\Python311\python.exe",
+        version="3.11.9",
+        confidence=0.95,
+    )
+
+    set_location, err = rewrite_python_command(r'Set-Location "C:\work"; python main.py', receipt)
+    env_path, err2 = rewrite_python_command(r'$env:Path="C:\Program Files\Python311"; pip install PyQt5', receipt)
+
+    assert err is None and err2 is None
+    assert set_location == r'Set-Location "C:\work"; & "C:\Program Files\Python311\python.exe" main.py'
+    assert env_path == r'$env:Path="C:\Program Files\Python311"; & "C:\Program Files\Python311\python.exe" -m pip install PyQt5'
+
+
+def test_broken_alias_blocks_prefixed_bare_python():
+    receipt = PythonToolchainReceipt(
+        device_id="win-broken",
+        status="broken_stub",
+        raw_evidence=["broken_alias:python:WindowsApps"],
+    )
+
+    rewritten, err = rewrite_python_command(r'Set-Location "C:\work"; python main.py', receipt)
+
+    assert rewritten == r'Set-Location "C:\work"; python main.py'
+    assert "known WindowsApps stub" in err
+
+
+def test_memory_pyqt_fact_requires_package_installed():
+    receipt = PythonToolchainReceipt(
+        device_id="win-no-pyqt",
+        status="ok",
+        interpreter_path=r"C:\Program Files\Python311\python.exe",
+        version="3.11.9",
+        packages={},
+        confidence=0.95,
+    )
+
+    allowed, corrected = validate_toolchain_fact_against_receipt("PyQt5 installed", receipt)
+
+    assert allowed is False
+    assert corrected is None
+
+
+def test_any_python_fact_requires_verified_receipt():
+    allowed, corrected = validate_toolchain_fact_against_receipt(
+        r"Python lives in C:\Python311",
+        None,
+    )
+
+    assert allowed is False
+    assert corrected is None

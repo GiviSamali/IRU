@@ -139,7 +139,17 @@ def test_decline_suggested_fact_does_not_insert_user_memory(client, monkeypatch)
     async def fake_process_nl_command(**kwargs):
         return {
             "answer": "Ok. [[SUGGEST_REMEMBER: Python lives in C:/Python | config]]",
-            "commands": [],
+            "commands": [
+                {
+                    "action": "execute_cmd",
+                    "command": r'py -3 -c "import sys; print(sys.executable); print(sys.version)"',
+                    "result": {
+                        "stdout": r"C:\Program Files\Python311\python.exe" + "\n3.11.9 (main, Apr  2 2024)\n",
+                        "stderr": "",
+                        "returncode": 0,
+                    },
+                }
+            ],
             "tasks": [],
         }
 
