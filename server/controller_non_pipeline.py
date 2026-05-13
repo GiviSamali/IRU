@@ -13,6 +13,11 @@ try:
         set_current_step,
     )
     from .controller_trust import enforce_trusted_answer  # type: ignore
+    from .python_toolchain import (  # type: ignore
+        resolve_python_toolchain,
+        rewrite_python_command,
+        validate_toolchain_fact_against_receipt,
+    )
 except ImportError:
     import database as db  # type: ignore
     from controller_budget import BUDGET_GUARD_ERROR, CommandBudget, budget_guard_entry  # type: ignore
@@ -22,6 +27,11 @@ except ImportError:
         set_current_step,
     )
     from controller_trust import enforce_trusted_answer  # type: ignore
+    from python_toolchain import (  # type: ignore
+        resolve_python_toolchain,
+        rewrite_python_command,
+        validate_toolchain_fact_against_receipt,
+    )
 
 
 def _training_context(device_info: dict) -> dict:
@@ -114,6 +124,7 @@ async def process_non_pipeline_command(
 
     commands_log = []
     command_budget = CommandBudget()
+    python_receipt = resolve_python_toolchain({"device_id": device_id, "machine_guid": machine_guid}, commands_log)
     model = pick_model_fn(cfg, modes)
     base_model = cfg.get("model", "deepseek-chat")
     print(f"[llm] выбрана модель: {model} (base={base_model}, autonomous={bool(modes.get('autonomous'))})")
@@ -229,6 +240,11 @@ async def process_non_pipeline_command(
                     f"-> device={target_device}"
                 )
 
+                rewrite_error = None
+                if fn_name == "execute_cmd":
+                    rewritten_command, rewrite_error = rewrite_python_command(fn_args.get("command", ""), python_receipt)
+                    fn_args["command"] = rewritten_command
+
                 budget_error = command_budget.register(fn_name, fn_args.get("command", ""))
                 if budget_error:
                     commands_log.append(budget_guard_entry(budget_error))
@@ -238,6 +254,22 @@ async def process_non_pipeline_command(
                         "tasks": [],
                         "training_context": _training_context(device_info),
                     }
+
+                if rewrite_error:
+                    tool_result = {"error": rewrite_error}
+                    commands_log.append({
+                        "action": fn_name,
+                        "command": fn_args.get("command", ""),
+                        "device_id": target_device,
+                        "result": tool_result,
+                        "iteration": iteration + 1,
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": json.dumps(tool_result, ensure_ascii=False)[:2000],
+                    })
+                    continue
 
                 if fn_name == "web_search":
                     query = fn_args.get("query", "")[:60]
@@ -294,6 +326,10 @@ async def process_non_pipeline_command(
                         "result": tool_result,
                         "iteration": iteration + 1,
                     })
+                    python_receipt = resolve_python_toolchain(
+                        {"device_id": target_device, "machine_guid": machine_guid},
+                        commands_log,
+                    )
                     env_guard_error = command_budget.observe_execute_result(
                         fn_args.get("command", ""),
                         tool_result,
@@ -382,9 +418,15 @@ async def process_non_pipeline_command(
                         tool_result = {"error": "Не удалось сохранить факт: пользователь не идентифицирован"}
                     else:
                         try:
+                            allowed, corrected_fact = validate_toolchain_fact_against_receipt(
+                                fn_args.get("text", ""),
+                                python_receipt,
+                            )
+                            if not allowed:
+                                raise ValueError("Toolchain memory fact requires a verified PythonToolchainReceipt")
                             fact_id = db.add_user_fact(
                                 user_id=mem_user_id,
-                                text=fn_args.get("text", ""),
+                                text=corrected_fact or fn_args.get("text", ""),
                                 category=fn_args.get("category"),
                             )
                             tool_result = {"status": "ok", "fact_id": fact_id, "result": f"Запомнил факт о тебе (id={fact_id})"}

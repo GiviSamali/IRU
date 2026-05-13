@@ -44,6 +44,7 @@ try:
         tasks,
         TOKEN_TTL,
     )
+    from ..python_toolchain import PythonToolchainReceipt, validate_toolchain_fact_against_receipt
     from ..task_runtime import run_nl_task, run_onboarding_task, send_command_to_agent
 except ImportError:
     from api_support import _is_admin, check_ip_rate_limit, check_rate_limit, get_current_user
@@ -78,6 +79,7 @@ except ImportError:
         tasks,
         TOKEN_TTL,
     )
+    from python_toolchain import PythonToolchainReceipt, validate_toolchain_fact_against_receipt
     from task_runtime import run_nl_task, run_onboarding_task, send_command_to_agent
 
 
@@ -406,7 +408,15 @@ async def api_remember_fact(task_id: str, request: Request):
     suggested_fact = task.get("suggested_fact")
     if not suggested_fact:
         return {"status": "error", "error": "Нет предложенного факта"}
-    fact_id = add_user_fact(user_id=str(user["id"]), text=suggested_fact["text"], category=suggested_fact.get("category"))
+    receipt = PythonToolchainReceipt.from_any(task.get("python_toolchain_receipt"))
+    allowed_fact, corrected_fact = validate_toolchain_fact_against_receipt(suggested_fact["text"], receipt)
+    if not allowed_fact:
+        return {"status": "error", "error": "Python toolchain fact is not backed by a verified receipt"}
+    fact_id = add_user_fact(
+        user_id=str(user["id"]),
+        text=corrected_fact or suggested_fact["text"],
+        category=suggested_fact.get("category"),
+    )
     task.pop("suggested_fact", None)
     profile = None
     if task.get("device_ids"):

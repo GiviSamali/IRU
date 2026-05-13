@@ -8,10 +8,24 @@ try:
     from . import database as db  # type: ignore
     from .controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from .controller_trust import enforce_trusted_answer  # type: ignore
+    from .python_toolchain import (  # type: ignore
+        build_python_toolchain_block,
+        get_cached_python_toolchain,
+        resolve_python_toolchain,
+        rewrite_python_command,
+        validate_toolchain_fact_against_receipt,
+    )
 except ImportError:
     import database as db  # type: ignore
     from controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from controller_trust import enforce_trusted_answer  # type: ignore
+    from python_toolchain import (  # type: ignore
+        build_python_toolchain_block,
+        get_cached_python_toolchain,
+        resolve_python_toolchain,
+        rewrite_python_command,
+        validate_toolchain_fact_against_receipt,
+    )
 
 try:
     from .controller_shared import (
@@ -460,6 +474,7 @@ def build_pipeline_shared_context(
     """Контекст окружения для оркестратора и subagent-исполнителей."""
     os_info = device_info.get("os", "Windows")
     os_lower = (os_info or "").lower()
+    python_receipt = get_cached_python_toolchain({"device_id": device_id, "machine_guid": machine_guid})
     return {
         "devices_block": build_devices_block(all_devices),
         "current_device_id": device_id,
@@ -467,7 +482,10 @@ def build_pipeline_shared_context(
         "current_os": os_info,
         "current_os_version": device_info.get("os_version", ""),
         "device_profile_block": build_device_profile_block(device_profile),
-        "target_device_block": build_target_device_block(device_id, device_info, device_profile),
+        "target_device_block": build_target_device_block(device_id, device_info, device_profile)
+        + "\n"
+        + build_python_toolchain_block(python_receipt),
+        "python_toolchain_receipt": python_receipt.to_dict() if python_receipt else None,
         "device_memory_block": build_memory_block(machine_guid, mem_user_id),
         "os_rules": linux_rules if "linux" in os_lower else windows_rules,
         "current_datetime_msk": current_datetime_msk(),
@@ -538,6 +556,7 @@ def build_pipeline_worker_context(
     os_info = target_info.get("os", "Windows")
     os_lower = (os_info or "").lower()
     other_devices_summary = build_pipeline_other_devices_summary(all_devices, target_device_id)
+    python_receipt = get_cached_python_toolchain({"device_id": target_device_id, "machine_guid": target_machine_guid})
     return {
         "devices_block": other_devices_summary,
         "other_devices_summary": other_devices_summary,
@@ -547,7 +566,10 @@ def build_pipeline_worker_context(
         "current_os": os_info,
         "current_os_version": target_info.get("os_version", ""),
         "device_profile_block": build_device_profile_block(target_profile),
-        "target_device_block": build_target_device_block(target_device_id, target_info, target_profile),
+        "target_device_block": build_target_device_block(target_device_id, target_info, target_profile)
+        + "\n"
+        + build_python_toolchain_block(python_receipt),
+        "python_toolchain_receipt": python_receipt.to_dict() if python_receipt else None,
         "device_memory_block": build_memory_block(target_machine_guid, mem_user_id),
         "os_rules": linux_rules if "linux" in os_lower else windows_rules,
         "current_datetime_msk": current_datetime_msk(),
@@ -601,6 +623,10 @@ async def run_pipeline_worker(
     commands_log = []
     command_budget = CommandBudget()
     step_device_id = step.get("device_id") or shared["current_device_id"]
+    python_receipt = resolve_python_toolchain(
+        {"device_id": step_device_id, "python_toolchain_receipt": shared.get("python_toolchain_receipt")},
+        commands_log,
+    )
 
     for iteration in range(PIPELINE_WORKER_MAX_ITERATIONS):
         print(
@@ -660,6 +686,11 @@ async def run_pipeline_worker(
                 f"({json.dumps(fn_args, ensure_ascii=False)[:250]}) -> device={target_device}"
             )
 
+            rewrite_error = None
+            if fn_name == "execute_cmd":
+                rewritten_command, rewrite_error = rewrite_python_command(fn_args.get("command", ""), python_receipt)
+                fn_args["command"] = rewritten_command
+
             budget_error = command_budget.register(fn_name, fn_args.get("command", ""))
             if budget_error:
                 commands_log.append(budget_guard_entry(budget_error))
@@ -668,6 +699,22 @@ async def run_pipeline_worker(
                     "answer": budget_error,
                     "commands": commands_log,
                 }
+
+            if rewrite_error:
+                tool_result = {"error": rewrite_error}
+                commands_log.append({
+                    "action": fn_name,
+                    "command": fn_args.get("command", ""),
+                    "device_id": target_device,
+                    "result": tool_result,
+                    "iteration": iteration + 1,
+                })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "content": json.dumps(tool_result, ensure_ascii=False)[:2000],
+                })
+                continue
 
             if fn_name == "execute_cmd":
                 set_current_step(poll_task_id, f"Исполняю шаг: {step.get('title', '')[:60]}")
@@ -708,6 +755,7 @@ async def run_pipeline_worker(
                     "result": tool_result,
                     "iteration": iteration + 1,
                 })
+                python_receipt = resolve_python_toolchain({"device_id": target_device}, commands_log)
                 env_guard_error = command_budget.observe_execute_result(
                     fn_args.get("command", ""),
                     tool_result,
@@ -844,9 +892,15 @@ async def run_pipeline_worker(
                     tool_result = {"error": "Не удалось сохранить факт: пользователь не идентифицирован"}
                 else:
                     try:
+                        allowed, corrected_fact = validate_toolchain_fact_against_receipt(
+                            fn_args.get("text", ""),
+                            python_receipt,
+                        )
+                        if not allowed:
+                            raise ValueError("Toolchain memory fact requires a verified PythonToolchainReceipt")
                         fact_id = db.add_user_fact(
                             user_id=mem_user_id,
-                            text=fn_args.get("text", ""),
+                            text=corrected_fact or fn_args.get("text", ""),
                             category=fn_args.get("category"),
                         )
                         tool_result = {"status": "ok", "fact_id": fact_id, "result": f"Запомнил факт о тебе (id={fact_id})"}

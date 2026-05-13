@@ -35,6 +35,7 @@ try:
         set_plan_trial_used,
     )
     from .path_scope import PATH_SCOPE_ERROR, validate_execute_command_paths_for_device, validate_write_path_for_device
+    from .python_toolchain import resolve_python_toolchain, validate_toolchain_fact_against_receipt
     from .runtime_state import (
         _dk,
         _short_did,
@@ -71,6 +72,7 @@ except ImportError:
         set_plan_trial_used,
     )
     from path_scope import PATH_SCOPE_ERROR, validate_execute_command_paths_for_device, validate_write_path_for_device
+    from python_toolchain import resolve_python_toolchain, validate_toolchain_fact_against_receipt
     from runtime_state import (
         _dk,
         _short_did,
@@ -84,6 +86,52 @@ except ImportError:
 
 
 logger = logging.getLogger("iru.run_plan")
+
+
+def _should_probe_python_toolchain(message: str, device_info: dict) -> bool:
+    if "windows" not in (device_info.get("os", "") or "").lower():
+        return False
+    lowered = (message or "").lower()
+    return any(marker in lowered for marker in ("python", "pyqt", "pip", "numpy", "matplotlib", ".py"))
+
+
+async def _probe_python_toolchain_if_needed(
+    *,
+    message: str,
+    device_id: str,
+    device_info: dict,
+    dev: dict,
+    user_id: int,
+    send_fn,
+) -> None:
+    if not _should_probe_python_toolchain(message, device_info):
+        return
+    if not dev.get("ws"):
+        return
+    command = (
+        "$ErrorActionPreference='SilentlyContinue'; "
+        "$paths=New-Object System.Collections.Generic.List[string]; "
+        "try { $pyout = py -3 -c \"import sys; print(sys.executable)\" 2>$null; "
+        "if ($LASTEXITCODE -eq 0 -and $pyout) { $paths.Add([string]$pyout[0]) } } catch {}; "
+        "$patterns=@('C:\\Program Files\\Python*\\python.exe', \"$env:LOCALAPPDATA\\Programs\\Python\\Python*\\python.exe\"); "
+        "foreach($pattern in $patterns) { Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | "
+        "Sort-Object FullName -Descending | ForEach-Object { $paths.Add($_.FullName) } }; "
+        "foreach($alias in @('python','python3')) { $cmd=Get-Command $alias -ErrorAction SilentlyContinue; "
+        "if($cmd) { Write-Output (\"ALIAS {0} {1} Source version {2}\" -f $alias,$cmd.Source,$cmd.Version) } }; "
+        "foreach($p in ($paths | Select-Object -Unique)) { "
+        "if($p -and $p -notlike '*\\Microsoft\\WindowsApps\\*' -and (Test-Path $p)) { "
+        "& $p -c \"import sys,site; print(sys.executable); print('Python '+sys.version.split()[0]); print(';'.join(site.getsitepackages()))\"; "
+        "& $p -m pip --version; break } }"
+    )
+    try:
+        result = await send_fn(_short_did(device_id), "execute_cmd", {"command": command, "timeout": 20})
+        profile = get_device_profile(_short_did(device_id))
+        resolve_python_toolchain(
+            {"device_id": _short_did(device_id), "machine_guid": (profile or {}).get("machine_guid")},
+            [{"command": command, "result": result}],
+        )
+    except Exception as exc:
+        logger.info("[python_toolchain] probe skipped/failed for %s user=%s: %s", device_id, user_id, exc)
 
 
 async def send_command_to_agent(
@@ -250,6 +298,14 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             return get_file_link_fn(dev_id, path, user_id=user_id)
 
         try:
+            await _probe_python_toolchain_if_needed(
+                message=message,
+                device_id=device_id,
+                device_info=device_info,
+                dev=dev,
+                user_id=user_id,
+                send_fn=send_fn,
+            )
             result = await process_nl_command(
                 user_message=message,
                 device_id=_short_did(device_id),
@@ -415,11 +471,22 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         if suggest_match:
             fact_text = suggest_match.group(1).strip()
             fact_category = suggest_match.group(2).strip()
-            if not is_suggested_fact_declined(user_id, chat_id, fact_text, fact_category):
+            first_dev_id = device_ids[0] if device_ids else None
+            first_profile = get_device_profile(_short_did(first_dev_id)) if first_dev_id else None
+            python_receipt = resolve_python_toolchain(
+                {
+                    "device_id": _short_did(first_dev_id) if first_dev_id else None,
+                    "machine_guid": (first_profile or {}).get("machine_guid"),
+                },
+                combined_commands,
+            )
+            allowed_fact, corrected_fact = validate_toolchain_fact_against_receipt(fact_text, python_receipt)
+            if allowed_fact and not is_suggested_fact_declined(user_id, chat_id, corrected_fact or fact_text, fact_category):
                 task["suggested_fact"] = {
-                    "text": fact_text,
+                    "text": corrected_fact or fact_text,
                     "category": fact_category,
                 }
+                task["python_toolchain_receipt"] = python_receipt.to_dict()
             combined_answer = (
                 combined_answer[:suggest_match.start()].rstrip() + combined_answer[suggest_match.end():]
             ).strip()

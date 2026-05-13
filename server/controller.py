@@ -40,6 +40,7 @@ try:
         strip_markdown,
     )
     from .controller_tools import TOOLSET_REGISTRY  # type: ignore
+    from .python_toolchain import build_python_toolchain_block, get_cached_python_toolchain  # type: ignore
 except ImportError:
     from controller_non_pipeline import process_non_pipeline_command as _process_non_pipeline_command  # type: ignore
     from controller_onboarding import process_onboarding_message as _process_onboarding_message  # type: ignore
@@ -60,6 +61,7 @@ except ImportError:
         strip_markdown,
     )
     from controller_tools import TOOLSET_REGISTRY  # type: ignore
+    from python_toolchain import build_python_toolchain_block, get_cached_python_toolchain  # type: ignore
 import asyncio
 import httpx
 from pathlib import Path
@@ -154,6 +156,7 @@ class LLMRuntimeContext:
     current_datetime_msk: str
     machine_guid: str | None
     mem_user_id: str | None
+    python_toolchain_block: str = ""
 
 
 @dataclass(frozen=True)
@@ -243,6 +246,7 @@ def _resolve_os_rules(os_info: str) -> str:
 
 def _build_runtime_context(
     *,
+    device_id: str,
     all_devices: dict,
     device_info: dict,
     device_profile: dict | None,
@@ -253,6 +257,7 @@ def _build_runtime_context(
     os_version = device_info.get("os_version", "")
     machine_guid = (device_profile or {}).get("machine_guid") or None
     mem_user_id = _resolve_memory_user_id(user_id, machine_guid)
+    python_receipt = get_cached_python_toolchain({"device_id": device_id, "machine_guid": machine_guid})
 
     return LLMRuntimeContext(
         cfg=load_llm_config(),
@@ -263,6 +268,7 @@ def _build_runtime_context(
         profile_block=build_device_profile_block(device_profile),
         memory_block=build_memory_block(machine_guid, mem_user_id),
         target_device_block=build_target_device_block("", device_info, device_profile),
+        python_toolchain_block=build_python_toolchain_block(python_receipt),
         os_rules=_resolve_os_rules(os_info),
         current_datetime_msk=_current_datetime_msk(),
         machine_guid=machine_guid,
@@ -283,7 +289,11 @@ def _build_non_pipeline_system_prompt(
         current_os_version=runtime.os_version,
         device_profile_block=runtime.profile_block,
         device_memory_block=runtime.memory_block,
-        target_device_block=runtime.target_device_block.replace("device_id: ", f"device_id: {device_id}", 1),
+        target_device_block=(
+            runtime.target_device_block.replace("device_id: ", f"device_id: {device_id}", 1)
+            + "\n"
+            + runtime.python_toolchain_block
+        ),
         os_rules=runtime.os_rules,
         current_datetime_msk=runtime.current_datetime_msk,
     )
@@ -477,6 +487,7 @@ async def process_nl_command(
     """
     modes = modes or {}
     runtime = _build_runtime_context(
+        device_id=device_id,
         all_devices=all_devices,
         device_info=device_info,
         device_profile=device_profile,
