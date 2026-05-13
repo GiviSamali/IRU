@@ -159,6 +159,56 @@ def test_memory_fact_python_not_installed_rejected_when_receipt_ok():
     assert corrected is None
 
 
+def test_memory_fact_russian_python_not_installed_rejected_when_receipt_ok():
+    receipt = PythonToolchainReceipt(
+        device_id="win-ru-python-negative",
+        status="ok",
+        interpreter_path=r"C:\Program Files\Python311\python.exe",
+        version="3.11.9",
+        confidence=0.95,
+    )
+
+    allowed, corrected = validate_toolchain_fact_against_receipt(
+        "Python не установлен на этом ПК",
+        receipt,
+    )
+
+    assert allowed is False
+    assert corrected is None
+
+
+def test_memory_fact_russian_pyqt_not_found_rejected_when_package_installed():
+    receipt = PythonToolchainReceipt(
+        device_id="win-ru-pyqt-negative",
+        status="ok",
+        interpreter_path=r"C:\Program Files\Python311\python.exe",
+        version="3.11.9",
+        packages={"PyQt5": "installed"},
+        confidence=0.95,
+    )
+
+    allowed, corrected = validate_toolchain_fact_against_receipt("PyQt5 не найден", receipt)
+
+    assert allowed is False
+    assert corrected is None
+
+
+def test_memory_fact_russian_wrong_python_version_corrected_from_receipt():
+    receipt = PythonToolchainReceipt(
+        device_id="win-ru-version",
+        status="ok",
+        interpreter_path=r"C:\Program Files\Python311\python.exe",
+        version="3.11.9",
+        confidence=0.95,
+    )
+
+    allowed, corrected = validate_toolchain_fact_against_receipt("Python 3.13 установлен", receipt)
+
+    assert allowed is True
+    assert "3.11.9" in corrected
+    assert "3.13" not in corrected
+
+
 def test_non_pipeline_prompt_includes_resolved_python_path_from_receipt():
     from server.controller import LLMRuntimeContext, _build_non_pipeline_system_prompt
 
@@ -282,6 +332,36 @@ def test_broken_alias_blocks_prefixed_bare_python():
 
     assert rewritten == r'Set-Location "C:\work"; python main.py'
     assert "known WindowsApps stub" in err
+
+
+def test_verified_receipt_blocks_call_operator_bare_python():
+    receipt = PythonToolchainReceipt(
+        device_id="win-call-operator",
+        status="ok",
+        interpreter_path=r"C:\Program Files\Python311\python.exe",
+        version="3.11.9",
+        confidence=0.95,
+    )
+
+    rewritten, err = rewrite_python_command("& python main.py", receipt)
+
+    assert rewritten == "& python main.py"
+    assert "could not be safely rewritten" in err
+
+
+def test_verified_receipt_blocks_nested_if_bare_python():
+    receipt = PythonToolchainReceipt(
+        device_id="win-if-block",
+        status="ok",
+        interpreter_path=r"C:\Program Files\Python311\python.exe",
+        version="3.11.9",
+        confidence=0.95,
+    )
+
+    rewritten, err = rewrite_python_command("if ($true) { python main.py }", receipt)
+
+    assert rewritten == "if ($true) { python main.py }"
+    assert "could not be safely rewritten" in err
 
 
 def test_memory_pyqt_fact_requires_package_installed():

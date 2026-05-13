@@ -465,8 +465,11 @@ def _rewrite_python_statement(statement: str, interpreter_path: str) -> str | No
 
 
 def _contains_bare_python_invocation(command: str) -> bool:
+    invocation_re = re.compile(
+        r"(?i)(?:^\s*&?\s*|[{\(|]\s*&?\s*)(python3?|py(?:\s+-3)?|pip3?)\b"
+    )
     for statement in _split_powershell_statements(_command_text(command)):
-        if re.match(r"^\s*(python3?|py(?:\s+-3)?|pip3?)\b", statement, re.IGNORECASE):
+        if invocation_re.search(statement):
             return True
     return False
 
@@ -523,9 +526,14 @@ def validate_toolchain_fact_against_receipt(
         "not installed",
         "not found",
         "не установлен",
+        "не установлена",
         "не установлены",
         "не найден",
         "не найдена",
+        "не найдено",
+        "отсутствует",
+        "не распознан",
+        "не распознано",
     )
     if any(marker in lower for marker in negative_markers):
         return False, None
