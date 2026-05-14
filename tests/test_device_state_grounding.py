@@ -1,11 +1,13 @@
 import asyncio
 import json
+import time
 
 import httpx
 
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_pipeline import pipeline_worker_prompt, run_pipeline_worker
 from server.controller_shared import build_device_profile_block, build_devices_block
+from server import task_runtime
 
 
 def _execute_call(command: str) -> dict:
@@ -221,3 +223,107 @@ def test_pipeline_completed_other_device_step_not_live_state():
     assert "OTHER DEVICE device_id=device-a hostname=GIVI" in prompt
     assert "informational only" in prompt
     assert "do not reuse paths as target-device paths" in prompt
+
+
+def test_state_all_devices_uses_deterministic_fanout(monkeypatch):
+    task_id = "state-task"
+    user_id = 1
+    device_ids = [f"{user_id}:givi", f"{user_id}:desktop"]
+    task_runtime.devices[device_ids[0]] = {"user_id": user_id, "info": {"hostname": "givi"}, "pending": {}, "ws": object()}
+    task_runtime.devices[device_ids[1]] = {"user_id": user_id, "info": {"hostname": "desktop"}, "pending": {}, "ws": object()}
+    task_runtime.tasks[task_id] = {
+        "task_id": task_id,
+        "user_id": user_id,
+        "chat_id": 1,
+        "message": "проверь текущее состояние на всех устройствах",
+        "device_ids": device_ids,
+        "status": "running",
+        "results": {},
+        "modes": {},
+        "created_at": time.time(),
+    }
+    calls = []
+
+    async def fake_collect(device_id, user_id=None):
+        calls.append(device_id)
+        short = device_id.split(":", 1)[1]
+        return {
+            "device_id": device_id,
+            "target_device_id": short,
+            "status": "ok",
+            "answer": f"target_device_id={short}; identity_status=ok",
+            "commands": [{"target_device_id": short, "collected_at": "now"}],
+        }
+
+    async def fail_process(**kwargs):
+        raise AssertionError("state fanout must not use LLM primary flow")
+
+    async def fail_send(*args, **kwargs):
+        raise AssertionError("state fanout test uses collect helper, not replay")
+
+    monkeypatch.setattr(task_runtime, "collect_device_live_snapshot", fake_collect)
+    monkeypatch.setattr(task_runtime, "process_nl_command", fail_process)
+    monkeypatch.setattr(task_runtime, "send_command_to_agent", fail_send)
+    monkeypatch.setattr(task_runtime, "add_message", lambda *args, **kwargs: None)
+
+    asyncio.run(task_runtime.run_nl_task(task_id, user_id, "проверь текущее состояние на всех устройствах", device_ids, 1))
+
+    assert calls == device_ids
+    assert task_runtime.tasks[task_id]["status"] == "done"
+    assert "target_device_id=givi" in task_runtime.tasks[task_id]["answer"]
+    assert "target_device_id=desktop" in task_runtime.tasks[task_id]["answer"]
+    assert len(task_runtime.tasks[task_id]["commands"]) == 2
+
+
+def test_collect_live_snapshot_identity_mismatch(monkeypatch):
+    user_id = 1
+    device_key = f"{user_id}:givi"
+    task_runtime.devices[device_key] = {
+        "user_id": user_id,
+        "info": {"hostname": "givi", "os": "Windows"},
+        "registered_identity": {"target_device_id": "givi", "registered_hostname": "givi", "registered_machine_guid": "reg-guid"},
+        "pending": {},
+        "ws": object(),
+    }
+
+    async def fake_send(device_id, action, params, user_id=None):
+        payload = {
+            "observed_hostname": "DESKTOP-JFQUB4O",
+            "observed_computer_name": "DESKTOP-JFQUB4O",
+            "observed_username": "user",
+            "process_count": 259,
+        }
+        return {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    monkeypatch.setattr(task_runtime, "send_command_to_agent", fake_send)
+
+    result = asyncio.run(task_runtime.collect_device_live_snapshot(device_key, user_id=user_id))
+
+    assert result["status"] == "routing_mismatch"
+    assert result["identity_receipt"]["identity_status"] == "mismatch"
+    assert "target_device_id=givi returned observed_hostname=DESKTOP-JFQUB4O" in result["answer"]
+    assert result["snapshot"] is None
+    assert result["commands"][0]["target_device_id"] == "givi"
+    assert result["commands"][0]["collected_at"]
+    assert result["commands"][0]["result"]["identity_receipt"]["identity_status"] == "mismatch"
+
+
+def test_identical_resource_values_do_not_imply_same_device():
+    answer = task_runtime._format_live_snapshot_summary([
+        {
+            "target_device_id": "givi",
+            "status": "ok",
+            "answer": "target_device_id=givi; identity_status=ok; cpu=i7; ram_total_gb=16",
+        },
+        {
+            "target_device_id": "desktop",
+            "status": "ok",
+            "answer": "target_device_id=desktop; identity_status=ok; cpu=i7; ram_total_gb=16",
+        },
+    ])
+
+    lowered = answer.lower()
+    assert "same physical" not in lowered
+    assert "одно физическое" not in lowered
+    assert "target_device_id=givi" in answer
+    assert "target_device_id=desktop" in answer

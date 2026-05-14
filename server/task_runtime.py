@@ -6,6 +6,7 @@ import time
 import traceback
 import uuid
 import re as _re
+from datetime import datetime, timezone
 
 import httpx
 
@@ -86,6 +87,103 @@ except ImportError:
 
 
 logger = logging.getLogger("iru.run_plan")
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _is_device_state_request(message: str) -> bool:
+    lowered = (message or "").lower()
+    state_markers = (
+        "состояни",
+        "статус",
+        "текущее",
+        "сейчас происходит",
+        "что происходит",
+        "snapshot",
+        "state",
+        "status",
+    )
+    device_markers = (
+        "устройств",
+        "компьютер",
+        "пк",
+        "device",
+        "devices",
+    )
+    return any(marker in lowered for marker in state_markers) and any(marker in lowered for marker in device_markers)
+
+
+def _registered_identity(device_id: str, dev: dict | None, profile: dict | None = None) -> dict:
+    info = (dev or {}).get("info", {}) if isinstance(dev, dict) else {}
+    registered = (dev or {}).get("registered_identity", {}) if isinstance(dev, dict) else {}
+    return {
+        "target_device_id": _short_did(device_id),
+        "registered_hostname": registered.get("registered_hostname") or info.get("hostname") or (profile or {}).get("hostname"),
+        "registered_machine_guid": registered.get("registered_machine_guid") or info.get("machine_guid") or (profile or {}).get("machine_guid"),
+        "registered_device_id": info.get("device_id") or _short_did(device_id),
+    }
+
+
+def _norm_identity_value(value) -> str:
+    return str(value or "").strip().lower()
+
+
+def _build_identity_receipt(
+    *,
+    device_id: str,
+    dev: dict | None,
+    observed: dict | None = None,
+    profile: dict | None = None,
+) -> dict:
+    observed = observed or {}
+    receipt = {
+        **_registered_identity(device_id, dev, profile),
+        "observed_hostname": observed.get("observed_hostname") or observed.get("hostname"),
+        "observed_computer_name": observed.get("observed_computer_name") or observed.get("computer_name"),
+        "observed_machine_guid": observed.get("observed_machine_guid") or observed.get("machine_uuid") or observed.get("uuid"),
+        "observed_username": observed.get("observed_username") or observed.get("username"),
+        "collected_at": observed.get("collected_at") or _utc_now_iso(),
+        "identity_status": "unknown",
+    }
+    registered_hostname = _norm_identity_value(receipt.get("registered_hostname"))
+    observed_names = [
+        _norm_identity_value(receipt.get("observed_hostname")),
+        _norm_identity_value(receipt.get("observed_computer_name")),
+    ]
+    observed_names = [name for name in observed_names if name]
+    if observed_names:
+        receipt["identity_status"] = "ok"
+        if registered_hostname and registered_hostname not in observed_names:
+            receipt["identity_status"] = "mismatch"
+
+    for stable_key in ("bios_serial", "system_uuid"):
+        registered_value = _norm_identity_value((dev or {}).get("info", {}).get(stable_key) if isinstance(dev, dict) else "")
+        observed_value = _norm_identity_value(observed.get(stable_key))
+        if registered_value and observed_value:
+            receipt["identity_status"] = "ok" if registered_value == observed_value else "mismatch"
+    return receipt
+
+
+def _attach_identity_receipt(result: dict, *, device_id: str, dev: dict | None) -> dict:
+    if not isinstance(result, dict):
+        return result
+    if "identity_receipt" not in result:
+        profile = get_device_profile(_short_did(device_id))
+        observed = result.get("observed_identity") or result.get("identity") or {}
+        if not observed:
+            observed = {key: result.get(key) for key in (
+                "observed_hostname",
+                "observed_computer_name",
+                "observed_machine_guid",
+                "observed_username",
+                "bios_serial",
+                "system_uuid",
+            ) if result.get(key)}
+        result = dict(result)
+        result["identity_receipt"] = _build_identity_receipt(device_id=device_id, dev=dev, observed=observed, profile=profile)
+    return result
 
 
 def _should_probe_python_toolchain(message: str, device_info: dict) -> bool:
@@ -243,12 +341,171 @@ async def send_command_to_agent(
         dev["pending"].pop(cmd_id, None)
         raise RuntimeError("Таймаут ожидания ответа от агента")
 
-    return result
+    return _attach_identity_receipt(result, device_id=device_id, dev=dev)
 
 
 def get_file_link_fn(device_id: str, file_path: str, user_id: int = 0) -> str:
     """Create a download link for a file (for LLM use)."""
     return create_download_link(device_id, file_path, user_id=user_id)
+
+
+def _snapshot_command_for_device(device_info: dict) -> str:
+    if "windows" not in (device_info.get("os", "") or "").lower():
+        return (
+            "python3 - <<'PY'\n"
+            "import json, os, platform, getpass, subprocess\n"
+            "def run(cmd):\n"
+            "    try: return subprocess.check_output(cmd, text=True).strip()\n"
+            "    except Exception: return ''\n"
+            "print(json.dumps({'observed_hostname': platform.node(), 'observed_computer_name': platform.node(), "
+            "'observed_machine_guid': run(['cat','/etc/machine-id']), 'observed_username': getpass.getuser(), "
+            "'os_caption': platform.platform(), 'os_version': platform.version(), 'cpu': platform.processor(), "
+            "'process_count': len([p for p in os.listdir('/proc') if p.isdigit()])}))\n"
+            "PY"
+        )
+    return (
+        "$ErrorActionPreference='SilentlyContinue'; "
+        "$cs=Get-CimInstance Win32_ComputerSystem; $os=Get-CimInstance Win32_OperatingSystem; "
+        "$prod=Get-CimInstance Win32_ComputerSystemProduct; $bios=Get-CimInstance Win32_BIOS; "
+        "$cpu=Get-CimInstance Win32_Processor | Select-Object -First 1; "
+        "$disks=Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" | ForEach-Object { "
+        "[pscustomobject]@{drive=$_.DeviceID; total_gb=[math]::Round($_.Size/1GB,2); free_gb=[math]::Round($_.FreeSpace/1GB,2)} }; "
+        "[pscustomobject]@{observed_hostname=[System.Net.Dns]::GetHostName(); observed_computer_name=$env:COMPUTERNAME; "
+        "observed_machine_guid=$prod.UUID; bios_serial=$bios.SerialNumber; observed_username=[Environment]::UserName; "
+        "os_caption=$os.Caption; os_version=$os.Version; os_build=$os.BuildNumber; cpu=$cpu.Name; "
+        "ram_total_gb=[math]::Round($cs.TotalPhysicalMemory/1GB,2); ram_free_gb=[math]::Round($os.FreePhysicalMemory/1MB,2); "
+        "disks=$disks; process_count=@(Get-Process).Count; uptime=((Get-Date)-$os.LastBootUpTime).ToString()} | ConvertTo-Json -Depth 5 -Compress"
+    )
+
+
+def _parse_snapshot_stdout(stdout: str) -> dict:
+    text = (stdout or "").strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end <= start:
+        return {}
+    try:
+        return json.loads(text[start:end + 1])
+    except Exception:
+        return {}
+
+
+async def collect_device_live_snapshot(device_id: str, user_id: int | None = None) -> dict:
+    dev = devices.get(device_id)
+    if not dev and user_id is not None:
+        dev = devices.get(_dk(user_id, device_id))
+        if dev:
+            device_id = _dk(user_id, device_id)
+    target_device_id = _short_did(device_id)
+    collected_at = _utc_now_iso()
+    if not dev or not dev.get("ws"):
+        receipt = _build_identity_receipt(device_id=device_id, dev=dev, observed={"collected_at": collected_at})
+        return {
+            "device_id": device_id,
+            "target_device_id": target_device_id,
+            "status": "unavailable",
+            "snapshot": None,
+            "identity_receipt": receipt,
+            "answer": f"target_device_id={target_device_id}: fresh state unavailable",
+            "commands": [],
+        }
+
+    command = _snapshot_command_for_device(dev.get("info", {}))
+    command_entry = {
+        "action": "collect_live_snapshot",
+        "command": command,
+        "device_id": target_device_id,
+        "target_device_id": target_device_id,
+        "hostname": dev.get("info", {}).get("hostname") or target_device_id,
+        "collected_at": collected_at,
+        "result": None,
+    }
+    try:
+        result = await send_command_to_agent(device_id, "execute_cmd", {"command": command, "timeout": 30}, user_id=user_id)
+        observed = _parse_snapshot_stdout(str(result.get("stdout") or ""))
+        observed["collected_at"] = collected_at
+        receipt = _build_identity_receipt(
+            device_id=device_id,
+            dev=dev,
+            observed=observed,
+            profile=get_device_profile(target_device_id),
+        )
+        result = dict(result)
+        result["identity_receipt"] = receipt
+        command_entry["result"] = result
+        if result.get("returncode") not in (None, 0, "0") or result.get("error"):
+            return {
+                "device_id": device_id,
+                "target_device_id": target_device_id,
+                "status": "unavailable",
+                "snapshot": None,
+                "identity_receipt": receipt,
+                "answer": f"target_device_id={target_device_id}: fresh state unavailable",
+                "commands": [command_entry],
+            }
+        if receipt.get("identity_status") == "mismatch":
+            return {
+                "device_id": device_id,
+                "target_device_id": target_device_id,
+                "status": "routing_mismatch",
+                "snapshot": None,
+                "identity_receipt": receipt,
+                "answer": _format_identity_mismatch(receipt),
+                "commands": [command_entry],
+            }
+        return {
+            "device_id": device_id,
+            "target_device_id": target_device_id,
+            "status": "ok",
+            "snapshot": observed,
+            "identity_receipt": receipt,
+            "answer": _format_snapshot_answer(target_device_id, receipt, observed),
+            "commands": [command_entry],
+        }
+    except Exception as exc:
+        receipt = _build_identity_receipt(device_id=device_id, dev=dev, observed={"collected_at": collected_at})
+        command_entry["result"] = {"error": str(exc), "identity_receipt": receipt}
+        return {
+            "device_id": device_id,
+            "target_device_id": target_device_id,
+            "status": "unavailable",
+            "snapshot": None,
+            "identity_receipt": receipt,
+            "answer": f"target_device_id={target_device_id}: fresh state unavailable ({exc})",
+            "commands": [command_entry],
+        }
+
+
+def _format_identity_mismatch(receipt: dict) -> str:
+    return (
+        f"target_device_id={receipt.get('target_device_id')} returned "
+        f"observed_hostname={receipt.get('observed_hostname') or receipt.get('observed_computer_name')}; "
+        "requires agent registration/device_id check"
+    )
+
+
+def _format_snapshot_answer(target_device_id: str, receipt: dict, snapshot: dict) -> str:
+    fields = [
+        f"target_device_id={target_device_id}",
+        f"observed_hostname={receipt.get('observed_hostname') or receipt.get('observed_computer_name')}",
+        f"identity_status={receipt.get('identity_status')}",
+        f"os={snapshot.get('os_caption') or snapshot.get('os_version')}",
+        f"cpu={snapshot.get('cpu')}",
+        f"ram_total_gb={snapshot.get('ram_total_gb')}",
+        f"ram_free_gb={snapshot.get('ram_free_gb')}",
+        f"process_count={snapshot.get('process_count')}",
+        f"uptime={snapshot.get('uptime')}",
+    ]
+    disks = snapshot.get("disks")
+    if disks:
+        fields.append(f"disks={json.dumps(disks, ensure_ascii=False)}")
+    return "; ".join(field for field in fields if not field.endswith("=None"))
+
+
+def _format_live_snapshot_summary(results: list[dict]) -> str:
+    if not results:
+        return "fresh state unavailable"
+    return "\n".join(result.get("answer") or f"target_device_id={result.get('target_device_id')}: fresh state unavailable" for result in results)
 
 
 async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list[str], chat_id: int):
@@ -391,6 +648,34 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             "answer": f"Команды выполнены на {hostname}",
             "commands": results,
         }
+
+    if _is_device_state_request(message):
+        snapshot_results = await asyncio.gather(
+            *[collect_device_live_snapshot(device_id, user_id=user_id) for device_id in device_ids],
+            return_exceptions=True,
+        )
+        combined_results = []
+        combined_commands = []
+        for device_id, item in zip(device_ids, snapshot_results):
+            if isinstance(item, Exception):
+                item = {
+                    "device_id": device_id,
+                    "target_device_id": _short_did(device_id),
+                    "status": "unavailable",
+                    "answer": f"target_device_id={_short_did(device_id)}: fresh state unavailable ({item})",
+                    "commands": [],
+                }
+            task["results"][device_id] = item
+            combined_results.append(item)
+            combined_commands.extend(item.get("commands") or [])
+
+        combined_answer = _format_live_snapshot_summary(combined_results)
+        add_message(chat_id, "assistant", combined_answer, combined_commands)
+        task["status"] = "done"
+        task["answer"] = combined_answer
+        task["commands"] = combined_commands
+        task["tasks"] = []
+        return
 
     is_pipeline = bool((task.get("modes") or {}).get("pipeline"))
     if not is_pipeline:

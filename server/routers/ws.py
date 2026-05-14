@@ -37,6 +37,7 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
     devices[composite_key] = {
         "ws": ws,
         "info": {},
+        "registered_identity": {"target_device_id": device_id, "registered_hostname": None, "registered_machine_guid": None},
         "pending": {},
         "user_id": user["id"],
         "short_device_id": device_id,
@@ -52,6 +53,11 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
             if msg_type == "register":
                 payload = data.get("payload", {})
                 devices[composite_key]["info"] = payload
+                devices[composite_key]["registered_identity"] = {
+                    "target_device_id": device_id,
+                    "registered_hostname": payload.get("hostname"),
+                    "registered_machine_guid": payload.get("machine_guid"),
+                }
                 try:
                     upsert_device_profile(device_id, user["id"], payload)
                     print(f"[ws] device profile saved: {device_id}")
