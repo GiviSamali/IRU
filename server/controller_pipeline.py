@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 
 import httpx
 
@@ -503,18 +504,12 @@ def _pipeline_device_info(all_devices: dict, device_id: str, fallback_info: dict
 
 def build_pipeline_other_devices_summary(all_devices: dict, target_device_id: str) -> str:
     """Return a path-free summary of non-target devices for worker prompts."""
-    lines = []
-    for did, dev in (all_devices or {}).items():
-        if did == target_device_id:
-            continue
-        info = dev.get("info", {}) if isinstance(dev, dict) else {}
-        hostname = info.get("hostname", "?")
-        os_name = info.get("os", "?")
-        os_ver = info.get("os_version", "")
-        status = (info.get("status") or dev.get("status")) if isinstance(dev, dict) else None
-        status_part = f", status={status}" if status else ""
-        lines.append(f"- {did}: hostname={hostname}, OS={os_name} ({os_ver}){status_part}")
-    return "\n".join(lines)
+    other_devices = {
+        did: dev
+        for did, dev in (all_devices or {}).items()
+        if did != target_device_id
+    }
+    return build_devices_block(other_devices) if other_devices else "No other connected devices."
 
 
 def validate_pipeline_step_device(step: dict, current_device_id: str, all_devices: dict) -> tuple[dict, str]:
@@ -618,6 +613,10 @@ async def run_pipeline_worker(
         "content": (
             f"Device scope hard rule: target_device={shared.get('target_device_id') or shared['current_device_id']}. "
             "Execute this step only on target_device. Do not use paths from another device. "
+            "Device state grounding hard rule: every device state fact must include device_id/source. "
+            "Do not copy CPU/RAM/disk/process/load from one device to another. "
+            "If no fresh live snapshot exists for a device, say fresh state unavailable. "
+            "Cached profile data must be labeled cached and must not be described as current. "
             "Absolute paths from user memory are hints only and must be verified on target_device before use. "
             "Never create missing C:\\Users\\<name> profile folders unless the user explicitly asked and confirmed. "
             "If a path is not found on target_device, report it instead of substituting a path from another device. "
@@ -658,7 +657,10 @@ async def run_pipeline_worker(
             "action": action,
             "command": command,
             "device_id": device_id,
+            "target_device_id": device_id,
             "device_name": shared.get("current_hostname") or device_id,
+            "hostname": shared.get("current_hostname") or device_id,
+            "collected_at": datetime.now(timezone.utc).isoformat(),
             "result": result,
             "iteration": iteration + 1,
             "step_index": step_index,

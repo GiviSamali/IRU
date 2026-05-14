@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from datetime import datetime, timezone
 
 import httpx
 
@@ -41,6 +42,20 @@ def _training_context(device_info: dict) -> dict:
         "os": device_info.get("os", ""),
         "hostname": device_info.get("hostname", ""),
         "method": "powershell" if "windows" in device_info.get("os", "").lower() else "bash",
+    }
+
+
+def _command_log_entry(action: str, command: str, target_device: str, device_info: dict, result: dict, iteration: int) -> dict:
+    hostname = device_info.get("hostname") or target_device
+    return {
+        "action": action,
+        "command": command,
+        "device_id": target_device,
+        "target_device_id": target_device,
+        "hostname": hostname,
+        "collected_at": datetime.now(timezone.utc).isoformat(),
+        "result": result,
+        "iteration": iteration,
     }
 
 
@@ -267,13 +282,14 @@ async def process_non_pipeline_command(
                         if command_error.get("missing_packages"):
                             tool_result["missing_packages"] = command_error["missing_packages"]
 
-                    commands_log.append({
-                        "action": fn_name,
-                        "command": fn_args.get("command", ""),
-                        "device_id": target_device,
-                        "result": tool_result,
-                        "iteration": iteration + 1,
-                    })
+                    commands_log.append(_command_log_entry(
+                        fn_name,
+                        fn_args.get("command", ""),
+                        target_device,
+                        device_info,
+                        tool_result,
+                        iteration + 1,
+                    ))
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call["id"],
@@ -337,13 +353,14 @@ async def process_non_pipeline_command(
                         if command_error.get("missing_packages"):
                             tool_result["missing_packages"] = command_error["missing_packages"]
 
-                    commands_log.append({
-                        "action": fn_name,
-                        "command": fn_args.get("command", ""),
-                        "device_id": target_device,
-                        "result": tool_result,
-                        "iteration": iteration + 1,
-                    })
+                    commands_log.append(_command_log_entry(
+                        fn_name,
+                        fn_args.get("command", ""),
+                        target_device,
+                        device_info,
+                        tool_result,
+                        iteration + 1,
+                    ))
                     python_receipt = resolve_python_toolchain(
                         {"device_id": target_device, "machine_guid": machine_guid},
                         commands_log,
@@ -398,13 +415,14 @@ async def process_non_pipeline_command(
 
                     preview = fn_args.get("content", "")[:60]
                     mode = "append" if fn_args.get("append") else "write"
-                    commands_log.append({
-                        "action": fn_name,
-                        "command": f"[{mode}] {fn_args.get('path', '')} | {preview}...",
-                        "device_id": target_device,
-                        "result": tool_result,
-                        "iteration": iteration + 1,
-                    })
+                    commands_log.append(_command_log_entry(
+                        fn_name,
+                        f"[{mode}] {fn_args.get('path', '')} | {preview}...",
+                        target_device,
+                        device_info,
+                        tool_result,
+                        iteration + 1,
+                    ))
 
                 elif fn_name == "get_file_link":
                     try:
@@ -426,13 +444,14 @@ async def process_non_pipeline_command(
                     query = fn_args.get("query", "").strip()
                     max_results = min(int(fn_args.get("max_results", 5) or 5), 10)
                     tool_result = await _run_web_search(cfg, query, max_results)
-                    commands_log.append({
-                        "action": fn_name,
-                        "command": f"[web_search] {fn_args.get('query', '')[:80]}",
-                        "device_id": target_device,
-                        "result": tool_result if "error" in tool_result else {"ok": True},
-                        "iteration": iteration + 1,
-                    })
+                    commands_log.append(_command_log_entry(
+                        fn_name,
+                        f"[web_search] {fn_args.get('query', '')[:80]}",
+                        target_device,
+                        device_info,
+                        tool_result if "error" in tool_result else {"ok": True},
+                        iteration + 1,
+                    ))
 
                 elif fn_name == "remember_fact":
                     if not mem_user_id:
@@ -454,13 +473,14 @@ async def process_non_pipeline_command(
                         except Exception as exc:
                             print(f"[llm] remember_fact EXCEPTION: {exc}")
                             tool_result = {"error": str(exc)}
-                    commands_log.append({
-                        "action": fn_name,
-                        "command": "[memory] remember_fact",
-                        "device_id": target_device,
-                        "result": tool_result,
-                        "iteration": iteration + 1,
-                    })
+                    commands_log.append(_command_log_entry(
+                        fn_name,
+                        "[memory] remember_fact",
+                        target_device,
+                        device_info,
+                        tool_result,
+                        iteration + 1,
+                    ))
 
                 elif fn_name == "forget_fact":
                     if not mem_user_id:
@@ -473,13 +493,14 @@ async def process_non_pipeline_command(
                         except Exception as exc:
                             print(f"[llm] forget_fact EXCEPTION: {exc}")
                             tool_result = {"error": str(exc)}
-                    commands_log.append({
-                        "action": fn_name,
-                        "command": "[memory] forget_fact",
-                        "device_id": target_device,
-                        "result": tool_result,
-                        "iteration": iteration + 1,
-                    })
+                    commands_log.append(_command_log_entry(
+                        fn_name,
+                        "[memory] forget_fact",
+                        target_device,
+                        device_info,
+                        tool_result,
+                        iteration + 1,
+                    ))
 
                 else:
                     tool_result = {"error": f"Неизвестная функция: {fn_name}"}

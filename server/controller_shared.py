@@ -19,6 +19,18 @@ _WEEKDAYS_RU = [
 ]
 
 MAX_MEMORY_BLOCK = 2048
+LIVE_SNAPSHOT_CONTAINER_KEYS = ("live_snapshot", "current_state", "state_snapshot")
+LIVE_SNAPSHOT_FIELDS = (
+    "cpu_usage",
+    "cpu_percent",
+    "ram_usage",
+    "memory_usage",
+    "disk_usage",
+    "process_count",
+    "processes",
+    "load",
+    "uptime",
+)
 
 ONBOARDING_MARKERS = [
     "нет подключённых устройств",
@@ -127,41 +139,91 @@ class ConfirmationRequired(Exception):
         super().__init__(f"Подтверждение: {command[:80]}")
 
 
-def build_devices_block(all_devices: dict) -> str:
-    """Сформировать текстовый список устройств для промпта."""
-    if not all_devices:
-        return "Нет подключённых устройств."
+def _device_online(dev: dict) -> str:
+    if not isinstance(dev, dict):
+        return "unknown"
+    status = str(dev.get("status") or dev.get("connection_status") or "").strip().lower()
+    if status in {"offline", "disconnected"}:
+        return "no"
+    if dev.get("ws") is not None or status in {"online", "connected", "ok"}:
+        return "yes"
+    return "yes"
 
-    lines = []
+
+def _live_snapshot_for_device(device_id: str, dev: dict) -> tuple[dict | None, str]:
+    if not isinstance(dev, dict):
+        return None, "missing"
+    candidates = [dev]
+    info = dev.get("info")
+    if isinstance(info, dict):
+        candidates.append(info)
+    for container in candidates:
+        for key in LIVE_SNAPSHOT_CONTAINER_KEYS:
+            snapshot = container.get(key)
+            if isinstance(snapshot, dict) and snapshot:
+                source_device_id = str(snapshot.get("source_device_id") or snapshot.get("device_id") or device_id)
+                if source_device_id != device_id:
+                    return None, f"invalid_source:{source_device_id}"
+                normalized = dict(snapshot)
+                normalized["source_device_id"] = source_device_id
+                return normalized, "present"
+    return None, "missing"
+
+
+def _live_snapshot_summary(snapshot: dict) -> str:
+    parts = []
+    collected_at = snapshot.get("collected_at") or snapshot.get("timestamp")
+    if collected_at:
+        parts.append(f"collected_at={collected_at}")
+    parts.append(f"source_device_id={snapshot.get('source_device_id')}")
+    for key in LIVE_SNAPSHOT_FIELDS:
+        if key in snapshot and snapshot.get(key) is not None:
+            parts.append(f"{key}={snapshot.get(key)}")
+    return ", ".join(parts)
+
+
+def build_devices_block(all_devices: dict) -> str:
+    """Build inventory separately from per-device live state."""
+    if not all_devices:
+        return "No connected devices."
+
+    lines = [
+        "Device inventory. Live state is separate and must be grounded per device_id.",
+        "Every device state fact must include device_id/source. Do not copy CPU/RAM/disk/process/load between devices.",
+    ]
     for did, dev in all_devices.items():
-        info = dev.get("info", {})
+        info = dev.get("info", {}) if isinstance(dev, dict) else {}
         hostname = info.get("hostname", "?")
         os_name = info.get("os", "?")
         os_ver = info.get("os_version", "")
-        lines.append(f"- {did}: hostname={hostname}, ОС={os_name} ({os_ver})")
+        snapshot, snapshot_status = _live_snapshot_for_device(did, dev)
+        profile_hint = "available" if any(info.get(key) for key in ("cpu", "gpu", "ram_gb", "disks")) else "missing"
+        if snapshot:
+            state_part = f"live_snapshot=present, {_live_snapshot_summary(snapshot)}"
+        else:
+            state_part = f"live_snapshot={snapshot_status}, state=fresh state unavailable"
+        lines.append(
+            f"- device_id={did}; hostname={hostname}; os={os_name} ({os_ver}); "
+            f"online={_device_online(dev)}; {state_part}; cached_profile={profile_hint}"
+        )
     return "\n".join(lines)
 
 
 def build_device_profile_block(profile: dict | None) -> str:
-    """Сформировать блок профиля устройства для промпта."""
+    """Build cached profile context; this is not a live state snapshot."""
     if not profile:
         return ""
 
-    lines = ["\n## Профиль устройства"]
-
-    if profile.get("username"):
-        lines.append(f"Пользователь: {profile['username']}")
-    if profile.get("desktop_path"):
-        lines.append(f"Рабочий стол: {profile['desktop_path']}")
-    if profile.get("home") or profile.get("home_path"):
-        lines.append(f"Домашняя директория: {profile.get('home_path') or profile.get('home')}")
-    if profile.get("cpu"):
-        lines.append(f"Процессор: {profile['cpu']}")
-    if profile.get("gpu"):
-        lines.append(f"Видеокарта: {profile['gpu']}")
-    if profile.get("ram_gb"):
-        lines.append(f"Оперативная память: {profile['ram_gb']} ГБ")
-
+    lines = [
+        "\n## Cached device profile",
+        "source=cached_profile; not live current state; do not describe as current device state.",
+    ]
+    for key in ("username", "desktop_path", "home_path", "home", "machine_guid", "updated_at"):
+        if profile.get(key):
+            lines.append(f"cached_{key}: {profile.get(key)}")
+    for key in ("cpu", "gpu", "ram_gb"):
+        if profile.get(key):
+            lines.append(f"cached_{key}: {profile.get(key)}")
     disks = profile.get("disks")
     if disks and isinstance(disks, list):
         disk_lines = []
@@ -169,12 +231,8 @@ def build_device_profile_block(profile: dict | None) -> str:
             drive = disk.get("drive", "?")
             total = disk.get("total_gb", 0)
             free = disk.get("free_gb", 0)
-            disk_lines.append(f"{drive} {total} ГБ всего, {free} ГБ свободно")
-        lines.append(f"Диски: {'; '.join(disk_lines)}")
-
-    if len(lines) <= 1:
-        return ""
-
+            disk_lines.append(f"{drive} {total} GB total, {free} GB free")
+        lines.append(f"cached_disks: {'; '.join(disk_lines)}")
     return "\n".join(lines)
 
 

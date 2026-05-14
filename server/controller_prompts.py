@@ -36,6 +36,10 @@ Hostname: {current_hostname}
 {target_device_block}
 {device_profile_block}
 {device_memory_block}
+Device state grounding hard rule:
+Every device state fact must include device_id/source. Do not copy CPU/RAM/disk/process/load from one device to another.
+For "state/status now" requests, use a fresh live snapshot for each target device or say "fresh state unavailable" for that device.
+Cached profile data is labeled cached and must not be described as current live state.
 ## Доступные инструменты
 
 ### 1. execute_cmd
