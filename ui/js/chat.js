@@ -45,9 +45,11 @@ async function openChat(chatId) {
     const data = await r.json();
     state.messages = data.messages || [];
     renderMessages();
+    restoreActiveChatTasks(chatId);
   } catch (e) {
     state.messages = [];
     renderMessages();
+    restoreActiveChatTasks(chatId);
   }
 }
 
@@ -239,7 +241,7 @@ function renderMessages() {
     let bodyHTML = linkified.html;
 
     // Блок задач (конвейер)
-    bodyHTML += renderTaskBlock(m.tasks);
+    bodyHTML += renderTaskBlock(m.tasks, m.commands || [], m._taskId || `msg-${mi}`);
 
     const commands = m.commands;
     bodyHTML += renderCommandDownloadButtons(commands, linkified.usedDownloads);
@@ -368,8 +370,8 @@ function renderMessages() {
 
     if (m.loading) {
       const stepText = escapeHTML(m.currentStep || 'ИРУ думает...');
-      const liveTasksHTML = renderTaskBlock(m.liveTasks);
-      const taskBlockAttr = (m.liveTasks && m.liveTasks.length > 0) ? '' : ' hidden';
+      const liveTasksHTML = renderTaskBlock(m.liveTasks, m.liveCommands || [], m._taskId || `live-${mi}`);
+      const taskBlockAttr = liveTasksHTML ? '' : ' hidden';
       html += `<div class="msg assistant msg-thinking"><div class="msg-role">иру</div><div class="msg-body"><div class="live-status"><span class="live-dot"></span><span class="live-text">${stepText}</span></div><div class="task-block-live"${taskBlockAttr}>${liveTasksHTML}</div></div></div>`;
     } else {
       html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}${confirmBtns}${suggestHTML}${planHTML}</div></div>`;
@@ -424,6 +426,25 @@ function bindChatMessageActions() {
       if (key && state.expandedStepDetails) {
         if (willOpen) state.expandedStepDetails.add(key);
         else state.expandedStepDetails.delete(key);
+      }
+      return;
+    }
+    if (action === 'toggle-step-commands') {
+      const stepEl = target.closest('.task-step');
+      if (!stepEl) return;
+      const taskId = target.dataset.taskId || stepEl.dataset.taskId || '';
+      const stepIndex = target.dataset.stepIndex || stepEl.dataset.stepIndex || '';
+      const key = `${taskId}:${stepIndex}`;
+      const willOpen = !stepEl.classList.contains('open');
+      stepEl.classList.toggle('open', willOpen);
+      target.setAttribute('aria-expanded', String(willOpen));
+      const arrow = target.querySelector('.step-details-arrow');
+      if (arrow) arrow.textContent = willOpen ? '\u25be' : '\u25b8';
+      const details = stepEl.querySelector('.step-details');
+      if (details) details.hidden = !willOpen;
+      if (state.expandedStepCommands) {
+        if (willOpen) state.expandedStepCommands.add(key);
+        else state.expandedStepCommands.delete(key);
       }
       return;
     }
@@ -482,7 +503,7 @@ async function sendMessage() {
   state.messages.push({ role: 'user', content: text });
   // Добавить placeholder для ответа (live-статус вместо точек загрузки)
   const msgIndex = state.messages.length;
-  state.messages.push({ role: 'assistant', content: '', loading: true, currentStep: 'ИРУ думает...', liveTasks: [] });
+  state.messages.push({ role: 'assistant', content: '', loading: true, currentStep: 'ИРУ думает...', liveTasks: [], liveCommands: [] });
   renderMessages();
 
   try {
@@ -508,6 +529,7 @@ async function sendMessage() {
 
     if (data.status === 'ok' && data.task_id) {
       // Задача запущена в фоне — начинаем polling
+      state.messages[msgIndex]._taskId = data.task_id;
       state.pendingTasks.push({ task_id: data.task_id, msgIndex });
       pollTask(data.task_id, msgIndex);
     } else {
@@ -531,11 +553,14 @@ async function pollTask(taskId, msgIndex) {
   const startTime = Date.now();
   const MAX_POLL_MS = 600000; // 10 минут макс (для длинных конвейеров)
   let stopped = false;
+  rememberActiveTask(taskId, state.currentChatId);
+  if (state.messages[msgIndex]) state.messages[msgIndex]._taskId = taskId;
   const poll = async () => {
     if (stopped) return;
     if (Date.now() - startTime > MAX_POLL_MS) {
       state.messages[msgIndex] = { role: 'assistant', content: 'Истекло время ожидания ответа.' };
       state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+      forgetActiveTask(taskId);
       renderMessages();
       return;
     }
@@ -545,6 +570,7 @@ async function pollTask(taskId, msgIndex) {
         stopped = true;
         state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена.' };
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+        forgetActiveTask(taskId);
         renderMessages();
         return;
       }
@@ -561,6 +587,7 @@ async function pollTask(taskId, msgIndex) {
           commands: task.commands,
           tasks: task.tasks || [],
           confirmTaskId: taskId,
+          _taskId: taskId,
         };
         renderMessages();
         return;
@@ -581,6 +608,7 @@ async function pollTask(taskId, msgIndex) {
         msg._taskId = taskId;
         state.messages[msgIndex] = msg;
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+        forgetActiveTask(taskId);
         // Update memory badge (Point 10)
         if (task.memory_stats) updateMemoryBadge(task.memory_stats);
         renderMessages();
@@ -599,6 +627,10 @@ async function pollTask(taskId, msgIndex) {
           msg.liveTasks = task.tasks;
           needRender = true;
         }
+        if (task.commands) {
+          msg.liveCommands = task.commands;
+          needRender = true;
+        }
         if (needRender) renderMessages();
       }
       // Повторить через 800мс пока задача running
@@ -611,6 +643,7 @@ async function pollTask(taskId, msgIndex) {
         stopped = true;
         state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена или истекла.' };
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+        forgetActiveTask(taskId);
         renderMessages();
         return;
       }
@@ -625,6 +658,159 @@ function getTaskStepKey(task, step, taskIndex, stepIndex) {
   const taskKey = task.id || task.task_id || task.taskId || `task-${taskIndex}`;
   const stepKey = step.id || step.step_id || step.index || step.idx || stepIndex;
   return `${taskKey}:${stepKey}`;
+}
+
+const ACTIVE_TASKS_STORAGE_KEY = 'iru_active_tasks';
+
+function readActiveTasks() {
+  try {
+    return JSON.parse(sessionStorage.getItem(ACTIVE_TASKS_STORAGE_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function writeActiveTasks(items) {
+  try {
+    sessionStorage.setItem(ACTIVE_TASKS_STORAGE_KEY, JSON.stringify(items));
+  } catch {}
+}
+
+function rememberActiveTask(taskId, chatId) {
+  if (!taskId || !chatId) return;
+  const items = readActiveTasks().filter(item => item && item.taskId);
+  if (items.some(item => item.taskId === taskId)) return;
+  items.push({ taskId, chatId });
+  writeActiveTasks(items);
+}
+
+function forgetActiveTask(taskId) {
+  if (!taskId) return;
+  writeActiveTasks(readActiveTasks().filter(item => item && item.taskId !== taskId));
+}
+
+function restoreActiveChatTasks(chatId) {
+  if (!chatId) return;
+  const tasksToRestore = readActiveTasks().filter(item => Number(item?.chatId) === Number(chatId));
+  if (!tasksToRestore.length) return;
+
+  let added = false;
+  for (const item of tasksToRestore) {
+    if (!item?.taskId) continue;
+    if (state.pendingTasks.some(task => task.task_id === item.taskId)) continue;
+    const msgIndex = state.messages.length;
+    state.messages.push({
+      role: 'assistant',
+      content: '',
+      loading: true,
+      currentStep: '\u0412\u043e\u0441\u0441\u0442\u0430\u043d\u0430\u0432\u043b\u0438\u0432\u0430\u044e \u0441\u0442\u0430\u0442\u0443\u0441 \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u0438...',
+      liveTasks: [],
+      liveCommands: [],
+      _taskId: item.taskId,
+    });
+    state.pendingTasks.push({ task_id: item.taskId, msgIndex });
+    added = true;
+  }
+
+  if (!added) return;
+  renderMessages();
+  for (const item of tasksToRestore) {
+    const pending = state.pendingTasks.find(task => task.task_id === item.taskId);
+    if (pending) pollTask(pending.task_id, pending.msgIndex);
+  }
+}
+
+function getStepIndex(step, stepIndex) {
+  const raw = step?.idx ?? step?.index ?? step?.step_index ?? stepIndex;
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) ? numeric : stepIndex;
+}
+
+function getCommandStepIndex(command) {
+  if (command?.step_index == null) return null;
+  const numeric = Number(command.step_index);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function isPipelineCommandLog(commands) {
+  return Array.isArray(commands) && commands.some(command => getCommandStepIndex(command) !== null);
+}
+
+function getCommandStatus(command) {
+  if (command?.status) return command.status;
+  const result = command?.result || {};
+  if (command?.action === 'budget_guard' || stripUtfPrefix(command?.command || '') === '[budget_guard]') return 'blocked';
+  if (result?.error) return 'error';
+  if (result?.returncode != null && result.returncode !== 0) return 'error';
+  return 'success';
+}
+
+function getCommandDisplayText(command) {
+  return stripUtfPrefix(command?.command || command?.action || 'command');
+}
+
+function getCommandOutputPreview(command) {
+  const result = command?.result;
+  if (!result) return '';
+  if (typeof result === 'string') return result;
+  if (result.error) return String(result.error);
+  if (result.stderr) return String(result.stderr);
+  if (result.stdout) return String(result.stdout);
+  if (result.result) return String(result.result);
+  if (result.answer) return String(result.answer);
+  if (Array.isArray(result.results) && result.results.length) {
+    return result.results.map(item => item?.title || item?.url || '').filter(Boolean).join(' | ');
+  }
+  if (result.file_path) return String(result.file_path);
+  return '';
+}
+
+function shortenText(text, limit = 140) {
+  if (!text) return '';
+  const compact = String(text).replace(/\s+/g, ' ').trim();
+  return compact.length > limit ? `${compact.slice(0, limit - 1)}…` : compact;
+}
+
+function synthesizePipelineTasks(commands, fallbackTaskId) {
+  if (!isPipelineCommandLog(commands)) return [];
+  const stepMap = new Map();
+
+  for (const command of commands) {
+    const stepIndex = getCommandStepIndex(command);
+    if (stepIndex == null) continue;
+    const current = stepMap.get(stepIndex) || {
+      idx: stepIndex,
+      description: command.step_title || `Step ${stepIndex + 1}`,
+      status: 'pending',
+      summary: '',
+    };
+    const commandStatus = getCommandStatus(command);
+    if (commandStatus === 'error' || commandStatus === 'blocked') current.status = 'failed';
+    else if (commandStatus === 'running') current.status = 'running';
+    else if (current.status !== 'failed') current.status = 'done';
+    if (!current.summary) current.summary = shortenText(getCommandOutputPreview(command), 180);
+    stepMap.set(stepIndex, current);
+  }
+
+  const steps = [...stepMap.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([, step]) => step);
+  if (!steps.length) return [];
+
+  const hasFailures = steps.some(step => step.status === 'failed');
+  const hasRunning = steps.some(step => step.status === 'running');
+  return [{
+    id: fallbackTaskId || 'pipeline-message',
+    goal: 'Pipeline',
+    status: hasRunning ? 'running' : (hasFailures ? 'failed' : 'completed'),
+    steps,
+  }];
+}
+
+function getStepCommands(commands, step, stepIndex) {
+  if (!Array.isArray(commands) || !commands.length) return [];
+  const resolvedStepIndex = getStepIndex(step, stepIndex);
+  return commands.filter(command => getCommandStepIndex(command) === resolvedStepIndex);
 }
 
 function getStepDetailText(value) {
@@ -652,24 +838,72 @@ function renderStepDetails(step) {
   return sections.join('');
 }
 
-function renderTaskBlock(tasks) {
-  if (!tasks || tasks.length === 0) return '';
+function getStepCommandStatusIcon(status) {
+  if (status === 'error') return '\u2717';
+  if (status === 'blocked') return '\u25a0';
+  if (status === 'running') return '\u23f3';
+  return '\u2713';
+}
+
+function getStepStatusLine(stepStatus, stepCommands, step) {
+  const lastCommand = stepCommands[stepCommands.length - 1];
+  if (!lastCommand) {
+    return step.summary ? shortenText(step.summary, 140) : 'Команд пока нет';
+  }
+
+  const commandStatus = getCommandStatus(lastCommand);
+  if (commandStatus === 'error' || commandStatus === 'blocked') {
+    return `Ошибка: ${shortenText(getCommandOutputPreview(lastCommand) || getCommandDisplayText(lastCommand), 140)}`;
+  }
+  if (stepStatus === 'running' || commandStatus === 'running') {
+    return `Сейчас: ${shortenText(getCommandDisplayText(lastCommand), 140)}`;
+  }
+  return `Последняя команда: ${shortenText(getCommandDisplayText(lastCommand), 140)}`;
+}
+
+function renderStepCommands(stepCommands) {
+  if (!stepCommands.length) return '';
+  const items = stepCommands.map((command) => {
+    const status = getCommandStatus(command);
+    const output = shortenText(getCommandOutputPreview(command), 320) || '(нет вывода)';
+    const device = command.device_name || command.device_id || '';
+    return `<div class="step-command-entry step-command-${escapeAttr(status)}">
+      <div class="step-command-header">
+        <span class="step-command-icon">${getStepCommandStatusIcon(status)}</span>
+        <span class="step-command-text">${escapeHTML(getCommandDisplayText(command))}</span>
+        ${device ? `<span class="step-command-device">${escapeHTML(device)}</span>` : ''}
+      </div>
+      <div class="step-command-output">${escapeHTML(output)}</div>
+    </div>`;
+  });
+  return `<div class="step-command-list">${items.join('')}</div>`;
+}
+
+function renderTaskBlock(tasks, commands = [], fallbackTaskId = '') {
+  const normalizedTasks = (tasks && tasks.length > 0) ? tasks : synthesizePipelineTasks(commands, fallbackTaskId);
+  if (!normalizedTasks || normalizedTasks.length === 0) return '';
   let html = '';
-  for (let ti = 0; ti < tasks.length; ti++) {
-    const t = tasks[ti];
+  for (let ti = 0; ti < normalizedTasks.length; ti++) {
+    const t = normalizedTasks[ti];
     const st = t.status || 'running';
-    const statusLabel = st === 'completed' ? 'завершено'
-      : st === 'failed' ? 'ошибка'
-      : st === 'cancelled' ? 'отменено'
-      : 'выполняется';
+    const statusLabel = st === 'completed' ? '\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e'
+      : st === 'failed' ? '\u043e\u0448\u0438\u0431\u043a\u0430'
+      : st === 'cancelled' ? '\u043e\u0442\u043c\u0435\u043d\u0435\u043d\u043e'
+      : '\u0432\u044b\u043f\u043e\u043b\u043d\u044f\u0435\u0442\u0441\u044f';
     html += `<div class="task-block task-${st}">`;
-    html += `<div class="task-goal"><span class="task-goal-label">Задача:</span> ${escapeHTML(t.goal || '')} <span class="task-badge task-badge-${st}">${statusLabel}</span></div>`;
+    html += `<div class="task-goal"><span class="task-goal-label">\u0417\u0430\u0434\u0430\u0447\u0430:</span> ${escapeHTML(t.goal || '')} <span class="task-badge task-badge-${st}">${statusLabel}</span></div>`;
     const steps = t.steps || [];
     if (steps.length > 0) {
       html += '<ul class="task-steps">';
       for (let si = 0; si < steps.length; si++) {
         const s = steps[si];
         const sst = s.status || 'pending';
+        const resolvedStepIndex = getStepIndex(s, si);
+        const stepCommands = getStepCommands(commands, s, si);
+        const taskUiId = t.id || t.task_id || t.taskId || fallbackTaskId || `task-${ti}`;
+        const commandsKey = `${taskUiId}:${resolvedStepIndex}`;
+        const hasStepCommands = stepCommands.length > 0;
+        const isCommandsOpen = hasStepCommands && state.expandedStepCommands && state.expandedStepCommands.has(commandsKey);
         const icon = sst === 'done' ? '\u2713'
           : sst === 'failed' ? '\u2717'
           : sst === 'running' ? '\u23f3'
@@ -680,13 +914,18 @@ function renderTaskBlock(tasks) {
           ? `<span class="step-subdesc">${escapeHTML(s.description)}</span>`
           : '';
         const detailsHTML = renderStepDetails(s);
-        const hasDetails = detailsHTML.length > 0;
+        const commandsHTML = renderStepCommands(stepCommands);
+        const hasDetails = detailsHTML.length > 0 || commandsHTML.length > 0;
         const stepKey = getTaskStepKey(t, s, ti, si);
-        const isOpen = hasDetails && state.expandedStepDetails && state.expandedStepDetails.has(stepKey);
-        const toggle = hasDetails
-          ? `<button type="button" class="step-details-toggle" data-action="toggle-step-details" data-step-key="${escapeAttr(stepKey)}" aria-expanded="${isOpen ? 'true' : 'false'}" title="Toggle step details"><span class="step-details-arrow">${isOpen ? '\u25be' : '\u25b8'}</span></button>`
+        const showDetailsByDefault = !hasStepCommands && detailsHTML.length > 0;
+        const isOpen = hasStepCommands
+          ? isCommandsOpen
+          : (showDetailsByDefault || (hasDetails && state.expandedStepDetails && state.expandedStepDetails.has(stepKey)));
+        const toggle = hasStepCommands
+          ? `<button type="button" class="step-details-toggle" data-action="toggle-step-commands" data-task-id="${escapeAttr(taskUiId)}" data-step-index="${escapeAttr(resolvedStepIndex)}" aria-expanded="${isOpen ? 'true' : 'false'}" title="\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u043a\u043e\u043c\u0430\u043d\u0434\u044b \u0448\u0430\u0433\u0430"><span class="step-details-arrow">${isOpen ? '\u25be' : '\u25b8'}</span></button>`
           : '';
-        html += `<li class="task-step step-${sst}${isOpen ? ' open' : ''}" data-step-key="${escapeAttr(stepKey)}"><div class="step-row"><span class="step-icon">${icon}</span><span class="step-desc">${escapeHTML(title)}${description}</span><span class="step-status">${escapeHTML(sst)}</span>${toggle}</div>${hasDetails ? `<div class="step-details"${isOpen ? '' : ' hidden'}>${detailsHTML}</div>` : ''}</li>`;
+        const stepStatusLine = getStepStatusLine(sst, stepCommands, s);
+        html += `<li class="task-step step-${sst}${isOpen ? ' open' : ''}" data-step-key="${escapeAttr(stepKey)}" data-task-id="${escapeAttr(taskUiId)}" data-step-index="${escapeAttr(resolvedStepIndex)}"><div class="step-row"><span class="step-icon">${icon}</span><span class="step-desc">${escapeHTML(title)}${description}<span class="step-command-line">${escapeHTML(stepStatusLine)}</span></span><span class="step-status">${escapeHTML(sst)}</span>${toggle}</div>${hasDetails ? `<div class="step-details"${(isOpen || showDetailsByDefault) ? '' : ' hidden'}>${detailsHTML}${commandsHTML}</div>` : ''}</li>`;
       }
       html += '</ul>';
     }
@@ -733,6 +972,7 @@ async function denyTask(taskId, msgIndex) {
     state.messages[msgIndex].confirmTaskId = null;
     state.messages[msgIndex].content = 'Команда отменена.';
     state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+    forgetActiveTask(taskId);
     renderMessages();
   } catch (e) { showToast('Ошибка', true); }
 }

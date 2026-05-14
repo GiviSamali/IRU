@@ -13,6 +13,7 @@ const state = {
   explorerHistory: [],
   pendingTasks: [],  // [{task_id, msgIndex}]
   expandedStepDetails: new Set(),
+  expandedStepCommands: new Set(),
   devModeOpen: false,
   userPlan: 'free',
   pollers: { devices: null },

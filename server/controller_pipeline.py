@@ -578,6 +578,19 @@ def build_pipeline_worker_context(
     }, target_machine_guid
 
 
+def _pipeline_command_status(action: str, result: dict | None) -> str:
+    if action == "budget_guard":
+        return "blocked"
+    if not isinstance(result, dict):
+        return "success"
+    if result.get("error"):
+        return "error"
+    returncode = result.get("returncode")
+    if returncode not in (None, 0):
+        return "error"
+    return "success"
+
+
 async def run_pipeline_worker(
     client: httpx.AsyncClient,
     cfg: dict,
@@ -593,6 +606,7 @@ async def run_pipeline_worker(
     mem_user_id: str | None,
     poll_task_id: str | None,
     *,
+    step_index: int = 0,
     chat_completion_request_fn,
     worker_tools: list[dict],
 ) -> dict:
@@ -632,10 +646,29 @@ async def run_pipeline_worker(
     commands_log = []
     command_budget = CommandBudget()
     step_device_id = step.get("device_id") or shared["current_device_id"]
+    step_title = step.get("title") or step.get("instruction") or f"Step {step_index + 1}"
+    step_id = step.get("id") or step.get("step_id")
     python_receipt = resolve_python_toolchain(
         {"device_id": step_device_id, "python_toolchain_receipt": shared.get("python_toolchain_receipt")},
         commands_log,
     )
+
+    def append_step_command(action: str, command: str, device_id: str | None, result: dict | None, *, status: str | None = None) -> dict:
+        entry = {
+            "action": action,
+            "command": command,
+            "device_id": device_id,
+            "device_name": shared.get("current_hostname") or device_id,
+            "result": result,
+            "iteration": iteration + 1,
+            "step_index": step_index,
+            "step_title": step_title,
+            "status": status or _pipeline_command_status(action, result),
+        }
+        if step_id is not None:
+            entry["step_id"] = step_id
+        commands_log.append(entry)
+        return entry
 
     for iteration in range(PIPELINE_WORKER_MAX_ITERATIONS):
         print(
@@ -702,7 +735,14 @@ async def run_pipeline_worker(
 
             budget_error = command_budget.register(fn_name, fn_args.get("command", ""))
             if budget_error:
-                commands_log.append(budget_guard_entry(budget_error))
+                guard_entry = budget_guard_entry(budget_error)
+                append_step_command(
+                    guard_entry.get("action", "budget_guard"),
+                    guard_entry.get("command", "[budget_guard]"),
+                    target_device,
+                    guard_entry.get("result"),
+                    status="blocked",
+                )
                 return {
                     "status": "error",
                     "answer": budget_error,
@@ -719,13 +759,7 @@ async def run_pipeline_worker(
                     if command_error.get("missing_packages"):
                         tool_result["missing_packages"] = command_error["missing_packages"]
 
-                commands_log.append({
-                    "action": fn_name,
-                    "command": fn_args.get("command", ""),
-                    "device_id": target_device,
-                    "result": tool_result,
-                    "iteration": iteration + 1,
-                })
+                append_step_command(fn_name, fn_args.get("command", ""), target_device, tool_result)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call["id"],
@@ -773,13 +807,7 @@ async def run_pipeline_worker(
                     if command_error.get("missing_packages"):
                         tool_result["missing_packages"] = command_error["missing_packages"]
 
-                commands_log.append({
-                    "action": fn_name,
-                    "command": fn_args.get("command", ""),
-                    "device_id": target_device,
-                    "result": tool_result,
-                    "iteration": iteration + 1,
-                })
+                append_step_command(fn_name, fn_args.get("command", ""), target_device, tool_result)
                 python_receipt = resolve_python_toolchain({"device_id": target_device}, commands_log)
                 env_guard_error = command_budget.observe_execute_result(
                     fn_args.get("command", ""),
@@ -789,8 +817,16 @@ async def run_pipeline_worker(
                     if is_recoverable_command_error(command_error):
                         tool_result["command_error"]["guard_message"] = env_guard_error
                         commands_log[-1]["result"] = tool_result
+                        commands_log[-1]["status"] = _pipeline_command_status(fn_name, tool_result)
                     else:
-                        commands_log.append(budget_guard_entry(env_guard_error))
+                        guard_entry = budget_guard_entry(env_guard_error)
+                        append_step_command(
+                            guard_entry.get("action", "budget_guard"),
+                            guard_entry.get("command", "[budget_guard]"),
+                            target_device,
+                            guard_entry.get("result"),
+                            status="blocked",
+                        )
                         return {
                             "status": "error",
                             "answer": env_guard_error,
@@ -829,13 +865,12 @@ async def run_pipeline_worker(
 
                 preview = fn_args.get("content", "")[:60]
                 mode = "append" if fn_args.get("append") else "write"
-                commands_log.append({
-                    "action": fn_name,
-                    "command": f"[{mode}] {fn_args.get('path', '')} | {preview}...",
-                    "device_id": target_device,
-                    "result": tool_result,
-                    "iteration": iteration + 1,
-                })
+                append_step_command(
+                    fn_name,
+                    f"[{mode}] {fn_args.get('path', '')} | {preview}...",
+                    target_device,
+                    tool_result,
+                )
 
             elif fn_name == "get_file_link":
                 set_current_step(poll_task_id, f"Формирую ссылку: {step.get('title', '')[:50]}")
@@ -846,13 +881,12 @@ async def run_pipeline_worker(
                 except Exception as exc:
                     tool_result = {"error": str(exc)}
 
-                commands_log.append({
-                    "action": fn_name,
-                    "command": f"[скачать] {fn_args.get('file_path', '')}",
-                    "device_id": target_device,
-                    "result": tool_result,
-                    "iteration": iteration + 1,
-                })
+                append_step_command(
+                    fn_name,
+                    f"[скачать] {fn_args.get('file_path', '')}",
+                    target_device,
+                    tool_result,
+                )
 
             elif fn_name == "web_search":
                 set_current_step(poll_task_id, f"Ищу данные для шага: {step.get('title', '')[:50]}")
@@ -908,13 +942,12 @@ async def run_pipeline_worker(
                         except Exception as exc:
                             tool_result = {"error": f"Поиск временно недоступен: {exc}"}
 
-                commands_log.append({
-                    "action": fn_name,
-                    "command": f"[web_search] {fn_args.get('query', '')[:80]}",
-                    "device_id": target_device,
-                    "result": tool_result if not isinstance(tool_result, dict) or "error" in tool_result else {"ok": True},
-                    "iteration": iteration + 1,
-                })
+                append_step_command(
+                    fn_name,
+                    f"[web_search] {fn_args.get('query', '')[:80]}",
+                    target_device,
+                    tool_result if not isinstance(tool_result, dict) or "error" in tool_result else {"ok": True},
+                )
 
             elif fn_name == "remember_fact":
                 if not mem_user_id:
@@ -935,13 +968,12 @@ async def run_pipeline_worker(
                         tool_result = {"status": "ok", "fact_id": fact_id, "result": f"Запомнил факт о тебе (id={fact_id})"}
                     except Exception as exc:
                         tool_result = {"error": str(exc)}
-                commands_log.append({
-                    "action": fn_name,
-                    "command": "[memory] remember_fact",
-                    "device_id": target_device,
-                    "result": tool_result,
-                    "iteration": iteration + 1,
-                })
+                append_step_command(
+                    fn_name,
+                    "[memory] remember_fact",
+                    target_device,
+                    tool_result,
+                )
 
             elif fn_name == "forget_fact":
                 if not mem_user_id:
@@ -953,13 +985,12 @@ async def run_pipeline_worker(
                         tool_result = {"status": "ok", "result": "Факт удалён"} if ok else {"error": "Факт не найден"}
                     except Exception as exc:
                         tool_result = {"error": str(exc)}
-                commands_log.append({
-                    "action": fn_name,
-                    "command": "[memory] forget_fact",
-                    "device_id": target_device,
-                    "result": tool_result,
-                    "iteration": iteration + 1,
-                })
+                append_step_command(
+                    fn_name,
+                    "[memory] forget_fact",
+                    target_device,
+                    tool_result,
+                )
 
             else:
                 tool_result = {"error": f"Неизвестная функция: {fn_name}"}
@@ -1122,6 +1153,7 @@ async def process_pipeline_subagents(
                     machine_guid=worker_machine_guid,
                     mem_user_id=mem_user_id,
                     poll_task_id=poll_task_id,
+                    step_index=idx,
                     chat_completion_request_fn=chat_completion_request_fn,
                     worker_tools=worker_tools,
                 )

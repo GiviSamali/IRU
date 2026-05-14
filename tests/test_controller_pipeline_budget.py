@@ -436,6 +436,9 @@ def test_pipeline_invalid_planner_device_falls_back_to_current_device(monkeypatc
 
     assert result["answer"] == "summary ok"
     assert seen_devices == ["device-a"]
+    assert result["commands"][0]["step_index"] == 0
+    assert result["commands"][0]["step_title"] == "step"
+    assert result["commands"][0]["status"] == "success"
     assert "Invalid pipeline step.device_id=missing-device" in caplog.text
     worker_messages = captured_messages[1]
     assert any("target_device=device-a" in msg.get("content", "") for msg in worker_messages)
