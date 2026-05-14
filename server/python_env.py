@@ -12,6 +12,15 @@ PYTHON_ENV_STOP_ERROR = (
     "installing the dependency."
 )
 
+RECOVERABLE_COMMAND_ERROR_TYPES = {
+    "dependency_missing",
+    "command_missing",
+    "path_missing",
+    "shell_syntax_error",
+    "python_runtime_error",
+    "timeout",
+}
+
 
 def _result_text(result: dict[str, Any] | None) -> str:
     if not isinstance(result, dict):
@@ -54,6 +63,93 @@ def _module_not_found_package(text: str) -> str | None:
     if match:
         return match.group(1)
     return None
+
+
+def _module_not_found_packages(text: str) -> list[str]:
+    packages = []
+    seen = set()
+    for match in re.finditer(r"No module named ['\"]([^'\"]+)['\"]", text, re.IGNORECASE):
+        package = match.group(1).strip()
+        if package and package not in seen:
+            packages.append(package)
+            seen.add(package)
+    return packages
+
+
+def classify_command_error(result: dict[str, Any] | None, command: str = "") -> dict[str, Any]:
+    """Classify a failed command as a structured observation for the controller loop."""
+    text = _result_text(result)
+    lowered = text.lower()
+    returncode = _returncode(result)
+    has_error = (
+        returncode not in (None, 0)
+        or (isinstance(result, dict) and bool(result.get("error")))
+        or "traceback (most recent call last)" in lowered
+    )
+    if not has_error:
+        return {"error_type": "none", "recoverable": False}
+
+    missing_packages = _module_not_found_packages(text)
+    if missing_packages:
+        return {
+            "error_type": "dependency_missing",
+            "recoverable": True,
+            "missing_packages": missing_packages,
+        }
+
+    if any(marker in lowered for marker in ("timed out", "timeout", "таймаут", "тайм-аут")):
+        return {"error_type": "timeout", "recoverable": True}
+
+    command_missing_markers = (
+        "commandnotfoundexception",
+        "not recognized as an internal or external command",
+        "is not recognized as the name of a cmdlet",
+        "is not recognized as the name",
+        "command not found",
+        "executable file not found",
+    )
+    if any(marker in lowered for marker in command_missing_markers):
+        return {"error_type": "command_missing", "recoverable": True}
+
+    path_missing_markers = (
+        "pathnotfound",
+        "cannot find path",
+        "could not find a part of the path",
+        "no such file or directory",
+        "cannot find the path specified",
+    )
+    if any(marker in lowered for marker in path_missing_markers):
+        return {"error_type": "path_missing", "recoverable": True}
+
+    permission_markers = (
+        "access denied",
+        "unauthorizedaccessexception",
+        "permission denied",
+        "отказано в доступе",
+    )
+    if any(marker in lowered for marker in permission_markers):
+        return {"error_type": "permission_error", "recoverable": False}
+
+    parser_markers = (
+        "parsererror",
+        "parsing failed",
+        "missing expression after",
+        "unexpected token",
+        "the string is missing the terminator",
+    )
+    if any(marker in lowered for marker in parser_markers):
+        return {"error_type": "shell_syntax_error", "recoverable": True}
+
+    if "traceback (most recent call last)" in lowered or lowered.lstrip().startswith("traceback"):
+        return {"error_type": "python_runtime_error", "recoverable": True}
+
+    return {"error_type": "command_error", "recoverable": False}
+
+
+def is_recoverable_command_error(classification: dict[str, Any] | None) -> bool:
+    if not isinstance(classification, dict):
+        return False
+    return bool(classification.get("recoverable")) and classification.get("error_type") in RECOVERABLE_COMMAND_ERROR_TYPES
 
 
 def _python_version(text: str) -> str | None:

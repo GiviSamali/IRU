@@ -13,6 +13,7 @@ try:
         set_current_step,
     )
     from .controller_trust import enforce_trusted_answer  # type: ignore
+    from .python_env import classify_command_error, is_recoverable_command_error  # type: ignore
     from .python_toolchain import (  # type: ignore
         resolve_python_toolchain,
         rewrite_python_command,
@@ -27,6 +28,7 @@ except ImportError:
         set_current_step,
     )
     from controller_trust import enforce_trusted_answer  # type: ignore
+    from python_env import classify_command_error, is_recoverable_command_error  # type: ignore
     from python_toolchain import (  # type: ignore
         resolve_python_toolchain,
         rewrite_python_command,
@@ -257,6 +259,14 @@ async def process_non_pipeline_command(
 
                 if rewrite_error:
                     tool_result = {"error": rewrite_error}
+                    command_error = classify_command_error(tool_result, fn_args.get("command", ""))
+                    if command_error.get("error_type") != "none":
+                        tool_result = dict(tool_result)
+                        tool_result["command_error"] = command_error
+                        tool_result["error_type"] = command_error.get("error_type")
+                        if command_error.get("missing_packages"):
+                            tool_result["missing_packages"] = command_error["missing_packages"]
+
                     commands_log.append({
                         "action": fn_name,
                         "command": fn_args.get("command", ""),
@@ -319,6 +329,14 @@ async def process_non_pipeline_command(
                             )
                         tool_result = {"error": err_str}
 
+                    command_error = classify_command_error(tool_result, fn_args.get("command", ""))
+                    if command_error.get("error_type") != "none":
+                        tool_result = dict(tool_result)
+                        tool_result["command_error"] = command_error
+                        tool_result["error_type"] = command_error.get("error_type")
+                        if command_error.get("missing_packages"):
+                            tool_result["missing_packages"] = command_error["missing_packages"]
+
                     commands_log.append({
                         "action": fn_name,
                         "command": fn_args.get("command", ""),
@@ -335,14 +353,17 @@ async def process_non_pipeline_command(
                         tool_result,
                     )
                     if env_guard_error:
-                        commands_log.append(budget_guard_entry(env_guard_error))
-                        return {
-                            "answer": env_guard_error,
-                            "commands": commands_log,
-                            "tasks": [],
-                            "training_context": _training_context(device_info),
-                        }
-
+                        if is_recoverable_command_error(command_error):
+                            tool_result["command_error"]["guard_message"] = env_guard_error
+                            commands_log[-1]["result"] = tool_result
+                        else:
+                            commands_log.append(budget_guard_entry(env_guard_error))
+                            return {
+                                "answer": env_guard_error,
+                                "commands": commands_log,
+                                "tasks": [],
+                                "training_context": _training_context(device_info),
+                            }
                     if machine_guid and "error" not in tool_result:
                         try:
                             db.add_command_memory(

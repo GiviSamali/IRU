@@ -8,6 +8,7 @@ try:
     from . import database as db  # type: ignore
     from .controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from .controller_trust import enforce_trusted_answer  # type: ignore
+    from .python_env import classify_command_error, is_recoverable_command_error  # type: ignore
     from .python_toolchain import (  # type: ignore
         build_python_toolchain_block,
         get_cached_python_toolchain,
@@ -19,6 +20,7 @@ except ImportError:
     import database as db  # type: ignore
     from controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from controller_trust import enforce_trusted_answer  # type: ignore
+    from python_env import classify_command_error, is_recoverable_command_error  # type: ignore
     from python_toolchain import (  # type: ignore
         build_python_toolchain_block,
         get_cached_python_toolchain,
@@ -608,7 +610,14 @@ async def run_pipeline_worker(
             "Completed steps marked OTHER DEVICE are informational only; do not reuse their paths as target-device paths. "
             "Python environment contract: if Python is found and an import check returns ModuleNotFoundError / No module named, "
             "treat it as a missing dependency, not missing Python. Do not search for another interpreter after Python was found "
-            "unless the user explicitly asked for a different interpreter. Stop and offer to install the dependency through confirmation."
+            "unless the user explicitly asked for a different interpreter. Stop and offer to install the dependency through confirmation. "
+            "Command errors are observations; analyze stderr/stdout and continue if recoverable. "
+            "Do not stop after ModuleNotFoundError; treat it as missing dependency. "
+            "For package checks prefer one non-throwing JSON check using importlib.util.find_spec, for example: "
+            "& \"<resolved_python_path>\" -c \"import importlib.util,json; names=['PyQt5','numpy','matplotlib']; "
+            "print(json.dumps({n: bool(importlib.util.find_spec(n)) for n in names}))\". "
+            "For PyQt5 version, first verify PyQt5 is present, then use from PyQt5.QtCore import PYQT_VERSION_STR. "
+            "Do not chain many import checks as separate failing native commands if a structured check is possible."
         ),
     })
     messages.append({
@@ -702,6 +711,14 @@ async def run_pipeline_worker(
 
             if rewrite_error:
                 tool_result = {"error": rewrite_error}
+                command_error = classify_command_error(tool_result, fn_args.get("command", ""))
+                if command_error.get("error_type") != "none":
+                    tool_result = dict(tool_result)
+                    tool_result["command_error"] = command_error
+                    tool_result["error_type"] = command_error.get("error_type")
+                    if command_error.get("missing_packages"):
+                        tool_result["missing_packages"] = command_error["missing_packages"]
+
                 commands_log.append({
                     "action": fn_name,
                     "command": fn_args.get("command", ""),
@@ -748,6 +765,14 @@ async def run_pipeline_worker(
                         )
                     tool_result = {"error": err_str}
 
+                command_error = classify_command_error(tool_result, fn_args.get("command", ""))
+                if command_error.get("error_type") != "none":
+                    tool_result = dict(tool_result)
+                    tool_result["command_error"] = command_error
+                    tool_result["error_type"] = command_error.get("error_type")
+                    if command_error.get("missing_packages"):
+                        tool_result["missing_packages"] = command_error["missing_packages"]
+
                 commands_log.append({
                     "action": fn_name,
                     "command": fn_args.get("command", ""),
@@ -761,12 +786,16 @@ async def run_pipeline_worker(
                     tool_result,
                 )
                 if env_guard_error:
-                    commands_log.append(budget_guard_entry(env_guard_error))
-                    return {
-                        "status": "error",
-                        "answer": env_guard_error,
-                        "commands": commands_log,
-                    }
+                    if is_recoverable_command_error(command_error):
+                        tool_result["command_error"]["guard_message"] = env_guard_error
+                        commands_log[-1]["result"] = tool_result
+                    else:
+                        commands_log.append(budget_guard_entry(env_guard_error))
+                        return {
+                            "status": "error",
+                            "answer": env_guard_error,
+                            "commands": commands_log,
+                        }
                 if machine_guid and "error" not in tool_result:
                     try:
                         db.add_command_memory(

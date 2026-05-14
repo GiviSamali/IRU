@@ -52,8 +52,14 @@ GUI-приложений (PyQt5, tkinter, WinForms, Electron, браузеры) 
 
 Python environment contract:
 If Python is found and an import check returns ModuleNotFoundError / No module named, treat it as a missing dependency, not as missing Python.
+Command errors are observations. Analyze stderr/stdout and continue if recoverable.
+Do not stop after ModuleNotFoundError; treat it as missing dependency.
 Do not search for another interpreter after Python was found unless the user explicitly asked for a different interpreter.
 Stop and offer to install the missing dependency through a command that requires user confirmation.
+For package checks prefer one non-throwing JSON check using importlib.util.find_spec instead of chained failing native commands:
+& "<resolved_python_path>" -c "import importlib.util,json; names=['PyQt5','numpy','matplotlib']; print(json.dumps({{n: bool(importlib.util.find_spec(n)) for n in names}}))"
+For PyQt5 version, first verify PyQt5 is present, then use from PyQt5.QtCore import PYQT_VERSION_STR.
+Do not chain many import checks as separate failing native commands if a structured check is possible.
 
 ## Контракт выполнения команд
 Каждая команда должна быть самодостаточной: действие + короткий проверяемый вывод результата.
