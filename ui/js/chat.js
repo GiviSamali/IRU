@@ -592,7 +592,7 @@ async function pollTask(taskId, msgIndex) {
         renderMessages();
         return;
       }
-      if (task.status === 'done' || task.status === 'error') {
+      if (['done', 'error', 'completed_with_recovery'].includes(task.status)) {
         stopped = true;
         const msg = {
           role: 'assistant',
@@ -787,7 +787,8 @@ function synthesizePipelineTasks(commands, fallbackTaskId) {
     const commandStatus = getCommandStatus(command);
     if (commandStatus === 'error' || commandStatus === 'blocked') current.status = 'failed';
     else if (commandStatus === 'running') current.status = 'running';
-    else if (current.status !== 'failed') current.status = 'done';
+    else if (current.status === 'failed') current.status = 'recovered';
+    else current.status = 'done';
     if (!current.summary) current.summary = shortenText(getCommandOutputPreview(command), 180);
     stepMap.set(stepIndex, current);
   }
@@ -798,11 +799,12 @@ function synthesizePipelineTasks(commands, fallbackTaskId) {
   if (!steps.length) return [];
 
   const hasFailures = steps.some(step => step.status === 'failed');
+  const hasRecovered = steps.some(step => step.status === 'recovered');
   const hasRunning = steps.some(step => step.status === 'running');
   return [{
     id: fallbackTaskId || 'pipeline-message',
     goal: 'Pipeline',
-    status: hasRunning ? 'running' : (hasFailures ? 'failed' : 'completed'),
+    status: hasRunning ? 'running' : (hasFailures ? 'failed' : (hasRecovered ? 'completed_with_recovery' : 'completed')),
     steps,
   }];
 }
@@ -887,6 +889,7 @@ function renderTaskBlock(tasks, commands = [], fallbackTaskId = '') {
     const t = normalizedTasks[ti];
     const st = t.status || 'running';
     const statusLabel = st === 'completed' ? '\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e'
+      : st === 'completed_with_recovery' ? '\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e \u0441 recovery'
       : st === 'failed' ? '\u043e\u0448\u0438\u0431\u043a\u0430'
       : st === 'cancelled' ? '\u043e\u0442\u043c\u0435\u043d\u0435\u043d\u043e'
       : '\u0432\u044b\u043f\u043e\u043b\u043d\u044f\u0435\u0442\u0441\u044f';
@@ -905,8 +908,10 @@ function renderTaskBlock(tasks, commands = [], fallbackTaskId = '') {
         const hasStepCommands = stepCommands.length > 0;
         const isCommandsOpen = hasStepCommands && state.expandedStepCommands && state.expandedStepCommands.has(commandsKey);
         const icon = sst === 'done' ? '\u2713'
+          : sst === 'recovered' ? '!'
           : sst === 'failed' ? '\u2717'
           : sst === 'running' ? '\u23f3'
+          : sst === 'blocked' ? '\u25a0'
           : sst === 'skipped' ? '\u2014'
           : '\u25cb';
         const title = s.title || s.description || `Step ${si + 1}`;

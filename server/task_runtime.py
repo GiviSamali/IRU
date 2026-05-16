@@ -583,6 +583,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 "answer": result.get("answer", ""),
                 "commands": result.get("commands", []),
                 "tasks": result.get("tasks", []),
+                "task_receipt": result.get("task_receipt"),
             }
         except ConfirmationRequired as confirm:
             return {
@@ -751,6 +752,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             combined_answer = result.get("answer", "")
             combined_commands = result.get("commands", [])
             combined_tasks = result.get("tasks", [])
+            combined_task_receipt = result.get("task_receipt")
 
         suggest_match = _re.search(r"\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]", combined_answer)
         if suggest_match:
@@ -826,6 +828,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         task["answer"] = combined_answer
         task["commands"] = combined_commands
         task["tasks"] = combined_tasks
+        if "combined_task_receipt" in locals() and combined_task_receipt:
+            task["task_receipt"] = combined_task_receipt
     except Exception as exc:
         print(f"[run_nl_task] FATAL task={task_id[:8]}: {type(exc).__name__}: {exc}")
         traceback.print_exc()

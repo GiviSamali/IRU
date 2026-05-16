@@ -785,7 +785,7 @@ def update_step(task_id: int, idx: int, status: str,
         if status == "running":
             fields.append("started_at = ?")
             values.append(now)
-        elif status in ("done", "failed", "skipped"):
+        elif status in ("done", "failed", "recovered", "skipped", "blocked"):
             fields.append("finished_at = ?")
             values.append(now)
         if summary is not None:

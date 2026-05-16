@@ -506,9 +506,11 @@ img[src*="iru_logo"] {
   color: var(--accent);
 }
 .task-block.task-completed { border-left-color: var(--success); }
+.task-block.task-completed_with_recovery { border-left-color: var(--warning); }
 .task-block.task-failed    { border-left-color: var(--error); }
 .task-block.task-cancelled { border-left-color: var(--text-muted); }
 .task-block.task-completed::before { color: var(--success); }
+.task-block.task-completed_with_recovery::before { color: var(--warning); }
 .task-block.task-failed::before { color: var(--error); }
 .task-block.task-cancelled::before { color: var(--text-muted); }
 
@@ -539,6 +541,7 @@ img[src*="iru_logo"] {
 }
 .task-badge-running   { color: var(--accent); border-color: var(--accent-dim); }
 .task-badge-completed { color: var(--success); border-color: var(--success); }
+.task-badge-completed_with_recovery { color: var(--warning); border-color: var(--warning); }
 .task-badge-failed    { color: var(--error); border-color: var(--error); }
 .task-badge-cancelled { color: var(--text-muted); }
 
@@ -571,9 +574,11 @@ img[src*="iru_logo"] {
   color: var(--text-muted);
 }
 .task-step.step-done    .step-icon { color: var(--success); }
+.task-step.step-recovered .step-icon { color: var(--warning); }
 .task-step.step-failed  .step-icon { color: var(--error); }
 .task-step.step-running .step-icon { color: var(--accent); }
 .task-step.step-done    .step-desc { color: var(--text-secondary); }
+.task-step.step-recovered .step-desc { color: var(--text-secondary); }
 .task-step.step-failed  .step-desc { color: var(--error); }
 .task-step.step-running .step-desc { color: var(--text-primary); font-weight: 500; }
 .task-step.step-pending .step-desc { color: var(--text-muted); }

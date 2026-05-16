@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 import httpx
@@ -63,6 +64,9 @@ except ImportError:
 PIPELINE_WORKER_MAX_ITERATIONS = 10
 PIPELINE_MAX_STEPS = 10
 logger = logging.getLogger(__name__)
+
+STEP_STATES = {"pending", "running", "done", "failed", "recovered", "skipped", "blocked"}
+TASK_STATES = {"running", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}
 
 _PIPELINE_MULTI_STEP_MARKERS = (
     " и ",
@@ -365,6 +369,8 @@ Target device context:
 
 Запрос пользователя:
 {user_message}
+
+{format_conversation_context_block(shared.get("conversation_context") or build_conversation_context(None, user_message))}
 """
 
 
@@ -444,6 +450,8 @@ Target device context:
 {shared["os_rules"]}
 
 Текущая дата и время: {shared["current_datetime_msk"]}.
+
+{format_conversation_context_block(shared.get("conversation_context") or build_conversation_context(None, ""), redact_paths=True)}
 """
 
 
@@ -584,6 +592,308 @@ def _pipeline_command_status(action: str, result: dict | None) -> str:
     if returncode not in (None, 0):
         return "error"
     return "success"
+
+
+def build_conversation_context(chat_history: list[dict] | None, current_user_message: str) -> dict:
+    """Return a compact, explicit history block for pipeline prompts."""
+    if chat_history is None:
+        return {
+            "current_user_message": current_user_message,
+            "previous_user_message": None,
+            "previous_assistant_message": None,
+            "recent_turns_count": 0,
+            "history_available": False,
+        }
+
+    messages = list(chat_history or [])
+    user_messages = [
+        (msg.get("content") or "").strip()
+        for msg in messages
+        if msg.get("role") == "user" and (msg.get("content") or "").strip()
+    ]
+    assistant_messages = [
+        (msg.get("content") or "").strip()
+        for msg in messages
+        if msg.get("role") == "assistant" and (msg.get("content") or "").strip()
+    ]
+    previous_user_message = None
+    if len(user_messages) >= 2:
+        previous_user_message = user_messages[-2]
+    elif user_messages and user_messages[-1] != current_user_message:
+        previous_user_message = user_messages[-1]
+
+    return {
+        "current_user_message": current_user_message,
+        "previous_user_message": previous_user_message,
+        "previous_assistant_message": assistant_messages[-1] if assistant_messages else None,
+        "recent_turns_count": len(user_messages),
+        "history_available": True,
+    }
+
+
+_WINDOWS_ABS_PATH_RE = re.compile(r"\b[A-Za-z]:\\[^\s\"'<>|]+")
+
+
+def _redact_history_text(value: str | None, limit: int = 700) -> str | None:
+    if not value:
+        return None
+    redacted = _WINDOWS_ABS_PATH_RE.sub("[redacted_path]", value)
+    return redacted[:limit]
+
+
+def format_conversation_context_block(context: dict, *, redact_paths: bool = False) -> str:
+    def _value(key: str) -> str:
+        value = context.get(key)
+        if redact_paths and isinstance(value, str):
+            value = _redact_history_text(value)
+        return str(value) if value else "null"
+
+    return "\n".join([
+        "Conversation context:",
+        f"history_available: {bool(context.get('history_available'))}",
+        f"recent_turns_count: {int(context.get('recent_turns_count') or 0)}",
+        f"current_user_message: {_value('current_user_message')}",
+        f"previous_user_message: {_value('previous_user_message')}",
+        f"previous_assistant_message: {_value('previous_assistant_message')}",
+        (
+            "If history_available is false, say that history is unavailable in this execution mode. "
+            "Do not claim this is the first request unless the server context proves it."
+        ),
+    ])
+
+
+_FALSE_FIRST_REQUEST_PATTERNS = (
+    "первый запрос",
+    "первое сообщение",
+    "предыдущих сообщений нет",
+    "нет предыдущих сообщений",
+    "first request",
+    "first message",
+    "no previous messages",
+)
+
+
+def enforce_conversation_context_answer(answer: str, context: dict) -> str:
+    """Prevent false "first request" claims when server-side history disagrees."""
+    text = answer or ""
+    lower = text.lower()
+    if not any(pattern in lower for pattern in _FALSE_FIRST_REQUEST_PATTERNS):
+        return text
+    if not context.get("history_available"):
+        return "В этом режиме выполнения история недоступна."
+    if int(context.get("recent_turns_count") or 0) <= 1:
+        return text
+
+    previous_user = context.get("previous_user_message")
+    previous_assistant = context.get("previous_assistant_message")
+    parts = []
+    if previous_user:
+        parts.append(f"Предыдущий вопрос пользователя: {previous_user}")
+    if previous_assistant:
+        parts.append(f"Мой предыдущий ответ: {previous_assistant}")
+    return "\n".join(parts) if parts else "История доступна, но предыдущий вопрос не удалось извлечь из контекста."
+
+
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _collect_result_paths(result: dict, keys: tuple[str, ...]) -> list[str]:
+    paths = []
+    if not isinstance(result, dict):
+        return paths
+    for key in keys:
+        for item in _as_list(result.get(key)):
+            if isinstance(item, str) and item.strip():
+                paths.append(item.strip())
+    return paths
+
+
+def _unique(items: list) -> list:
+    seen = set()
+    result = []
+    for item in items:
+        key = json.dumps(item, ensure_ascii=False, sort_keys=True) if isinstance(item, dict) else str(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def _command_failed(command: dict) -> bool:
+    return command.get("status") in {"error", "blocked"} or _pipeline_command_status(
+        command.get("action") or "",
+        command.get("result") if isinstance(command.get("result"), dict) else None,
+    ) in {"error", "blocked"}
+
+
+def _command_recoverable(command: dict) -> bool:
+    result = command.get("result") or {}
+    if not isinstance(result, dict):
+        return False
+    command_error = result.get("command_error") or {}
+    if isinstance(command_error, dict) and command_error.get("recoverable"):
+        return True
+    return result.get("error_type") in {
+        "dependency_missing",
+        "command_missing",
+        "path_missing",
+        "shell_syntax_error",
+        "python_runtime_error",
+        "timeout",
+    }
+
+
+def _verification_command_succeeded(command: dict) -> bool:
+    if _command_failed(command):
+        return False
+    result = command.get("result") or {}
+    if not isinstance(result, dict):
+        return False
+    if _collect_result_paths(result, ("files_verified", "verified_files", "file_path")):
+        return True
+    if result.get("exists") is True or result.get("verified") is True:
+        return True
+    output = f"{result.get('stdout') or ''}\n{result.get('stderr') or ''}".upper()
+    return any(marker in output for marker in ("EXISTS", "VERIFIED", "CHECK_OK", "OK", "CREATED"))
+
+
+def _step_has_failed_command(commands: list[dict], step_index: int) -> bool:
+    return any(command.get("step_index") == step_index and _command_failed(command) for command in commands)
+
+
+def _step_has_recoverable_failure(commands: list[dict], step_index: int) -> bool:
+    return any(command.get("step_index") == step_index and _command_failed(command) and _command_recoverable(command) for command in commands)
+
+
+def _step_success_after_failure(commands: list[dict], step_index: int) -> bool:
+    saw_failure = False
+    for command in commands:
+        if command.get("step_index") != step_index:
+            continue
+        if _command_failed(command):
+            saw_failure = True
+        elif saw_failure and _verification_command_succeeded(command):
+            return True
+    return False
+
+
+_QUOTED_PYTHON_RE = re.compile(r'"([^"]*python(?:\.exe)?)"', re.IGNORECASE)
+_WIN_PYTHON_PATH_RE = re.compile(r"\b([A-Za-z]:\\[^\n\r\"';&|]*?python(?:\.exe)?)\b", re.IGNORECASE)
+
+
+def _extract_python_interpreters(commands: list[dict], receipt_dicts: list[dict | None]) -> list[dict]:
+    interpreters = []
+    for receipt in receipt_dicts:
+        if not isinstance(receipt, dict):
+            continue
+        path = receipt.get("interpreter_path")
+        if path:
+            interpreters.append({
+                "path": path,
+                "version": receipt.get("version"),
+                "source": "receipt",
+            })
+
+    for command in commands:
+        command_text = command.get("command") or ""
+        result = command.get("result") or {}
+        version = result.get("python_version") if isinstance(result, dict) else None
+        for match in _QUOTED_PYTHON_RE.findall(command_text):
+            interpreters.append({"path": match, "version": version, "source": "command"})
+        for match in _WIN_PYTHON_PATH_RE.findall(command_text):
+            interpreters.append({"path": match, "version": version, "source": "command"})
+        if re.search(r"(^|[;&|]\s*)(python|py)\b", command_text, re.IGNORECASE):
+            interpreters.append({"path": command_text.split()[0], "version": version, "source": "command"})
+
+    deduped = []
+    seen = set()
+    for item in interpreters:
+        path = str(item.get("path") or "").strip()
+        if not path:
+            continue
+        key = path.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def build_pipeline_task_receipt(
+    *,
+    task_status: str,
+    commands: list[dict],
+    step_results: list[dict],
+    recovery_warnings: list[str],
+    receipt_dicts: list[dict | None],
+) -> dict:
+    artifacts_created = []
+    files_verified = []
+    commands_failed = []
+    for command in commands:
+        result = command.get("result") or {}
+        if isinstance(result, dict):
+            artifacts_created.extend(_collect_result_paths(result, (
+                "artifacts_created",
+                "created_artifacts",
+                "created_files",
+                "files_created",
+                "path",
+            )))
+            if command.get("action") == "write_content":
+                artifacts_created.extend(_collect_result_paths(result, ("file_path",)))
+            files_verified.extend(_collect_result_paths(result, (
+                "files_verified",
+                "verified_files",
+                "file_path",
+            )))
+        if _command_failed(command):
+            commands_failed.append({
+                "step_index": command.get("step_index"),
+                "step_title": command.get("step_title"),
+                "action": command.get("action"),
+                "command": command.get("command"),
+                "status": command.get("status"),
+                "error_type": result.get("error_type") if isinstance(result, dict) else None,
+                "error": result.get("error") if isinstance(result, dict) else None,
+                "returncode": result.get("returncode") if isinstance(result, dict) else None,
+            })
+
+    recoveries_applied = [
+        {
+            "step_index": step.get("idx"),
+            "step_title": step.get("title"),
+            "reason": step.get("recovery_reason") or "failed command recovered by later verification",
+        }
+        for step in step_results
+        if step.get("status") == "recovered"
+    ]
+    python_interpreters = _extract_python_interpreters(commands, receipt_dicts)
+    warnings = list(recovery_warnings)
+    if len({item["path"].lower() for item in python_interpreters}) > 1:
+        warnings.append("multiple_python_interpreters_used")
+    final_verification_status = "verified" if files_verified or any(
+        step.get("status") in {"done", "recovered"} for step in step_results[-1:]
+    ) else "unverified"
+    if any(step.get("status") in {"failed", "blocked"} for step in step_results):
+        final_verification_status = "failed"
+
+    return {
+        "task_status": task_status,
+        "artifacts_created": _unique(artifacts_created),
+        "files_verified": _unique(files_verified),
+        "commands_failed": _unique(commands_failed),
+        "recoveries_applied": _unique(recoveries_applied),
+        "final_verification_status": final_verification_status,
+        "python_interpreters": python_interpreters,
+        "warnings": _unique(warnings),
+    }
 
 
 async def run_pipeline_worker(
@@ -1047,6 +1357,8 @@ async def process_pipeline_subagents(
         windows_rules=windows_rules,
         linux_rules=linux_rules,
     )
+    conversation_context = build_conversation_context(chat_history, user_message)
+    shared["conversation_context"] = conversation_context
 
     set_current_step(poll_task_id, "Оркестратор строит план...")
     history_msgs = build_chat_messages(chat_history[:-1], filter_onboarding=True)[-8:] if chat_history else []
@@ -1122,6 +1434,7 @@ async def process_pipeline_subagents(
 
         pipeline_failed = False
         failure_reason = ""
+        recovery_warnings = []
         for idx, step in enumerate(normalized_plan["steps"]):
             step, step_device_id = validate_pipeline_step_device(step, device_id, all_devices)
             worker_shared, worker_machine_guid = build_pipeline_worker_context(
@@ -1134,6 +1447,7 @@ async def process_pipeline_subagents(
                 windows_rules=windows_rules,
                 linux_rules=linux_rules,
             )
+            worker_shared["conversation_context"] = conversation_context
             db.update_step(db_task_id, idx, "running", summary="Подзадача передана subagent-исполнителю")
             push_tasks_view(poll_task_id, created_task_ids)
             set_current_step(
@@ -1182,11 +1496,23 @@ async def process_pipeline_subagents(
             if urls:
                 step_summary = f"{step_summary} Ссылки: {'; '.join(urls)}"
 
-            step_status = "done" if worker_result.get("status") == "ok" else "failed"
+            step_commands = worker_result.get("commands", [])
+            if worker_result.get("status") == "ok":
+                step_status = "recovered" if (
+                    _step_has_failed_command(step_commands, idx)
+                    and (
+                        _step_success_after_failure(step_commands, idx)
+                        or any(_verification_command_succeeded(cmd) for cmd in step_commands)
+                    )
+                ) else "done"
+            else:
+                step_status = "failed"
+                if _step_has_recoverable_failure(step_commands, idx):
+                    recovery_warnings.append(f"step_{idx}_had_recoverable_failure")
             db.update_step(db_task_id, idx, step_status, summary=step_summary[:500])
             push_tasks_view(poll_task_id, created_task_ids)
 
-            step_results.append({
+            step_record = {
                 "idx": idx,
                 "title": step["title"],
                 "instruction": step["instruction"],
@@ -1194,22 +1520,61 @@ async def process_pipeline_subagents(
                 "hostname": worker_shared.get("current_hostname", "unknown"),
                 "status": step_status,
                 "summary": step_summary,
-            })
+            }
+            if step_status == "recovered":
+                step_record["recovery_reason"] = "failed command recovered by successful verification in the same step"
+            step_results.append(step_record)
 
-            if step_status != "done":
+            if step_status not in {"done", "recovered"}:
                 pipeline_failed = True
                 failure_reason = step_summary
-                break
+                if not _step_has_recoverable_failure(step_commands, idx):
+                    break
 
-        db.finish_task(db_task_id, "failed" if pipeline_failed else "completed")
+        final_verification_ok = any(_verification_command_succeeded(command) for command in all_commands)
+        if final_verification_ok:
+            unrecovered_failure = False
+            for step_record in step_results:
+                if step_record.get("status") == "failed" and _step_has_recoverable_failure(all_commands, step_record["idx"]):
+                    step_record["status"] = "recovered"
+                    step_record["recovery_reason"] = "failed step recovered by later artifact verification"
+                    db.update_step(
+                        db_task_id,
+                        step_record["idx"],
+                        "recovered",
+                        summary=(step_record.get("summary") or "")[:500],
+                    )
+                elif step_record.get("status") in {"failed", "blocked"}:
+                    unrecovered_failure = True
+            pipeline_failed = unrecovered_failure
+            if not pipeline_failed:
+                failure_reason = ""
+
+        task_status = "failed" if pipeline_failed else (
+            "completed_with_recovery"
+            if any(step.get("status") == "recovered" for step in step_results)
+            or any(_command_failed(command) for command in all_commands)
+            else "completed"
+        )
+        receipt = build_pipeline_task_receipt(
+            task_status=task_status,
+            commands=all_commands,
+            step_results=step_results,
+            recovery_warnings=recovery_warnings,
+            receipt_dicts=[shared.get("python_toolchain_receipt")],
+        )
+
+        db.finish_task(db_task_id, task_status)
         push_tasks_view(poll_task_id, created_task_ids)
         set_current_step(poll_task_id, "Оркестратор подводит итоги...")
 
         summary_payload = {
             "goal": normalized_plan["goal"],
-            "pipeline_status": "failed" if pipeline_failed else "completed",
+            "pipeline_status": task_status,
             "failure_reason": failure_reason,
             "steps": step_results,
+            "task_receipt": receipt,
+            "conversation_context": conversation_context,
         }
         summary_messages = [
             {"role": "system", "content": pipeline_summary_prompt()},
@@ -1235,11 +1600,13 @@ async def process_pipeline_subagents(
                 )
 
     final_answer = strip_markdown(final_answer)
+    final_answer = enforce_conversation_context_answer(final_answer, conversation_context)
     final_answer = enforce_trusted_answer(final_answer, all_commands)
     return {
         "answer": final_answer,
         "commands": all_commands,
         "tasks": collect_tasks(created_task_ids),
+        "task_receipt": receipt,
         "training_context": {
             "os": device_info.get("os", ""),
             "hostname": device_info.get("hostname", ""),

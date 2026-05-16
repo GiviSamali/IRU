@@ -343,6 +343,7 @@ async def api_get_task(task_id: str, request: Request):
         "answer": task.get("answer"),
         "commands": task.get("commands"),
         "tasks": task.get("tasks", []),
+        "task_receipt": task.get("task_receipt"),
         "current_step": task.get("current_step"),
         "results": task.get("results", {}),
         "confirm_data": task.get("confirm_data"),
