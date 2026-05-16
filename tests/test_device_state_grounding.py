@@ -135,6 +135,9 @@ def test_non_pipeline_command_log_includes_target_device_id():
     assert entry["target_device_id"] == "device-a"
     assert entry["hostname"] == "alpha"
     assert entry["collected_at"]
+    assert entry["tool_name"] == "execute_cmd"
+    assert entry["tool_type"] == "fallback"
+    assert entry["tool_label"] == "PowerShell / shell fallback"
 
 
 def test_pipeline_command_log_includes_target_device_id():
@@ -227,18 +230,70 @@ def test_pipeline_completed_other_device_step_not_live_state():
     assert "do not reuse paths as target-device paths" in prompt
 
 
-def test_state_all_devices_uses_deterministic_fanout(monkeypatch):
+@pytest.mark.parametrize("message", [
+    "Создай на рабочем столе папку test_iru_state, в ней создай txt файл hello.txt с текстом Проверка ИРУ",
+    "Создай файл state.txt",
+    "Создай папку test_iru_state",
+])
+def test_nl_state_phrase_uses_llm_tool_flow_not_hidden_shortcut(monkeypatch, message):
     task_id = "state-task"
     user_id = 1
-    device_ids = [f"{user_id}:givi", f"{user_id}:desktop"]
+    device_ids = [f"{user_id}:givi"]
+    task_runtime.devices.clear()
     task_runtime.devices[device_ids[0]] = {"user_id": user_id, "info": {"hostname": "givi"}, "pending": {}, "ws": object()}
-    task_runtime.devices[device_ids[1]] = {"user_id": user_id, "info": {"hostname": "desktop"}, "pending": {}, "ws": object()}
     task_runtime.tasks[task_id] = {
         "task_id": task_id,
         "user_id": user_id,
         "chat_id": 1,
-        "message": "проверь текущее состояние на всех устройствах",
+        "message": message,
         "device_ids": device_ids,
+        "status": "running",
+        "results": {},
+        "modes": {},
+        "created_at": time.time(),
+    }
+    process_calls = []
+
+    async def fail_collect(*args, **kwargs):
+        raise AssertionError("hidden state shortcut must not collect live snapshot")
+
+    async def fake_process(**kwargs):
+        process_calls.append(kwargs["user_message"])
+        return {"answer": "llm flow", "commands": [], "tasks": []}
+
+    async def fail_send(*args, **kwargs):
+        raise AssertionError("this regression should stay in LLM/tool flow without direct send")
+
+    async def fake_classify(_message):
+        return ("SIMPLE", "")
+
+    monkeypatch.setattr(task_runtime, "collect_device_live_snapshot", fail_collect)
+    monkeypatch.setattr(task_runtime, "process_nl_command", fake_process)
+    monkeypatch.setattr(task_runtime, "classify_task_complexity", fake_classify)
+    monkeypatch.setattr(task_runtime, "send_command_to_agent", fail_send)
+    monkeypatch.setattr(task_runtime, "add_message", lambda *args, **kwargs: None)
+    monkeypatch.setattr(task_runtime, "get_messages", lambda *args, **kwargs: [])
+    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id: {"device_id": device_id})
+
+    asyncio.run(task_runtime.run_nl_task(task_id, user_id, message, device_ids, 1))
+
+    assert process_calls == [message]
+    assert task_runtime.tasks[task_id]["status"] == "done"
+    assert task_runtime.tasks[task_id]["answer"] == "llm flow"
+
+
+def test_run_nl_device_refresh_state_tool_collects_and_stores_snapshot(monkeypatch):
+    task_id = "tool-state-task"
+    user_id = 1
+    device_key = f"{user_id}:givi"
+    task_runtime.devices.clear()
+    task_runtime.devices[device_key] = {"user_id": user_id, "info": {"hostname": "givi"}, "pending": {}, "ws": object()}
+    task_runtime.tasks[task_id] = {
+        "task_id": task_id,
+        "user_id": user_id,
+        "chat_id": 1,
+        "message": "Проверь состояние устройства",
+        "device_ids": [device_key],
         "status": "running",
         "results": {},
         "modes": {},
@@ -247,36 +302,42 @@ def test_state_all_devices_uses_deterministic_fanout(monkeypatch):
     calls = []
 
     async def fake_collect(device_id, user_id=None):
-        calls.append(device_id)
-        short = device_id.split(":", 1)[1]
-        return {
-            "device_id": device_id,
-            "target_device_id": short,
+        calls.append((device_id, user_id))
+        task_runtime.devices[device_id]["last_state_snapshot"] = {
+            "snapshot": {"process_count": 7},
+            "collected_at": "2026-05-16T10:00:00Z",
+            "identity_receipt": {"identity_status": "ok"},
+            "health_summary": {"health_status": "ok", "identity_status": "ok", "process_count": 7},
             "status": "ok",
-            "answer": f"target_device_id={short}; identity_status=ok",
-            "commands": [{"target_device_id": short, "collected_at": "now"}],
+        }
+        return {
+            "status": "ok",
+            "device_id": device_id,
+            "target_device_id": "givi",
+            "health_summary": {"health_status": "ok", "identity_status": "ok", "process_count": 7},
+            "identity_receipt": {"identity_status": "ok"},
+            "commands": [],
         }
 
-    async def fail_process(**kwargs):
-        raise AssertionError("state fanout must not use LLM primary flow")
+    async def fake_process(**kwargs):
+        tool_result = await kwargs["device_tool_fn"]("device_refresh_state", {"device_id": kwargs["device_id"]})
+        return {"answer": "state refreshed", "commands": [{"tool_name": "device.refresh_state", "result": tool_result}], "tasks": []}
 
-    async def fail_send(*args, **kwargs):
-        raise AssertionError("state fanout test uses collect helper, not replay")
+    async def fake_classify(_message):
+        return ("SIMPLE", "")
 
     monkeypatch.setattr(task_runtime, "collect_device_live_snapshot", fake_collect)
-    monkeypatch.setattr(task_runtime, "process_nl_command", fail_process)
-    monkeypatch.setattr(task_runtime, "send_command_to_agent", fail_send)
+    monkeypatch.setattr(task_runtime, "process_nl_command", fake_process)
+    monkeypatch.setattr(task_runtime, "classify_task_complexity", fake_classify)
     monkeypatch.setattr(task_runtime, "add_message", lambda *args, **kwargs: None)
+    monkeypatch.setattr(task_runtime, "get_messages", lambda *args, **kwargs: [])
+    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id: {"device_id": device_id})
 
-    asyncio.run(task_runtime.run_nl_task(task_id, user_id, "проверь текущее состояние на всех устройствах", device_ids, 1))
+    asyncio.run(task_runtime.run_nl_task(task_id, user_id, "Проверь состояние устройства", [device_key], 1))
 
-    assert calls == device_ids
-    assert task_runtime.tasks[task_id]["status"] == "done"
-    assert "target_device_id=givi" not in task_runtime.tasks[task_id]["answer"]
-    assert "target_device_id=desktop" not in task_runtime.tasks[task_id]["answer"]
-    assert "Состояние устройства givi" in task_runtime.tasks[task_id]["answer"]
-    assert "Состояние устройства desktop" in task_runtime.tasks[task_id]["answer"]
-    assert len(task_runtime.tasks[task_id]["commands"]) == 2
+    assert calls == [(device_key, user_id)]
+    assert task_runtime.devices[device_key]["last_state_snapshot"]["snapshot"]["process_count"] == 7
+    assert task_runtime.tasks[task_id]["commands"][0]["tool_name"] == "device.refresh_state"
 
 
 def test_collect_live_snapshot_stores_last_state_snapshot(monkeypatch):

@@ -364,6 +364,7 @@ def _build_non_pipeline_route_kwargs(
     modes: dict,
     poll_task_id: str | None,
     system_msg: str,
+    device_tool_fn=None,
 ) -> dict:
     return {
         "user_message": user_message,
@@ -384,6 +385,7 @@ def _build_non_pipeline_route_kwargs(
         "max_iterations": MAX_ITERATIONS,
         "pick_model_fn": _pick_model,
         "chat_completion_request_fn": _chat_completion_request,
+        "device_tool_fn": device_tool_fn,
     }
 
 
@@ -403,6 +405,7 @@ def _build_route_kwargs(
     device_profile: dict | None,
     modes: dict,
     poll_task_id: str | None,
+    device_tool_fn=None,
 ) -> dict:
     if route.name == "pipeline":
         return _build_pipeline_route_kwargs(
@@ -443,6 +446,7 @@ def _build_route_kwargs(
         modes=modes,
         poll_task_id=poll_task_id,
         system_msg=system_msg,
+        device_tool_fn=device_tool_fn,
     )
 
 
@@ -473,6 +477,7 @@ async def process_nl_command(
     device_profile: dict | None = None,
     modes: dict | None = None,
     poll_task_id: str | None = None,
+    device_tool_fn=None,
 ) -> dict:
     """
     Обработка команды на естественном языке.
@@ -515,6 +520,7 @@ async def process_nl_command(
         device_profile=device_profile,
         modes=modes,
         poll_task_id=poll_task_id,
+        device_tool_fn=device_tool_fn,
     )
     return await route.executor(**route_kwargs)
 

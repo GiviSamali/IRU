@@ -20,6 +20,7 @@ try:
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
+    from .tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
 except ImportError:
     import database as db  # type: ignore
     from controller_budget import BUDGET_GUARD_ERROR, CommandBudget, budget_guard_entry  # type: ignore
@@ -35,6 +36,7 @@ except ImportError:
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
+    from tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
 
 
 def _training_context(device_info: dict) -> dict:
@@ -47,7 +49,7 @@ def _training_context(device_info: dict) -> dict:
 
 def _command_log_entry(action: str, command: str, target_device: str, device_info: dict, result: dict, iteration: int) -> dict:
     hostname = device_info.get("hostname") or target_device
-    return {
+    entry = {
         "action": action,
         "command": command,
         "device_id": target_device,
@@ -57,6 +59,8 @@ def _command_log_entry(action: str, command: str, target_device: str, device_inf
         "result": result,
         "iteration": iteration,
     }
+    entry.update(tool_log_fields(action, result, command, target_device))
+    return entry
 
 
 async def _run_web_search(cfg: dict, query: str, max_results: int) -> dict:
@@ -130,6 +134,7 @@ async def process_non_pipeline_command(
     max_iterations: int,
     pick_model_fn,
     chat_completion_request_fn,
+    device_tool_fn=None,
 ) -> dict:
     messages = [{"role": "system", "content": system_msg}]
 
@@ -250,8 +255,8 @@ async def process_non_pipeline_command(
                     })
                     continue
 
-                fn_args.pop("device_id", None)
-                target_device = device_id
+                requested_device_id = fn_args.pop("device_id", None)
+                target_device = (requested_device_id or device_id) if fn_name.startswith("device_") else device_id
                 print(
                     f"[llm] tool_call: {fn_name}({json.dumps(fn_args, ensure_ascii=False)[:250]}) "
                     f"-> device={target_device}"
@@ -300,6 +305,10 @@ async def process_non_pipeline_command(
                 if fn_name == "web_search":
                     query = fn_args.get("query", "")[:60]
                     set_current_step(poll_task_id, f"Ищу в интернете: {query}")
+                elif fn_name == "system_list_tools":
+                    set_current_step(poll_task_id, "Checking tool registry")
+                elif fn_name.startswith("device_"):
+                    set_current_step(poll_task_id, "Running device tool")
                 elif fn_name == "write_content":
                     name = fn_args.get("path", "")[:60]
                     set_current_step(poll_task_id, f"Создаю файл {name}")
@@ -308,7 +317,35 @@ async def process_non_pipeline_command(
                 elif fn_name == "get_file_link":
                     set_current_step(poll_task_id, "Формирую ссылку на файл")
 
-                if fn_name == "execute_cmd":
+                if fn_name == "system_list_tools":
+                    tool_result = list_tools(fn_args.get("category", "all"))
+                    commands_log.append(tool_log_entry(
+                        fn_name,
+                        tool_result,
+                        command="[tool] system.list_tools",
+                        target_device_id=target_device,
+                        hostname=device_info.get("hostname") or target_device,
+                        iteration=iteration + 1,
+                    ))
+
+                elif fn_name.startswith("device_"):
+                    if device_tool_fn is None:
+                        tool_result = {"error": "device tools are unavailable in this route"}
+                    else:
+                        try:
+                            tool_result = await device_tool_fn(fn_name, {**fn_args, "device_id": target_device})
+                        except Exception as exc:
+                            tool_result = {"error": str(exc)}
+                    commands_log.append(tool_log_entry(
+                        fn_name,
+                        tool_result,
+                        command=f"[tool] {fn_name}",
+                        target_device_id=target_device,
+                        hostname=device_info.get("hostname") or target_device,
+                        iteration=iteration + 1,
+                    ))
+
+                elif fn_name == "execute_cmd":
                     is_long_running = fn_args.pop("long_running", False)
                     try:
                         if is_long_running:

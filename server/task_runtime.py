@@ -50,6 +50,7 @@ try:
         is_suggested_fact_declined,
         tasks,
     )
+    from .tool_registry import compact_device_passport
 except ImportError:
     from api_support import is_command_safe, needs_confirmation
     from controller import (
@@ -90,6 +91,7 @@ except ImportError:
         is_suggested_fact_declined,
         tasks,
     )
+    from tool_registry import compact_device_passport
 
 
 logger = logging.getLogger("iru.run_plan")
@@ -97,28 +99,6 @@ logger = logging.getLogger("iru.run_plan")
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _is_device_state_request(message: str) -> bool:
-    lowered = (message or "").lower()
-    state_markers = (
-        "состояни",
-        "статус",
-        "текущее",
-        "сейчас происходит",
-        "что происходит",
-        "snapshot",
-        "state",
-        "status",
-    )
-    device_markers = (
-        "устройств",
-        "компьютер",
-        "пк",
-        "device",
-        "devices",
-    )
-    return any(marker in lowered for marker in state_markers) and any(marker in lowered for marker in device_markers)
 
 
 def _registered_identity(device_id: str, dev: dict | None, profile: dict | None = None) -> dict:
@@ -733,6 +713,14 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         chat_history = get_messages(chat_id, limit=50)
         device_profile = get_device_profile(_short_did(device_id))
         autonomous_flag = bool(task_modes.get("autonomous"))
+        all_devices_info.setdefault(_short_did(device_id), {
+            "info": device_info,
+            "ws": dev.get("ws"),
+            "activation_receipt": dev.get("activation_receipt"),
+            "activation_summary": dev.get("activation_summary"),
+            "activation_context_markers": dev.get("activation_context_markers", []),
+            "last_state_snapshot": dev.get("last_state_snapshot"),
+        })
         manifest = build_minimal_llm_context(_short_did(device_id), all_devices_info, device_profile)
         activation_markers = activation_markers_for_task(message, manifest)
         dev["activation_context_markers"] = activation_markers
@@ -753,6 +741,58 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
 
         def file_link(dev_id: str, path: str) -> str:
             return get_file_link_fn(dev_id, path, user_id=user_id)
+
+        async def device_tool_fn(tool_name: str, args: dict) -> dict:
+            requested = _short_did(str(args.get("device_id") or device_id))
+            target_key = _dk(user_id, requested) if ":" not in requested else requested
+            target_dev = devices.get(target_key)
+            if not target_dev or target_dev.get("user_id") != user_id:
+                return {"status": "unavailable", "device_id": requested, "error": f"Нет доступа к устройству '{requested}'"}
+            target_short = _short_did(target_key)
+            if tool_name == "device_get_passport":
+                profile = get_device_profile(target_short)
+                return compact_device_passport(target_short, target_dev, profile)
+            if tool_name == "device_refresh_state":
+                snapshot_result = await collect_device_live_snapshot(target_key, user_id=user_id)
+                last_state = target_dev.get("last_state_snapshot") if isinstance(target_dev, dict) else {}
+                health = snapshot_result.get("health_summary") if isinstance(snapshot_result.get("health_summary"), dict) else {}
+                return {
+                    "status": snapshot_result.get("status"),
+                    "device_id": target_short,
+                    "health_summary": health,
+                    "last_snapshot_at": (last_state or {}).get("collected_at"),
+                    "identity_status": health.get("identity_status") or (snapshot_result.get("identity_receipt") or {}).get("identity_status"),
+                    "state_handle": f"ctx://device/{target_short}/state",
+                }
+            if tool_name in {"device_activate", "device_repair_activation"}:
+                mode = "repair" if tool_name == "device_repair_activation" else "soft"
+                receipt = await send_command_to_agent(
+                    target_key,
+                    "device.activate",
+                    {"mode": mode, "device_id": target_short},
+                    user_id=user_id,
+                    skip_confirm=autonomous_flag,
+                )
+                if not isinstance(receipt, dict) or receipt.get("error"):
+                    return {"status": "failed", "device_id": target_short, "error": receipt.get("error") if isinstance(receipt, dict) else "missing activation receipt"}
+                valid, reason = validate_activation_receipt(receipt)
+                if not valid:
+                    return {"status": "failed", "device_id": target_short, "error": f"invalid activation receipt: {reason}"}
+                summary = compact_activation_summary(receipt)
+                target_dev["activation_receipt"] = receipt
+                target_dev["activation_summary"] = summary
+                update_device_activation_summary(target_short, summary)
+                return {
+                    "status": "ok",
+                    "device_id": target_short,
+                    "mode": mode,
+                    "activation_summary": {
+                        "activation_status": summary.get("activation_status"),
+                        "runtime_status": summary.get("runtime_status"),
+                        "receipt_hash": summary.get("receipt_hash"),
+                    },
+                }
+            return {"status": "failed", "device_id": target_short, "error": f"unknown device tool: {tool_name}"}
 
         try:
             await _probe_python_toolchain_if_needed(
@@ -776,6 +816,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 user_id=user_id,
                 chat_id=chat_id,
                 poll_task_id=task_id,
+                device_tool_fn=device_tool_fn,
             )
             task_receipt = result.get("task_receipt")
             if activation_markers:
@@ -853,34 +894,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             "answer": f"Команды выполнены на {hostname}",
             "commands": results,
         }
-
-    if _is_device_state_request(message):
-        snapshot_results = await asyncio.gather(
-            *[collect_device_live_snapshot(device_id, user_id=user_id) for device_id in device_ids],
-            return_exceptions=True,
-        )
-        combined_results = []
-        combined_commands = []
-        for device_id, item in zip(device_ids, snapshot_results):
-            if isinstance(item, Exception):
-                item = {
-                    "device_id": device_id,
-                    "target_device_id": _short_did(device_id),
-                    "status": "unavailable",
-                    "answer": f"target_device_id={_short_did(device_id)}: fresh state unavailable ({item})",
-                    "commands": [],
-                }
-            task["results"][device_id] = item
-            combined_results.append(item)
-            combined_commands.extend(item.get("commands") or [])
-
-        combined_answer = _format_live_snapshot_summary(combined_results)
-        add_message(chat_id, "assistant", combined_answer, combined_commands)
-        task["status"] = "done"
-        task["answer"] = combined_answer
-        task["commands"] = combined_commands
-        task["tasks"] = []
-        return
 
     is_pipeline = bool((task.get("modes") or {}).get("pipeline"))
     if not is_pipeline:

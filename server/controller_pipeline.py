@@ -19,6 +19,7 @@ try:
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
+    from .tool_registry import tool_log_fields  # type: ignore
 except ImportError:
     import database as db  # type: ignore
     from controller_budget import CommandBudget, budget_guard_entry  # type: ignore
@@ -32,6 +33,7 @@ except ImportError:
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
+    from tool_registry import tool_log_fields  # type: ignore
 
 try:
     from .controller_shared import (
@@ -987,6 +989,7 @@ async def run_pipeline_worker(
         }
         if step_id is not None:
             entry["step_id"] = step_id
+        entry.update(tool_log_fields(action, result, command, device_id))
         commands_log.append(entry)
         return entry
 

@@ -1,6 +1,12 @@
 """LLM tool schemas and toolset registries for IRU controller flows."""
 
+try:
+    from .tool_registry import DEVICE_TOOL_SCHEMAS
+except ImportError:
+    from tool_registry import DEVICE_TOOL_SCHEMAS
+
 TOOLS = [
+    *DEVICE_TOOL_SCHEMAS,
     {
         "type": "function",
         "function": {
@@ -210,6 +216,11 @@ NON_PIPELINE_TOOLS = [
 ]
 
 WORKER_TOOL_NAMES = {
+    "system_list_tools",
+    "device_get_passport",
+    "device_refresh_state",
+    "device_activate",
+    "device_repair_activation",
     "execute_cmd",
     "write_content",
     "get_file_link",

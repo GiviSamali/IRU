@@ -1,0 +1,167 @@
+import asyncio
+import json
+
+from server.controller_non_pipeline import process_non_pipeline_command
+from server.controller_prompts import SYSTEM_PROMPT_TEMPLATE
+from server.tool_registry import compact_device_passport, list_tools, tool_log_entry
+
+
+def _tool_call(name: str, args: dict | None = None) -> dict:
+    return {
+        "id": f"call-{name}",
+        "function": {
+            "name": name,
+            "arguments": json.dumps(args or {}),
+        },
+    }
+
+
+async def _run_non_pipeline(tool_name: str, args: dict | None = None, *, send_command_fn=None, device_tool_fn=None):
+    async def chat_completion_request_fn(**kwargs):
+        messages = kwargs["messages"]
+        if not any(msg.get("role") == "tool" for msg in messages):
+            return {
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {"content": "", "tool_calls": [_tool_call(tool_name, args)]},
+                }]
+            }
+        return {
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": "ok"},
+            }]
+        }
+
+    async def default_send(device_id, action, params):
+        return {"returncode": 0, "stdout": "ok", "stderr": "", "path": params.get("path")}
+
+    return await process_non_pipeline_command(
+        user_message="run",
+        device_id="givi",
+        device_info={"hostname": "GIVI", "os": "Windows"},
+        send_command_fn=send_command_fn or default_send,
+        get_file_link_fn=lambda device_id, path: "/api/download/mock",
+        chat_history=[],
+        user_id=None,
+        chat_id=None,
+        modes={},
+        poll_task_id=None,
+        cfg={"model": "mock", "max_tokens": 512},
+        system_msg="system",
+        machine_guid=None,
+        mem_user_id=None,
+        non_pipeline_tools=[],
+        max_iterations=3,
+        pick_model_fn=lambda cfg, modes: "mock",
+        chat_completion_request_fn=chat_completion_request_fn,
+        device_tool_fn=device_tool_fn,
+    )
+
+
+def test_system_list_tools_returns_compact_grouped_tools():
+    registry = list_tools("all")
+
+    assert "device" in registry
+    assert "fallback" in registry
+    assert any(tool["name"] == "device.refresh_state" for tool in registry["device"])
+    execute = next(tool for tool in registry["fallback"] if tool["name"] == "execute_cmd")
+    assert execute["purpose"].lower().startswith("low-level shell fallback")
+    assert "stdout" not in json.dumps(registry).lower()
+
+
+def test_device_get_passport_compact_and_has_context_handles():
+    passport = compact_device_passport(
+        "givi",
+        {
+            "info": {"hostname": "GIVI"},
+            "ws": object(),
+            "activation_receipt": {"secret": "full receipt should not leak"},
+            "activation_summary": {"activation_status": "activated", "runtime_status": "ok"},
+            "recent_traces": [{"raw": "trace"}],
+        },
+        None,
+    )
+
+    assert passport["device_id"] == "givi"
+    assert passport["hostname"] == "GIVI"
+    assert passport["context_handles"]["device_state"] == "ctx://device/givi/state"
+    dumped = json.dumps(passport, ensure_ascii=False)
+    assert "full receipt should not leak" not in dumped
+    assert '"raw": "trace"' not in dumped
+
+
+def test_device_refresh_state_tool_log_entry_is_compact():
+    entry = tool_log_entry(
+        "device_refresh_state",
+        {
+            "status": "ok",
+            "device_id": "givi",
+            "health_summary": {"health_status": "warning"},
+            "raw_stdout": "x" * 500,
+        },
+        target_device_id="givi",
+    )
+
+    assert entry["tool_name"] == "device.refresh_state"
+    assert entry["tool_type"] == "typed"
+    assert entry["summary"] == "status=ok; health=warning"
+    assert "x" * 100 not in entry["summary"]
+
+
+def test_device_refresh_state_tool_uses_callback_and_logs_tool():
+    calls = []
+
+    async def device_tool_fn(name, args):
+        calls.append((name, args["device_id"]))
+        return {
+            "status": "ok",
+            "device_id": args["device_id"],
+            "health_summary": {"health_status": "ok"},
+            "state_handle": f"ctx://device/{args['device_id']}/state",
+        }
+
+    result = asyncio.run(_run_non_pipeline("device_refresh_state", {}, device_tool_fn=device_tool_fn))
+
+    assert calls == [("device_refresh_state", "givi")]
+    entry = result["commands"][0]
+    assert entry["tool_name"] == "device.refresh_state"
+    assert entry["tool_status"] == "success"
+    assert entry["summary"] == "status=ok; health=ok"
+
+
+def test_activation_tools_call_expected_modes_and_log_compact_summary():
+    calls = []
+
+    async def device_tool_fn(name, args):
+        calls.append(name)
+        return {
+            "status": "ok",
+            "device_id": args["device_id"],
+            "activation_summary": {"activation_status": "activated", "runtime_status": "ok", "receipt_hash": "abc"},
+        }
+
+    soft = asyncio.run(_run_non_pipeline("device_activate", {}, device_tool_fn=device_tool_fn))
+    repair = asyncio.run(_run_non_pipeline("device_repair_activation", {}, device_tool_fn=device_tool_fn))
+
+    assert calls == ["device_activate", "device_repair_activation"]
+    assert soft["commands"][0]["tool_name"] == "device.activate"
+    assert repair["commands"][0]["tool_name"] == "device.repair_activation"
+    assert "activation=" in soft["commands"][0]["summary"]
+
+
+def test_write_content_and_execute_cmd_tool_log_types():
+    write = asyncio.run(_run_non_pipeline("write_content", {"path": "C:/tmp/hello.txt", "content": "hello"}))
+    execute = asyncio.run(_run_non_pipeline("execute_cmd", {"command": "whoami"}))
+
+    assert write["commands"][0]["tool_name"] == "write_content"
+    assert write["commands"][0]["tool_type"] == "typed"
+    assert execute["commands"][0]["tool_name"] == "execute_cmd"
+    assert execute["commands"][0]["tool_type"] == "fallback"
+
+
+def test_prompt_contains_tool_selection_policy():
+    assert "Tool selection policy:" in SYSTEM_PROMPT_TEMPLATE
+    assert "Use typed tools first" in SYSTEM_PROMPT_TEMPLATE
+    assert "execute_cmd / PowerShell only as fallback" in SYSTEM_PROMPT_TEMPLATE
+    assert "Do not assume device state" in SYSTEM_PROMPT_TEMPLATE
