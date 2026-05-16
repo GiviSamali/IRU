@@ -319,9 +319,11 @@ def test_collect_live_snapshot_stores_last_state_snapshot(monkeypatch):
 
 def test_devices_api_includes_state_summary_fields(monkeypatch):
     from server.routers import devices as devices_router
+    from server.runtime_state import devices
 
     device_key = "7:givi"
-    task_runtime.devices[device_key] = {
+    devices.clear()
+    devices[device_key] = {
         "user_id": 7,
         "short_device_id": "givi",
         "info": {"hostname": "GIVI", "os": "Windows"},
