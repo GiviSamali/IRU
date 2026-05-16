@@ -1,0 +1,79 @@
+import json
+
+from server.controller_prompts import SYSTEM_PROMPT_TEMPLATE
+from server.device_activation import compact_activation_summary
+from server.device_context import activation_markers_for_task, build_minimal_llm_context, get_context_handle
+
+
+def _receipt(status="ok", runtime_status="ok", python="available"):
+    return {
+        "activation_version": 1,
+        "device_id": "givi",
+        "activation_mode": "soft",
+        "activation_status": status,
+        "identity": {"hostname": "GIVI", "machine_guid": "guid"},
+        "paths": {"iru_home": r"C:\Users\tester\AppData\Local\IRU"},
+        "runtime": {"managed_python_status": runtime_status},
+        "capabilities": {"execute_cmd": "available", "write_content": "available", "python": python},
+        "health": {"agent": "ok"},
+        "warnings": [],
+        "next_actions": [],
+        "created_at": "2026-05-16T00:00:00Z",
+    }
+
+
+def test_minimal_context_has_handles_without_full_receipts():
+    receipt = _receipt()
+    context = build_minimal_llm_context(
+        "givi",
+        {"givi": {"info": {"hostname": "GIVI"}, "ws": object(), "activation_receipt": receipt}},
+    )
+    raw = json.dumps(context, ensure_ascii=False)
+    handles = context["current_device"]["context_handles"]
+    assert handles["activation_receipt"] == "ctx://device/givi/activation"
+    assert handles["python_runtime"] == "ctx://device/givi/python"
+    assert handles["device_state"] == "ctx://device/givi/state"
+    assert handles["artifacts"] == "ctx://device/givi/artifacts"
+    assert handles["recent_traces"] == "ctx://device/givi/traces"
+    assert "python_receipt" not in raw
+    assert "raw_evidence" not in raw
+
+
+def test_full_activation_receipt_only_by_handle():
+    receipt = _receipt()
+    response = get_context_handle(
+        "ctx://device/givi/activation",
+        all_devices={"givi": {"ws": object(), "activation_receipt": receipt}},
+    )
+
+    assert response == {"status": "ok", "source": "agent_live", "data": receipt}
+
+
+def test_offline_handle_returns_stale_cache(monkeypatch):
+    summary = compact_activation_summary(_receipt())
+    monkeypatch.setattr("server.device_context.db.get_device_profile", lambda device_id: {"activation_summary": summary})
+    response = get_context_handle("ctx://device/givi/activation", all_devices={})
+
+    assert response["status"] == "stale"
+    assert response["source"] == "server_cache"
+    assert response["data"]["receipt_hash"]
+
+
+def test_prompt_includes_context_budget_rule():
+    assert "Context budget rule:" in SYSTEM_PROMPT_TEMPLATE
+    assert "Lazy context rule:" in SYSTEM_PROMPT_TEMPLATE
+
+
+def test_activation_and_runtime_markers_are_separate():
+    missing = build_minimal_llm_context("givi", {"givi": {"info": {"hostname": "GIVI"}, "ws": object()}})
+    soft_missing_runtime = build_minimal_llm_context(
+        "givi",
+        {"givi": {"info": {"hostname": "GIVI"}, "ws": object(), "activation_receipt": _receipt(runtime_status="missing", python="missing")}},
+    )
+    missing_markers = activation_markers_for_task("create python app", missing)
+    runtime_markers = activation_markers_for_task("create python app", soft_missing_runtime)
+
+    assert "target_device_not_activated" in missing_markers
+    assert "target_device_runtime_not_ready" in missing_markers
+    assert "target_device_not_activated" not in runtime_markers
+    assert "target_device_runtime_not_ready" in runtime_markers

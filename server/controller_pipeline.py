@@ -10,6 +10,7 @@ try:
     from . import database as db  # type: ignore
     from .controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from .controller_trust import enforce_trusted_answer  # type: ignore
+    from .device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
     from .python_env import classify_command_error, is_recoverable_command_error  # type: ignore
     from .python_toolchain import (  # type: ignore
         build_python_toolchain_block,
@@ -22,6 +23,7 @@ except ImportError:
     import database as db  # type: ignore
     from controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from controller_trust import enforce_trusted_answer  # type: ignore
+    from device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
     from python_env import classify_command_error, is_recoverable_command_error  # type: ignore
     from python_toolchain import (  # type: ignore
         build_python_toolchain_block,
@@ -359,6 +361,7 @@ Hostname: {shared["current_hostname"]}
 {shared["device_profile_block"] or "Нет расширенного профиля."}
 
 Target device context:
+{shared.get("device_context_block") or ""}
 {shared.get("target_device_block") or "Нет расширенного target context."}
 
 Память:
@@ -441,6 +444,7 @@ Hostname: {shared["current_hostname"]}
 {shared["device_profile_block"] or "Нет расширенного профиля."}
 
 Target device context:
+{shared.get("device_context_block") or ""}
 {shared.get("target_device_block") or "Нет расширенного target context."}
 
 Память:
@@ -486,6 +490,7 @@ def build_pipeline_shared_context(
     os_info = device_info.get("os", "Windows")
     os_lower = (os_info or "").lower()
     python_receipt = get_cached_python_toolchain({"device_id": device_id, "machine_guid": machine_guid})
+    manifest = build_minimal_llm_context(device_id, all_devices, device_profile)
     return {
         "devices_block": build_devices_block(all_devices),
         "current_device_id": device_id,
@@ -496,6 +501,7 @@ def build_pipeline_shared_context(
         "target_device_block": build_target_device_block(device_id, device_info, device_profile)
         + "\n"
         + build_python_toolchain_block(python_receipt),
+        "device_context_block": format_minimal_llm_context_block(manifest),
         "python_toolchain_receipt": python_receipt.to_dict() if python_receipt else None,
         "device_memory_block": build_memory_block(machine_guid, mem_user_id),
         "os_rules": linux_rules if "linux" in os_lower else windows_rules,
@@ -562,6 +568,7 @@ def build_pipeline_worker_context(
     os_lower = (os_info or "").lower()
     other_devices_summary = build_pipeline_other_devices_summary(all_devices, target_device_id)
     python_receipt = get_cached_python_toolchain({"device_id": target_device_id, "machine_guid": target_machine_guid})
+    manifest = build_minimal_llm_context(target_device_id, all_devices, target_profile)
     return {
         "devices_block": other_devices_summary,
         "other_devices_summary": other_devices_summary,
@@ -574,6 +581,7 @@ def build_pipeline_worker_context(
         "target_device_block": build_target_device_block(target_device_id, target_info, target_profile)
         + "\n"
         + build_python_toolchain_block(python_receipt),
+        "device_context_block": format_minimal_llm_context_block(manifest),
         "python_toolchain_receipt": python_receipt.to_dict() if python_receipt else None,
         "device_memory_block": build_memory_block(target_machine_guid, mem_user_id),
         "os_rules": linux_rules if "linux" in os_lower else windows_rules,

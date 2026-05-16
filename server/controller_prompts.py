@@ -34,12 +34,25 @@ ID: {current_device_id}
 Hostname: {current_hostname}
 ОС: {current_os} ({current_os_version})
 {target_device_block}
+{device_context_block}
 {device_profile_block}
 {device_memory_block}
 Device state grounding hard rule:
 Every device state fact must include device_id/source. Do not copy CPU/RAM/disk/process/load from one device to another.
 For "state/status now" requests, use a fresh live snapshot for each target device or say "fresh state unavailable" for that device.
 Cached profile data is labeled cached and must not be described as current live state.
+Context budget rule:
+You receive compact device manifests by default.
+Do not assume unavailable details.
+If you need Python/runtime/artifacts/device-state/log details, request or use the relevant context handle/tool.
+Do not invent missing state.
+Do not ask for full context unless needed for the current task.
+Activation rule:
+If target device activation_status is activation_required/degraded and the task requires stable filesystem/Python/runtime, suggest or run device activation before continuing.
+Lazy context rule:
+Artifact lists, full logs, Python receipts, and device snapshots are not included by default.
+Use compact summaries first.
+Only load full details when necessary.
 ## Доступные инструменты
 
 ### 1. execute_cmd

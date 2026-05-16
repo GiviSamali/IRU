@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import base64
+import getpass
+import json
 import os
 import platform
+import shutil
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from platforms import get_platform
@@ -10,6 +15,20 @@ from platforms import get_platform
 platform_mod = get_platform()
 
 WS_FILE_DOWNLOAD_MAX_BYTES = 5 * 1024 * 1024
+
+IRU_DIRS = (
+    "agent",
+    "runtime/python",
+    "runtime/venvs/default",
+    "runtime/venvs/project_envs",
+    "cache",
+    "scripts",
+    "tools",
+    "logs",
+    "traces",
+    "artifacts",
+    "state",
+)
 
 
 def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
@@ -124,10 +143,132 @@ def collect_system_info(device_id: str = "") -> dict:
     return info
 
 
+def _iru_home() -> Path:
+    if platform.system() == "Windows":
+        root = os.environ.get("LOCALAPPDATA")
+        return (Path(root) if root else Path.home() / "AppData" / "Local") / "IRU"
+    return Path.home() / ".iru"
+
+
+def _write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _activation_paths(home: Path) -> dict:
+    return {
+        "iru_home": str(home),
+        "cache": str(home / "cache"),
+        "scripts": str(home / "scripts"),
+        "tools": str(home / "tools"),
+        "logs": str(home / "logs"),
+        "traces": str(home / "traces"),
+        "artifacts": str(home / "artifacts"),
+        "state": str(home / "state"),
+    }
+
+
+def _activation_identity(device_id: str) -> dict:
+    info = collect_system_info(device_id=device_id)
+    return {
+        "hostname": info.get("hostname") or platform.node(),
+        "computer_name": os.environ.get("COMPUTERNAME", ""),
+        "machine_guid": info.get("machine_guid") or "",
+        "user": info.get("username") or getpass.getuser(),
+        "os": info.get("os") or platform.system(),
+        "os_build": info.get("os_version") or platform.version(),
+    }
+
+
+def _runtime_receipt(home: Path) -> dict:
+    managed_python = home / "runtime" / "python" / ("python.exe" if sys.platform == "win32" else "bin/python")
+    venv_python = home / "runtime" / "venvs" / "default" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    python_path = managed_python if managed_python.exists() else None
+    status = "ok" if python_path else "missing"
+    return {
+        "managed_python_status": status,
+        "python_path": str(python_path) if python_path else None,
+        "venv_path": str(home / "runtime" / "venvs" / "default") if venv_python.exists() else None,
+        "venv_python": str(venv_python) if venv_python.exists() else None,
+        "python_version": None,
+        "pip_status": "unknown" if python_path else "missing",
+    }
+
+
+def _activation_capabilities(runtime: dict) -> dict:
+    python_state = "available" if runtime.get("managed_python_status") == "ok" else "missing"
+    return {
+        "execute_cmd": "available",
+        "write_content": "available",
+        "read_files": "available",
+        "python": python_state,
+        "gui": "available" if platform.system() == "Windows" else "unknown",
+        "screenshot": "unknown",
+        "process_inspection": "available",
+        "temperature_sensors": "unknown",
+    }
+
+
+def activate_device(mode: str = "soft", device_id: str = "") -> dict:
+    mode = (mode or "soft").strip().lower()
+    if mode not in {"soft", "full", "repair"}:
+        return {"error": f"unsupported activation mode: {mode}"}
+
+    home = _iru_home()
+    warnings: list[str] = []
+    next_actions: list[str] = []
+    try:
+        for rel in IRU_DIRS:
+            (home / rel).mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        return {"error": str(exc), "activation_status": "failed"}
+
+    identity = _activation_identity(device_id)
+    paths = _activation_paths(home)
+    runtime = _runtime_receipt(home)
+    capabilities = _activation_capabilities(runtime)
+    health = {
+        "agent": "ok",
+        "disk": "ok" if shutil.disk_usage(home).free > 256 * 1024 * 1024 else "warning",
+        "runtime": "ok" if runtime["managed_python_status"] == "ok" else "warning",
+    }
+    status = "repaired" if mode == "repair" else "ok"
+    if mode == "full" and runtime["managed_python_status"] != "ok":
+        runtime["managed_python_status"] = "install_required"
+        status = "degraded"
+        next_actions.append("install_managed_python")
+        warnings.append("managed Python runtime is not installed")
+
+    receipt = {
+        "activation_version": 1,
+        "device_id": device_id,
+        "activation_mode": mode,
+        "activation_status": status,
+        "identity": identity,
+        "paths": paths,
+        "runtime": runtime,
+        "capabilities": capabilities,
+        "health": health,
+        "warnings": warnings,
+        "next_actions": next_actions,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    state_dir = home / "state"
+    _write_json(state_dir / "identity.json", identity)
+    _write_json(state_dir / "capabilities.json", capabilities)
+    _write_json(state_dir / "python_receipt.json", runtime)
+    _write_json(state_dir / "health.json", health)
+    _write_json(state_dir / "activation.json", receipt)
+    return receipt
+
+
 ACTIONS = {
     "execute_cmd": lambda **params: execute_cmd(**params),
     "list_dir": lambda **params: list_dir(**params),
     "get_file_content": lambda **params: get_file_content(**params),
     "write_content": lambda **params: write_content(**params),
+    "device.activate": lambda **params: activate_device(**params),
 }
-

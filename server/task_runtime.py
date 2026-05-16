@@ -34,7 +34,10 @@ try:
         get_user_plan,
         get_user_device_profiles,
         set_plan_trial_used,
+        update_device_activation_summary,
     )
+    from .device_activation import compact_activation_summary
+    from .device_context import activation_markers_for_task, build_minimal_llm_context
     from .path_scope import PATH_SCOPE_ERROR, validate_execute_command_paths_for_device, validate_write_path_for_device
     from .python_toolchain import resolve_python_toolchain, validate_toolchain_fact_against_receipt
     from .runtime_state import (
@@ -71,7 +74,10 @@ except ImportError:
         get_user_plan,
         get_user_device_profiles,
         set_plan_trial_used,
+        update_device_activation_summary,
     )
+    from device_activation import compact_activation_summary
+    from device_context import activation_markers_for_task, build_minimal_llm_context
     from path_scope import PATH_SCOPE_ERROR, validate_execute_command_paths_for_device, validate_write_path_for_device
     from python_toolchain import resolve_python_toolchain, validate_toolchain_fact_against_receipt
     from runtime_state import (
@@ -341,6 +347,12 @@ async def send_command_to_agent(
         dev["pending"].pop(cmd_id, None)
         raise RuntimeError("Таймаут ожидания ответа от агента")
 
+    if action == "device.activate" and isinstance(result, dict) and not result.get("error"):
+        summary = compact_activation_summary(result)
+        dev["activation_receipt"] = result
+        dev["activation_summary"] = summary
+        update_device_activation_summary(_short_did(device_id), summary)
+
     return _attach_identity_receipt(result, device_id=device_id, dev=dev)
 
 
@@ -533,10 +545,23 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
 
         device_info = dev.get("info", {})
         user_devs = get_user_devices(user_id)
-        all_devices_info = {did: {"info": value.get("info", {})} for did, value in user_devs.items()}
+        all_devices_info = {
+            _short_did(did): {
+                "info": value.get("info", {}),
+                "ws": value.get("ws"),
+                "activation_receipt": value.get("activation_receipt"),
+                "activation_summary": value.get("activation_summary"),
+                "activation_context_markers": value.get("activation_context_markers", []),
+            }
+            for did, value in user_devs.items()
+        }
         chat_history = get_messages(chat_id, limit=50)
         device_profile = get_device_profile(_short_did(device_id))
         autonomous_flag = bool(task_modes.get("autonomous"))
+        manifest = build_minimal_llm_context(_short_did(device_id), all_devices_info, device_profile)
+        activation_markers = activation_markers_for_task(message, manifest)
+        dev["activation_context_markers"] = activation_markers
+        all_devices_info[_short_did(device_id)]["activation_context_markers"] = activation_markers
 
         async def send_fn(target_device_id, action, params):
             target_dk = _dk(user_id, target_device_id) if ":" not in target_device_id else target_device_id
@@ -567,7 +592,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 user_message=message,
                 device_id=_short_did(device_id),
                 device_info=device_info,
-                all_devices={_short_did(k): v for k, v in all_devices_info.items()},
+                all_devices=all_devices_info,
                 send_command_fn=send_fn,
                 get_file_link_fn=file_link,
                 chat_history=chat_history,
@@ -577,13 +602,17 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 chat_id=chat_id,
                 poll_task_id=task_id,
             )
+            task_receipt = result.get("task_receipt")
+            if activation_markers:
+                task_receipt = dict(task_receipt or {})
+                task_receipt["warnings"] = sorted(set((task_receipt.get("warnings") or []) + activation_markers))
             return {
                 "device_id": device_id,
                 "status": "ok",
                 "answer": result.get("answer", ""),
                 "commands": result.get("commands", []),
                 "tasks": result.get("tasks", []),
-                "task_receipt": result.get("task_receipt"),
+                "task_receipt": task_receipt,
             }
         except ConfirmationRequired as confirm:
             return {

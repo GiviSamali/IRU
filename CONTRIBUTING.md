@@ -439,7 +439,11 @@ python -m pytest -q tests
 - Если менялся UI — вручную проверить чат, План, confirm/deny и основные панели.
 
 ---
-
+Добавлен server-side trust guard:
+- запрещены выдуманные download-ссылки;
+- file links разрешены только через get_file_link;
+- ошибки write_content/execute_cmd больше не могут завершаться success-ответом;
+- добавлены regression tests.
 ## Частые ошибки
 
 1. Забыл `escapeHTML` — DOM ломается при спецсимволах
