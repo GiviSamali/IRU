@@ -100,6 +100,10 @@ function metricValue(value, suffix) {
   return `${value}${suffix || ''}`;
 }
 
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 function renderDevicePassport() {
   const root = document.getElementById('devicePassport');
   if (!root) return;
@@ -118,11 +122,15 @@ function renderDevicePassport() {
   const identityStatus = dev.identity_status || 'unknown';
   const caps = dev.capabilities_summary || {};
   const capsList = Array.isArray(caps) ? caps : Object.keys(caps);
+  const disconnectAvailable = capsList.includes('agent.disconnect') || caps.agent_disconnect === 'available';
   const activationAction = ['activation_required', 'unknown'].includes(activationStatus)
     ? `<button class="device-passport-btn" data-action="passport-activate" data-mode="soft" ${busy ? 'disabled' : ''}>Активировать</button>`
     : '';
-  const repairAction = ['degraded', 'activation_failed'].includes(activationStatus) || runtimeStatus !== 'ok'
+  const repairAction = ['degraded', 'activation_failed'].includes(activationStatus)
     ? `<button class="device-passport-btn" data-action="passport-activate" data-mode="repair" ${busy ? 'disabled' : ''}>Repair</button>`
+    : '';
+  const runtimeNotice = runtimeStatus !== 'ok'
+    ? `<div class="device-passport-notice">Runtime не готов. Managed Python не подготовлен.</div>`
     : '';
   const error = state.devicePanelError ? `<div class="device-passport-error">${escapeHTML(state.devicePanelError)}</div>` : '';
   root.innerHTML = `
@@ -167,6 +175,18 @@ function renderDevicePassport() {
       <pre>${escapeHTML(JSON.stringify({ info, capabilities: capsList }, null, 2))}</pre>
     </details>
   `;
+  if (runtimeNotice) {
+    root.querySelector('.device-passport-actions')?.insertAdjacentHTML('afterend', runtimeNotice);
+  }
+  if (!disconnectAvailable) {
+    const disconnectBtn = root.querySelector('[data-action="passport-disconnect"]');
+    if (disconnectBtn) {
+      disconnectBtn.disabled = true;
+      disconnectBtn.title = 'Скоро';
+      disconnectBtn.textContent = 'Отключить агент · Скоро';
+      disconnectBtn.removeAttribute('data-action');
+    }
+  }
 }
 
 async function runDevicePassportAction(action, mode) {
@@ -209,6 +229,12 @@ async function runDevicePassportAction(action, mode) {
         uptime: data.health_summary.uptime,
         last_snapshot_at: data.last_state_snapshot?.collected_at,
       });
+    }
+    if (action === 'shutdown') {
+      showToast('Агент выключается');
+      await wait(1500);
+      await fetchDevices();
+      return;
     }
     await fetchDevices();
     showToast(action === 'state' ? 'Состояние обновлено' : 'Команда отправлена');
