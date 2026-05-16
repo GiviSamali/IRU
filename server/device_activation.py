@@ -32,12 +32,17 @@ def validate_activation_receipt(receipt: dict | None) -> tuple[bool, str]:
     paths = receipt.get("paths")
     if not isinstance(paths, dict) or not str(paths.get("iru_home") or "").strip():
         return False, "missing_iru_home"
-    if not isinstance(receipt.get("identity"), dict):
+    identity = receipt.get("identity")
+    if not isinstance(identity, dict):
         return False, "missing_identity"
+    if not (str(identity.get("hostname") or "").strip() or str(identity.get("computer_name") or "").strip()):
+        return False, "missing_identity_hostname"
     if not isinstance(receipt.get("runtime"), dict):
         return False, "missing_runtime"
     if not isinstance(receipt.get("capabilities"), dict):
         return False, "missing_capabilities"
+    if not str(receipt.get("created_at") or "").strip():
+        return False, "missing_created_at"
     return True, "ok"
 
 
@@ -80,7 +85,7 @@ def compact_activation_summary(receipt: dict | None) -> dict:
     caps = receipt.get("capabilities") or {}
     return {
         "device_id": receipt.get("device_id"),
-        "hostname": identity.get("hostname"),
+        "hostname": identity.get("hostname") or identity.get("computer_name"),
         "machine_guid": identity.get("machine_guid"),
         "activation_status": activation_state_from_receipt(receipt),
         "iru_home": paths.get("iru_home"),

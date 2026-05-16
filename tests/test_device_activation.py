@@ -1,7 +1,13 @@
+import asyncio
+import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+from fastapi import HTTPException
+
 from server.device_activation import activation_state_from_receipt, runtime_status_from_receipt, validate_activation_receipt
+from server.runtime_state import devices
 
 AGENT_DIR = Path(__file__).resolve().parents[1] / "agent"
 if str(AGENT_DIR) not in sys.path:
@@ -14,6 +20,20 @@ def _windows_iru_home(monkeypatch, tmp_path):
 
     monkeypatch.setattr(actions.platform, "system", lambda: "Windows")
     return actions
+
+
+def _server_receipt(device_id="givi"):
+    return {
+        "activation_version": 1,
+        "device_id": device_id,
+        "activation_mode": "soft",
+        "activation_status": "ok",
+        "identity": {"hostname": "GIVI", "machine_guid": "guid"},
+        "paths": {"iru_home": r"C:\Users\tester\AppData\Local\IRU"},
+        "runtime": {"managed_python_status": "ok"},
+        "capabilities": {"execute_cmd": "available", "python": "available"},
+        "created_at": "2026-05-16T00:00:00Z",
+    }
 
 
 def test_soft_activation_persists_receipt_and_is_idempotent(monkeypatch, tmp_path):
@@ -49,10 +69,11 @@ def test_ok_receipt_missing_iru_home_is_invalid_not_activated():
         "activation_version": 1,
         "device_id": "givi",
         "activation_status": "ok",
-        "identity": {},
+        "identity": {"hostname": "GIVI"},
         "paths": {},
         "runtime": {},
         "capabilities": {},
+        "created_at": "2026-05-16T00:00:00Z",
     }
 
     valid, reason = validate_activation_receipt(receipt)
@@ -60,3 +81,93 @@ def test_ok_receipt_missing_iru_home_is_invalid_not_activated():
     assert valid is False
     assert reason == "missing_iru_home"
     assert activation_state_from_receipt(receipt) == "activation_required"
+
+
+def test_ok_receipt_missing_hostname_or_computer_name_is_invalid():
+    receipt = {
+        "activation_version": 1,
+        "device_id": "givi",
+        "activation_status": "ok",
+        "identity": {"machine_guid": "guid"},
+        "paths": {"iru_home": r"C:\Users\tester\AppData\Local\IRU"},
+        "runtime": {},
+        "capabilities": {},
+        "created_at": "2026-05-16T00:00:00Z",
+    }
+
+    valid, reason = validate_activation_receipt(receipt)
+
+    assert valid is False
+    assert reason == "missing_identity_hostname"
+    assert activation_state_from_receipt(receipt) == "activation_required"
+
+
+def test_activate_device_for_user_sends_action_and_stores_summary(monkeypatch):
+    from server.routers import devices as devices_router
+
+    devices.clear()
+    devices["7:givi"] = {"ws": object(), "pending": {}, "user_id": 7, "short_device_id": "givi", "info": {}}
+    sent = {}
+    stored = {}
+
+    async def fake_send(device_key, action, params, user_id=None):
+        sent.update({"device_key": device_key, "action": action, "params": params, "user_id": user_id})
+        return _server_receipt()
+
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
+    monkeypatch.setattr(devices_router, "send_command_to_agent", fake_send)
+    monkeypatch.setattr(devices_router, "update_device_activation_summary", lambda device_id, summary: stored.update({device_id: summary}))
+
+    result = asyncio.run(devices_router.activate_device_for_user({"id": 7, "name": "tester"}, "givi", "soft"))
+
+    assert sent == {"device_key": "7:givi", "action": "device.activate", "params": {"mode": "soft"}, "user_id": 7}
+    assert result["receipt"]["device_id"] == "givi"
+    assert result["summary"]["activation_status"] == "activated"
+    assert devices["7:givi"]["activation_receipt"]["device_id"] == "givi"
+    assert devices["7:givi"]["activation_summary"]["receipt_hash"]
+    assert stored["givi"]["activation_status"] == "activated"
+
+
+def test_activate_device_for_user_rejects_invalid_receipt(monkeypatch):
+    from server.routers import devices as devices_router
+
+    devices.clear()
+    devices["7:givi"] = {"ws": object(), "pending": {}, "user_id": 7, "short_device_id": "givi", "info": {}}
+    receipt = _server_receipt()
+    receipt["identity"] = {"machine_guid": "guid"}
+    stored = {}
+
+    async def fake_send(*args, **kwargs):
+        return receipt
+
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
+    monkeypatch.setattr(devices_router, "send_command_to_agent", fake_send)
+    monkeypatch.setattr(devices_router, "update_device_activation_summary", lambda device_id, summary: stored.update({device_id: summary}))
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(devices_router.activate_device_for_user({"id": 7, "name": "tester"}, "givi", "soft"))
+
+    assert exc.value.status_code == 409
+    assert "missing_identity_hostname" in exc.value.detail
+    assert "activation_summary" not in devices["7:givi"]
+    assert stored == {}
+
+
+def test_activate_device_for_user_offline_returns_error(monkeypatch):
+    from server.routers import devices as devices_router
+
+    devices.clear()
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(devices_router.activate_device_for_user({"id": 7, "name": "tester"}, "givi", "soft"))
+
+    assert exc.value.status_code == 503
+    assert "offline" in exc.value.detail
+
+
+def test_contributing_no_longer_differs_from_main():
+    repo = Path(__file__).resolve().parents[1]
+    result = subprocess.run(["git", "diff", "--quiet", "main", "--", "CONTRIBUTING.md"], cwd=repo)
+
+    assert result.returncode == 0

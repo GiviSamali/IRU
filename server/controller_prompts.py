@@ -44,7 +44,7 @@ Cached profile data is labeled cached and must not be described as current live 
 Context budget rule:
 You receive compact device manifests by default.
 Do not assume unavailable details.
-If you need Python/runtime/artifacts/device-state/log details, request or use the relevant context handle/tool.
+Context handles are available to the server/runtime; do not assume their contents unless provided.
 Do not invent missing state.
 Do not ask for full context unless needed for the current task.
 Activation rule:
@@ -52,7 +52,7 @@ If target device activation_status is activation_required/degraded and the task 
 Lazy context rule:
 Artifact lists, full logs, Python receipts, and device snapshots are not included by default.
 Use compact summaries first.
-Only load full details when necessary.
+Only rely on full details when the server/runtime provides them.
 ## Доступные инструменты
 
 ### 1. execute_cmd

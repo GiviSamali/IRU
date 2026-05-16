@@ -36,7 +36,7 @@ try:
         set_plan_trial_used,
         update_device_activation_summary,
     )
-    from .device_activation import compact_activation_summary
+    from .device_activation import compact_activation_summary, validate_activation_receipt
     from .device_context import activation_markers_for_task, build_minimal_llm_context
     from .path_scope import PATH_SCOPE_ERROR, validate_execute_command_paths_for_device, validate_write_path_for_device
     from .python_toolchain import resolve_python_toolchain, validate_toolchain_fact_against_receipt
@@ -76,7 +76,7 @@ except ImportError:
         set_plan_trial_used,
         update_device_activation_summary,
     )
-    from device_activation import compact_activation_summary
+    from device_activation import compact_activation_summary, validate_activation_receipt
     from device_context import activation_markers_for_task, build_minimal_llm_context
     from path_scope import PATH_SCOPE_ERROR, validate_execute_command_paths_for_device, validate_write_path_for_device
     from python_toolchain import resolve_python_toolchain, validate_toolchain_fact_against_receipt
@@ -348,6 +348,9 @@ async def send_command_to_agent(
         raise RuntimeError("Таймаут ожидания ответа от агента")
 
     if action == "device.activate" and isinstance(result, dict) and not result.get("error"):
+        valid, _ = validate_activation_receipt(result)
+        if not valid:
+            return _attach_identity_receipt(result, device_id=device_id, dev=dev)
         summary = compact_activation_summary(result)
         dev["activation_receipt"] = result
         dev["activation_summary"] = summary
