@@ -256,7 +256,7 @@ async def process_non_pipeline_command(
                     continue
 
                 requested_device_id = fn_args.pop("device_id", None)
-                target_device = (requested_device_id or device_id) if fn_name.startswith("device_") else device_id
+                target_device = requested_device_id or device_id
                 print(
                     f"[llm] tool_call: {fn_name}({json.dumps(fn_args, ensure_ascii=False)[:250]}) "
                     f"-> device={target_device}"

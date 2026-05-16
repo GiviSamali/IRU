@@ -3,6 +3,7 @@ import json
 
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_prompts import SYSTEM_PROMPT_TEMPLATE
+from server.controller_tools import WORKER_TOOLS
 from server.tool_registry import compact_device_passport, list_tools, tool_log_entry
 
 
@@ -158,6 +159,29 @@ def test_write_content_and_execute_cmd_tool_log_types():
     assert write["commands"][0]["tool_type"] == "typed"
     assert execute["commands"][0]["tool_name"] == "execute_cmd"
     assert execute["commands"][0]["tool_type"] == "fallback"
+
+
+def test_non_pipeline_execute_cmd_and_write_content_honor_device_id_override():
+    seen = []
+
+    async def send_command_fn(device_id, action, params):
+        seen.append((device_id, action))
+        return {"returncode": 0, "stdout": "ok", "stderr": "", "path": params.get("path")}
+
+    asyncio.run(_run_non_pipeline("execute_cmd", {"command": "whoami", "device_id": "desktop"}, send_command_fn=send_command_fn))
+    asyncio.run(_run_non_pipeline("write_content", {"path": "C:/tmp/hello.txt", "content": "hello", "device_id": "desktop"}, send_command_fn=send_command_fn))
+
+    assert seen == [("desktop", "execute_cmd"), ("desktop", "write_content")]
+
+
+def test_pipeline_worker_toolset_does_not_expose_unsupported_device_tools():
+    names = {tool["function"]["name"] for tool in WORKER_TOOLS}
+
+    assert "system_list_tools" not in names
+    assert "device_refresh_state" not in names
+    assert "device_get_passport" not in names
+    assert "device_activate" not in names
+    assert "device_repair_activation" not in names
 
 
 def test_prompt_contains_tool_selection_policy():
