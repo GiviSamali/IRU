@@ -40,6 +40,7 @@ try:
         strip_markdown,
     )
     from .controller_tools import TOOLSET_REGISTRY  # type: ignore
+    from .device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
     from .python_toolchain import build_python_toolchain_block, get_cached_python_toolchain  # type: ignore
 except ImportError:
     from controller_non_pipeline import process_non_pipeline_command as _process_non_pipeline_command  # type: ignore
@@ -61,6 +62,7 @@ except ImportError:
         strip_markdown,
     )
     from controller_tools import TOOLSET_REGISTRY  # type: ignore
+    from device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
     from python_toolchain import build_python_toolchain_block, get_cached_python_toolchain  # type: ignore
 import asyncio
 import httpx
@@ -157,6 +159,7 @@ class LLMRuntimeContext:
     machine_guid: str | None
     mem_user_id: str | None
     python_toolchain_block: str = ""
+    device_context_block: str = ""
 
 
 @dataclass(frozen=True)
@@ -258,6 +261,7 @@ def _build_runtime_context(
     machine_guid = (device_profile or {}).get("machine_guid") or None
     mem_user_id = _resolve_memory_user_id(user_id, machine_guid)
     python_receipt = get_cached_python_toolchain({"device_id": device_id, "machine_guid": machine_guid})
+    manifest = build_minimal_llm_context(device_id, all_devices, device_profile)
 
     return LLMRuntimeContext(
         cfg=load_llm_config(),
@@ -269,6 +273,7 @@ def _build_runtime_context(
         memory_block=build_memory_block(machine_guid, mem_user_id),
         target_device_block=build_target_device_block("", device_info, device_profile),
         python_toolchain_block=build_python_toolchain_block(python_receipt),
+        device_context_block=format_minimal_llm_context_block(manifest),
         os_rules=_resolve_os_rules(os_info),
         current_datetime_msk=_current_datetime_msk(),
         machine_guid=machine_guid,
@@ -289,6 +294,7 @@ def _build_non_pipeline_system_prompt(
         current_os_version=runtime.os_version,
         device_profile_block=runtime.profile_block,
         device_memory_block=runtime.memory_block,
+        device_context_block=runtime.device_context_block,
         target_device_block=(
             runtime.target_device_block.replace("device_id: ", f"device_id: {device_id}", 1)
             + "\n"
