@@ -99,6 +99,7 @@ def _device_manifest(device_id: str, dev: dict | None, profile: dict | None, *, 
         "runtime_status": runtime_status_from_summary(summary),
         "capabilities_summary": _capability_list(summary),
         "state_summary": state_summary,
+        "tool_registry_available": True,
     }
     if isinstance(dev, dict) and dev.get("activation_context_markers"):
         item["context_markers"] = list(dev.get("activation_context_markers") or [])

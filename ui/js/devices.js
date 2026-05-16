@@ -237,7 +237,15 @@ async function runDevicePassportAction(action, mode) {
       return;
     }
     await fetchDevices();
-    showToast(action === 'state' ? 'Состояние обновлено' : 'Команда отправлена');
+    if (action === 'state') {
+      showToast('Использован инструмент: device.refresh_state');
+    } else if (action === 'activate' && (mode || 'soft') === 'repair') {
+      showToast('Использован инструмент: device.repair_activation');
+    } else if (action === 'activate') {
+      showToast('Использован инструмент: device.activate');
+    } else {
+      showToast('Команда отправлена');
+    }
   } catch (e) {
     state.devicePanelError = e.message || String(e);
     renderDevicePassport();

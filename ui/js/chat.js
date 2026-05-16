@@ -244,6 +244,7 @@ function renderMessages() {
     bodyHTML += renderTaskBlock(m.tasks, m.commands || [], m._taskId || `msg-${mi}`);
 
     const commands = m.commands;
+    bodyHTML += renderUsedToolsLine(commands);
     bodyHTML += renderCommandDownloadButtons(commands, linkified.usedDownloads);
     if (commands && commands.length > 0) {
       bodyHTML += '<div class="cmd-log">';
@@ -259,7 +260,8 @@ function renderMessages() {
         const statusCls = isBudgetStop ? 'stopped' : (isOk ? 'ok' : 'err');
         const statusTxt = isBudgetStop ? '\u25a0' : (isOk ? '\u2713' : '\u2717');
         const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
-        const cmdText = escapeHTML(stripUtfPrefix(c.command || ''));
+        const cmdText = escapeHTML(getCommandDisplayText(c));
+        const detailsText = getCommandDetailsText(c, output);
         const entryClass = isBudgetStop ? 'cmd-entry cmd-entry-budget' : 'cmd-entry';
         bodyHTML += `
           <div class="${entryClass}" data-action="toggle-cmd-entry">
@@ -269,13 +271,13 @@ function renderMessages() {
               ${deviceTag}
               <span class="cmd-status ${statusCls}">${statusTxt}</span>
             </div>
-            <div class="cmd-details">${escapeHTML(output)}</div>
+            <div class="cmd-details">${escapeHTML(detailsText)}</div>
           </div>`;
       } else {
         // Группа команд — свёрнутая плашка
         const groupId = 'cmdgrp-' + mi;
         const lastCmd = commands[commands.length - 1];
-        const lastClean = stripUtfPrefix(lastCmd.command || '');
+        const lastClean = getCommandDisplayText(lastCmd);
         const lastTrunc = lastClean.length > 120 ? lastClean.slice(0, 120) + '\u2026' : lastClean;
         const hasBudgetStop = commands.some((cmd) => cmd?.action === 'budget_guard' || stripUtfPrefix(cmd.command || '') === '[budget_guard]');
         const lastIsOk = !hasBudgetStop && !(lastCmd.result?.error) && (lastCmd.result?.returncode === 0 || lastCmd.result?.returncode == null);
@@ -305,7 +307,8 @@ function renderMessages() {
           const statusCls = isBudgetStop ? 'stopped' : (isOk ? 'ok' : 'err');
           const statusTxt = isBudgetStop ? '\u25a0' : (isOk ? '\u2713' : '\u2717');
           const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
-          const cmdText = escapeHTML(stripUtfPrefix(c.command || ''));
+          const cmdText = escapeHTML(getCommandDisplayText(c));
+          const detailsText = getCommandDetailsText(c, output);
           const entryClass = isBudgetStop ? 'cmd-entry cmd-entry-budget' : 'cmd-entry';
           bodyHTML += `
               <div class="${entryClass}" data-action="toggle-cmd-entry">
@@ -315,7 +318,7 @@ function renderMessages() {
                   ${deviceTag}
                   <span class="cmd-status ${statusCls}">${statusTxt}</span>
                 </div>
-                <div class="cmd-details">${escapeHTML(output)}</div>
+                <div class="cmd-details">${escapeHTML(detailsText)}</div>
               </div>`;
         }
         bodyHTML += `
@@ -745,11 +748,61 @@ function getCommandStatus(command) {
   return 'success';
 }
 
+function getToolEntries(commands) {
+  return Array.isArray(commands) ? commands.filter(command => command && command.tool_name) : [];
+}
+
+function getToolNameList(commands, type) {
+  const names = getToolEntries(commands)
+    .filter(command => !type || command.tool_type === type)
+    .map(command => command.tool_name)
+    .filter(Boolean);
+  return [...new Set(names)];
+}
+
+function renderUsedToolsLine(commands) {
+  const typed = getToolEntries(commands)
+    .filter(command => command.tool_type !== 'fallback')
+    .map(command => command.tool_name)
+    .filter(Boolean);
+  const fallback = getToolNameList(commands, 'fallback');
+  const typedNames = [...new Set(typed)];
+  const parts = [];
+  if (typedNames.length === 1) {
+    parts.push(`Использован инструмент: ${escapeHTML(typedNames[0])}`);
+  } else if (typedNames.length > 1) {
+    parts.push(`Использованы инструменты: ${escapeHTML(typedNames.join(', '))}`);
+  }
+  if (fallback.length === 1) {
+    parts.push(`Использован fallback: ${escapeHTML(fallback[0])}`);
+  } else if (fallback.length > 1) {
+    parts.push(`Использованы fallback: ${escapeHTML(fallback.join(', '))}`);
+  }
+  return parts.length ? `<div class="tool-usage-line">${parts.join(' · ')}</div>` : '';
+}
+
+function getCommandDetailsText(command, fallbackOutput) {
+  if (!command?.tool_name) return fallbackOutput;
+  const lines = [
+    `tool_name: ${command.tool_name}`,
+    `status: ${command.tool_status || getCommandStatus(command)}`,
+  ];
+  if (command.target_device_id || command.device_id) lines.push(`target_device: ${command.target_device_id || command.device_id}`);
+  if (command.summary) lines.push(`summary: ${command.summary}`);
+  if (fallbackOutput && fallbackOutput !== '(нет вывода)') lines.push('', fallbackOutput);
+  return lines.join('\n');
+}
+
 function getCommandDisplayText(command) {
+  if (command?.tool_name) {
+    const prefix = command.tool_type === 'fallback' ? 'Fallback' : 'Инструмент';
+    return `${prefix}: ${command.tool_name}`;
+  }
   return stripUtfPrefix(command?.command || command?.action || 'command');
 }
 
 function getCommandOutputPreview(command) {
+  if (command?.summary) return String(command.summary);
   const result = command?.result;
   if (!result) return '';
   if (typeof result === 'string') return result;
@@ -860,6 +913,10 @@ function getStepStatusLine(stepStatus, stepCommands, step) {
   if (stepStatus === 'running' || commandStatus === 'running') {
     return `Сейчас: ${shortenText(getCommandDisplayText(lastCommand), 140)}`;
   }
+  if (lastCommand.tool_name) {
+    const label = lastCommand.tool_type === 'fallback' ? 'Последний fallback' : 'Последний инструмент';
+    return `${label}: ${shortenText(lastCommand.tool_name, 140)}`;
+  }
   return `Последняя команда: ${shortenText(getCommandDisplayText(lastCommand), 140)}`;
 }
 
@@ -869,6 +926,12 @@ function renderStepCommands(stepCommands) {
     const status = getCommandStatus(command);
     const output = shortenText(getCommandOutputPreview(command), 320) || '(нет вывода)';
     const device = command.device_name || command.device_id || '';
+    const toolDetails = command.tool_name ? `<div class="step-command-tool-details">${escapeHTML([
+      `tool_name: ${command.tool_name}`,
+      `status: ${command.tool_status || status}`,
+      `target_device: ${command.target_device_id || command.device_id || ''}`,
+      `summary: ${command.summary || ''}`,
+    ].join('\n'))}</div>` : '';
     return `<div class="step-command-entry step-command-${escapeAttr(status)}">
       <div class="step-command-header">
         <span class="step-command-icon">${getStepCommandStatusIcon(status)}</span>
@@ -876,6 +939,7 @@ function renderStepCommands(stepCommands) {
         ${device ? `<span class="step-command-device">${escapeHTML(device)}</span>` : ''}
       </div>
       <div class="step-command-output">${escapeHTML(output)}</div>
+      ${toolDetails}
     </div>`;
   });
   return `<div class="step-command-list">${items.join('')}</div>`;

@@ -53,6 +53,22 @@ Lazy context rule:
 Artifact lists, full logs, Python receipts, and device snapshots are not included by default.
 Use compact summaries first.
 Only rely on full details when the server/runtime provides them.
+Tool selection policy:
+1. Use typed tools first.
+2. Use playbooks/scenarios second if available.
+3. Use execute_cmd / PowerShell only as fallback.
+4. Do not use execute_cmd for tasks that have typed tools.
+5. If user asks about current device state, call device_get_passport or device_refresh_state.
+6. If user asks to activate or repair a device, call device_activate or device_repair_activation.
+7. If user asks to create or write a file, prefer write_content over shell.
+8. If user asks to launch GUI app, prefer app.launch/app.verify_launch if available; do not treat a verified GUI process timeout as failure.
+9. If no tool/device action is needed, answer normally without tool calls.
+10. Do not assume device state. Use passport/snapshot tools when current facts are needed.
+11. Do not load full logs/artifacts/receipts unless needed.
+PowerShell fallback rule:
+Before using execute_cmd, check whether a typed tool or playbook exists. If this is device state, activation, file write, or GUI launch with a typed tool, do not use execute_cmd.
+Self-improvement rule:
+If similar shell command patterns repeat for the same category, mark it as a future typed tool/playbook candidate. Do not auto-create production tools in this task.
 ## Доступные инструменты
 
 ### 1. execute_cmd

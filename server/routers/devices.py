@@ -12,6 +12,7 @@ try:
     )
     from ..runtime_state import _dk, _short_did, devices, get_user_devices
     from ..task_runtime import collect_device_live_snapshot, compact_state_snapshot_summary, send_command_to_agent
+    from ..tool_registry import tool_log_entry
 except ImportError:
     from api_support import _is_admin, get_current_user
     from database import get_device_profile, get_user_device_profiles, update_device_activation_summary
@@ -24,6 +25,7 @@ except ImportError:
     )
     from runtime_state import _dk, _short_did, devices, get_user_devices
     from task_runtime import collect_device_live_snapshot, compact_state_snapshot_summary, send_command_to_agent
+    from tool_registry import tool_log_entry
 
 
 router = APIRouter()
@@ -97,7 +99,17 @@ async def activate_device_for_user(user: dict, device_id: str, mode: str = "soft
     dev["activation_receipt"] = receipt
     dev["activation_summary"] = summary
     update_device_activation_summary(device_id, summary)
-    return {"status": "ok", "receipt": receipt, "summary": summary}
+    return {
+        "status": "ok",
+        "receipt": receipt,
+        "summary": summary,
+        "tool_log": tool_log_entry(
+            "device_repair_activation" if mode == "repair" else "device_activate",
+            {"status": "ok", "activation_summary": summary},
+            target_device_id=device_id,
+            hostname=(dev.get("info") or {}).get("hostname") or device_id,
+        ),
+    }
 
 
 @router.get("/api/devices")
@@ -146,6 +158,12 @@ async def api_device_state(device_id: str, request: Request):
         "identity_receipt": result.get("identity_receipt"),
         "health_summary": result.get("health_summary"),
         "last_state_snapshot": devices.get(device_key, {}).get("last_state_snapshot"),
+        "tool_log": tool_log_entry(
+            "device_refresh_state",
+            result,
+            target_device_id=device_id,
+            hostname=(devices.get(device_key, {}).get("info") or {}).get("hostname") or device_id,
+        ),
     }
 
 

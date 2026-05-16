@@ -323,7 +323,7 @@ def test_non_pipeline_single_execute_command_is_not_blocked():
     assert result["answer"] == "ok"
 
 
-def test_non_pipeline_selected_device_ignores_llm_device_override():
+def test_non_pipeline_execute_cmd_uses_llm_device_override():
     seen_devices = []
 
     async def _send_command_fn(device_id, action, params):
@@ -349,10 +349,10 @@ def test_non_pipeline_selected_device_ignores_llm_device_override():
         device_id="device-1",
     )
 
-    assert seen_devices == ["device-1"]
+    assert seen_devices == ["device-2"]
 
 
-def test_non_pipeline_broadcast_mode_still_uses_current_device_context():
+def test_non_pipeline_broadcast_mode_honors_tool_device_override():
     seen_devices = []
 
     async def _send_command_fn(device_id, action, params):
@@ -378,7 +378,7 @@ def test_non_pipeline_broadcast_mode_still_uses_current_device_context():
         device_id="device-1",
     )
 
-    assert seen_devices == ["device-1"]
+    assert seen_devices == ["device-2"]
 
 
 def test_chat_broadcast_replays_command_to_all_devices(client, monkeypatch):

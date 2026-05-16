@@ -1,6 +1,12 @@
 """LLM tool schemas and toolset registries for IRU controller flows."""
 
+try:
+    from .tool_registry import DEVICE_TOOL_SCHEMAS
+except ImportError:
+    from tool_registry import DEVICE_TOOL_SCHEMAS
+
 TOOLS = [
+    *DEVICE_TOOL_SCHEMAS,
     {
         "type": "function",
         "function": {
