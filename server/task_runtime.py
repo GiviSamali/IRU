@@ -824,7 +824,13 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         except Exception as exc:
             print(f"[training] Ошибка записи: {exc}")
 
-        task["status"] = "done"
+        receipt_status = (combined_task_receipt or {}).get("task_status") if "combined_task_receipt" in locals() else None
+        if receipt_status == "completed_with_recovery":
+            task["status"] = "completed_with_recovery"
+        elif receipt_status in {"failed", "blocked"}:
+            task["status"] = receipt_status
+        else:
+            task["status"] = "done"
         task["answer"] = combined_answer
         task["commands"] = combined_commands
         task["tasks"] = combined_tasks

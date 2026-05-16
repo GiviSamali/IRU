@@ -2,6 +2,8 @@ import asyncio
 import json
 
 from server.controller_pipeline import (
+    _extract_python_interpreters,
+    _verification_command_succeeded,
     build_pipeline_task_receipt,
     enforce_conversation_context_answer,
     process_pipeline_subagents,
@@ -88,7 +90,7 @@ def test_pipeline_recoverable_failure_later_verification_completes_with_recovery
             }
         return {
             "returncode": 0,
-            "stdout": "VERIFIED 7 files",
+            "stdout": "IRU_VERIFIED=1 7 files",
             "stderr": "",
             "files_verified": [r"C:\Users\russa\Desktop\test\file1.docx"],
             "artifacts_created": [r"C:\Users\russa\Desktop\test\file1.docx"],
@@ -140,6 +142,39 @@ def test_receipt_warns_on_multiple_python_interpreters():
 
     assert "multiple_python_interpreters_used" in receipt["warnings"]
     assert len(receipt["python_interpreters"]) == 2
+
+
+def test_not_ok_is_not_verification_success():
+    assert _verification_command_succeeded({
+        "action": "execute_cmd",
+        "command": "verify",
+        "status": "success",
+        "result": {"returncode": 0, "stdout": "NOT OK", "stderr": ""},
+    }) is False
+
+
+def test_strict_iru_verified_marker_is_verification_success():
+    assert _verification_command_succeeded({
+        "action": "execute_cmd",
+        "command": "verify",
+        "status": "success",
+        "result": {"returncode": 0, "stdout": "IRU_VERIFIED=1", "stderr": ""},
+    }) is True
+
+
+def test_complex_bare_python_command_records_bare_interpreter_not_first_token():
+    interpreters = _extract_python_interpreters(
+        [{
+            "action": "execute_cmd",
+            "command": r'Set-Location "C:\work"; python main.py',
+            "status": "success",
+            "result": {"returncode": 0},
+        }],
+        [],
+    )
+
+    assert {"path": "python", "version": None, "source": "bare_command"} in interpreters
+    assert all(item["path"] != "Set-Location" for item in interpreters)
 
 
 def test_conversation_context_replaces_false_first_request_claim():

@@ -777,7 +777,7 @@ def get_task(task_id: int) -> dict | None:
 
 def update_step(task_id: int, idx: int, status: str,
                 summary: str | None = None) -> bool:
-    """Обновить статус шага. status: 'running' | 'done' | 'failed' | 'skipped'."""
+    """Обновить статус шага. status: running | done | failed | recovered | skipped | blocked."""
     now = time.time()
     with get_db() as conn:
         fields = ["status = ?"]

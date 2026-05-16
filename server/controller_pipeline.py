@@ -760,7 +760,7 @@ def _verification_command_succeeded(command: dict) -> bool:
     if result.get("exists") is True or result.get("verified") is True:
         return True
     output = f"{result.get('stdout') or ''}\n{result.get('stderr') or ''}".upper()
-    return any(marker in output for marker in ("EXISTS", "VERIFIED", "CHECK_OK", "OK", "CREATED"))
+    return any(marker in output for marker in ("IRU_VERIFIED", "IRU_CHECK_OK", "IRU_ARTIFACT_EXISTS"))
 
 
 def _step_has_failed_command(commands: list[dict], step_index: int) -> bool:
@@ -808,8 +808,8 @@ def _extract_python_interpreters(commands: list[dict], receipt_dicts: list[dict 
             interpreters.append({"path": match, "version": version, "source": "command"})
         for match in _WIN_PYTHON_PATH_RE.findall(command_text):
             interpreters.append({"path": match, "version": version, "source": "command"})
-        if re.search(r"(^|[;&|]\s*)(python|py)\b", command_text, re.IGNORECASE):
-            interpreters.append({"path": command_text.split()[0], "version": version, "source": "command"})
+        if re.search(r"(^|[;&|{]\s*)(python|py)\b", command_text, re.IGNORECASE):
+            interpreters.append({"path": "python", "version": version, "source": "bare_command"})
 
     deduped = []
     seen = set()
