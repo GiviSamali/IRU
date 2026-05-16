@@ -63,7 +63,7 @@ async def activate_device_for_user(user: dict, device_id: str, mode: str = "soft
     if not dev or not dev.get("ws"):
         raise HTTPException(status_code=503, detail=f"Agent for device '{device_id}' is offline")
     try:
-        receipt = await send_command_to_agent(device_key, "device.activate", {"mode": mode}, user_id=user["id"])
+        receipt = await send_command_to_agent(device_key, "device.activate", {"mode": mode, "device_id": device_id}, user_id=user["id"])
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not isinstance(receipt, dict) or receipt.get("error"):

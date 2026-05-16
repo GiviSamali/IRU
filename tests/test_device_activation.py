@@ -120,7 +120,12 @@ def test_activate_device_for_user_sends_action_and_stores_summary(monkeypatch):
 
     result = asyncio.run(devices_router.activate_device_for_user({"id": 7, "name": "tester"}, "givi", "soft"))
 
-    assert sent == {"device_key": "7:givi", "action": "device.activate", "params": {"mode": "soft"}, "user_id": 7}
+    assert sent == {
+        "device_key": "7:givi",
+        "action": "device.activate",
+        "params": {"mode": "soft", "device_id": "givi"},
+        "user_id": 7,
+    }
     assert result["receipt"]["device_id"] == "givi"
     assert result["summary"]["activation_status"] == "activated"
     assert devices["7:givi"]["activation_receipt"]["device_id"] == "givi"
@@ -151,6 +156,47 @@ def test_activate_device_for_user_rejects_invalid_receipt(monkeypatch):
     assert "missing_identity_hostname" in exc.value.detail
     assert "activation_summary" not in devices["7:givi"]
     assert stored == {}
+
+
+def test_send_command_to_agent_does_not_store_invalid_activation_receipt(monkeypatch):
+    from server import task_runtime
+
+    device_key = "7:givi"
+    existing_summary = {"activation_status": "activated", "receipt_hash": "old"}
+    invalid_receipt = _server_receipt(device_id="")
+    stored = []
+
+    class FakeWS:
+        async def send_text(self, _msg):
+            pending = next(iter(task_runtime.devices[device_key]["pending"].values()))
+            pending.set_result(invalid_receipt)
+
+    task_runtime.devices.clear()
+    task_runtime.devices[device_key] = {
+        "ws": FakeWS(),
+        "pending": {},
+        "user_id": 7,
+        "short_device_id": "givi",
+        "info": {},
+        "activation_summary": existing_summary,
+    }
+
+    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
+    monkeypatch.setattr(task_runtime, "update_device_activation_summary", lambda device_id, summary: stored.append((device_id, summary)))
+
+    result = asyncio.run(
+        task_runtime.send_command_to_agent(
+            device_key,
+            "device.activate",
+            {"mode": "soft", "device_id": "givi"},
+            user_id=7,
+        )
+    )
+
+    assert result["device_id"] == ""
+    assert "activation_receipt" not in task_runtime.devices[device_key]
+    assert task_runtime.devices[device_key]["activation_summary"] is existing_summary
+    assert stored == []
 
 
 def test_activate_device_for_user_offline_returns_error(monkeypatch):
