@@ -3,6 +3,8 @@ import json
 import time
 
 import httpx
+import pytest
+from fastapi import HTTPException
 
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_pipeline import pipeline_worker_prompt, run_pipeline_worker
@@ -270,9 +272,143 @@ def test_state_all_devices_uses_deterministic_fanout(monkeypatch):
 
     assert calls == device_ids
     assert task_runtime.tasks[task_id]["status"] == "done"
-    assert "target_device_id=givi" in task_runtime.tasks[task_id]["answer"]
-    assert "target_device_id=desktop" in task_runtime.tasks[task_id]["answer"]
+    assert "target_device_id=givi" not in task_runtime.tasks[task_id]["answer"]
+    assert "target_device_id=desktop" not in task_runtime.tasks[task_id]["answer"]
+    assert "Состояние устройства givi" in task_runtime.tasks[task_id]["answer"]
+    assert "Состояние устройства desktop" in task_runtime.tasks[task_id]["answer"]
     assert len(task_runtime.tasks[task_id]["commands"]) == 2
+
+
+def test_collect_live_snapshot_stores_last_state_snapshot(monkeypatch):
+    user_id = 1
+    device_key = f"{user_id}:givi"
+    task_runtime.devices[device_key] = {
+        "user_id": user_id,
+        "info": {"hostname": "givi", "os": "Windows"},
+        "registered_identity": {"target_device_id": "givi", "registered_hostname": "givi", "registered_machine_guid": "guid"},
+        "pending": {},
+        "ws": object(),
+    }
+
+    async def fake_send(device_id, action, params, user_id=None):
+        payload = {
+            "observed_hostname": "givi",
+            "observed_computer_name": "givi",
+            "observed_machine_guid": "guid",
+            "ram_total_gb": 16,
+            "ram_free_gb": 4,
+            "disks": [{"drive": "C:", "total_gb": 100, "free_gb": 25}],
+            "cpu_load": 32,
+            "process_count": 180,
+            "uptime": "1.00:00:00",
+        }
+        return {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    monkeypatch.setattr(task_runtime, "send_command_to_agent", fake_send)
+    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id: {"device_id": device_id, "machine_guid": "guid"})
+
+    result = asyncio.run(task_runtime.collect_device_live_snapshot(device_key, user_id=user_id))
+
+    record = task_runtime.devices[device_key]["last_state_snapshot"]
+    assert result["status"] == "ok"
+    assert record["snapshot"]["process_count"] == 180
+    assert record["identity_receipt"]["identity_status"] == "ok"
+    assert record["health_summary"]["ram_used_pct"] == 75.0
+    assert record["health_summary"]["disk_used_pct"] == 75.0
+
+
+def test_devices_api_includes_state_summary_fields(monkeypatch):
+    from server.routers import devices as devices_router
+    from server.runtime_state import devices
+
+    device_key = "7:givi"
+    devices.clear()
+    devices[device_key] = {
+        "user_id": 7,
+        "short_device_id": "givi",
+        "info": {"hostname": "GIVI", "os": "Windows"},
+        "pending": {},
+        "ws": object(),
+        "last_state_snapshot": {
+            "snapshot": {"process_count": 180},
+            "collected_at": "2026-05-16T10:00:00Z",
+            "identity_receipt": {"identity_status": "ok"},
+            "health_summary": {"health_status": "warning", "identity_status": "ok", "cpu_load": 12, "ram_used_pct": 88, "disk_used_pct": 71, "process_count": 180, "uptime": "1 day"},
+        },
+    }
+
+    monkeypatch.setattr(devices_router, "get_current_user", lambda request: {"id": 7, "name": "tester"})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: None)
+
+    result = asyncio.run(devices_router.get_devices_api(object()))
+
+    item = result["devices"]["givi"]
+    assert item["health_status"] == "warning"
+    assert item["last_snapshot_at"] == "2026-05-16T10:00:00Z"
+    assert item["identity_status"] == "ok"
+    assert item["cpu_load"] == 12
+    assert item["ram_used_pct"] == 88
+    assert item["disk_used_pct"] == 71
+    assert item["process_count"] == 180
+    assert item["uptime"] == "1 day"
+
+
+def test_device_state_endpoint_returns_structured_snapshot(monkeypatch):
+    from server.routers import devices as devices_router
+
+    class Request:
+        async def json(self):
+            return {"mode": "snapshot"}
+
+    user_id = 7
+    device_key = f"{user_id}:givi"
+    task_runtime.devices[device_key] = {
+        "user_id": user_id,
+        "short_device_id": "givi",
+        "info": {"hostname": "givi", "os": "Windows"},
+        "registered_identity": {"target_device_id": "givi", "registered_hostname": "givi", "registered_machine_guid": "guid"},
+        "pending": {},
+        "ws": object(),
+    }
+
+    async def fake_send(device_id, action, params, user_id=None):
+        payload = {"observed_hostname": "givi", "observed_machine_guid": "guid", "process_count": 200, "ram_total_gb": 8, "ram_free_gb": 2}
+        return {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    monkeypatch.setattr(devices_router, "get_current_user", lambda request: {"id": user_id, "name": "tester"})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
+    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
+    monkeypatch.setattr(task_runtime, "send_command_to_agent", fake_send)
+
+    result = asyncio.run(devices_router.api_device_state("givi", Request()))
+
+    assert result["status"] == "ok"
+    assert result["snapshot"]["process_count"] == 200
+    assert result["health_summary"]["ram_used_pct"] == 75.0
+    assert result["last_state_snapshot"]["snapshot"]["process_count"] == 200
+
+
+def test_agent_control_endpoints_ack_or_explicit_501(monkeypatch):
+    from server.routers import devices as devices_router
+
+    device_key = "7:givi"
+    task_runtime.devices[device_key] = {"user_id": 7, "short_device_id": "givi", "info": {}, "pending": {}, "ws": object()}
+
+    monkeypatch.setattr(devices_router, "get_current_user", lambda request: {"id": 7, "name": "tester"})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
+
+    async def fake_send(device_id, action, params, user_id=None):
+        if action == "agent.shutdown":
+            return {"ack": True, "action": action}
+        return {"error": "unknown action"}
+
+    monkeypatch.setattr(devices_router, "send_command_to_agent", fake_send)
+
+    shutdown = asyncio.run(devices_router.api_shutdown_device("givi", object()))
+    assert shutdown["ack"]["ack"] is True
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(devices_router.api_disconnect_device("givi", object()))
+    assert exc.value.status_code == 501
 
 
 def test_collect_live_snapshot_identity_mismatch(monkeypatch):
@@ -301,7 +437,8 @@ def test_collect_live_snapshot_identity_mismatch(monkeypatch):
 
     assert result["status"] == "routing_mismatch"
     assert result["identity_receipt"]["identity_status"] == "mismatch"
-    assert "target_device_id=givi returned observed_hostname=DESKTOP-JFQUB4O" in result["answer"]
+    assert "устройство givi ответило как DESKTOP-JFQUB4O" in result["answer"]
+    assert "target_device_id=" not in result["answer"]
     assert result["snapshot"] is None
     assert result["commands"][0]["target_device_id"] == "givi"
     assert result["commands"][0]["collected_at"]
@@ -325,5 +462,7 @@ def test_identical_resource_values_do_not_imply_same_device():
     lowered = answer.lower()
     assert "same physical" not in lowered
     assert "одно физическое" not in lowered
-    assert "target_device_id=givi" in answer
-    assert "target_device_id=desktop" in answer
+    assert "target_device_id=givi" not in answer
+    assert "target_device_id=desktop" not in answer
+    assert "Состояние устройства givi" in answer
+    assert "Состояние устройства desktop" in answer

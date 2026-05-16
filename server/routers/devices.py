@@ -11,7 +11,7 @@ try:
         validate_activation_receipt,
     )
     from ..runtime_state import _dk, _short_did, devices, get_user_devices
-    from ..task_runtime import send_command_to_agent
+    from ..task_runtime import collect_device_live_snapshot, compact_state_snapshot_summary, send_command_to_agent
 except ImportError:
     from api_support import _is_admin, get_current_user
     from database import get_device_profile, get_user_device_profiles, update_device_activation_summary
@@ -23,7 +23,7 @@ except ImportError:
         validate_activation_receipt,
     )
     from runtime_state import _dk, _short_did, devices, get_user_devices
-    from task_runtime import send_command_to_agent
+    from task_runtime import collect_device_live_snapshot, compact_state_snapshot_summary, send_command_to_agent
 
 
 router = APIRouter()
@@ -50,6 +50,27 @@ def _ensure_device_access(user: dict, device_id: str) -> None:
     if _runtime_device_key_for_user(user, device_id):
         return
     raise HTTPException(status_code=404, detail=f"Устройство '{device_id}' не найдено")
+
+
+def _device_api_item(short_did: str, dev: dict, profile: dict | None) -> dict:
+    summary = dev.get("activation_summary") or parse_activation_summary((profile or {}).get("activation_summary"))
+    state_summary = compact_state_snapshot_summary(dev.get("last_state_snapshot"))
+    return {
+        "device_id": short_did,
+        "info": dev.get("info", {}),
+        "connected": bool(dev.get("ws")),
+        "activation_status": activation_status_from_summary(summary),
+        "runtime_status": runtime_status_from_summary(summary),
+        "health_status": state_summary.get("health_status"),
+        "last_snapshot_at": state_summary.get("last_snapshot_at"),
+        "identity_status": state_summary.get("identity_status"),
+        "cpu_load": state_summary.get("cpu_load"),
+        "ram_used_pct": state_summary.get("ram_used_pct"),
+        "disk_used_pct": state_summary.get("disk_used_pct"),
+        "process_count": state_summary.get("process_count"),
+        "uptime": state_summary.get("uptime"),
+        "capabilities_summary": (summary.get("capabilities_summary") if isinstance(summary, dict) else None) or {},
+    }
 
 
 async def activate_device_for_user(user: dict, device_id: str, mode: str = "soft") -> dict:
@@ -88,14 +109,7 @@ async def get_devices_api(request: Request):
     for composite_key, dev in user_devs.items():
         short_did = dev.get("short_device_id", _short_did(composite_key))
         profile = get_device_profile(short_did)
-        summary = dev.get("activation_summary") or parse_activation_summary((profile or {}).get("activation_summary"))
-        result[short_did] = {
-            "device_id": short_did,
-            "info": dev.get("info", {}),
-            "connected": True,
-            "activation_status": activation_status_from_summary(summary),
-            "runtime_status": runtime_status_from_summary(summary),
-        }
+        result[short_did] = _device_api_item(short_did, dev, profile)
     return {"devices": result}
 
 
@@ -107,6 +121,60 @@ async def api_activate_device(device_id: str, request: Request):
     except Exception:
         body = {}
     return await activate_device_for_user(user, device_id, (body or {}).get("mode", "soft"))
+
+
+@router.post("/api/devices/{device_id}/state")
+async def api_device_state(device_id: str, request: Request):
+    user = get_current_user(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    mode = (body or {}).get("mode", "snapshot")
+    if mode != "snapshot":
+        raise HTTPException(status_code=422, detail="mode must be snapshot")
+    device_id = _short_did(device_id)
+    _ensure_device_access(user, device_id)
+    device_key = _runtime_device_key_for_user(user, device_id)
+    if not device_key:
+        raise HTTPException(status_code=503, detail=f"Agent for device '{device_id}' is offline")
+    result = await collect_device_live_snapshot(device_key, user_id=user["id"])
+    return {
+        "status": result.get("status"),
+        "device_id": device_id,
+        "snapshot": result.get("snapshot"),
+        "identity_receipt": result.get("identity_receipt"),
+        "health_summary": result.get("health_summary"),
+        "last_state_snapshot": devices.get(device_key, {}).get("last_state_snapshot"),
+    }
+
+
+@router.post("/api/devices/{device_id}/disconnect")
+async def api_disconnect_device(device_id: str, request: Request):
+    user = get_current_user(request)
+    device_id = _short_did(device_id)
+    _ensure_device_access(user, device_id)
+    device_key = _runtime_device_key_for_user(user, device_id)
+    if not device_key:
+        raise HTTPException(status_code=503, detail=f"Agent for device '{device_id}' is offline")
+    result = await send_command_to_agent(device_key, "agent.disconnect", {}, user_id=user["id"])
+    if not isinstance(result, dict) or result.get("error"):
+        raise HTTPException(status_code=501, detail="agent.disconnect is not implemented by this agent")
+    return {"status": "ok", "device_id": device_id, "ack": result}
+
+
+@router.post("/api/devices/{device_id}/shutdown")
+async def api_shutdown_device(device_id: str, request: Request):
+    user = get_current_user(request)
+    device_id = _short_did(device_id)
+    _ensure_device_access(user, device_id)
+    device_key = _runtime_device_key_for_user(user, device_id)
+    if not device_key:
+        raise HTTPException(status_code=503, detail=f"Agent for device '{device_id}' is offline")
+    result = await send_command_to_agent(device_key, "agent.shutdown", {}, user_id=user["id"])
+    if not isinstance(result, dict) or result.get("error"):
+        raise HTTPException(status_code=501, detail="agent.shutdown is not implemented by this agent")
+    return {"status": "ok", "device_id": device_id, "ack": result}
 
 
 @router.get("/api/device_profiles")

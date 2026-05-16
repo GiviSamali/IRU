@@ -107,3 +107,28 @@ def test_action_dispatcher_reports_unknown_action():
     assert result["id"] == "cmd-1"
     assert result["status"] == "error"
     assert "Неизвестное действие" in result["error"]
+
+def test_agent_shutdown_returns_ack_and_sets_stop_event():
+    from core.runtime import AgentRuntime
+    from core.state import AgentSnapshot, AgentState
+
+    runtime = AgentRuntime(
+        config={"device_id": "dev", "server_url": "ws://example.test", "user_token": "token"},
+        agent_version="test-version",
+        logger=logging.getLogger("agent-test"),
+        state=AgentState(
+            AgentSnapshot(
+                version="test-version",
+                device_id="dev",
+                server_url="ws://example.test",
+                config_path="config.json",
+                logs_dir="logs",
+                log_path="logs/agent.log",
+            )
+        ),
+    )
+
+    result = asyncio.run(runtime._handle_command({"id": "cmd-2", "action": "agent.shutdown", "params": {}}))
+
+    assert result == {"id": "cmd-2", "status": "ok", "result": {"ack": True, "action": "agent.shutdown"}}
+    assert runtime._stop_event.is_set()

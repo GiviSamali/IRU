@@ -23,6 +23,7 @@ function renderDevices() {
     state.selectedDevice = null;
     renderInputDeviceSelector();
     renderInputModeBtn();
+    renderDevicePassport();
     return;
   }
   empty.style.display = 'none';
@@ -42,6 +43,7 @@ function renderDevices() {
     </div>`;
   }).join('');
   renderInputDeviceSelector();
+  renderDevicePassport();
 }
 
 function bindDeviceListActions() {
@@ -61,6 +63,203 @@ function selectDevice(id) {
   renderDevices();
   closeDeviceDropdown();
   if (state.explorerOpen) explorerNavigate(state.explorerPath);
+}
+
+function deviceStatusLabel(value) {
+  const labels = {
+    activated: 'Активировано',
+    activation_required: 'Нужна активация',
+    degraded: 'Требует repair',
+    activation_failed: 'Ошибка активации',
+    ok: 'OK',
+    warning: 'Внимание',
+    critical: 'Критично',
+    unavailable: 'Недоступно',
+    unknown: 'Неизвестно',
+    install_required: 'Нужен runtime',
+  };
+  return labels[value] || value || 'Неизвестно';
+}
+
+function deviceStatusClass(value) {
+  if (['activated', 'ok'].includes(value)) return 'ok';
+  if (['warning', 'degraded', 'install_required', 'activation_required'].includes(value)) return 'warning';
+  if (['critical', 'activation_failed', 'unavailable'].includes(value)) return 'critical';
+  return 'unknown';
+}
+
+function formatSnapshotTime(value) {
+  if (!value) return 'Снимок ещё не собирался';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function metricValue(value, suffix) {
+  if (value === null || value === undefined || value === '') return '—';
+  return `${value}${suffix || ''}`;
+}
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function renderDevicePassport() {
+  const root = document.getElementById('devicePassport');
+  if (!root) return;
+  const ids = Object.keys(state.devices);
+  if (!ids.length || !state.selectedDevice || !state.devices[state.selectedDevice]) {
+    root.innerHTML = '<div class="device-passport-empty">Нет подключённых устройств</div>';
+    return;
+  }
+  const id = state.selectedDevice;
+  const dev = state.devices[id] || {};
+  const info = dev.info || {};
+  const busy = state.devicePanelBusy;
+  const activationStatus = dev.activation_status || 'unknown';
+  const runtimeStatus = dev.runtime_status || 'unknown';
+  const healthStatus = dev.health_status || 'unknown';
+  const identityStatus = dev.identity_status || 'unknown';
+  const caps = dev.capabilities_summary || {};
+  const capsList = Array.isArray(caps) ? caps : Object.keys(caps);
+  const disconnectAvailable = capsList.includes('agent.disconnect') || caps.agent_disconnect === 'available';
+  const activationAction = ['activation_required', 'unknown'].includes(activationStatus)
+    ? `<button class="device-passport-btn" data-action="passport-activate" data-mode="soft" ${busy ? 'disabled' : ''}>Активировать</button>`
+    : '';
+  const repairAction = ['degraded', 'activation_failed'].includes(activationStatus)
+    ? `<button class="device-passport-btn" data-action="passport-activate" data-mode="repair" ${busy ? 'disabled' : ''}>Repair</button>`
+    : '';
+  const runtimeNotice = runtimeStatus !== 'ok'
+    ? `<div class="device-passport-notice">Runtime не готов. Managed Python не подготовлен.</div>`
+    : '';
+  const error = state.devicePanelError ? `<div class="device-passport-error">${escapeHTML(state.devicePanelError)}</div>` : '';
+  root.innerHTML = `
+    <div class="device-passport-head">
+      <div>
+        <div class="device-passport-title">${escapeHTML(info.hostname || id)}</div>
+        <div class="device-passport-subtitle">${escapeHTML(id)} · ${dev.connected ? 'online' : 'offline'}</div>
+      </div>
+      <span class="device-passport-dot ${dev.connected ? 'online' : ''}"></span>
+    </div>
+    <div class="device-passport-actions">
+      <button class="device-passport-btn primary" data-action="passport-state" ${busy ? 'disabled' : ''}>${busy === 'state' ? 'Проверка...' : 'Проверить состояние'}</button>
+      ${activationAction}
+      ${repairAction}
+      <button class="device-passport-btn" data-action="passport-disconnect" ${busy ? 'disabled' : ''}>Отключить агент</button>
+      <button class="device-passport-btn danger" data-action="passport-shutdown" ${busy ? 'disabled' : ''}>Выключить агент</button>
+    </div>
+    ${error}
+    <div class="device-passport-section">
+      <div class="device-passport-section-title">Паспорт</div>
+      <div class="device-passport-grid">
+        <div>OS</div><strong>${escapeHTML(info.os || info.os_caption || '—')}</strong>
+        <div>Activation</div><span class="device-passport-badge ${deviceStatusClass(activationStatus)}">${escapeHTML(deviceStatusLabel(activationStatus))}</span>
+        <div>Runtime</div><span class="device-passport-badge ${deviceStatusClass(runtimeStatus)}">${escapeHTML(deviceStatusLabel(runtimeStatus))}</span>
+        <div>Health</div><span class="device-passport-badge ${deviceStatusClass(healthStatus)}">${escapeHTML(deviceStatusLabel(healthStatus))}</span>
+        <div>Identity</div><span class="device-passport-badge ${deviceStatusClass(identityStatus)}">${escapeHTML(deviceStatusLabel(identityStatus))}</span>
+        <div>Snapshot</div><strong>${escapeHTML(formatSnapshotTime(dev.last_snapshot_at))}</strong>
+      </div>
+    </div>
+    <div class="device-passport-section">
+      <div class="device-passport-section-title">Состояние</div>
+      <div class="device-passport-metrics">
+        <div><span>CPU</span><strong>${escapeHTML(metricValue(dev.cpu_load, '%'))}</strong></div>
+        <div><span>RAM</span><strong>${escapeHTML(metricValue(dev.ram_used_pct, '%'))}</strong></div>
+        <div><span>Disk</span><strong>${escapeHTML(metricValue(dev.disk_used_pct, '%'))}</strong></div>
+        <div><span>Processes</span><strong>${escapeHTML(metricValue(dev.process_count))}</strong></div>
+      </div>
+      <div class="device-passport-uptime">Uptime: ${escapeHTML(metricValue(dev.uptime))}</div>
+    </div>
+    <details class="device-passport-details">
+      <summary>Технические детали</summary>
+      <pre>${escapeHTML(JSON.stringify({ info, capabilities: capsList }, null, 2))}</pre>
+    </details>
+  `;
+  if (runtimeNotice) {
+    root.querySelector('.device-passport-actions')?.insertAdjacentHTML('afterend', runtimeNotice);
+  }
+  if (!disconnectAvailable) {
+    const disconnectBtn = root.querySelector('[data-action="passport-disconnect"]');
+    if (disconnectBtn) {
+      disconnectBtn.disabled = true;
+      disconnectBtn.title = 'Скоро';
+      disconnectBtn.textContent = 'Отключить агент · Скоро';
+      disconnectBtn.removeAttribute('data-action');
+    }
+  }
+}
+
+async function runDevicePassportAction(action, mode) {
+  const id = state.selectedDevice;
+  if (!id) return;
+  state.devicePanelBusy = action;
+  state.devicePanelError = '';
+  renderDevicePassport();
+  try {
+    let endpoint = `${API}/api/devices/${encodeURIComponent(id)}/state`;
+    let body = { mode: 'snapshot' };
+    if (action === 'activate') {
+      endpoint = `${API}/api/devices/${encodeURIComponent(id)}/activate`;
+      body = { mode: mode || 'soft' };
+    } else if (action === 'disconnect') {
+      endpoint = `${API}/api/devices/${encodeURIComponent(id)}/disconnect`;
+      body = {};
+    } else if (action === 'shutdown') {
+      if (!confirm('Выключить агент ИРУ на выбранном устройстве? Компьютер не будет выключен.')) {
+        return;
+      }
+      endpoint = `${API}/api/devices/${encodeURIComponent(id)}/shutdown`;
+      body = {};
+    }
+    const r = await apiFetch(endpoint, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.detail || 'Команда не выполнена');
+    if (data.health_summary && state.devices[id]) {
+      Object.assign(state.devices[id], {
+        health_status: data.health_summary.health_status,
+        identity_status: data.health_summary.identity_status,
+        cpu_load: data.health_summary.cpu_load,
+        ram_used_pct: data.health_summary.ram_used_pct,
+        disk_used_pct: data.health_summary.disk_used_pct,
+        process_count: data.health_summary.process_count,
+        uptime: data.health_summary.uptime,
+        last_snapshot_at: data.last_state_snapshot?.collected_at,
+      });
+    }
+    if (action === 'shutdown') {
+      showToast('Агент выключается');
+      await wait(1500);
+      await fetchDevices();
+      return;
+    }
+    await fetchDevices();
+    showToast(action === 'state' ? 'Состояние обновлено' : 'Команда отправлена');
+  } catch (e) {
+    state.devicePanelError = e.message || String(e);
+    renderDevicePassport();
+    showToast(state.devicePanelError, true);
+  } finally {
+    state.devicePanelBusy = null;
+    renderDevicePassport();
+  }
+}
+
+function bindDevicePassportActions() {
+  const root = document.getElementById('devicePassport');
+  if (!root || root.dataset.delegated === '1') return;
+  root.dataset.delegated = '1';
+  root.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-action]');
+    if (!target || !root.contains(target)) return;
+    if (target.dataset.action === 'passport-state') runDevicePassportAction('state');
+    if (target.dataset.action === 'passport-activate') runDevicePassportAction('activate', target.dataset.mode || 'soft');
+    if (target.dataset.action === 'passport-disconnect') runDevicePassportAction('disconnect');
+    if (target.dataset.action === 'passport-shutdown') runDevicePassportAction('shutdown');
+  });
 }
 function toggleDeviceDropdown() {
   document.getElementById('deviceDropdown').classList.toggle('show');
@@ -194,6 +393,7 @@ function bindInputDeviceActions() {
 
 bindDeviceListActions();
 bindInputDeviceActions();
+bindDevicePassportActions();
 
 // ── LIVE PROGRESS ─────────────────────────────────────
 
