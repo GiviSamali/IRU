@@ -189,3 +189,21 @@ def test_prompt_contains_tool_selection_policy():
     assert "Use typed tools first" in SYSTEM_PROMPT_TEMPLATE
     assert "execute_cmd / PowerShell only as fallback" in SYSTEM_PROMPT_TEMPLATE
     assert "Do not assume device state" in SYSTEM_PROMPT_TEMPLATE
+
+
+def test_prompt_prefers_refresh_state_for_explicit_state_checks():
+    assert "Проверь состояние" in SYSTEM_PROMPT_TEMPLATE
+    assert "call device_refresh_state directly" in SYSTEM_PROMPT_TEMPLATE
+    assert "Do not call only device_get_passport" in SYSTEM_PROMPT_TEMPLATE
+
+
+def test_prompt_contains_device_inventory_wording_rule():
+    assert "Never say \"в сети не обнаружено\"" in SYSTEM_PROMPT_TEMPLATE
+    assert "Других подключённых к ИРУ устройств сейчас не вижу." in SYSTEM_PROMPT_TEMPLATE
+    assert "only connected-to-IRU device" in SYSTEM_PROMPT_TEMPLATE
+
+
+def test_prompt_contains_concise_success_answer_rule():
+    assert "Concise final answer policy:" in SYSTEM_PROMPT_TEMPLATE
+    assert "UI already shows used tools and technical details" in SYSTEM_PROMPT_TEMPLATE
+    assert "Готово. Создал папку" in SYSTEM_PROMPT_TEMPLATE

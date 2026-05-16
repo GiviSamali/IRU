@@ -23,6 +23,13 @@ _DOWNLOAD_HOST_HINTS = (
     "storage.googleapis.com",
     "blob.core.windows.net",
 )
+_DEVICE_INVENTORY_SCAN_PHRASES = (
+    "Других устройств в сети не обнаружено",
+    "устройств в сети не обнаружено",
+)
+_DEVICE_INVENTORY_CONNECTED_ONLY_ANSWER = (
+    "Других подключённых к ИРУ устройств сейчас не вижу."
+)
 
 
 def _infer_action(command_entry: dict) -> str | None:
@@ -168,12 +175,21 @@ def _sanitize_memory_claims(answer: str, commands_log: list[dict]) -> str:
     return answer
 
 
+def _sanitize_device_inventory_wording(answer: str) -> str:
+    lowered = (answer or "").lower()
+    for phrase in _DEVICE_INVENTORY_SCAN_PHRASES:
+        if phrase.lower() in lowered:
+            return _DEVICE_INVENTORY_CONNECTED_ONLY_ANSWER
+    return answer
+
+
 def enforce_trusted_answer(answer: str, commands_log: list[dict] | None) -> str:
     commands_log = commands_log or []
     safe_answer = _sanitize_download_urls(answer or "", commands_log)
     if safe_answer == SAFE_DOWNLOAD_LINK_ERROR:
         return safe_answer
     safe_answer = _sanitize_memory_claims(safe_answer, commands_log)
+    safe_answer = _sanitize_device_inventory_wording(safe_answer)
 
     failed_actions = [entry for entry in commands_log if _is_failed_action(entry)]
     if not failed_actions:

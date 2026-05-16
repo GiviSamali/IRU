@@ -4,7 +4,7 @@ import re
 import time
 
 from server.controller_non_pipeline import process_non_pipeline_command
-from server.controller_trust import SAFE_DOWNLOAD_LINK_ERROR
+from server.controller_trust import SAFE_DOWNLOAD_LINK_ERROR, enforce_trusted_answer
 
 
 def _make_completion_fn(responses):
@@ -62,6 +62,13 @@ def test_non_pipeline_blocks_fabricated_download_link_without_tool_result():
 
     assert result["answer"] == SAFE_DOWNLOAD_LINK_ERROR
     assert "storage.yandexcloud.net" not in result["answer"]
+
+
+def test_inventory_network_scan_wording_is_replaced():
+    expected = "Других подключённых к ИРУ устройств сейчас не вижу."
+
+    assert enforce_trusted_answer("Других устройств в сети не обнаружено.", []) == expected
+    assert enforce_trusted_answer("устройств в сети не обнаружено", []) == expected
 
 
 def test_non_pipeline_uses_only_real_get_file_link_url():
