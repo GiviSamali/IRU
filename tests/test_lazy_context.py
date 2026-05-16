@@ -59,6 +59,26 @@ def test_offline_handle_returns_stale_cache(monkeypatch):
     assert response["data"]["receipt_hash"]
 
 
+def test_state_handle_and_manifest_include_fresh_last_snapshot():
+    state_record = {
+        "snapshot": {"process_count": 180},
+        "collected_at": "2026-05-16T10:00:00Z",
+        "identity_receipt": {"identity_status": "ok"},
+        "health_summary": {"health_status": "ok", "identity_status": "ok", "process_count": 180},
+        "status": "ok",
+    }
+    all_devices = {"givi": {"info": {"hostname": "GIVI"}, "ws": object(), "last_state_snapshot": state_record}}
+
+    context = build_minimal_llm_context("givi", all_devices)
+    state_summary = context["current_device"]["state_summary"]
+    handle = get_context_handle("ctx://device/givi/state", all_devices=all_devices)
+
+    assert state_summary["state_snapshot_fresh"] is True
+    assert state_summary["last_snapshot_at"] == "2026-05-16T10:00:00Z"
+    assert context["current_device"]["context_handles"]["device_state"] == "ctx://device/givi/state"
+    assert handle == {"status": "ok", "source": "agent_live", "data": state_record}
+
+
 def test_prompt_includes_context_budget_rule():
     assert "Context budget rule:" in SYSTEM_PROMPT_TEMPLATE
     assert "Lazy context rule:" in SYSTEM_PROMPT_TEMPLATE

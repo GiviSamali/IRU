@@ -209,6 +209,9 @@ class AgentRuntime:
             self._format_params_for_log(action_name, params),
         )
         try:
+            if action_name == "agent.shutdown":
+                self._stop_event.set()
+                return {"id": cmd_id, "status": "ok", "result": {"ack": True, "action": "agent.shutdown"}}
             func = ACTIONS.get(action_name)
             if func is None:
                 raise ValueError(f"Неизвестное действие: {action_name}")

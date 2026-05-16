@@ -6,6 +6,8 @@ const state = {
   messages: [],      // messages of current chat (from server)
   devices: {},
   selectedDevice: null,
+  devicePanelBusy: null,
+  devicePanelError: '',
   sendTarget: 'single', // 'single' = selected device, 'all' = all devices
   modes: { pipeline: false, autonomous: false }, // флаги режимов для следующего запроса
   explorerOpen: false,

@@ -374,8 +374,9 @@ def _snapshot_command_for_device(device_info: dict) -> str:
             "    except Exception: return ''\n"
             "print(json.dumps({'observed_hostname': platform.node(), 'observed_computer_name': platform.node(), "
             "'observed_machine_guid': run(['cat','/etc/machine-id']), 'observed_username': getpass.getuser(), "
-            "'os_caption': platform.platform(), 'os_version': platform.version(), 'cpu': platform.processor(), "
-            "'process_count': len([p for p in os.listdir('/proc') if p.isdigit()])}))\n"
+        "'os_caption': platform.platform(), 'os_version': platform.version(), 'cpu': platform.processor(), "
+        "'cpu_load': os.getloadavg()[0] if hasattr(os, 'getloadavg') else None, "
+        "'process_count': len([p for p in os.listdir('/proc') if p.isdigit()])}))\n"
             "PY"
         )
     return (
@@ -387,7 +388,7 @@ def _snapshot_command_for_device(device_info: dict) -> str:
         "[pscustomobject]@{drive=$_.DeviceID; total_gb=[math]::Round($_.Size/1GB,2); free_gb=[math]::Round($_.FreeSpace/1GB,2)} }; "
         "[pscustomobject]@{observed_hostname=[System.Net.Dns]::GetHostName(); observed_computer_name=$env:COMPUTERNAME; "
         "observed_machine_guid=$prod.UUID; bios_serial=$bios.SerialNumber; observed_username=[Environment]::UserName; "
-        "os_caption=$os.Caption; os_version=$os.Version; os_build=$os.BuildNumber; cpu=$cpu.Name; "
+        "os_caption=$os.Caption; os_version=$os.Version; os_build=$os.BuildNumber; cpu=$cpu.Name; cpu_load=$cpu.LoadPercentage; "
         "ram_total_gb=[math]::Round($cs.TotalPhysicalMemory/1GB,2); ram_free_gb=[math]::Round($os.FreePhysicalMemory/1MB,2); "
         "disks=$disks; process_count=@(Get-Process).Count; uptime=((Get-Date)-$os.LastBootUpTime).ToString()} | ConvertTo-Json -Depth 5 -Compress"
     )
@@ -405,6 +406,135 @@ def _parse_snapshot_stdout(stdout: str) -> dict:
         return {}
 
 
+def _safe_float(value) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _pct(used: float | None, total: float | None) -> float | None:
+    if used is None or not total:
+        return None
+    return round(max(0.0, min(100.0, used * 100.0 / total)), 1)
+
+
+def build_state_health_summary(snapshot: dict | None, identity_receipt: dict | None = None, status: str = "ok") -> dict:
+    snapshot = snapshot or {}
+    identity_receipt = identity_receipt or {}
+    cpu_load = _safe_float(snapshot.get("cpu_load") or snapshot.get("load_percentage"))
+    ram_total = _safe_float(snapshot.get("ram_total_gb"))
+    ram_free = _safe_float(snapshot.get("ram_free_gb"))
+    ram_used_pct = _safe_float(snapshot.get("ram_used_pct"))
+    if ram_used_pct is None and ram_total is not None and ram_free is not None:
+        ram_used_pct = _pct(ram_total - ram_free, ram_total)
+
+    disk_used_pct = _safe_float(snapshot.get("disk_used_pct"))
+    disks = snapshot.get("disks")
+    if disk_used_pct is None and isinstance(disks, list):
+        disk_values = []
+        for disk in disks:
+            if not isinstance(disk, dict):
+                continue
+            total = _safe_float(disk.get("total_gb"))
+            free = _safe_float(disk.get("free_gb"))
+            value = _pct(total - free if total is not None and free is not None else None, total)
+            if value is not None:
+                disk_values.append(value)
+        if disk_values:
+            disk_used_pct = max(disk_values)
+
+    health_status = "ok"
+    if status in {"unavailable", "routing_mismatch"}:
+        health_status = "critical" if status == "routing_mismatch" else "unavailable"
+    elif any(value is not None and value >= 95 for value in (cpu_load, ram_used_pct, disk_used_pct)):
+        health_status = "critical"
+    elif any(value is not None and value >= 85 for value in (cpu_load, ram_used_pct, disk_used_pct)):
+        health_status = "warning"
+
+    return {
+        "health_status": health_status,
+        "identity_status": identity_receipt.get("identity_status") or "unknown",
+        "cpu_load": cpu_load,
+        "ram_used_pct": ram_used_pct,
+        "disk_used_pct": disk_used_pct,
+        "process_count": snapshot.get("process_count"),
+        "uptime": snapshot.get("uptime"),
+    }
+
+
+def compact_state_snapshot_summary(state_record: dict | None) -> dict:
+    if not isinstance(state_record, dict):
+        return {
+            "health_status": "unknown",
+            "last_snapshot_at": None,
+            "identity_status": "unknown",
+            "cpu_load": None,
+            "ram_used_pct": None,
+            "disk_used_pct": None,
+            "process_count": None,
+            "uptime": None,
+        }
+    health = state_record.get("health_summary") if isinstance(state_record.get("health_summary"), dict) else {}
+    return {
+        "health_status": health.get("health_status") or "unknown",
+        "last_snapshot_at": state_record.get("collected_at"),
+        "identity_status": health.get("identity_status") or (state_record.get("identity_receipt") or {}).get("identity_status") or "unknown",
+        "cpu_load": health.get("cpu_load"),
+        "ram_used_pct": health.get("ram_used_pct"),
+        "disk_used_pct": health.get("disk_used_pct"),
+        "process_count": health.get("process_count"),
+        "uptime": health.get("uptime"),
+    }
+
+
+def _store_last_state_snapshot(dev: dict | None, *, snapshot: dict | None, collected_at: str, identity_receipt: dict, status: str) -> dict:
+    health_summary = build_state_health_summary(snapshot, identity_receipt, status)
+    record = {
+        "snapshot": snapshot,
+        "collected_at": collected_at,
+        "identity_receipt": identity_receipt,
+        "health_summary": health_summary,
+        "status": status,
+    }
+    if isinstance(dev, dict):
+        dev["last_state_snapshot"] = record
+    return record
+
+
+def _live_snapshot_result(
+    *,
+    device_id: str,
+    target_device_id: str,
+    status: str,
+    snapshot: dict | None,
+    identity_receipt: dict,
+    collected_at: str,
+    answer: str,
+    commands: list,
+    dev: dict | None,
+) -> dict:
+    record = _store_last_state_snapshot(
+        dev,
+        snapshot=snapshot,
+        collected_at=collected_at,
+        identity_receipt=identity_receipt,
+        status=status,
+    )
+    return {
+        "device_id": device_id,
+        "target_device_id": target_device_id,
+        "status": status,
+        "snapshot": snapshot,
+        "identity_receipt": identity_receipt,
+        "health_summary": record["health_summary"],
+        "answer": answer,
+        "commands": commands,
+    }
+
+
 async def collect_device_live_snapshot(device_id: str, user_id: int | None = None) -> dict:
     dev = devices.get(device_id)
     if not dev and user_id is not None:
@@ -415,15 +545,17 @@ async def collect_device_live_snapshot(device_id: str, user_id: int | None = Non
     collected_at = _utc_now_iso()
     if not dev or not dev.get("ws"):
         receipt = _build_identity_receipt(device_id=device_id, dev=dev, observed={"collected_at": collected_at})
-        return {
-            "device_id": device_id,
-            "target_device_id": target_device_id,
-            "status": "unavailable",
-            "snapshot": None,
-            "identity_receipt": receipt,
-            "answer": f"target_device_id={target_device_id}: fresh state unavailable",
-            "commands": [],
-        }
+        return _live_snapshot_result(
+            device_id=device_id,
+            target_device_id=target_device_id,
+            status="unavailable",
+            snapshot=None,
+            identity_receipt=receipt,
+            collected_at=collected_at,
+            answer=f"Свежее состояние устройства {target_device_id} недоступно.",
+            commands=[],
+            dev=dev,
+        )
 
     command = _snapshot_command_for_device(dev.get("info", {}))
     command_entry = {
@@ -449,78 +581,117 @@ async def collect_device_live_snapshot(device_id: str, user_id: int | None = Non
         result["identity_receipt"] = receipt
         command_entry["result"] = result
         if result.get("returncode") not in (None, 0, "0") or result.get("error"):
-            return {
-                "device_id": device_id,
-                "target_device_id": target_device_id,
-                "status": "unavailable",
-                "snapshot": None,
-                "identity_receipt": receipt,
-                "answer": f"target_device_id={target_device_id}: fresh state unavailable",
-                "commands": [command_entry],
-            }
+            return _live_snapshot_result(
+                device_id=device_id,
+                target_device_id=target_device_id,
+                status="unavailable",
+                snapshot=None,
+                identity_receipt=receipt,
+                collected_at=collected_at,
+                answer=f"Свежее состояние устройства {target_device_id} недоступно.",
+                commands=[command_entry],
+                dev=dev,
+            )
         if receipt.get("identity_status") == "mismatch":
-            return {
-                "device_id": device_id,
-                "target_device_id": target_device_id,
-                "status": "routing_mismatch",
-                "snapshot": None,
-                "identity_receipt": receipt,
-                "answer": _format_identity_mismatch(receipt),
-                "commands": [command_entry],
-            }
-        return {
-            "device_id": device_id,
-            "target_device_id": target_device_id,
-            "status": "ok",
-            "snapshot": observed,
-            "identity_receipt": receipt,
-            "answer": _format_snapshot_answer(target_device_id, receipt, observed),
-            "commands": [command_entry],
-        }
+            return _live_snapshot_result(
+                device_id=device_id,
+                target_device_id=target_device_id,
+                status="routing_mismatch",
+                snapshot=None,
+                identity_receipt=receipt,
+                collected_at=collected_at,
+                answer=_format_identity_mismatch(receipt),
+                commands=[command_entry],
+                dev=dev,
+            )
+        return _live_snapshot_result(
+            device_id=device_id,
+            target_device_id=target_device_id,
+            status="ok",
+            snapshot=observed,
+            identity_receipt=receipt,
+            collected_at=collected_at,
+            answer=_format_snapshot_answer(target_device_id, receipt, observed),
+            commands=[command_entry],
+            dev=dev,
+        )
     except Exception as exc:
         receipt = _build_identity_receipt(device_id=device_id, dev=dev, observed={"collected_at": collected_at})
         command_entry["result"] = {"error": str(exc), "identity_receipt": receipt}
-        return {
-            "device_id": device_id,
-            "target_device_id": target_device_id,
-            "status": "unavailable",
-            "snapshot": None,
-            "identity_receipt": receipt,
-            "answer": f"target_device_id={target_device_id}: fresh state unavailable ({exc})",
-            "commands": [command_entry],
-        }
+        return _live_snapshot_result(
+            device_id=device_id,
+            target_device_id=target_device_id,
+            status="unavailable",
+            snapshot=None,
+            identity_receipt=receipt,
+            collected_at=collected_at,
+            answer=f"Свежее состояние устройства {target_device_id} недоступно: {exc}",
+            commands=[command_entry],
+            dev=dev,
+        )
 
 
 def _format_identity_mismatch(receipt: dict) -> str:
+    target = receipt.get("target_device_id")
+    observed = receipt.get("observed_hostname") or receipt.get("observed_computer_name") or "unknown"
     return (
-        f"target_device_id={receipt.get('target_device_id')} returned "
-        f"observed_hostname={receipt.get('observed_hostname') or receipt.get('observed_computer_name')}; "
-        "requires agent registration/device_id check"
+        f"Снимок состояния не принят: устройство {target} ответило как {observed}. "
+        "Проверьте регистрацию агента и device_id."
     )
 
 
 def _format_snapshot_answer(target_device_id: str, receipt: dict, snapshot: dict) -> str:
-    fields = [
-        f"target_device_id={target_device_id}",
-        f"observed_hostname={receipt.get('observed_hostname') or receipt.get('observed_computer_name')}",
-        f"identity_status={receipt.get('identity_status')}",
-        f"os={snapshot.get('os_caption') or snapshot.get('os_version')}",
-        f"cpu={snapshot.get('cpu')}",
-        f"ram_total_gb={snapshot.get('ram_total_gb')}",
-        f"ram_free_gb={snapshot.get('ram_free_gb')}",
-        f"process_count={snapshot.get('process_count')}",
-        f"uptime={snapshot.get('uptime')}",
+    health = build_state_health_summary(snapshot, receipt, "ok")
+    hostname = receipt.get("observed_hostname") or receipt.get("observed_computer_name") or target_device_id
+    parts = [
+        f"Состояние устройства {target_device_id} обновлено.",
+        f"Хост: {hostname}.",
+        f"Идентичность: {health.get('identity_status')}.",
+        f"Здоровье: {health.get('health_status')}.",
     ]
-    disks = snapshot.get("disks")
-    if disks:
-        fields.append(f"disks={json.dumps(disks, ensure_ascii=False)}")
-    return "; ".join(field for field in fields if not field.endswith("=None"))
+    metrics = []
+    if health.get("cpu_load") is not None:
+        metrics.append(f"CPU {health['cpu_load']}%")
+    if health.get("ram_used_pct") is not None:
+        metrics.append(f"RAM {health['ram_used_pct']}%")
+    if health.get("disk_used_pct") is not None:
+        metrics.append(f"Disk {health['disk_used_pct']}%")
+    if health.get("process_count") is not None:
+        metrics.append(f"Processes {health['process_count']}")
+    if metrics:
+        parts.append("Метрики: " + ", ".join(metrics) + ".")
+    if snapshot.get("uptime"):
+        parts.append(f"Uptime: {snapshot.get('uptime')}.")
+    return " ".join(parts)
 
 
 def _format_live_snapshot_summary(results: list[dict]) -> str:
     if not results:
         return "fresh state unavailable"
-    return "\n".join(result.get("answer") or f"target_device_id={result.get('target_device_id')}: fresh state unavailable" for result in results)
+    lines = []
+    for result in results:
+        target = result.get("target_device_id") or _short_did(str(result.get("device_id") or "device"))
+        status = result.get("status")
+        health = result.get("health_summary") if isinstance(result.get("health_summary"), dict) else {}
+        if status == "ok":
+            line = f"Состояние устройства {target} обновлено."
+            if health.get("health_status"):
+                line += f" Здоровье: {health['health_status']}."
+            metrics = []
+            if health.get("cpu_load") is not None:
+                metrics.append(f"CPU {health['cpu_load']}%")
+            if health.get("ram_used_pct") is not None:
+                metrics.append(f"RAM {health['ram_used_pct']}%")
+            if health.get("disk_used_pct") is not None:
+                metrics.append(f"Disk {health['disk_used_pct']}%")
+            if metrics:
+                line += " " + ", ".join(metrics) + "."
+            lines.append(line)
+        elif status == "routing_mismatch":
+            lines.append(result.get("answer") or f"Снимок состояния устройства {target} не принят из-за mismatch идентичности.")
+        else:
+            lines.append(result.get("answer") or f"Свежее состояние устройства {target} недоступно.")
+    return "\n".join(lines)
 
 
 async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list[str], chat_id: int):
@@ -555,6 +726,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 "activation_receipt": value.get("activation_receipt"),
                 "activation_summary": value.get("activation_summary"),
                 "activation_context_markers": value.get("activation_context_markers", []),
+                "last_state_snapshot": value.get("last_state_snapshot"),
             }
             for did, value in user_devs.items()
         }

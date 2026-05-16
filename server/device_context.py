@@ -59,12 +59,37 @@ def _capability_list(summary: dict) -> list[str]:
     return []
 
 
+def _state_summary_from(dev: dict | None) -> dict:
+    record = dev.get("last_state_snapshot") if isinstance(dev, dict) else None
+    if not isinstance(record, dict):
+        return {
+            "health_status": "unknown",
+            "last_snapshot_at": None,
+            "identity_status": "unknown",
+            "state_snapshot_fresh": False,
+        }
+    health = record.get("health_summary") if isinstance(record.get("health_summary"), dict) else {}
+    return {
+        "health_status": health.get("health_status") or "unknown",
+        "last_snapshot_at": record.get("collected_at"),
+        "identity_status": health.get("identity_status") or (record.get("identity_receipt") or {}).get("identity_status") or "unknown",
+        "state_snapshot_fresh": bool(record.get("collected_at")),
+        "cpu_load": health.get("cpu_load"),
+        "ram_used_pct": health.get("ram_used_pct"),
+        "disk_used_pct": health.get("disk_used_pct"),
+        "process_count": health.get("process_count"),
+        "uptime": health.get("uptime"),
+    }
+
+
 def _device_manifest(device_id: str, dev: dict | None, profile: dict | None, *, include_handles: bool) -> dict:
     info = dev.get("info", {}) if isinstance(dev, dict) else {}
     summary = _summary_from(dev, profile)
-    health = "unknown"
+    state_summary = _state_summary_from(dev)
+    health = state_summary.get("health_status") or "unknown"
     if isinstance(dev, dict) and isinstance(dev.get("activation_receipt"), dict):
-        health = (dev["activation_receipt"].get("health") or {}).get("agent") or "unknown"
+        activation_health = (dev["activation_receipt"].get("health") or {}).get("agent") or "unknown"
+        health = activation_health if health == "unknown" else health
     item = {
         "device_id": device_id,
         "hostname": info.get("hostname") or (profile or {}).get("hostname") or device_id,
@@ -73,6 +98,7 @@ def _device_manifest(device_id: str, dev: dict | None, profile: dict | None, *, 
         "health_status": health,
         "runtime_status": runtime_status_from_summary(summary),
         "capabilities_summary": _capability_list(summary),
+        "state_summary": state_summary,
     }
     if isinstance(dev, dict) and dev.get("activation_context_markers"):
         item["context_markers"] = list(dev.get("activation_context_markers") or [])
@@ -135,7 +161,12 @@ def get_context_handle(handle: str, *, all_devices: dict | None = None) -> dict:
         if summary:
             return {"status": "stale", "source": "server_cache", "data": {"runtime_status": runtime_status_from_summary(summary)}}
         return {"status": "not_found", "source": "missing", "data": None}
-    if kind in {"state", "artifacts", "traces"}:
+    if kind == "state":
+        record = dev.get("last_state_snapshot") if isinstance(dev, dict) else None
+        if isinstance(record, dict):
+            return {"status": "ok" if live else "stale", "source": "agent_live" if live else "server_cache", "data": record}
+        return {"status": "not_found", "source": "missing", "data": None}
+    if kind in {"artifacts", "traces"}:
         return {"status": "unavailable", "source": "missing", "data": None}
     return {"status": "not_found", "source": "missing", "data": None}
 
