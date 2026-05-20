@@ -82,6 +82,38 @@ def remember_python_toolchain(receipt: PythonToolchainReceipt) -> None:
         _RECEIPT_CACHE[str(receipt.device_id)] = receipt
 
 
+def python_toolchain_from_runtime_summary(
+    summary: dict[str, Any] | None,
+    *,
+    device_id: str | None = None,
+) -> PythonToolchainReceipt | None:
+    if not isinstance(summary, dict):
+        return None
+    if summary.get("runtime_status") != "ok":
+        return None
+    interpreter = str(summary.get("venv_python") or "").strip()
+    version = str(summary.get("python_version") or "").strip()
+    if not interpreter or not version:
+        return None
+    receipt = PythonToolchainReceipt(
+        device_id=device_id or summary.get("device_id"),
+        status="ok",
+        interpreter_path=interpreter,
+        launcher=interpreter,
+        version=version,
+        pip_available=summary.get("pip_status") == "ok",
+        pip_version=None,
+        site_packages=[],
+        packages={},
+        raw_evidence=["managed_python_runtime_summary"],
+        confidence=0.99,
+    )
+    if is_verified_python_receipt(receipt):
+        remember_python_toolchain(receipt)
+        return receipt
+    return None
+
+
 def _result_text(result: dict[str, Any] | None) -> str:
     if not isinstance(result, dict):
         return ""

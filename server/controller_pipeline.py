@@ -15,6 +15,7 @@ try:
     from .python_toolchain import (  # type: ignore
         build_python_toolchain_block,
         get_cached_python_toolchain,
+        python_toolchain_from_runtime_summary,
         resolve_python_toolchain,
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
@@ -29,6 +30,7 @@ except ImportError:
     from python_toolchain import (  # type: ignore
         build_python_toolchain_block,
         get_cached_python_toolchain,
+        python_toolchain_from_runtime_summary,
         resolve_python_toolchain,
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
@@ -491,7 +493,10 @@ def build_pipeline_shared_context(
     """Контекст окружения для оркестратора и subagent-исполнителей."""
     os_info = device_info.get("os", "Windows")
     os_lower = (os_info or "").lower()
-    python_receipt = get_cached_python_toolchain({"device_id": device_id, "machine_guid": machine_guid})
+    python_receipt = (
+        python_toolchain_from_runtime_summary((device_profile or {}).get("python_runtime_summary"), device_id=device_id)
+        or get_cached_python_toolchain({"device_id": device_id, "machine_guid": machine_guid})
+    )
     manifest = build_minimal_llm_context(device_id, all_devices, device_profile)
     return {
         "devices_block": build_devices_block(all_devices),
@@ -569,7 +574,10 @@ def build_pipeline_worker_context(
     os_info = target_info.get("os", "Windows")
     os_lower = (os_info or "").lower()
     other_devices_summary = build_pipeline_other_devices_summary(all_devices, target_device_id)
-    python_receipt = get_cached_python_toolchain({"device_id": target_device_id, "machine_guid": target_machine_guid})
+    python_receipt = (
+        python_toolchain_from_runtime_summary((target_profile or {}).get("python_runtime_summary"), device_id=target_device_id)
+        or get_cached_python_toolchain({"device_id": target_device_id, "machine_guid": target_machine_guid})
+    )
     manifest = build_minimal_llm_context(target_device_id, all_devices, target_profile)
     return {
         "devices_block": other_devices_summary,
@@ -967,9 +975,12 @@ async def run_pipeline_worker(
     step_device_id = step.get("device_id") or shared["current_device_id"]
     step_title = step.get("title") or step.get("instruction") or f"Step {step_index + 1}"
     step_id = step.get("id") or step.get("step_id")
-    python_receipt = resolve_python_toolchain(
-        {"device_id": step_device_id, "python_toolchain_receipt": shared.get("python_toolchain_receipt")},
-        commands_log,
+    python_receipt = (
+        python_toolchain_from_runtime_summary((db.get_device_profile(step_device_id) or {}).get("python_runtime_summary"), device_id=step_device_id)
+        or resolve_python_toolchain(
+            {"device_id": step_device_id, "python_toolchain_receipt": shared.get("python_toolchain_receipt")},
+            commands_log,
+        )
     )
 
     def append_step_command(action: str, command: str, device_id: str | None, result: dict | None, *, status: str | None = None) -> dict:
@@ -1131,7 +1142,10 @@ async def run_pipeline_worker(
                         tool_result["missing_packages"] = command_error["missing_packages"]
 
                 append_step_command(fn_name, fn_args.get("command", ""), target_device, tool_result)
-                python_receipt = resolve_python_toolchain({"device_id": target_device}, commands_log)
+                python_receipt = (
+                    python_toolchain_from_runtime_summary((db.get_device_profile(target_device) or {}).get("python_runtime_summary"), device_id=target_device)
+                    or resolve_python_toolchain({"device_id": target_device}, commands_log)
+                )
                 env_guard_error = command_budget.observe_execute_result(
                     fn_args.get("command", ""),
                     tool_result,

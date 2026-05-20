@@ -35,11 +35,13 @@ try:
         get_user_device_profiles,
         set_plan_trial_used,
         update_device_activation_summary,
+        update_device_python_runtime_summary,
     )
     from .device_activation import compact_activation_summary, validate_activation_receipt
     from .device_context import activation_markers_for_task, build_minimal_llm_context
     from .path_scope import PATH_SCOPE_ERROR, validate_execute_command_paths_for_device, validate_write_path_for_device
-    from .python_toolchain import resolve_python_toolchain, validate_toolchain_fact_against_receipt
+    from .python_toolchain import python_toolchain_from_runtime_summary, resolve_python_toolchain, validate_toolchain_fact_against_receipt
+    from .python_runtime import compact_python_runtime_summary, parse_python_runtime_summary, python_runtime_status_from_summary, validate_python_runtime_receipt
     from .runtime_state import (
         _dk,
         _short_did,
@@ -76,11 +78,13 @@ except ImportError:
         get_user_device_profiles,
         set_plan_trial_used,
         update_device_activation_summary,
+        update_device_python_runtime_summary,
     )
     from device_activation import compact_activation_summary, validate_activation_receipt
     from device_context import activation_markers_for_task, build_minimal_llm_context
     from path_scope import PATH_SCOPE_ERROR, validate_execute_command_paths_for_device, validate_write_path_for_device
-    from python_toolchain import resolve_python_toolchain, validate_toolchain_fact_against_receipt
+    from python_toolchain import python_toolchain_from_runtime_summary, resolve_python_toolchain, validate_toolchain_fact_against_receipt
+    from python_runtime import compact_python_runtime_summary, parse_python_runtime_summary, python_runtime_status_from_summary, validate_python_runtime_receipt
     from runtime_state import (
         _dk,
         _short_did,
@@ -189,6 +193,11 @@ async def _probe_python_toolchain_if_needed(
     send_fn,
 ) -> None:
     if not _should_probe_python_toolchain(message, device_info):
+        return
+    profile = get_device_profile(_short_did(device_id))
+    runtime_summary = dev.get("python_runtime_summary") if isinstance(dev, dict) else None
+    runtime_summary = runtime_summary or parse_python_runtime_summary((profile or {}).get("python_runtime_summary"))
+    if python_runtime_status_from_summary(runtime_summary) == "ok":
         return
     if not dev.get("ws"):
         return
@@ -320,6 +329,8 @@ async def send_command_to_agent(
         wait_timeout = max(60.0, float(cmd_timeout) + 15.0)
     elif action in {"write_content", "get_file_content"}:
         wait_timeout = 90.0
+    elif action == "device.prepare_runtime":
+        wait_timeout = 180.0
 
     try:
         result = await asyncio.wait_for(future, timeout=wait_timeout)
@@ -335,6 +346,13 @@ async def send_command_to_agent(
         dev["activation_receipt"] = result
         dev["activation_summary"] = summary
         update_device_activation_summary(_short_did(device_id), summary)
+    elif action == "device.prepare_runtime" and isinstance(result, dict) and not result.get("error"):
+        valid, _ = validate_python_runtime_receipt(result)
+        if valid:
+            summary = compact_python_runtime_summary(result)
+            dev["python_runtime_receipt"] = result
+            dev["python_runtime_summary"] = summary
+            update_device_python_runtime_summary(_short_did(device_id), summary)
 
     return _attach_identity_receipt(result, device_id=device_id, dev=dev)
 
@@ -705,6 +723,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 "ws": value.get("ws"),
                 "activation_receipt": value.get("activation_receipt"),
                 "activation_summary": value.get("activation_summary"),
+                "python_runtime_summary": value.get("python_runtime_summary"),
                 "activation_context_markers": value.get("activation_context_markers", []),
                 "last_state_snapshot": value.get("last_state_snapshot"),
             }
@@ -718,6 +737,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             "ws": dev.get("ws"),
             "activation_receipt": dev.get("activation_receipt"),
             "activation_summary": dev.get("activation_summary"),
+            "python_runtime_summary": dev.get("python_runtime_summary"),
             "activation_context_markers": dev.get("activation_context_markers", []),
             "last_state_snapshot": dev.get("last_state_snapshot"),
         })
@@ -791,6 +811,40 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                         "runtime_status": summary.get("runtime_status"),
                         "receipt_hash": summary.get("receipt_hash"),
                     },
+                }
+            if tool_name in {"device_check_runtime", "device_prepare_runtime", "device_repair_runtime"}:
+                mode = "check"
+                if tool_name == "device_prepare_runtime":
+                    mode = "prepare"
+                elif tool_name == "device_repair_runtime":
+                    mode = "repair"
+                receipt = await send_command_to_agent(
+                    target_key,
+                    "device.prepare_runtime",
+                    {
+                        "mode": mode,
+                        "packages": args.get("packages") or [],
+                        "python_version_policy": "existing",
+                        "device_id": target_short,
+                    },
+                    user_id=user_id,
+                    skip_confirm=autonomous_flag,
+                )
+                if not isinstance(receipt, dict) or receipt.get("error"):
+                    return {"status": "failed", "device_id": target_short, "error": receipt.get("error") if isinstance(receipt, dict) else "missing Python runtime receipt"}
+                valid, reason = validate_python_runtime_receipt(receipt)
+                if not valid:
+                    return {"status": "failed", "device_id": target_short, "error": f"invalid Python runtime receipt: {reason}"}
+                summary = compact_python_runtime_summary(receipt)
+                target_dev["python_runtime_receipt"] = receipt
+                target_dev["python_runtime_summary"] = summary
+                update_device_python_runtime_summary(target_short, summary)
+                return {
+                    "status": summary.get("runtime_status"),
+                    "device_id": target_short,
+                    "mode": mode,
+                    "runtime_summary": summary,
+                    "runtime_handle": f"ctx://device/{target_short}/python",
                 }
             return {"status": "failed", "device_id": target_short, "error": f"unknown device tool: {tool_name}"}
 
@@ -977,12 +1031,16 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             fact_category = suggest_match.group(2).strip()
             first_dev_id = device_ids[0] if device_ids else None
             first_profile = get_device_profile(_short_did(first_dev_id)) if first_dev_id else None
-            python_receipt = resolve_python_toolchain(
-                {
-                    "device_id": _short_did(first_dev_id) if first_dev_id else None,
-                    "machine_guid": (first_profile or {}).get("machine_guid"),
-                },
-                combined_commands,
+            first_short = _short_did(first_dev_id) if first_dev_id else None
+            python_receipt = (
+                python_toolchain_from_runtime_summary((first_profile or {}).get("python_runtime_summary"), device_id=first_short)
+                or resolve_python_toolchain(
+                    {
+                        "device_id": first_short,
+                        "machine_guid": (first_profile or {}).get("machine_guid"),
+                    },
+                    combined_commands,
+                )
             )
             allowed_fact, corrected_fact = validate_toolchain_fact_against_receipt(fact_text, python_receipt)
             if allowed_fact and not is_suggested_fact_declined(user_id, chat_id, corrected_fact or fact_text, fact_category):
