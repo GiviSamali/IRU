@@ -295,6 +295,7 @@ def _runtime_receipt_v1(
     packages: dict,
     warnings: list[str],
     next_actions: list[str],
+    stage: str = "completed",
 ) -> dict:
     paths = _runtime_paths(home)
     venv_python = Path(paths["venv_python"]) if paths.get("venv_python") else _runtime_venv_python(home)
@@ -315,6 +316,7 @@ def _runtime_receipt_v1(
         "device_id": device_id,
         "mode": mode,
         "status": status,
+        "stage": stage,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "paths": paths,
         "python": {
@@ -343,6 +345,7 @@ def prepare_runtime(
     packages: list[str] | None = None,
     python_version_policy: str = "existing",
     device_id: str = "",
+    upgrade_pip: bool = False,
 ) -> dict:
     mode = (mode or "check").strip().lower()
     if mode not in {"check", "prepare", "repair"}:
@@ -372,6 +375,7 @@ def prepare_runtime(
                 packages={"checked": [], "installed": [], "missing": [], "failed": []},
                 warnings=warnings,
                 next_actions=next_actions,
+                stage="missing",
             )
             return receipt
     else:
@@ -386,6 +390,7 @@ def prepare_runtime(
                 packages={"checked": [], "installed": [], "missing": [], "failed": []},
                 warnings=["no usable system Python found"],
                 next_actions=next_actions,
+                stage="missing",
             )
         for path in (_runtime_home(home), _runtime_home(home) / "wheels", _runtime_home(home) / "receipts", home / "state"):
             path.mkdir(parents=True, exist_ok=True)
@@ -403,12 +408,39 @@ def prepare_runtime(
                     packages={"checked": [], "installed": [], "missing": [], "failed": []},
                     warnings=[f"venv creation failed: {err[:240]}"],
                     next_actions=["repair_runtime"],
+                    stage="failed",
                 )
                 _save_runtime_receipt(home, receipt)
                 return receipt
-        rc, _, err = _run_python([str(venv_python), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], timeout=120)
-        if rc != 0:
-            warnings.append(f"pip bootstrap upgrade failed: {err[:240]}")
+        if venv_python.exists():
+            receipt = _runtime_receipt_v1(
+                home=home,
+                mode=mode,
+                device_id=device_id,
+                status="ok",
+                base_python=base_python,
+                packages={"checked": [], "installed": [], "missing": [], "failed": []},
+                warnings=list(warnings),
+                next_actions=list(next_actions),
+                stage="venv_created",
+            )
+            _save_runtime_receipt(home, receipt)
+            receipt = _runtime_receipt_v1(
+                home=home,
+                mode=mode,
+                device_id=device_id,
+                status="ok",
+                base_python=base_python,
+                packages={"checked": [], "installed": [], "missing": [], "failed": []},
+                warnings=list(warnings),
+                next_actions=list(next_actions),
+                stage="pip_checked",
+            )
+            _save_runtime_receipt(home, receipt)
+        if upgrade_pip:
+            rc, _, err = _run_python([str(venv_python), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], timeout=45)
+            if rc != 0:
+                warnings.append(f"pip bootstrap upgrade failed: {err[:240]}")
 
     status = "ok" if venv_python.exists() else ("missing" if base_python else "install_required")
     checked_packages = _check_packages(venv_python, packages or []) if venv_python.exists() else {"checked": [], "installed": [], "missing": [], "failed": []}
@@ -425,6 +457,7 @@ def prepare_runtime(
         packages=checked_packages,
         warnings=warnings,
         next_actions=next_actions,
+        stage="completed",
     )
     if mode in {"prepare", "repair"}:
         _save_runtime_receipt(home, receipt)
