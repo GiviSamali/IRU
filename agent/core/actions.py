@@ -20,8 +20,8 @@ WS_FILE_DOWNLOAD_MAX_BYTES = 5 * 1024 * 1024
 IRU_DIRS = (
     "agent",
     "runtime/python",
-    "runtime/venvs/default",
-    "runtime/venvs/project_envs",
+    "runtime/venv",
+    "runtime/project_envs",
     "cache",
     "scripts",
     "tools",

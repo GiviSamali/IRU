@@ -62,6 +62,10 @@ def _device_api_item(short_did: str, dev: dict, profile: dict | None) -> dict:
     state_summary = compact_state_snapshot_summary(dev.get("last_state_snapshot"))
     runtime_status = python_runtime_status_from_summary(runtime_summary)
     activation_runtime_status = runtime_status_from_summary(summary)
+    caps = (summary.get("capabilities_summary") if isinstance(summary, dict) else None) or {}
+    if runtime_status == "ok":
+        caps = dict(caps) if isinstance(caps, dict) else {str(item): "available" for item in caps}
+        caps["python"] = "available"
     return {
         "device_id": short_did,
         "info": dev.get("info", {}),
@@ -81,7 +85,7 @@ def _device_api_item(short_did: str, dev: dict, profile: dict | None) -> dict:
         "disk_used_pct": state_summary.get("disk_used_pct"),
         "process_count": state_summary.get("process_count"),
         "uptime": state_summary.get("uptime"),
-        "capabilities_summary": (summary.get("capabilities_summary") if isinstance(summary, dict) else None) or {},
+        "capabilities_summary": caps,
     }
 
 

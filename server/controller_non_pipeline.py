@@ -342,6 +342,11 @@ async def process_non_pipeline_command(
                             tool_result = await device_tool_fn(fn_name, {**fn_args, "device_id": target_device})
                         except Exception as exc:
                             tool_result = {"error": str(exc)}
+                    if fn_name in {"device_check_runtime", "device_prepare_runtime", "device_repair_runtime"} and isinstance(tool_result, dict) and not tool_result.get("error"):
+                        runtime_summary = tool_result.get("runtime_summary") or tool_result.get("summary")
+                        refreshed = python_toolchain_from_runtime_summary(runtime_summary, device_id=target_device)
+                        if refreshed:
+                            python_receipt = refreshed
                     commands_log.append(tool_log_entry(
                         fn_name,
                         tool_result,

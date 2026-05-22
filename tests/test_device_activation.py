@@ -52,6 +52,8 @@ def test_soft_activation_persists_receipt_and_is_idempotent(monkeypatch, tmp_pat
     state_dir = tmp_path / "IRU" / "state"
     for name in ("activation.json", "identity.json", "capabilities.json", "python_receipt.json", "health.json"):
         assert (state_dir / name).exists()
+    assert (tmp_path / "IRU" / "runtime" / "venv").exists()
+    assert not (tmp_path / "IRU" / "runtime" / "venvs" / "default").exists()
 
 
 def test_full_activation_without_managed_python_is_degraded(monkeypatch, tmp_path):

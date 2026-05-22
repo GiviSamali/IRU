@@ -97,3 +97,33 @@ def test_activation_and_runtime_markers_are_separate():
     assert "target_device_runtime_not_ready" in missing_markers
     assert "target_device_not_activated" not in runtime_markers
     assert "target_device_runtime_not_ready" in runtime_markers
+
+
+def test_managed_runtime_ok_overrides_activation_python_missing():
+    activation_summary = compact_activation_summary(_receipt(runtime_status="missing", python="missing"))
+    context = build_minimal_llm_context(
+        "givi",
+        {
+            "givi": {
+                "info": {"hostname": "GIVI"},
+                "ws": object(),
+                "activation_summary": activation_summary,
+                "python_runtime_summary": {
+                    "runtime_status": "ok",
+                    "python_source": "system",
+                    "venv_python": r"C:\Users\tester\AppData\Local\IRU\runtime\venv\Scripts\python.exe",
+                    "python_version": "3.11.9",
+                    "pip_status": "ok",
+                    "last_runtime_check": "2026-05-22T00:00:00Z",
+                    "receipt_hash": "abc",
+                },
+            }
+        },
+    )
+
+    current = context["current_device"]
+    markers = activation_markers_for_task("create python app", context)
+
+    assert current["runtime_status"] == "ok"
+    assert "python" in current["capabilities_summary"]
+    assert "target_device_runtime_not_ready" not in markers

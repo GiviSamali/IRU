@@ -101,18 +101,22 @@ def _device_manifest(device_id: str, dev: dict | None, profile: dict | None, *, 
     if isinstance(dev, dict) and isinstance(dev.get("activation_receipt"), dict):
         activation_health = (dev["activation_receipt"].get("health") or {}).get("agent") or "unknown"
         health = activation_health if health == "unknown" else health
+    runtime_status = python_runtime_status_from_summary(runtime_summary) if runtime_summary else runtime_status_from_summary(summary)
+    caps = _capability_list(summary)
+    if runtime_status == "ok" and "python" not in caps:
+        caps.append("python")
     item = {
         "device_id": device_id,
         "hostname": info.get("hostname") or (profile or {}).get("hostname") or device_id,
         "online": bool(isinstance(dev, dict) and dev.get("ws") is not None),
         "activation_status": activation_status_from_summary(summary),
         "health_status": health,
-        "runtime_status": python_runtime_status_from_summary(runtime_summary) if runtime_summary else runtime_status_from_summary(summary),
+        "runtime_status": runtime_status,
         "python_runtime_status": python_runtime_status_from_summary(runtime_summary),
         "python_version": runtime_summary.get("python_version"),
         "pip_status": runtime_summary.get("pip_status"),
         "runtime_handle": _handles(device_id)["python_runtime"],
-        "capabilities_summary": _capability_list(summary),
+        "capabilities_summary": sorted(caps),
         "state_summary": state_summary,
         "tool_registry_available": True,
     }
@@ -218,6 +222,6 @@ def activation_markers_for_task(message: str, manifest: dict) -> list[str]:
         markers.append("target_device_not_activated")
     caps = current.get("capabilities_summary") or []
     runtime_status = current.get("runtime_status") or "unknown"
-    if runtime_status != "ok" or "python" not in caps:
+    if runtime_status != "ok":
         markers.append("target_device_runtime_not_ready")
     return markers

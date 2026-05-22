@@ -17,6 +17,12 @@ def _tool_call(name: str, args: dict | None = None) -> dict:
     }
 
 
+def _tool_call_with_id(call_id: str, name: str, args: dict | None = None) -> dict:
+    call = _tool_call(name, args)
+    call["id"] = call_id
+    return call
+
+
 async def _run_non_pipeline(tool_name: str, args: dict | None = None, *, send_command_fn=None, device_tool_fn=None):
     async def chat_completion_request_fn(**kwargs):
         messages = kwargs["messages"]
@@ -190,6 +196,76 @@ def test_runtime_tools_call_callback_and_log_compact_summary():
     assert prepare["commands"][0]["tool_name"] == "device.prepare_runtime"
     assert repair["commands"][0]["tool_name"] == "device.repair_runtime"
     assert prepare["commands"][0]["summary"] == "runtime=ok"
+
+
+def test_non_pipeline_uses_freshly_prepared_runtime_for_following_execute_cmd():
+    sent = []
+    venv_python = r"C:\Users\tester\AppData\Local\IRU\runtime\venv\Scripts\python.exe"
+
+    async def chat_completion_request_fn(**kwargs):
+        tool_messages = [msg for msg in kwargs["messages"] if msg.get("role") == "tool"]
+        if not tool_messages:
+            return {
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {"content": "", "tool_calls": [_tool_call_with_id("call-runtime", "device_prepare_runtime", {})]},
+                }]
+            }
+        if len(tool_messages) == 1:
+            return {
+                "choices": [{
+                    "finish_reason": "tool_calls",
+                    "message": {"content": "", "tool_calls": [_tool_call_with_id("call-run", "execute_cmd", {"command": "python script.py"})]},
+                }]
+            }
+        return {
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": "ok"},
+            }]
+        }
+
+    async def device_tool_fn(name, args):
+        return {
+            "status": "ok",
+            "device_id": args["device_id"],
+            "runtime_summary": {
+                "runtime_status": "ok",
+                "venv_python": venv_python,
+                "python_version": "3.11.9",
+                "pip_status": "ok",
+            },
+        }
+
+    async def send_command_fn(device_id, action, params):
+        sent.append((device_id, action, params))
+        return {"returncode": 0, "stdout": "ok", "stderr": ""}
+
+    result = asyncio.run(process_non_pipeline_command(
+        user_message="prepare then run",
+        device_id="givi",
+        device_info={"hostname": "GIVI", "os": "Windows"},
+        send_command_fn=send_command_fn,
+        get_file_link_fn=lambda device_id, path: "/api/download/mock",
+        chat_history=[],
+        user_id=None,
+        chat_id=None,
+        modes={},
+        poll_task_id=None,
+        cfg={"model": "mock", "max_tokens": 512},
+        system_msg="system",
+        machine_guid=None,
+        mem_user_id=None,
+        non_pipeline_tools=[],
+        max_iterations=4,
+        pick_model_fn=lambda cfg, modes: "mock",
+        chat_completion_request_fn=chat_completion_request_fn,
+        device_tool_fn=device_tool_fn,
+    ))
+
+    assert sent == [("givi", "execute_cmd", {"command": f'& "{venv_python}" script.py'})]
+    assert result["commands"][0]["tool_name"] == "device.prepare_runtime"
+    assert result["commands"][1]["command"] == f'& "{venv_python}" script.py'
 
 
 def test_write_content_and_execute_cmd_tool_log_types():
