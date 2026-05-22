@@ -77,14 +77,16 @@ function deviceStatusLabel(value) {
     unavailable: 'Недоступно',
     unknown: 'Неизвестно',
     install_required: 'Нужен runtime',
+    missing: 'Нужен runtime',
+    broken: 'Runtime сломан',
   };
   return labels[value] || value || 'Неизвестно';
 }
 
 function deviceStatusClass(value) {
   if (['activated', 'ok'].includes(value)) return 'ok';
-  if (['warning', 'degraded', 'install_required', 'activation_required'].includes(value)) return 'warning';
-  if (['critical', 'activation_failed', 'unavailable'].includes(value)) return 'critical';
+  if (['warning', 'degraded', 'install_required', 'missing', 'activation_required'].includes(value)) return 'warning';
+  if (['critical', 'activation_failed', 'unavailable', 'broken'].includes(value)) return 'critical';
   return 'unknown';
 }
 
@@ -118,6 +120,7 @@ function renderDevicePassport() {
   const busy = state.devicePanelBusy;
   const activationStatus = dev.activation_status || 'unknown';
   const runtimeStatus = dev.runtime_status || 'unknown';
+  const pythonRuntimeStatus = dev.python_runtime_status || runtimeStatus;
   const healthStatus = dev.health_status || 'unknown';
   const identityStatus = dev.identity_status || 'unknown';
   const caps = dev.capabilities_summary || {};
@@ -132,6 +135,11 @@ function renderDevicePassport() {
   const runtimeNotice = runtimeStatus !== 'ok'
     ? `<div class="device-passport-notice">Runtime не готов. Managed Python не подготовлен.</div>`
     : '';
+  const runtimeActions = ['missing', 'install_required', 'unknown'].includes(pythonRuntimeStatus)
+    ? `<button class="device-passport-btn" data-action="passport-runtime" data-mode="prepare" ${busy ? 'disabled' : ''}>${busy === 'runtime' ? 'Подготовка...' : 'Подготовить Python'}</button>`
+    : pythonRuntimeStatus === 'ok'
+      ? `<button class="device-passport-btn" data-action="passport-runtime" data-mode="check" ${busy ? 'disabled' : ''}>${busy === 'runtime' ? 'Проверка...' : 'Проверить runtime'}</button>`
+      : `<button class="device-passport-btn" data-action="passport-runtime" data-mode="repair" ${busy ? 'disabled' : ''}>${busy === 'runtime' ? 'Repair...' : 'Repair runtime'}</button>`;
   const error = state.devicePanelError ? `<div class="device-passport-error">${escapeHTML(state.devicePanelError)}</div>` : '';
   root.innerHTML = `
     <div class="device-passport-head">
@@ -145,6 +153,7 @@ function renderDevicePassport() {
       <button class="device-passport-btn primary" data-action="passport-state" ${busy ? 'disabled' : ''}>${busy === 'state' ? 'Проверка...' : 'Проверить состояние'}</button>
       ${activationAction}
       ${repairAction}
+      ${runtimeActions}
       <button class="device-passport-btn" data-action="passport-disconnect" ${busy ? 'disabled' : ''}>Отключить агент</button>
       <button class="device-passport-btn danger" data-action="passport-shutdown" ${busy ? 'disabled' : ''}>Выключить агент</button>
     </div>
@@ -155,6 +164,8 @@ function renderDevicePassport() {
         <div>OS</div><strong>${escapeHTML(info.os || info.os_caption || '—')}</strong>
         <div>Activation</div><span class="device-passport-badge ${deviceStatusClass(activationStatus)}">${escapeHTML(deviceStatusLabel(activationStatus))}</span>
         <div>Runtime</div><span class="device-passport-badge ${deviceStatusClass(runtimeStatus)}">${escapeHTML(deviceStatusLabel(runtimeStatus))}</span>
+        <div>Python</div><span class="device-passport-badge ${deviceStatusClass(pythonRuntimeStatus)}">${escapeHTML(dev.python_version || deviceStatusLabel(pythonRuntimeStatus))}</span>
+        <div>pip</div><span class="device-passport-badge ${deviceStatusClass(dev.pip_status || 'unknown')}">${escapeHTML(deviceStatusLabel(dev.pip_status || 'unknown'))}</span>
         <div>Health</div><span class="device-passport-badge ${deviceStatusClass(healthStatus)}">${escapeHTML(deviceStatusLabel(healthStatus))}</span>
         <div>Identity</div><span class="device-passport-badge ${deviceStatusClass(identityStatus)}">${escapeHTML(deviceStatusLabel(identityStatus))}</span>
         <div>Snapshot</div><strong>${escapeHTML(formatSnapshotTime(dev.last_snapshot_at))}</strong>
@@ -172,7 +183,7 @@ function renderDevicePassport() {
     </div>
     <details class="device-passport-details">
       <summary>Технические детали</summary>
-      <pre>${escapeHTML(JSON.stringify({ info, capabilities: capsList }, null, 2))}</pre>
+      <pre>${escapeHTML(JSON.stringify({ info, capabilities: capsList, python_runtime: { status: pythonRuntimeStatus, version: dev.python_version, pip_status: dev.pip_status, venv_python: dev.venv_python, last_runtime_check: dev.last_runtime_check } }, null, 2))}</pre>
     </details>
   `;
   if (runtimeNotice) {
@@ -210,6 +221,9 @@ async function runDevicePassportAction(action, mode) {
       }
       endpoint = `${API}/api/devices/${encodeURIComponent(id)}/shutdown`;
       body = {};
+    } else if (action === 'runtime') {
+      endpoint = `${API}/api/devices/${encodeURIComponent(id)}/runtime`;
+      body = { mode: mode || 'check', packages: [] };
     }
     const r = await apiFetch(endpoint, {
       method: 'POST',
@@ -230,6 +244,16 @@ async function runDevicePassportAction(action, mode) {
         last_snapshot_at: data.last_state_snapshot?.collected_at,
       });
     }
+    if (data.summary && state.devices[id]) {
+      Object.assign(state.devices[id], {
+        runtime_status: data.summary.runtime_status,
+        python_runtime_status: data.summary.runtime_status,
+        python_version: data.summary.python_version,
+        pip_status: data.summary.pip_status,
+        last_runtime_check: data.summary.last_runtime_check,
+        venv_python: data.summary.venv_python,
+      });
+    }
     if (action === 'shutdown') {
       showToast('Агент выключается');
       await wait(1500);
@@ -243,6 +267,12 @@ async function runDevicePassportAction(action, mode) {
       showToast('Использован инструмент: device.repair_activation');
     } else if (action === 'activate') {
       showToast('Использован инструмент: device.activate');
+    } else if (action === 'runtime' && (mode || 'check') === 'prepare') {
+      showToast('Использован инструмент: device.prepare_runtime');
+    } else if (action === 'runtime' && (mode || 'check') === 'repair') {
+      showToast('Использован инструмент: device.repair_runtime');
+    } else if (action === 'runtime') {
+      showToast('Использован инструмент: device.check_runtime');
     } else {
       showToast('Команда отправлена');
     }
@@ -265,6 +295,7 @@ function bindDevicePassportActions() {
     if (!target || !root.contains(target)) return;
     if (target.dataset.action === 'passport-state') runDevicePassportAction('state');
     if (target.dataset.action === 'passport-activate') runDevicePassportAction('activate', target.dataset.mode || 'soft');
+    if (target.dataset.action === 'passport-runtime') runDevicePassportAction('runtime', target.dataset.mode || 'check');
     if (target.dataset.action === 'passport-disconnect') runDevicePassportAction('disconnect');
     if (target.dataset.action === 'passport-shutdown') runDevicePassportAction('shutdown');
   });

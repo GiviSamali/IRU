@@ -15,6 +15,9 @@ CANONICAL_TOOL_NAMES = {
     "device_refresh_state": "device.refresh_state",
     "device_activate": "device.activate",
     "device_repair_activation": "device.repair_activation",
+    "device_check_runtime": "device.check_runtime",
+    "device_prepare_runtime": "device.prepare_runtime",
+    "device_repair_runtime": "device.repair_runtime",
     "write_content": "write_content",
     "execute_cmd": "execute_cmd",
 }
@@ -74,6 +77,38 @@ TOOL_METADATA = {
         "when_to_use": ["activation_status is degraded", "activation_status is activation_failed"],
         "returns": "compact activation summary",
         "danger": "safe",
+    },
+    "device.check_runtime": {
+        "category": "python",
+        "tool_type": "typed",
+        "tool_label": "Проверка Python runtime",
+        "purpose": "Check the managed Python runtime without creating or installing it",
+        "when_to_use": ["need Python runtime facts", "before Python/PyQt work", "passport says runtime status is unknown"],
+        "returns": "compact runtime summary + ctx://device/{device_id}/python",
+        "danger": "safe",
+    },
+    "device.prepare_runtime": {
+        "category": "python",
+        "tool_type": "typed",
+        "tool_label": "Подготовка Python runtime",
+        "purpose": "Prepare an IRU-owned venv for stable Python execution",
+        "when_to_use": [
+            "user asks to prepare Python",
+            "Python/PyQt task requires stable runtime",
+            "passport says runtime_status missing/install_required/broken",
+            "before creating or running Python apps",
+        ],
+        "returns": "compact runtime summary + ctx://device/{device_id}/python",
+        "danger": "write/runtime",
+    },
+    "device.repair_runtime": {
+        "category": "python",
+        "tool_type": "typed",
+        "tool_label": "Repair Python runtime",
+        "purpose": "Repair or recreate a broken managed Python venv",
+        "when_to_use": ["runtime_status is broken", "runtime_status is degraded", "managed venv is unusable"],
+        "returns": "compact runtime summary + ctx://device/{device_id}/python",
+        "danger": "write/runtime",
     },
     "write_content": {
         "category": "files",
@@ -167,6 +202,48 @@ DEVICE_TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "device_check_runtime",
+            "description": "Check managed Python runtime status for a device without creating or installing it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string", "description": "Optional device ID. Defaults to current device."},
+                    "packages": {"type": "array", "items": {"type": "string"}, "description": "Optional packages to check only."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "device_prepare_runtime",
+            "description": "Prepare an IRU-managed Python venv if possible. Does not download Python or install requested packages.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string", "description": "Optional device ID. Defaults to current device."},
+                    "packages": {"type": "array", "items": {"type": "string"}, "description": "Optional packages to check only after preparation."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "device_repair_runtime",
+            "description": "Repair or recreate a broken managed Python venv. Does not download Python or install requested packages.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string", "description": "Optional device ID. Defaults to current device."},
+                    "packages": {"type": "array", "items": {"type": "string"}, "description": "Optional packages to check only after repair."},
+                },
+            },
+        },
+    },
 ]
 
 
@@ -226,6 +303,11 @@ def compact_tool_summary(action: str, result: Any = None, command: str = "") -> 
             summary = result.get("activation_summary") or result.get("summary") or {}
             if isinstance(summary, dict):
                 return f"activation={summary.get('activation_status') or summary.get('status') or 'unknown'}"
+        if name in {"device.check_runtime", "device.prepare_runtime", "device.repair_runtime"}:
+            summary = result.get("runtime_summary") or result.get("summary") or {}
+            if isinstance(summary, dict):
+                return f"runtime={summary.get('runtime_status') or result.get('status') or 'unknown'}"
+            return f"runtime={result.get('status') or 'unknown'}"
         if name == "device.get_passport":
             return f"passport={result.get('device_id') or 'device'}"
         if name == "write_content":
@@ -288,6 +370,9 @@ def compact_device_passport(device_id: str, dev: dict | None, profile: dict | No
         "online": bool(current.get("online")),
         "activation_status": current.get("activation_status"),
         "runtime_status": current.get("runtime_status"),
+        "python_runtime_status": current.get("python_runtime_status"),
+        "python_version": current.get("python_version"),
+        "pip_status": current.get("pip_status"),
         "health_status": current.get("health_status"),
         "last_snapshot_at": state.get("last_snapshot_at"),
         "identity_status": state.get("identity_status"),

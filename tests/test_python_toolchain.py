@@ -1,6 +1,7 @@
 from server.python_toolchain import (
     PythonToolchainReceipt,
     build_python_toolchain_block,
+    python_toolchain_from_runtime_summary,
     remember_python_toolchain,
     resolve_python_toolchain,
     rewrite_python_command,
@@ -388,3 +389,20 @@ def test_any_python_fact_requires_verified_receipt():
 
     assert allowed is False
     assert corrected is None
+
+
+def test_managed_runtime_summary_has_priority_for_rewrite():
+    receipt = python_toolchain_from_runtime_summary(
+        {
+            "runtime_status": "ok",
+            "venv_python": r"C:\Users\tester\AppData\Local\IRU\runtime\venv\Scripts\python.exe",
+            "python_version": "3.11.9",
+            "pip_status": "ok",
+        },
+        device_id="givi",
+    )
+
+    rewritten, err = rewrite_python_command("python app.py", receipt)
+
+    assert err is None
+    assert rewritten == r'& "C:\Users\tester\AppData\Local\IRU\runtime\venv\Scripts\python.exe" app.py'

@@ -16,6 +16,7 @@ try:
     from .controller_trust import enforce_trusted_answer  # type: ignore
     from .python_env import classify_command_error, is_recoverable_command_error  # type: ignore
     from .python_toolchain import (  # type: ignore
+        python_toolchain_from_runtime_summary,
         resolve_python_toolchain,
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
@@ -32,6 +33,7 @@ except ImportError:
     from controller_trust import enforce_trusted_answer  # type: ignore
     from python_env import classify_command_error, is_recoverable_command_error  # type: ignore
     from python_toolchain import (  # type: ignore
+        python_toolchain_from_runtime_summary,
         resolve_python_toolchain,
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
@@ -146,7 +148,11 @@ async def process_non_pipeline_command(
 
     commands_log = []
     command_budget = CommandBudget()
-    python_receipt = resolve_python_toolchain({"device_id": device_id, "machine_guid": machine_guid}, commands_log)
+    device_profile = db.get_device_profile(device_id)
+    python_receipt = (
+        python_toolchain_from_runtime_summary((device_profile or {}).get("python_runtime_summary"), device_id=device_id)
+        or resolve_python_toolchain({"device_id": device_id, "machine_guid": machine_guid}, commands_log)
+    )
     model = pick_model_fn(cfg, modes)
     base_model = cfg.get("model", "deepseek-chat")
     print(f"[llm] выбрана модель: {model} (base={base_model}, autonomous={bool(modes.get('autonomous'))})")
@@ -336,6 +342,11 @@ async def process_non_pipeline_command(
                             tool_result = await device_tool_fn(fn_name, {**fn_args, "device_id": target_device})
                         except Exception as exc:
                             tool_result = {"error": str(exc)}
+                    if fn_name in {"device_check_runtime", "device_prepare_runtime", "device_repair_runtime"} and isinstance(tool_result, dict) and not tool_result.get("error"):
+                        runtime_summary = tool_result.get("runtime_summary") or tool_result.get("summary")
+                        refreshed = python_toolchain_from_runtime_summary(runtime_summary, device_id=target_device)
+                        if refreshed:
+                            python_receipt = refreshed
                     commands_log.append(tool_log_entry(
                         fn_name,
                         tool_result,
@@ -398,9 +409,13 @@ async def process_non_pipeline_command(
                         tool_result,
                         iteration + 1,
                     ))
-                    python_receipt = resolve_python_toolchain(
-                        {"device_id": target_device, "machine_guid": machine_guid},
-                        commands_log,
+                    target_profile = db.get_device_profile(target_device)
+                    python_receipt = (
+                        python_toolchain_from_runtime_summary((target_profile or {}).get("python_runtime_summary"), device_id=target_device)
+                        or resolve_python_toolchain(
+                            {"device_id": target_device, "machine_guid": machine_guid},
+                            commands_log,
+                        )
                     )
                     env_guard_error = command_budget.observe_execute_result(
                         fn_args.get("command", ""),

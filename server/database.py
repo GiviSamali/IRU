@@ -122,6 +122,7 @@ def init_db():
                 machine_guid TEXT,
                 agent_version TEXT,
                 activation_summary TEXT,
+                python_runtime_summary TEXT,
                 updated_at  REAL    NOT NULL
             );
 
@@ -198,6 +199,10 @@ def init_db():
             pass  # уже существует
         try:
             conn.execute("ALTER TABLE device_profiles ADD COLUMN activation_summary TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE device_profiles ADD COLUMN python_runtime_summary TEXT")
         except Exception:
             pass
         conn.executescript("""
@@ -660,7 +665,7 @@ def upsert_device_profile(device_id: str, user_id: int, profile: dict) -> None:
     now = time.time()
     with get_db() as conn:
         existing = conn.execute(
-            "SELECT id, activation_summary FROM device_profiles WHERE device_id = ?", (device_id,)
+            "SELECT id, activation_summary, python_runtime_summary FROM device_profiles WHERE device_id = ?", (device_id,)
         ).fetchone()
         disks_json = json.dumps(profile.get("disks"), ensure_ascii=False) if profile.get("disks") else None
         activation_summary_json = (
@@ -670,6 +675,13 @@ def upsert_device_profile(device_id: str, user_id: int, profile: dict) -> None:
         )
         if activation_summary_json is None and existing:
             activation_summary_json = existing["activation_summary"]
+        python_runtime_summary_json = (
+            json.dumps(profile.get("python_runtime_summary"), ensure_ascii=False)
+            if isinstance(profile.get("python_runtime_summary"), dict)
+            else profile.get("python_runtime_summary")
+        )
+        if python_runtime_summary_json is None and existing:
+            python_runtime_summary_json = existing["python_runtime_summary"]
         vals = (
             user_id,
             profile.get("hostname"),
@@ -684,6 +696,7 @@ def upsert_device_profile(device_id: str, user_id: int, profile: dict) -> None:
             profile.get("machine_guid"),
             profile.get("agent_version"),
             activation_summary_json,
+            python_runtime_summary_json,
             now,
         )
         if existing:
@@ -691,7 +704,7 @@ def upsert_device_profile(device_id: str, user_id: int, profile: dict) -> None:
                 """UPDATE device_profiles SET
                     user_id = ?, hostname = ?, os = ?, os_version = ?,
                     username = ?, desktop_path = ?, cpu = ?, gpu = ?,
-                    ram_gb = ?, disks = ?, machine_guid = ?, agent_version = ?, activation_summary = ?, updated_at = ?
+                    ram_gb = ?, disks = ?, machine_guid = ?, agent_version = ?, activation_summary = ?, python_runtime_summary = ?, updated_at = ?
                    WHERE device_id = ?""",
                 vals + (device_id,)
             )
@@ -699,8 +712,8 @@ def upsert_device_profile(device_id: str, user_id: int, profile: dict) -> None:
             conn.execute(
                 """INSERT INTO device_profiles
                    (device_id, user_id, hostname, os, os_version,
-                    username, desktop_path, cpu, gpu, ram_gb, disks, machine_guid, agent_version, activation_summary, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    username, desktop_path, cpu, gpu, ram_gb, disks, machine_guid, agent_version, activation_summary, python_runtime_summary, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (device_id,) + vals
             )
 
@@ -722,6 +735,11 @@ def get_device_profile(device_id: str) -> dict | None:
         if d.get("activation_summary"):
             try:
                 d["activation_summary"] = json.loads(d["activation_summary"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if d.get("python_runtime_summary"):
+            try:
+                d["python_runtime_summary"] = json.loads(d["python_runtime_summary"])
             except (json.JSONDecodeError, TypeError):
                 pass
         return d
@@ -747,6 +765,11 @@ def get_user_device_profiles(user_id: int) -> list[dict]:
                     d["activation_summary"] = json.loads(d["activation_summary"])
                 except (json.JSONDecodeError, TypeError):
                     pass
+            if d.get("python_runtime_summary"):
+                try:
+                    d["python_runtime_summary"] = json.loads(d["python_runtime_summary"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
             result.append(d)
         return result
 
@@ -756,6 +779,16 @@ def update_device_activation_summary(device_id: str, summary: dict) -> bool:
     with get_db() as conn:
         cur = conn.execute(
             "UPDATE device_profiles SET activation_summary = ?, updated_at = ? WHERE device_id = ?",
+            (payload, time.time(), device_id),
+        )
+        return cur.rowcount > 0
+
+
+def update_device_python_runtime_summary(device_id: str, summary: dict) -> bool:
+    payload = json.dumps(summary, ensure_ascii=False)
+    with get_db() as conn:
+        cur = conn.execute(
+            "UPDATE device_profiles SET python_runtime_summary = ?, updated_at = ? WHERE device_id = ?",
             (payload, time.time(), device_id),
         )
         return cur.rowcount > 0

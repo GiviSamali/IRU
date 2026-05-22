@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 try:
     from ..api_support import _is_admin, get_current_user
-    from ..database import get_device_profile, get_user_device_profiles, update_device_activation_summary
+    from ..database import get_device_profile, get_user_device_profiles, update_device_activation_summary, update_device_python_runtime_summary
     from ..device_activation import (
         activation_status_from_summary,
         compact_activation_summary,
@@ -13,9 +13,10 @@ try:
     from ..runtime_state import _dk, _short_did, devices, get_user_devices
     from ..task_runtime import collect_device_live_snapshot, compact_state_snapshot_summary, send_command_to_agent
     from ..tool_registry import tool_log_entry
+    from ..python_runtime import compact_python_runtime_summary, parse_python_runtime_summary, python_runtime_status_from_summary, validate_python_runtime_receipt
 except ImportError:
     from api_support import _is_admin, get_current_user
-    from database import get_device_profile, get_user_device_profiles, update_device_activation_summary
+    from database import get_device_profile, get_user_device_profiles, update_device_activation_summary, update_device_python_runtime_summary
     from device_activation import (
         activation_status_from_summary,
         compact_activation_summary,
@@ -26,6 +27,7 @@ except ImportError:
     from runtime_state import _dk, _short_did, devices, get_user_devices
     from task_runtime import collect_device_live_snapshot, compact_state_snapshot_summary, send_command_to_agent
     from tool_registry import tool_log_entry
+    from python_runtime import compact_python_runtime_summary, parse_python_runtime_summary, python_runtime_status_from_summary, validate_python_runtime_receipt
 
 
 router = APIRouter()
@@ -56,13 +58,25 @@ def _ensure_device_access(user: dict, device_id: str) -> None:
 
 def _device_api_item(short_did: str, dev: dict, profile: dict | None) -> dict:
     summary = dev.get("activation_summary") or parse_activation_summary((profile or {}).get("activation_summary"))
+    runtime_summary = dev.get("python_runtime_summary") or parse_python_runtime_summary((profile or {}).get("python_runtime_summary"))
     state_summary = compact_state_snapshot_summary(dev.get("last_state_snapshot"))
+    runtime_status = python_runtime_status_from_summary(runtime_summary)
+    activation_runtime_status = runtime_status_from_summary(summary)
+    caps = (summary.get("capabilities_summary") if isinstance(summary, dict) else None) or {}
+    if runtime_status == "ok":
+        caps = dict(caps) if isinstance(caps, dict) else {str(item): "available" for item in caps}
+        caps["python"] = "available"
     return {
         "device_id": short_did,
         "info": dev.get("info", {}),
         "connected": bool(dev.get("ws")),
         "activation_status": activation_status_from_summary(summary),
-        "runtime_status": runtime_status_from_summary(summary),
+        "runtime_status": runtime_status if runtime_status != "unknown" else activation_runtime_status,
+        "python_runtime_status": runtime_status,
+        "python_version": runtime_summary.get("python_version"),
+        "pip_status": runtime_summary.get("pip_status"),
+        "last_runtime_check": runtime_summary.get("last_runtime_check"),
+        "venv_python": runtime_summary.get("venv_python"),
         "health_status": state_summary.get("health_status"),
         "last_snapshot_at": state_summary.get("last_snapshot_at"),
         "identity_status": state_summary.get("identity_status"),
@@ -71,7 +85,64 @@ def _device_api_item(short_did: str, dev: dict, profile: dict | None) -> dict:
         "disk_used_pct": state_summary.get("disk_used_pct"),
         "process_count": state_summary.get("process_count"),
         "uptime": state_summary.get("uptime"),
-        "capabilities_summary": (summary.get("capabilities_summary") if isinstance(summary, dict) else None) or {},
+        "capabilities_summary": caps,
+    }
+
+
+async def prepare_runtime_for_user(user: dict, device_id: str, mode: str = "check", packages: list | None = None) -> dict:
+    mode = (mode or "check").strip().lower()
+    if mode not in {"check", "prepare", "repair"}:
+        raise HTTPException(status_code=422, detail="mode must be one of: check, prepare, repair")
+    device_id = _short_did(device_id)
+    _ensure_device_access(user, device_id)
+    device_key = _runtime_device_key_for_user(user, device_id)
+    dev = devices.get(device_key or "")
+    if not dev or not dev.get("ws"):
+        raise HTTPException(status_code=503, detail=f"Agent for device '{device_id}' is offline")
+    try:
+        receipt = await send_command_to_agent(
+            device_key,
+            "device.prepare_runtime",
+            {
+                "mode": mode,
+                "packages": packages or [],
+                "python_version_policy": "existing",
+                "device_id": device_id,
+            },
+            user_id=user["id"],
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not isinstance(receipt, dict):
+        raise HTTPException(status_code=409, detail="Missing Python runtime receipt")
+    if receipt.get("error"):
+        error = str(receipt.get("error") or "")
+        if "unknown" in error.lower() or "неизвест" in error.lower():
+            raise HTTPException(status_code=501, detail="device.prepare_runtime is not implemented by this agent")
+        raise HTTPException(status_code=409, detail=f"Python runtime preparation failed: {error}")
+    valid, reason = validate_python_runtime_receipt(receipt)
+    if not valid:
+        raise HTTPException(status_code=409, detail=f"Invalid Python runtime receipt: {reason}")
+    summary = compact_python_runtime_summary(receipt)
+    dev["python_runtime_receipt"] = receipt
+    dev["python_runtime_summary"] = summary
+    update_device_python_runtime_summary(device_id, summary)
+    tool_name = {
+        "check": "device_check_runtime",
+        "prepare": "device_prepare_runtime",
+        "repair": "device_repair_runtime",
+    }[mode]
+    return {
+        "status": summary.get("runtime_status"),
+        "device_id": device_id,
+        "summary": summary,
+        "receipt": receipt,
+        "tool_log": tool_log_entry(
+            tool_name,
+            {"status": summary.get("runtime_status"), "runtime_summary": summary},
+            target_device_id=device_id,
+            hostname=(dev.get("info") or {}).get("hostname") or device_id,
+        ),
     }
 
 
@@ -167,6 +238,21 @@ async def api_device_state(device_id: str, request: Request):
     }
 
 
+@router.post("/api/devices/{device_id}/runtime")
+async def api_device_runtime(device_id: str, request: Request):
+    user = get_current_user(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return await prepare_runtime_for_user(
+        user,
+        device_id,
+        (body or {}).get("mode", "check"),
+        (body or {}).get("packages") or [],
+    )
+
+
 @router.post("/api/devices/{device_id}/disconnect")
 async def api_disconnect_device(device_id: str, request: Request):
     user = get_current_user(request)
@@ -219,8 +305,10 @@ async def api_device_profiles(request: Request):
         profiles = get_user_device_profiles(user["id"])
     for profile in profiles:
         summary = parse_activation_summary(profile.get("activation_summary"))
+        runtime_summary = parse_python_runtime_summary(profile.get("python_runtime_summary"))
         profile["activation_status"] = activation_status_from_summary(summary)
-        profile["runtime_status"] = runtime_status_from_summary(summary)
+        profile["runtime_status"] = python_runtime_status_from_summary(runtime_summary) if runtime_summary else runtime_status_from_summary(summary)
+        profile["python_runtime_status"] = python_runtime_status_from_summary(runtime_summary)
     return {"status": "ok", "profiles": profiles}
 
 
@@ -233,6 +321,8 @@ async def api_device_profile(device_id: str, request: Request):
     if not _is_admin(user) and profile.get("user_id") != user["id"]:
         raise HTTPException(status_code=403, detail="Нет доступа")
     summary = parse_activation_summary(profile.get("activation_summary"))
+    runtime_summary = parse_python_runtime_summary(profile.get("python_runtime_summary"))
     profile["activation_status"] = activation_status_from_summary(summary)
-    profile["runtime_status"] = runtime_status_from_summary(summary)
+    profile["runtime_status"] = python_runtime_status_from_summary(runtime_summary) if runtime_summary else runtime_status_from_summary(summary)
+    profile["python_runtime_status"] = python_runtime_status_from_summary(runtime_summary)
     return {"status": "ok", "profile": profile}
