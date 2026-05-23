@@ -218,34 +218,75 @@ def _runtime_pip_path(home: Path) -> Path:
     return _runtime_venv_path(home) / "bin" / "pip"
 
 
+def _is_packaged_agent() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def _looks_like_python_executable(path: str | Path | None) -> bool:
+    if not path:
+        return False
+    name = Path(path).name.lower()
+    if name in {"python", "python.exe", "python3", "python3.exe"}:
+        return True
+    if not name.startswith("python"):
+        return False
+    return name.endswith(".exe") or "." not in name
+
+
+def _is_py_launcher(path: str | Path | None) -> bool:
+    return Path(path).name.lower() in {"py", "py.exe"} if path else False
+
+
+def _subprocess_creationflags() -> int:
+    if os.name == "nt":
+        return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return 0
+
+
 def _run_python(args: list[str], timeout: int = 45) -> tuple[int, str, str]:
     try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=_subprocess_creationflags(),
+        )
         return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
     except Exception as exc:
         return 1, "", str(exc)
 
 
 def _find_base_python() -> str | None:
-    candidates = [sys.executable, shutil.which("python3"), shutil.which("python"), shutil.which("py")]
+    candidates: list[str] = []
+    if not _is_packaged_agent() and _looks_like_python_executable(sys.executable):
+        candidates.append(sys.executable)
+    candidates.extend([shutil.which("py"), shutil.which("python"), shutil.which("python3")])
+    seen: set[str] = set()
     for candidate in candidates:
         if not candidate:
             continue
-        cmd = [candidate, "-3", "-c", "import sys; print(sys.executable)"] if Path(candidate).name.lower() == "py.exe" else [candidate, "-c", "import sys; print(sys.executable)"]
-        rc, out, _ = _run_python(cmd, timeout=10)
+        candidate = str(candidate)
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if not (_looks_like_python_executable(candidate) or _is_py_launcher(candidate)):
+            continue
+        cmd = [candidate, "-3", "-c", "import sys; print(sys.executable)"] if _is_py_launcher(candidate) else [candidate, "-c", "import sys; print(sys.executable)"]
+        rc, out, _ = _run_python(cmd, timeout=5)
         path = out.splitlines()[0].strip() if out else candidate
-        if rc == 0 and path and "WindowsApps" not in path:
-            return candidate
+        if rc == 0 and path and "WindowsApps" not in path and _looks_like_python_executable(path):
+            return path
     return None
 
 
 def _python_version(python_path: Path | str) -> str:
-    rc, out, _ = _run_python([str(python_path), "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"], timeout=15)
+    rc, out, _ = _run_python([str(python_path), "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"], timeout=10)
     return out.splitlines()[0].strip() if rc == 0 and out else ""
 
 
 def _pip_info(venv_python: Path) -> dict:
-    rc, out, err = _run_python([str(venv_python), "-m", "pip", "--version"], timeout=20)
+    rc, out, err = _run_python([str(venv_python), "-m", "pip", "--version"], timeout=10)
     if rc == 0:
         parts = out.split()
         return {"status": "ok", "version": parts[1] if len(parts) > 1 else out}
@@ -264,7 +305,7 @@ def _check_packages(venv_python: Path, packages: list[str]) -> dict:
             f"name={package!r}; "
             "sys.exit(0 if importlib.util.find_spec(name) else 1)"
         )
-        rc, _, err = _run_python([str(venv_python), "-c", probe], timeout=15)
+        rc, _, err = _run_python([str(venv_python), "-c", probe], timeout=10)
         if rc == 0:
             result["installed"].append(package)
         elif err:
@@ -357,32 +398,52 @@ def prepare_runtime(
     home = _iru_home()
     warnings: list[str] = []
     next_actions: list[str] = []
-    base_python = _find_base_python()
     venv_path = _runtime_venv_path(home)
     venv_python = _runtime_venv_python(home)
 
     if mode == "check":
-        if not venv_python.exists():
-            status = "missing" if base_python else "install_required"
-            if not base_python:
-                next_actions.append("install_python")
+        if venv_python.exists():
+            checked_packages = _check_packages(venv_python, packages or [])
+            status = "ok"
+            if checked_packages["missing"] or checked_packages["failed"]:
+                warnings.append("requested packages are not fully available in managed venv")
+                status = "degraded"
             receipt = _runtime_receipt_v1(
                 home=home,
                 mode=mode,
                 device_id=device_id,
                 status=status,
-                base_python=base_python,
-                packages={"checked": [], "installed": [], "missing": [], "failed": []},
+                base_python=None,
+                packages=checked_packages,
                 warnings=warnings,
                 next_actions=next_actions,
-                stage="missing",
+                stage="completed",
             )
             _save_runtime_receipt(home, receipt)
             return receipt
-    else:
+
+        base_python = _find_base_python()
+        status = "missing" if base_python else "install_required"
         if not base_python:
             next_actions.append("install_python")
-            return _runtime_receipt_v1(
+        receipt = _runtime_receipt_v1(
+            home=home,
+            mode=mode,
+            device_id=device_id,
+            status=status,
+            base_python=base_python,
+            packages={"checked": [], "installed": [], "missing": [], "failed": []},
+            warnings=warnings,
+            next_actions=next_actions,
+            stage="missing",
+        )
+        _save_runtime_receipt(home, receipt)
+        return receipt
+    else:
+        base_python = _find_base_python()
+        if not base_python:
+            next_actions.append("install_python")
+            receipt = _runtime_receipt_v1(
                 home=home,
                 mode=mode,
                 device_id=device_id,
@@ -393,6 +454,8 @@ def prepare_runtime(
                 next_actions=next_actions,
                 stage="missing",
             )
+            _save_runtime_receipt(home, receipt)
+            return receipt
         for path in (_runtime_home(home), _runtime_home(home) / "wheels", _runtime_home(home) / "receipts", home / "state"):
             path.mkdir(parents=True, exist_ok=True)
         if mode == "repair" and venv_path.exists() and not venv_python.exists():
