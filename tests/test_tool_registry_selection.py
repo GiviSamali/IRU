@@ -71,9 +71,13 @@ def test_system_list_tools_returns_compact_grouped_tools():
 
     assert "device" in registry
     assert "python" in registry
+    assert "window" in registry
+    assert "app" in registry
     assert "fallback" in registry
     assert any(tool["name"] == "device.refresh_state" for tool in registry["device"])
     assert any(tool["name"] == "device.prepare_runtime" for tool in registry["python"])
+    assert any(tool["name"] == "window.verify" for tool in registry["window"])
+    assert any(tool["name"] == "app.launch" for tool in registry["app"])
     execute = next(tool for tool in registry["fallback"] if tool["name"] == "execute_cmd")
     assert execute["purpose"].lower().startswith("low-level shell fallback")
     assert "stdout" not in json.dumps(registry).lower()
@@ -133,6 +137,36 @@ def test_device_runtime_tool_log_entry_is_compact():
     assert entry["tool_type"] == "typed"
     assert entry["summary"] == "runtime=ok"
     assert "x" * 100 not in entry["summary"]
+
+
+def test_window_and_app_tool_log_entries_are_compact():
+    launch = tool_log_entry(
+        "app_launch",
+        {
+            "status": "launched_verified",
+            "pid": 4321,
+            "window": {"title": "Demo", "process_name": "python.exe", "visible": True},
+            "raw_stdout": "x" * 500,
+        },
+        target_device_id="givi",
+    )
+    verify = tool_log_entry(
+        "window_verify",
+        {
+            "status": "verified",
+            "verified": True,
+            "window": {"pid": 4321, "title": "Demo", "process_name": "python.exe"},
+            "raw_stdout": "x" * 500,
+        },
+        target_device_id="givi",
+    )
+
+    assert launch["tool_name"] == "app.launch"
+    assert launch["tool_type"] == "typed"
+    assert "status=launched_verified" in launch["summary"]
+    assert "x" * 100 not in launch["summary"]
+    assert verify["tool_name"] == "window.verify"
+    assert "status=verified" in verify["summary"]
 
 
 def test_device_refresh_state_tool_uses_callback_and_logs_tool():
@@ -302,6 +336,10 @@ def test_pipeline_worker_toolset_does_not_expose_unsupported_device_tools():
     assert "device_check_runtime" not in names
     assert "device_prepare_runtime" not in names
     assert "device_repair_runtime" not in names
+    assert "window_list" not in names
+    assert "window_verify" not in names
+    assert "app_launch" not in names
+    assert "app_verify_launch" not in names
 
 
 def test_prompt_contains_tool_selection_policy():
@@ -311,6 +349,9 @@ def test_prompt_contains_tool_selection_policy():
     assert "Do not assume device state" in SYSTEM_PROMPT_TEMPLATE
     assert "prefer device_prepare_runtime or device_check_runtime" in SYSTEM_PROMPT_TEMPLATE
     assert "use its venv_python path" in SYSTEM_PROMPT_TEMPLATE
+    assert "GUI success means a matching window is found/visible or the process is alive" in SYSTEM_PROMPT_TEMPLATE
+    assert "window_find" in SYSTEM_PROMPT_TEMPLATE
+    assert "app_launch" in SYSTEM_PROMPT_TEMPLATE
 
 
 def test_prompt_prefers_refresh_state_for_explicit_state_checks():

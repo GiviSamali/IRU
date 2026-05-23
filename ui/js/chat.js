@@ -789,6 +789,20 @@ function getCommandDetailsText(command, fallbackOutput) {
   ];
   if (command.target_device_id || command.device_id) lines.push(`target_device: ${command.target_device_id || command.device_id}`);
   if (command.summary) lines.push(`summary: ${command.summary}`);
+  const result = command.result || {};
+  const windowInfo = result.window || result.match || {};
+  const detailFields = {
+    pid: result.pid || windowInfo.pid,
+    verified: result.verified,
+    process_alive: result.process_alive,
+    window_visible: result.window_visible ?? windowInfo.visible,
+    window_title: result.window_title || windowInfo.title,
+    class_name: windowInfo.class_name,
+    process_name: windowInfo.process_name,
+  };
+  Object.entries(detailFields).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') lines.push(`${key}: ${value}`);
+  });
   if (fallbackOutput && fallbackOutput !== '(нет вывода)') lines.push('', fallbackOutput);
   return lines.join('\n');
 }
@@ -931,6 +945,10 @@ function renderStepCommands(stepCommands) {
       `status: ${command.tool_status || status}`,
       `target_device: ${command.target_device_id || command.device_id || ''}`,
       `summary: ${command.summary || ''}`,
+      `pid: ${command.result?.pid || command.result?.window?.pid || command.result?.match?.pid || ''}`,
+      `verified: ${command.result?.verified ?? ''}`,
+      `window_title: ${command.result?.window_title || command.result?.window?.title || command.result?.match?.title || ''}`,
+      `process_name: ${command.result?.window?.process_name || command.result?.match?.process_name || ''}`,
     ].join('\n'))}</div>` : '';
     return `<div class="step-command-entry step-command-${escapeAttr(status)}">
       <div class="step-command-header">

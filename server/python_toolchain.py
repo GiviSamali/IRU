@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -533,6 +534,52 @@ def rewrite_python_command(command: str, receipt: PythonToolchainReceipt | None)
     if _contains_bare_python_invocation(command):
         return command, "Python command blocked: bare python/pip invocation could not be safely rewritten."
     return command, None
+
+
+def _split_process_args(text: str) -> list[str]:
+    try:
+        parts = shlex.split(text or "", posix=False)
+    except ValueError:
+        return []
+    cleaned: list[str] = []
+    for part in parts:
+        if len(part) >= 2 and part[0] == part[-1] and part[0] in {"'", '"'}:
+            cleaned.append(part[1:-1])
+        else:
+            cleaned.append(part)
+    return cleaned
+
+
+def rewrite_python_app_launch_command(command: str, receipt: PythonToolchainReceipt | None) -> tuple[dict[str, Any], str | None]:
+    if not command:
+        return {}, None
+    if not receipt or receipt.status != "ok" or not receipt.interpreter_path:
+        if receipt and receipt.status == "broken_stub" and _contains_bare_python_invocation(command):
+            return {"command": command}, "Python app launch blocked: bare python alias is a known WindowsApps stub; resolve or install real Python first."
+        return {"command": command}, None
+    if not is_verified_python_receipt(receipt):
+        if _contains_bare_python_invocation(command):
+            return {"command": command}, "Python app launch blocked: resolved Python receipt is not verified."
+        return {"command": command}, None
+
+    statements = [statement.strip() for statement in _split_powershell_statements(command) if statement.strip()]
+    if len(statements) != 1:
+        if _contains_bare_python_invocation(command):
+            return {"command": command}, "Python app launch blocked: bare python invocation inside a compound shell command cannot be safely converted to process argv."
+        return {"command": command}, None
+
+    match = re.match(r"^&?\s*(python3?|py(?:\s+-3)?)\b\s*(.*)$", statements[0], re.IGNORECASE)
+    if not match:
+        if _contains_bare_python_invocation(command):
+            return {"command": command}, "Python app launch blocked: bare python invocation could not be safely converted to process argv."
+        return {"command": command}, None
+
+    args = _split_process_args(match.group(2).strip())
+    return {
+        "command": command,
+        "executable": receipt.interpreter_path,
+        "args": args,
+    }, None
 
 
 def validate_toolchain_fact_against_receipt(
