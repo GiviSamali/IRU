@@ -27,8 +27,13 @@ def test_app_launch_returns_pid_and_verified_window(monkeypatch):
     class Proc:
         pid = 4321
 
+    launched = {}
     monkeypatch.setattr(actions.os, "name", "nt")
-    monkeypatch.setattr(actions.subprocess, "Popen", lambda *args, **kwargs: Proc())
+    def fake_popen(argv, *args, **kwargs):
+        launched["argv"] = argv
+        return Proc()
+
+    monkeypatch.setattr(actions.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(actions, "_process_alive", lambda pid: True)
     monkeypatch.setattr(actions, "window_find", lambda **kwargs: {
         "status": "found",
@@ -40,6 +45,32 @@ def test_app_launch_returns_pid_and_verified_window(monkeypatch):
     assert result["status"] == "launched_verified"
     assert result["pid"] == 4321
     assert result["window"]["title"] == "Demo"
+    assert launched["argv"] == ["python", "app.py"]
+
+
+def test_app_launch_accepts_executable_and_args(monkeypatch):
+    from core import actions
+
+    class Proc:
+        pid = 4321
+
+    launched = {}
+
+    def fake_popen(argv, *args, **kwargs):
+        launched["argv"] = argv
+        return Proc()
+
+    monkeypatch.setattr(actions.os, "name", "nt")
+    monkeypatch.setattr(actions.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(actions, "_process_alive", lambda pid: True)
+    monkeypatch.setattr(actions, "window_find", lambda **kwargs: {"status": "not_found", "match": None})
+
+    result = actions.app_launch(executable=r"C:\IRU\runtime\venv\Scripts\python.exe", args=["app.py", "--demo"], timeout_sec=0)
+
+    assert launched["argv"] == [r"C:\IRU\runtime\venv\Scripts\python.exe", "app.py", "--demo"]
+    assert result["status"] == "launched"
+    assert result["executable"].endswith("python.exe")
+    assert result["args"] == ["app.py", "--demo"]
 
 
 def test_app_verify_launch_reports_process_alive_no_window(monkeypatch):
@@ -121,7 +152,8 @@ def test_non_pipeline_app_launch_rewrites_python_to_managed_runtime():
         device_tool_fn=device_tool_fn,
     ))
 
-    assert sent == [("givi", "app.launch", {"command": f'& "{venv_python}" app.py', "expected_title": "Demo"})]
+    assert sent == [("givi", "app.launch", {"command": "python app.py", "expected_title": "Demo", "executable": venv_python, "args": ["app.py"]})]
+    assert not sent[0][2]["command"].startswith("& ")
     assert result["commands"][1]["tool_name"] == "app.launch"
     assert result["commands"][1]["tool_type"] == "typed"
 

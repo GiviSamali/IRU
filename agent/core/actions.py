@@ -727,16 +727,54 @@ def _launch_creationflags() -> int:
     return getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def app_launch(command: str, cwd: str | None = None, expected_title: str | None = None, expected_process: str | None = None, timeout_sec: float = 5, env: dict | None = None) -> dict:
-    if not command:
-        return {"status": "failed", "error": "missing command", "pid": None, "command": command, "cwd": cwd, "process_alive": False, "window": None, "next_actions": []}
+def _strip_arg_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def _process_argv_from_command(command: str) -> list[str]:
+    try:
+        parts = shlex.split(command, posix=False)
+    except ValueError:
+        return []
+    argv = [_strip_arg_quotes(part) for part in parts]
+    if argv and argv[0] == "&":
+        argv = argv[1:]
+    return argv
+
+
+def _format_process_command(argv: list[str]) -> str:
+    if os.name == "nt":
+        return subprocess.list2cmdline(argv)
+    return shlex.join(argv)
+
+
+def app_launch(
+    command: str | None = None,
+    executable: str | None = None,
+    args: list | None = None,
+    cwd: str | None = None,
+    expected_title: str | None = None,
+    expected_process: str | None = None,
+    timeout_sec: float = 5,
+    env: dict | None = None,
+) -> dict:
+    if executable:
+        argv = [str(executable), *[str(arg) for arg in (args or [])]]
+    elif command:
+        argv = _process_argv_from_command(command)
+    else:
+        argv = []
+    display_command = command or (_format_process_command(argv) if argv else "")
+    if not argv:
+        return {"status": "failed", "error": "missing command", "pid": None, "command": display_command, "cwd": cwd, "process_alive": False, "window": None, "next_actions": []}
     proc_env = os.environ.copy()
     if isinstance(env, dict):
         proc_env.update({str(key): str(value) for key, value in env.items()})
     try:
-        args = command if os.name == "nt" else shlex.split(command)
         proc = subprocess.Popen(
-            args,
+            argv,
             cwd=cwd or None,
             env=proc_env,
             stdin=subprocess.DEVNULL,
@@ -746,7 +784,7 @@ def app_launch(command: str, cwd: str | None = None, expected_title: str | None 
             creationflags=_launch_creationflags(),
         )
     except Exception as exc:
-        return {"status": "failed", "error": str(exc), "pid": None, "command": command, "cwd": cwd, "process_alive": False, "window": None, "next_actions": []}
+        return {"status": "failed", "error": str(exc), "pid": None, "command": display_command, "cwd": cwd, "process_alive": False, "window": None, "next_actions": []}
 
     timeout = max(0.0, min(float(timeout_sec or 0), 30.0))
     criteria = {"pid": proc.pid}
@@ -761,7 +799,9 @@ def app_launch(command: str, cwd: str | None = None, expected_title: str | None 
     return {
         "status": status,
         "pid": proc.pid,
-        "command": command,
+        "command": display_command,
+        "executable": argv[0],
+        "args": argv[1:],
         "cwd": cwd or "",
         "process_alive": process_alive,
         "window": window,

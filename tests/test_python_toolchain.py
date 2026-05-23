@@ -4,6 +4,7 @@ from server.python_toolchain import (
     python_toolchain_from_runtime_summary,
     remember_python_toolchain,
     resolve_python_toolchain,
+    rewrite_python_app_launch_command,
     rewrite_python_command,
     validate_toolchain_fact_against_receipt,
 )
@@ -406,3 +407,23 @@ def test_managed_runtime_summary_has_priority_for_rewrite():
 
     assert err is None
     assert rewritten == r'& "C:\Users\tester\AppData\Local\IRU\runtime\venv\Scripts\python.exe" app.py'
+
+
+def test_managed_runtime_app_launch_rewrite_is_process_safe():
+    receipt = python_toolchain_from_runtime_summary(
+        {
+            "runtime_status": "ok",
+            "venv_python": r"C:\Users\tester\AppData\Local\IRU\runtime\venv\Scripts\python.exe",
+            "python_version": "3.11.9",
+            "pip_status": "ok",
+        },
+        device_id="givi",
+    )
+
+    rewritten, err = rewrite_python_app_launch_command('python "app.py"', receipt)
+
+    assert err is None
+    assert rewritten["command"] == 'python "app.py"'
+    assert rewritten["executable"] == r"C:\Users\tester\AppData\Local\IRU\runtime\venv\Scripts\python.exe"
+    assert rewritten["args"] == ["app.py"]
+    assert not rewritten["command"].startswith("& ")

@@ -18,6 +18,7 @@ try:
     from .python_toolchain import (  # type: ignore
         python_toolchain_from_runtime_summary,
         resolve_python_toolchain,
+        rewrite_python_app_launch_command,
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
@@ -35,6 +36,7 @@ except ImportError:
     from python_toolchain import (  # type: ignore
         python_toolchain_from_runtime_summary,
         resolve_python_toolchain,
+        rewrite_python_app_launch_command,
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
@@ -281,9 +283,12 @@ async def process_non_pipeline_command(
                 )
 
                 rewrite_error = None
-                if fn_name in {"execute_cmd", "app_launch"}:
+                if fn_name == "execute_cmd":
                     rewritten_command, rewrite_error = rewrite_python_command(fn_args.get("command", ""), python_receipt)
                     fn_args["command"] = rewritten_command
+                elif fn_name == "app_launch":
+                    rewritten_launch, rewrite_error = rewrite_python_app_launch_command(fn_args.get("command", ""), python_receipt)
+                    fn_args.update(rewritten_launch)
 
                 budget_error = command_budget.register(fn_name, fn_args.get("command", ""))
                 if budget_error:
