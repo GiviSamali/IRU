@@ -377,6 +377,7 @@ def prepare_runtime(
                 next_actions=next_actions,
                 stage="missing",
             )
+            _save_runtime_receipt(home, receipt)
             return receipt
     else:
         if not base_python:
@@ -459,8 +460,7 @@ def prepare_runtime(
         next_actions=next_actions,
         stage="completed",
     )
-    if mode in {"prepare", "repair"}:
-        _save_runtime_receipt(home, receipt)
+    _save_runtime_receipt(home, receipt)
     return receipt
 
 

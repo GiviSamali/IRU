@@ -122,7 +122,10 @@ async def prepare_runtime_for_user(user: dict, device_id: str, mode: str = "chec
         if mode == "prepare" and "AGENT_DISCONNECTED" in error:
             raise HTTPException(
                 status_code=409,
-                detail="runtime_prepare_interrupted: Подготовка прервана: агент переподключился. Повторите check.",
+                detail=(
+                    "runtime_prepare_interrupted: Подготовка прервана: агент отключился. "
+                    "Повторите check после переподключения."
+                ),
             )
         raise HTTPException(status_code=409, detail=f"Python runtime preparation failed: {error}")
     valid, reason = validate_python_runtime_receipt(receipt)

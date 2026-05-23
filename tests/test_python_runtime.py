@@ -57,13 +57,15 @@ def _valid_runtime_receipt(device_id="givi", status="ok"):
 
 
 def test_check_mode_missing_returns_missing_or_install_required(monkeypatch, tmp_path):
-    actions, _home = _runtime_home(monkeypatch, tmp_path)
+    actions, home = _runtime_home(monkeypatch, tmp_path)
 
     receipt = actions.prepare_runtime(mode="check", device_id="givi")
 
     assert receipt["status"] in {"missing", "install_required"}
     assert receipt["status"] != "ok"
     assert receipt["device_id"] == "givi"
+    saved = json.loads((home / "state" / "python_runtime_receipt.json").read_text(encoding="utf-8"))
+    assert saved["stage"] == "missing"
 
 
 def test_prepare_mode_with_system_python_creates_venv(monkeypatch, tmp_path):
@@ -130,7 +132,7 @@ def test_prepare_pip_upgrade_failure_is_recoverable(monkeypatch, tmp_path):
 
 
 def test_check_after_partially_created_venv_returns_ok(monkeypatch, tmp_path):
-    actions, _home = _runtime_home(monkeypatch, tmp_path)
+    actions, home = _runtime_home(monkeypatch, tmp_path)
     monkeypatch.setattr(actions, "_find_base_python", lambda: sys.executable)
 
     prepared = actions.prepare_runtime(mode="prepare", device_id="givi")
@@ -139,6 +141,10 @@ def test_check_after_partially_created_venv_returns_ok(monkeypatch, tmp_path):
     assert prepared["paths"]["venv_python"]
     assert checked["status"] == "ok"
     assert checked["stage"] == "completed"
+    saved = json.loads((home / "state" / "python_runtime_receipt.json").read_text(encoding="utf-8"))
+    assert saved["mode"] == "check"
+    assert saved["status"] == "ok"
+    assert saved["stage"] == "completed"
 
 
 def test_validate_python_runtime_receipt_accepts_and_rejects():
@@ -235,4 +241,5 @@ def test_runtime_endpoint_disconnect_during_prepare_is_recoverable_detail(monkey
 
     assert exc.value.status_code == 409
     assert "runtime_prepare_interrupted" in exc.value.detail
-    assert "Повторите check" in exc.value.detail
+    assert "агент отключился" in exc.value.detail
+    assert "Повторите check после переподключения" in exc.value.detail

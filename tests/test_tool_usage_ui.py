@@ -27,4 +27,4 @@ def test_device_passport_runtime_prepare_disconnect_message():
     source = (ROOT / "ui" / "js" / "devices.js").read_text(encoding="utf-8")
 
     assert "runtime_prepare_interrupted" in source
-    assert "Проверить runtime" in source
+    assert "Подготовка прервана. Агент переподключился — нажмите Проверить runtime." in source

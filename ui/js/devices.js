@@ -279,7 +279,7 @@ async function runDevicePassportAction(action, mode) {
   } catch (e) {
     const message = e.message || String(e);
     state.devicePanelError = message.includes('runtime_prepare_interrupted')
-      ? 'Подготовка прервана: агент переподключился. Нажмите Проверить runtime.'
+      ? 'Подготовка прервана. Агент переподключился — нажмите Проверить runtime.'
       : message;
     renderDevicePassport();
     showToast(state.devicePanelError, true);
