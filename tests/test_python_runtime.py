@@ -136,6 +136,11 @@ def test_check_after_partially_created_venv_returns_ok(monkeypatch, tmp_path):
     monkeypatch.setattr(actions, "_find_base_python", lambda: sys.executable)
 
     prepared = actions.prepare_runtime(mode="prepare", device_id="givi")
+
+    def fail_base_lookup():
+        raise AssertionError("check must validate existing venv before probing base python")
+
+    monkeypatch.setattr(actions, "_find_base_python", fail_base_lookup)
     checked = actions.prepare_runtime(mode="check", device_id="givi")
 
     assert prepared["paths"]["venv_python"]
@@ -145,6 +150,48 @@ def test_check_after_partially_created_venv_returns_ok(monkeypatch, tmp_path):
     assert saved["mode"] == "check"
     assert saved["status"] == "ok"
     assert saved["stage"] == "completed"
+
+
+def test_find_base_python_skips_packaged_agent_executable(monkeypatch, tmp_path):
+    actions, _home = _runtime_home(monkeypatch, tmp_path)
+    agent_exe = r"C:\Program Files\IRU\IruAgent.exe"
+    system_python = r"C:\Python311\python.exe"
+    probes = []
+
+    monkeypatch.setattr(actions.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(actions.sys, "executable", agent_exe)
+    monkeypatch.setattr(actions.shutil, "which", lambda name: system_python if name == "python" else None)
+
+    def fake_run_python(args, timeout=45):
+        probes.append(args)
+        return 0, system_python, ""
+
+    monkeypatch.setattr(actions, "_run_python", fake_run_python)
+
+    assert actions._find_base_python() == system_python
+    assert probes
+    assert all(agent_exe not in part for command in probes for part in command)
+
+
+def test_run_python_uses_create_no_window_on_windows(monkeypatch, tmp_path):
+    actions, _home = _runtime_home(monkeypatch, tmp_path)
+    captured = {}
+
+    class Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(*args, **kwargs):
+        captured.update(kwargs)
+        return Proc()
+
+    monkeypatch.setattr(actions.os, "name", "nt")
+    monkeypatch.setattr(actions.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(actions.subprocess, "run", fake_run)
+
+    assert actions._run_python(["python", "-V"]) == (0, "", "")
+    assert captured["creationflags"] == 0x08000000
 
 
 def test_validate_python_runtime_receipt_accepts_and_rejects():
