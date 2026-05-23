@@ -12,6 +12,9 @@ def test_chat_renderer_can_show_one_or_many_used_tools():
     assert "Использованы инструменты:" in source
     assert "Использован fallback:" in source
     assert "command.tool_name" in source
+    assert "window_title" in source
+    assert "process_alive" in source
+    assert "process_name" in source
 
 
 def test_device_passport_buttons_show_used_typed_tools():

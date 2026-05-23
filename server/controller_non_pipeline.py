@@ -65,6 +65,18 @@ def _command_log_entry(action: str, command: str, target_device: str, device_inf
     return entry
 
 
+APP_WINDOW_ACTIONS = {
+    "window_list": "window.list",
+    "window_find": "window.find",
+    "window_verify": "window.verify",
+    "window_focus": "window.focus",
+    "window_close": "window.close",
+    "app_launch": "app.launch",
+    "app_verify_launch": "app.verify_launch",
+    "app_close": "app.close",
+}
+
+
 async def _run_web_search(cfg: dict, query: str, max_results: int) -> dict:
     tavily_key = cfg.get("tavily_api_key")
     if not tavily_key:
@@ -269,7 +281,7 @@ async def process_non_pipeline_command(
                 )
 
                 rewrite_error = None
-                if fn_name == "execute_cmd":
+                if fn_name in {"execute_cmd", "app_launch"}:
                     rewritten_command, rewrite_error = rewrite_python_command(fn_args.get("command", ""), python_receipt)
                     fn_args["command"] = rewritten_command
 
@@ -315,6 +327,10 @@ async def process_non_pipeline_command(
                     set_current_step(poll_task_id, "Checking tool registry")
                 elif fn_name.startswith("device_"):
                     set_current_step(poll_task_id, "Running device tool")
+                elif fn_name.startswith("window_"):
+                    set_current_step(poll_task_id, "Checking windows")
+                elif fn_name.startswith("app_"):
+                    set_current_step(poll_task_id, "Running app tool")
                 elif fn_name == "write_content":
                     name = fn_args.get("path", "")[:60]
                     set_current_step(poll_task_id, f"Создаю файл {name}")
@@ -351,6 +367,31 @@ async def process_non_pipeline_command(
                         fn_name,
                         tool_result,
                         command=f"[tool] {fn_name}",
+                        target_device_id=target_device,
+                        hostname=device_info.get("hostname") or target_device,
+                        iteration=iteration + 1,
+                    ))
+
+                elif fn_name in APP_WINDOW_ACTIONS:
+                    agent_action = APP_WINDOW_ACTIONS[fn_name]
+                    try:
+                        tool_result = await send_command_fn(target_device, agent_action, fn_args)
+                    except Exception as exc:
+                        err_str = str(exc)
+                        print(f"[llm] {fn_name} EXCEPTION: {type(exc).__name__}: {err_str[:200]}")
+                        if "CONFIRM_REQUIRED" in err_str:
+                            raise ConfirmationRequired(
+                                command=f"{agent_action}: {fn_args.get('command') or fn_args.get('pid') or fn_args.get('title_contains') or ''}",
+                                device_id=target_device,
+                                params=fn_args,
+                                answer="РРЅСЃС‚СЂСѓРјРµРЅС‚ РѕРєРЅР°/РїСЂРёР»РѕР¶РµРЅРёСЏ С‚СЂРµР±СѓРµС‚ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ",
+                                commands_log=commands_log,
+                            )
+                        tool_result = {"error": err_str}
+                    commands_log.append(tool_log_entry(
+                        fn_name,
+                        tool_result,
+                        command=fn_args.get("command") or f"[tool] {agent_action}",
                         target_device_id=target_device,
                         hostname=device_info.get("hostname") or target_device,
                         iteration=iteration + 1,

@@ -18,6 +18,14 @@ CANONICAL_TOOL_NAMES = {
     "device_check_runtime": "device.check_runtime",
     "device_prepare_runtime": "device.prepare_runtime",
     "device_repair_runtime": "device.repair_runtime",
+    "window_list": "window.list",
+    "window_find": "window.find",
+    "window_verify": "window.verify",
+    "window_focus": "window.focus",
+    "window_close": "window.close",
+    "app_launch": "app.launch",
+    "app_verify_launch": "app.verify_launch",
+    "app_close": "app.close",
     "write_content": "write_content",
     "execute_cmd": "execute_cmd",
 }
@@ -110,6 +118,78 @@ TOOL_METADATA = {
         "returns": "compact runtime summary + ctx://device/{device_id}/python",
         "danger": "write/runtime",
     },
+    "window.list": {
+        "category": "window",
+        "tool_type": "typed",
+        "tool_label": "Список окон",
+        "purpose": "List top-level OS windows with pid, title, class, visibility, bounds, and process name",
+        "when_to_use": ["need to inspect open windows", "user asks what windows are open"],
+        "returns": "compact window list",
+        "danger": "safe",
+    },
+    "window.find": {
+        "category": "window",
+        "tool_type": "typed",
+        "tool_label": "Поиск окна",
+        "purpose": "Find a top-level OS window by pid, title, class, process, and visibility",
+        "when_to_use": ["user asks whether an app window is open", "need to locate a window before focus or close"],
+        "returns": "best matching window + compact matches",
+        "danger": "safe",
+    },
+    "window.verify": {
+        "category": "window",
+        "tool_type": "typed",
+        "tool_label": "Проверка окна",
+        "purpose": "Verify that a matching window exists and is visible without waiting for the GUI process to exit",
+        "when_to_use": ["verify GUI launch", "check whether an existing app window is visible"],
+        "returns": "verified flag + process/window status",
+        "danger": "safe",
+    },
+    "window.focus": {
+        "category": "window",
+        "tool_type": "typed",
+        "tool_label": "Фокус окна",
+        "purpose": "Focus or restore one matching window",
+        "when_to_use": ["user asks to bring an app window forward"],
+        "returns": "focus status + window",
+        "danger": "window_focus",
+    },
+    "window.close": {
+        "category": "window",
+        "tool_type": "typed",
+        "tool_label": "Закрытие окна",
+        "purpose": "Close one exactly matched window; refuses broad ambiguous matches",
+        "when_to_use": ["user asks to close a specific window"],
+        "returns": "close status + window/pid",
+        "danger": "process_control",
+    },
+    "app.launch": {
+        "category": "app",
+        "tool_type": "typed",
+        "tool_label": "Запуск приложения",
+        "purpose": "Launch an application as a background process and attempt window verification",
+        "when_to_use": ["launch GUI app", "open file or app and verify it appeared"],
+        "returns": "pid + launch status + optional window",
+        "danger": "process_start",
+    },
+    "app.verify_launch": {
+        "category": "app",
+        "tool_type": "typed",
+        "tool_label": "Проверка запуска приложения",
+        "purpose": "Verify an app launch through the universal window layer",
+        "when_to_use": ["confirm launched GUI app is visible", "verify a pid has a window"],
+        "returns": "verified flag + window/process status",
+        "danger": "safe",
+    },
+    "app.close": {
+        "category": "app",
+        "tool_type": "typed",
+        "tool_label": "Закрытие приложения",
+        "purpose": "Close an application by pid through window.close",
+        "when_to_use": ["user asks to close a launched app"],
+        "returns": "close status",
+        "danger": "process_control",
+    },
     "write_content": {
         "category": "files",
         "tool_type": "typed",
@@ -142,7 +222,7 @@ DEVICE_TOOL_SCHEMAS = [
                 "properties": {
                     "category": {
                         "type": "string",
-                        "enum": ["all", "device", "files", "python", "app", "artifact"],
+                        "enum": ["all", "device", "files", "python", "window", "app", "artifact"],
                         "default": "all",
                     }
                 },
@@ -244,6 +324,153 @@ DEVICE_TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "window_list",
+            "description": "List top-level OS windows with title, pid, class, process, visibility, minimized state, and bounds.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string", "description": "Optional device ID. Defaults to current device."},
+                    "include_invisible": {"type": "boolean", "default": False},
+                    "include_minimized": {"type": "boolean", "default": True},
+                    "limit": {"type": "integer", "default": 100},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "window_find",
+            "description": "Find a top-level OS window by pid, title, regex, class, process, and visibility.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string", "description": "Optional device ID. Defaults to current device."},
+                    "pid": {"type": "integer"},
+                    "title_contains": {"type": "string"},
+                    "title_regex": {"type": "string"},
+                    "class_name": {"type": "string"},
+                    "process_name": {"type": "string"},
+                    "visible": {"type": "boolean", "default": True},
+                    "timeout_sec": {"type": "number", "default": 5},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "window_verify",
+            "description": "Verify that a matching window exists and is visible. For GUI success use this instead of waiting for process exit.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string", "description": "Optional device ID. Defaults to current device."},
+                    "pid": {"type": "integer"},
+                    "title_contains": {"type": "string"},
+                    "title_regex": {"type": "string"},
+                    "class_name": {"type": "string"},
+                    "process_name": {"type": "string"},
+                    "require_visible": {"type": "boolean", "default": True},
+                    "require_not_minimized": {"type": "boolean", "default": False},
+                    "timeout_sec": {"type": "number", "default": 5},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "window_focus",
+            "description": "Restore and focus one matching window.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string", "description": "Optional device ID. Defaults to current device."},
+                    "handle": {"type": "integer"},
+                    "pid": {"type": "integer"},
+                    "title_contains": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "window_close",
+            "description": "Close one exactly matched window. Refuses broad ambiguous matches.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string", "description": "Optional device ID. Defaults to current device."},
+                    "handle": {"type": "integer"},
+                    "pid": {"type": "integer"},
+                    "title_contains": {"type": "string"},
+                    "title_regex": {"type": "string"},
+                    "class_name": {"type": "string"},
+                    "process_name": {"type": "string"},
+                    "force": {"type": "boolean", "default": False},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "app_launch",
+            "description": "Launch an app in the background and attempt window verification. Do not wait for GUI process exit.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string", "description": "Optional device ID. Defaults to current device."},
+                    "command": {"type": "string"},
+                    "cwd": {"type": "string"},
+                    "expected_title": {"type": "string"},
+                    "expected_process": {"type": "string"},
+                    "timeout_sec": {"type": "number", "default": 5},
+                    "env": {"type": "object"},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "app_verify_launch",
+            "description": "Verify a launched app by pid and optional expected title/process through window.verify.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string", "description": "Optional device ID. Defaults to current device."},
+                    "pid": {"type": "integer"},
+                    "expected_title": {"type": "string"},
+                    "expected_process": {"type": "string"},
+                    "timeout_sec": {"type": "number", "default": 5},
+                },
+                "required": ["pid"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "app_close",
+            "description": "Close an app by pid through window.close.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string", "description": "Optional device ID. Defaults to current device."},
+                    "pid": {"type": "integer"},
+                    "force": {"type": "boolean", "default": False},
+                },
+                "required": ["pid"],
+            },
+        },
+    },
 ]
 
 
@@ -308,6 +535,30 @@ def compact_tool_summary(action: str, result: Any = None, command: str = "") -> 
             if isinstance(summary, dict):
                 return f"runtime={summary.get('runtime_status') or result.get('status') or 'unknown'}"
             return f"runtime={result.get('status') or 'unknown'}"
+        if name.startswith("window."):
+            window = result.get("window") or result.get("match") or {}
+            title = window.get("title") or result.get("window_title") or ""
+            status = result.get("status") or "unknown"
+            pid = window.get("pid") or result.get("pid") or ""
+            bits = [f"status={status}"]
+            if pid:
+                bits.append(f"pid={pid}")
+            if title:
+                bits.append(f"title={title[:80]}")
+            return "; ".join(bits)
+        if name.startswith("app."):
+            window = result.get("window") or {}
+            status = result.get("status") or "unknown"
+            pid = result.get("pid") or window.get("pid") or ""
+            title = window.get("title") or result.get("window_title") or ""
+            bits = [f"status={status}"]
+            if pid:
+                bits.append(f"pid={pid}")
+            if result.get("verified") is not None:
+                bits.append(f"verified={bool(result.get('verified'))}")
+            if title:
+                bits.append(f"title={title[:80]}")
+            return "; ".join(bits)
         if name == "device.get_passport":
             return f"passport={result.get('device_id') or 'device'}"
         if name == "write_content":

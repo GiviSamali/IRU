@@ -5,9 +5,12 @@ import getpass
 import json
 import os
 import platform
+import re
+import shlex
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -381,6 +384,407 @@ def _save_runtime_receipt(home: Path, receipt: dict) -> None:
     _write_json(_runtime_home(home) / "receipts" / "python_runtime_receipt.json", receipt)
 
 
+def _process_alive(pid: int | None) -> bool | None:
+    if not pid:
+        return None
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return False
+                return exit_code.value == STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return None
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return None
+
+
+def _windows_process_name(pid: int) -> str:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not handle:
+            return ""
+        try:
+            size = wintypes.DWORD(32768)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                return Path(buffer.value).name
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return ""
+    return ""
+
+
+def _window_record(hwnd: int, *, title: str, class_name: str, pid: int, visible: bool, minimized: bool, foreground: bool, bounds: dict) -> dict:
+    width = max(0, int(bounds["right"]) - int(bounds["left"]))
+    height = max(0, int(bounds["bottom"]) - int(bounds["top"]))
+    return {
+        "handle": int(hwnd),
+        "pid": int(pid),
+        "title": title,
+        "class_name": class_name,
+        "process_name": _windows_process_name(pid) if os.name == "nt" and pid else "",
+        "visible": bool(visible),
+        "minimized": bool(minimized),
+        "foreground": bool(foreground),
+        "bounds": bounds,
+        "width": width,
+        "height": height,
+    }
+
+
+def _list_windows_internal(include_invisible: bool = False, include_minimized: bool = True, limit: int = 100) -> list[dict]:
+    if os.name != "nt":
+        return []
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    windows: list[dict] = []
+    foreground = user32.GetForegroundWindow()
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    @WNDENUMPROC
+    def enum_proc(hwnd, _lparam):
+        if len(windows) >= max(1, int(limit or 100)):
+            return False
+        visible = bool(user32.IsWindowVisible(hwnd))
+        minimized = bool(user32.IsIconic(hwnd))
+        if not include_invisible and not visible:
+            return True
+        if not include_minimized and minimized:
+            return True
+        title_buffer = ctypes.create_unicode_buffer(512)
+        class_buffer = ctypes.create_unicode_buffer(256)
+        user32.GetWindowTextW(hwnd, title_buffer, len(title_buffer))
+        user32.GetClassNameW(hwnd, class_buffer, len(class_buffer))
+        title = title_buffer.value
+        class_name = class_buffer.value
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        if not title and not class_name:
+            return True
+        windows.append(_window_record(
+            int(hwnd),
+            title=title,
+            class_name=class_name,
+            pid=int(pid.value),
+            visible=visible,
+            minimized=minimized,
+            foreground=int(hwnd) == int(foreground),
+            bounds={"left": rect.left, "top": rect.top, "right": rect.right, "bottom": rect.bottom},
+        ))
+        return True
+
+    user32.EnumWindows(enum_proc, 0)
+    return windows
+
+
+def window_list(include_invisible: bool = False, include_minimized: bool = True, limit: int = 100) -> dict:
+    if os.name != "nt":
+        return {"status": "failed", "error": "window tools are only implemented on Windows in v1", "windows": [], "collected_at": datetime.now(timezone.utc).isoformat()}
+    return {
+        "status": "ok",
+        "windows": _list_windows_internal(include_invisible=include_invisible, include_minimized=include_minimized, limit=limit),
+        "collected_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _match_window(window: dict, criteria: dict) -> bool:
+    pid = criteria.get("pid")
+    if pid is not None and str(window.get("pid")) != str(pid):
+        return False
+    title_contains = (criteria.get("title_contains") or "").strip().lower()
+    if title_contains and title_contains not in (window.get("title") or "").lower():
+        return False
+    title_regex = (criteria.get("title_regex") or "").strip()
+    if title_regex:
+        try:
+            if not re.search(title_regex, window.get("title") or "", re.IGNORECASE):
+                return False
+        except re.error:
+            return False
+    class_name = (criteria.get("class_name") or "").strip().lower()
+    if class_name and class_name != (window.get("class_name") or "").lower():
+        return False
+    process_name = (criteria.get("process_name") or "").strip().lower()
+    if process_name:
+        actual = (window.get("process_name") or "").lower()
+        if process_name != actual and process_name != Path(actual).stem:
+            return False
+    visible = criteria.get("visible")
+    if visible is not None and bool(window.get("visible")) != bool(visible):
+        return False
+    return True
+
+
+def _find_windows_once(criteria: dict) -> list[dict]:
+    include_invisible = criteria.get("visible") is not True
+    windows = _list_windows_internal(include_invisible=include_invisible, include_minimized=True, limit=200)
+    matches = [window for window in windows if _match_window(window, criteria)]
+    matches.sort(key=lambda item: (not item.get("foreground"), not item.get("visible"), item.get("minimized")))
+    return matches
+
+
+def window_find(
+    pid: int | None = None,
+    title_contains: str | None = None,
+    title_regex: str | None = None,
+    class_name: str | None = None,
+    process_name: str | None = None,
+    visible: bool | None = True,
+    timeout_sec: float = 5,
+) -> dict:
+    if os.name != "nt":
+        return {"status": "failed", "error": "window tools are only implemented on Windows in v1", "match": None, "matches": [], "criteria": {}, "checked_at": datetime.now(timezone.utc).isoformat()}
+    deadline = time.monotonic() + max(0.0, min(float(timeout_sec or 0), 30.0))
+    criteria = {
+        "pid": pid,
+        "title_contains": title_contains,
+        "title_regex": title_regex,
+        "class_name": class_name,
+        "process_name": process_name,
+        "visible": visible,
+    }
+    matches: list[dict] = []
+    while True:
+        matches = _find_windows_once(criteria)
+        if matches or time.monotonic() >= deadline:
+            break
+        time.sleep(0.2)
+    return {
+        "status": "found" if matches else "not_found",
+        "match": matches[0] if matches else None,
+        "matches": matches,
+        "criteria": criteria,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def window_verify(
+    pid: int | None = None,
+    title_contains: str | None = None,
+    title_regex: str | None = None,
+    class_name: str | None = None,
+    process_name: str | None = None,
+    require_visible: bool = True,
+    require_not_minimized: bool = False,
+    timeout_sec: float = 5,
+) -> dict:
+    visible = True if require_visible else None
+    found = window_find(
+        pid=pid,
+        title_contains=title_contains,
+        title_regex=title_regex,
+        class_name=class_name,
+        process_name=process_name,
+        visible=visible,
+        timeout_sec=timeout_sec,
+    )
+    process_alive = _process_alive(pid) if pid is not None else None
+    window = found.get("match")
+    status = "not_found"
+    verified = False
+    if found.get("status") == "failed":
+        status = "failed"
+    elif window:
+        if require_not_minimized and window.get("minimized"):
+            status = "window_minimized"
+        elif require_visible and not window.get("visible"):
+            status = "not_found"
+        else:
+            status = "verified"
+            verified = True
+    elif pid is not None:
+        pid_windows = _find_windows_once({"pid": pid, "visible": None}) if os.name == "nt" else []
+        if pid_windows and (title_contains or title_regex):
+            status = "title_mismatch"
+            window = pid_windows[0]
+        elif process_alive is True:
+            status = "process_alive_no_window"
+        elif process_alive is False:
+            status = "not_running"
+    return {
+        "status": status,
+        "verified": verified,
+        "window": window,
+        "process_alive": process_alive,
+        "window_visible": bool(window.get("visible")) if window else False,
+        "window_title": window.get("title") if window else "",
+        "criteria": {
+            "pid": pid,
+            "title_contains": title_contains,
+            "title_regex": title_regex,
+            "class_name": class_name,
+            "process_name": process_name,
+            "require_visible": require_visible,
+            "require_not_minimized": require_not_minimized,
+        },
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _has_window_criteria(handle=None, pid=None, title_contains=None, title_regex=None, class_name=None, process_name=None) -> bool:
+    return any(value not in (None, "") for value in (handle, pid, title_contains, title_regex, class_name, process_name))
+
+
+def window_focus(handle: int | None = None, pid: int | None = None, title_contains: str | None = None) -> dict:
+    if os.name != "nt":
+        return {"status": "failed", "error": "window tools are only implemented on Windows in v1", "window": None}
+    if handle:
+        matches = [window for window in _list_windows_internal(include_invisible=True, include_minimized=True, limit=200) if str(window.get("handle")) == str(handle)]
+    else:
+        matches = window_find(pid=pid, title_contains=title_contains, visible=None, timeout_sec=2).get("matches") or []
+    if not matches:
+        return {"status": "not_found", "window": None}
+    window = matches[0]
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    hwnd = int(window["handle"])
+    SW_RESTORE = 9
+    SW_SHOW = 5
+    user32.ShowWindow(hwnd, SW_RESTORE if window.get("minimized") else SW_SHOW)
+    ok = bool(user32.SetForegroundWindow(hwnd))
+    return {"status": "focused" if ok else "failed", "window": window}
+
+
+def window_close(
+    handle: int | None = None,
+    pid: int | None = None,
+    title_contains: str | None = None,
+    title_regex: str | None = None,
+    class_name: str | None = None,
+    process_name: str | None = None,
+    force: bool = False,
+) -> dict:
+    if os.name != "nt":
+        return {"status": "failed", "error": "window tools are only implemented on Windows in v1", "window": None, "pid": pid}
+    if not _has_window_criteria(handle, pid, title_contains, title_regex, class_name, process_name):
+        return {"status": "ambiguous", "error": "ambiguous_window_match", "window": None, "pid": pid}
+    if handle:
+        matches = [window for window in _list_windows_internal(include_invisible=True, include_minimized=True, limit=200) if str(window.get("handle")) == str(handle)]
+    else:
+        matches = window_find(pid=pid, title_contains=title_contains, title_regex=title_regex, class_name=class_name, process_name=process_name, visible=None, timeout_sec=2).get("matches") or []
+    if not matches:
+        if force and pid and _process_alive(pid):
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, text=True, timeout=10, creationflags=_subprocess_creationflags())
+            return {"status": "closed" if not _process_alive(pid) else "still_running", "window": None, "pid": pid}
+        return {"status": "not_found", "window": None, "pid": pid}
+    if len(matches) > 1 and not handle:
+        return {"status": "ambiguous", "error": "ambiguous_window_match", "matches": matches[:10], "window": None, "pid": pid}
+    window = matches[0]
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    WM_CLOSE = 0x0010
+    user32.PostMessageW(int(window["handle"]), WM_CLOSE, 0, 0)
+    time.sleep(0.5)
+    target_pid = int(pid or window.get("pid") or 0)
+    alive = _process_alive(target_pid)
+    if force and alive:
+        subprocess.run(["taskkill", "/PID", str(target_pid), "/F"], capture_output=True, text=True, timeout=10, creationflags=_subprocess_creationflags())
+        alive = _process_alive(target_pid)
+    return {"status": "still_running" if alive else "closed", "window": window, "pid": target_pid}
+
+
+def _launch_creationflags() -> int:
+    if os.name != "nt":
+        return 0
+    return getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def app_launch(command: str, cwd: str | None = None, expected_title: str | None = None, expected_process: str | None = None, timeout_sec: float = 5, env: dict | None = None) -> dict:
+    if not command:
+        return {"status": "failed", "error": "missing command", "pid": None, "command": command, "cwd": cwd, "process_alive": False, "window": None, "next_actions": []}
+    proc_env = os.environ.copy()
+    if isinstance(env, dict):
+        proc_env.update({str(key): str(value) for key, value in env.items()})
+    try:
+        args = command if os.name == "nt" else shlex.split(command)
+        proc = subprocess.Popen(
+            args,
+            cwd=cwd or None,
+            env=proc_env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+            creationflags=_launch_creationflags(),
+        )
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc), "pid": None, "command": command, "cwd": cwd, "process_alive": False, "window": None, "next_actions": []}
+
+    timeout = max(0.0, min(float(timeout_sec or 0), 30.0))
+    criteria = {"pid": proc.pid}
+    if expected_title:
+        criteria["title_contains"] = expected_title
+    if expected_process:
+        criteria["process_name"] = expected_process
+    found = window_find(timeout_sec=timeout, **criteria) if os.name == "nt" else {"status": "failed", "match": None}
+    window = found.get("match")
+    process_alive = _process_alive(proc.pid)
+    status = "launched_verified" if window else ("launched" if process_alive is not False else "failed")
+    return {
+        "status": status,
+        "pid": proc.pid,
+        "command": command,
+        "cwd": cwd or "",
+        "process_alive": process_alive,
+        "window": window,
+        "next_actions": [] if window else ["window.verify"],
+    }
+
+
+def app_verify_launch(pid: int, expected_title: str | None = None, expected_process: str | None = None, timeout_sec: float = 5) -> dict:
+    result = window_verify(pid=pid, title_contains=expected_title, process_name=expected_process, timeout_sec=timeout_sec)
+    return {
+        "status": "verified" if result.get("verified") else result.get("status", "failed"),
+        "verified": bool(result.get("verified")),
+        "pid": pid,
+        "window": result.get("window"),
+        "process_alive": result.get("process_alive"),
+        "window_visible": result.get("window_visible"),
+    }
+
+
+def app_close(pid: int, force: bool = False) -> dict:
+    return window_close(pid=pid, force=force)
+
+
 def prepare_runtime(
     mode: str = "check",
     packages: list[str] | None = None,
@@ -602,4 +1006,12 @@ ACTIONS = {
     "write_content": lambda **params: write_content(**params),
     "device.activate": lambda **params: activate_device(**params),
     "device.prepare_runtime": lambda **params: prepare_runtime(**params),
+    "window.list": lambda **params: window_list(**params),
+    "window.find": lambda **params: window_find(**params),
+    "window.verify": lambda **params: window_verify(**params),
+    "window.focus": lambda **params: window_focus(**params),
+    "window.close": lambda **params: window_close(**params),
+    "app.launch": lambda **params: app_launch(**params),
+    "app.verify_launch": lambda **params: app_verify_launch(**params),
+    "app.close": lambda **params: app_close(**params),
 }
