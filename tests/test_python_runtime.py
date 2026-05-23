@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -56,13 +57,15 @@ def _valid_runtime_receipt(device_id="givi", status="ok"):
 
 
 def test_check_mode_missing_returns_missing_or_install_required(monkeypatch, tmp_path):
-    actions, _home = _runtime_home(monkeypatch, tmp_path)
+    actions, home = _runtime_home(monkeypatch, tmp_path)
 
     receipt = actions.prepare_runtime(mode="check", device_id="givi")
 
     assert receipt["status"] in {"missing", "install_required"}
     assert receipt["status"] != "ok"
     assert receipt["device_id"] == "givi"
+    saved = json.loads((home / "state" / "python_runtime_receipt.json").read_text(encoding="utf-8"))
+    assert saved["stage"] == "missing"
 
 
 def test_prepare_mode_with_system_python_creates_venv(monkeypatch, tmp_path):
@@ -76,6 +79,7 @@ def test_prepare_mode_with_system_python_creates_venv(monkeypatch, tmp_path):
     assert Path(receipt["paths"]["venv_python"]).exists()
     assert receipt["pip"]["status"] in {"ok", "missing", "broken"}
     assert receipt["packages"]["checked"] == ["json"]
+    assert receipt["stage"] == "completed"
     assert (home / "state" / "python_runtime_receipt.json").exists()
     assert (home / "runtime" / "receipts" / "python_runtime_receipt.json").exists()
 
@@ -103,8 +107,49 @@ def test_repair_mode_recreates_broken_venv(monkeypatch, tmp_path):
     assert Path(receipt["paths"]["venv_python"]).exists()
 
 
+def test_prepare_pip_upgrade_failure_is_recoverable(monkeypatch, tmp_path):
+    actions, home = _runtime_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(actions, "_find_base_python", lambda: sys.executable)
+    original_run_python = actions._run_python
+
+    def fake_run_python(args, timeout=45):
+        text = " ".join(str(part) for part in args)
+        if " -m pip install --upgrade pip setuptools wheel" in text:
+            return 1, "", "upgrade failed"
+        return original_run_python(args, timeout=timeout)
+
+    monkeypatch.setattr(actions, "_run_python", fake_run_python)
+
+    receipt = actions.prepare_runtime(mode="prepare", device_id="givi", upgrade_pip=True)
+
+    assert receipt["status"] in {"ok", "degraded"}
+    assert receipt["stage"] == "completed"
+    assert receipt["paths"]["venv_python"]
+    assert receipt["pip"]["status"] == "ok"
+    assert any("pip bootstrap upgrade failed" in warning for warning in receipt["warnings"])
+    saved = json.loads((home / "state" / "python_runtime_receipt.json").read_text(encoding="utf-8"))
+    assert saved["stage"] == "completed"
+
+
+def test_check_after_partially_created_venv_returns_ok(monkeypatch, tmp_path):
+    actions, home = _runtime_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(actions, "_find_base_python", lambda: sys.executable)
+
+    prepared = actions.prepare_runtime(mode="prepare", device_id="givi")
+    checked = actions.prepare_runtime(mode="check", device_id="givi")
+
+    assert prepared["paths"]["venv_python"]
+    assert checked["status"] == "ok"
+    assert checked["stage"] == "completed"
+    saved = json.loads((home / "state" / "python_runtime_receipt.json").read_text(encoding="utf-8"))
+    assert saved["mode"] == "check"
+    assert saved["status"] == "ok"
+    assert saved["stage"] == "completed"
+
+
 def test_validate_python_runtime_receipt_accepts_and_rejects():
     valid = _valid_runtime_receipt()
+    valid["stage"] = "pip_checked"
     assert validate_python_runtime_receipt(valid) == (True, "ok")
 
     missing_device = dict(valid)
@@ -177,3 +222,24 @@ def test_runtime_endpoint_old_agent_error_is_explicit(monkeypatch):
 
     assert exc.value.status_code == 501
     assert "device.prepare_runtime" in exc.value.detail
+
+
+def test_runtime_endpoint_disconnect_during_prepare_is_recoverable_detail(monkeypatch):
+    from server.routers import devices as devices_router
+
+    devices.clear()
+    devices["7:givi"] = {"ws": object(), "pending": {}, "user_id": 7, "short_device_id": "givi", "info": {}}
+
+    async def fake_send(*args, **kwargs):
+        return {"error": "AGENT_DISCONNECTED: устройство 'givi' отключилось во время выполнения команды"}
+
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
+    monkeypatch.setattr(devices_router, "send_command_to_agent", fake_send)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(devices_router.prepare_runtime_for_user({"id": 7, "name": "tester"}, "givi", "prepare", []))
+
+    assert exc.value.status_code == 409
+    assert "runtime_prepare_interrupted" in exc.value.detail
+    assert "агент отключился" in exc.value.detail
+    assert "Повторите check после переподключения" in exc.value.detail

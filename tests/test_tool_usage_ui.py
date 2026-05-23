@@ -20,3 +20,11 @@ def test_device_passport_buttons_show_used_typed_tools():
     assert "Использован инструмент: device.refresh_state" in source
     assert "Использован инструмент: device.activate" in source
     assert "Использован инструмент: device.repair_activation" in source
+    assert "device.prepare_runtime" in source
+
+
+def test_device_passport_runtime_prepare_disconnect_message():
+    source = (ROOT / "ui" / "js" / "devices.js").read_text(encoding="utf-8")
+
+    assert "runtime_prepare_interrupted" in source
+    assert "Подготовка прервана. Агент переподключился — нажмите Проверить runtime." in source
