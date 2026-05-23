@@ -12,9 +12,42 @@ def _make_completion_fn(responses):
 
     async def _chat_completion_request_fn(**kwargs):
         assert queue, "No more mocked LLM responses left"
-        return queue.pop(0)
+        response = queue.pop(0)
+        if kwargs.get("tools") is not None:
+            message = response["choices"][0]["message"]
+            tool_calls = message.get("tool_calls") or []
+            if len(tool_calls) > 1:
+                queue[:0] = [
+                    {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [call]}}]}
+                    for call in tool_calls[1:]
+                ]
+                return {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [tool_calls[0]]}}]}
+            if not tool_calls:
+                content = message.get("content") or "ok"
+                return {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_call("call-answer", content)]}}]}
+        return response
 
     return _chat_completion_request_fn
+
+
+def _answer_call(call_id: str, text: str) -> dict:
+    return {
+        "id": call_id,
+        "function": {
+            "name": "answer_text",
+            "arguments": json.dumps({
+                "answer_type": "pure_text",
+                "text": text,
+                "basis": [],
+                "self_check": {
+                    "depends_on_current_external_state": False,
+                    "claims_completed_action": False,
+                    "has_sufficient_evidence": True,
+                    "missing_evidence_question": "",
+                },
+            }, ensure_ascii=False),
+        },
+    }
 
 
 def _run_non_pipeline_case(responses, send_command_fn=None, get_file_link_fn=None, device_id="device-1", modes=None):
@@ -41,7 +74,7 @@ def _run_non_pipeline_case(responses, send_command_fn=None, get_file_link_fn=Non
             machine_guid=None,
             mem_user_id=None,
             non_pipeline_tools=[],
-            max_iterations=4,
+            max_iterations=64,
             pick_model_fn=lambda cfg, modes: "mock-model",
             chat_completion_request_fn=_make_completion_fn(responses),
         )

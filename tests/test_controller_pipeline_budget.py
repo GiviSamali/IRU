@@ -18,9 +18,41 @@ def _make_completion_fn(responses, captured_messages=None):
         if captured_messages is not None:
             captured_messages.append(kwargs.get("messages"))
         assert queue, "No more mocked LLM responses left"
-        return queue.pop(0)
+        response = queue.pop(0)
+        if kwargs.get("tools") is not None:
+            message = response["choices"][0]["message"]
+            tool_calls = message.get("tool_calls") or []
+            if len(tool_calls) > 1:
+                queue[:0] = [
+                    {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [call]}}]}
+                    for call in tool_calls[1:]
+                ]
+                return {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [tool_calls[0]]}}]}
+            if not tool_calls:
+                return {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_call("call-answer", message.get("content") or "ok")]}}]}
+        return response
 
     return _chat_completion_request_fn
+
+
+def _answer_call(call_id: str, text: str) -> dict:
+    return {
+        "id": call_id,
+        "function": {
+            "name": "answer_text",
+            "arguments": json.dumps({
+                "answer_type": "pure_text",
+                "text": text,
+                "basis": [],
+                "self_check": {
+                    "depends_on_current_external_state": False,
+                    "claims_completed_action": False,
+                    "has_sufficient_evidence": True,
+                    "missing_evidence_question": "",
+                },
+            }, ensure_ascii=False),
+        },
+    }
 
 
 def _execute_call(call_id, command, device_id=None):

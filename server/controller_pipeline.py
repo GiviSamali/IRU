@@ -8,6 +8,7 @@ import httpx
 
 try:
     from . import database as db  # type: ignore
+    from .answer_auditor import audit_answer_payload  # type: ignore
     from .controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from .controller_trust import enforce_trusted_answer  # type: ignore
     from .device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
@@ -20,9 +21,25 @@ try:
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
-    from .tool_registry import tool_log_fields  # type: ignore
+    from .tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
+    from .run_journal import (  # type: ignore
+        GROUNDED_CORRECTION,
+        ONE_TOOL_CORRECTION,
+        RAW_CONTENT_CORRECTION,
+        ProtocolValidationError,
+        append_answer_step,
+        append_tool_step,
+        is_answer_failure_tool,
+        is_answer_text_tool,
+        is_terminal_answer_tool,
+        validate_answer_report_failure_payload,
+        validate_answer_text_payload,
+        validate_tool_call_batch,
+        wrap_tool_result_for_llm,
+    )
 except ImportError:
     import database as db  # type: ignore
+    from answer_auditor import audit_answer_payload  # type: ignore
     from controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from controller_trust import enforce_trusted_answer  # type: ignore
     from device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
@@ -35,7 +52,22 @@ except ImportError:
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
-    from tool_registry import tool_log_fields  # type: ignore
+    from tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
+    from run_journal import (  # type: ignore
+        GROUNDED_CORRECTION,
+        ONE_TOOL_CORRECTION,
+        RAW_CONTENT_CORRECTION,
+        ProtocolValidationError,
+        append_answer_step,
+        append_tool_step,
+        is_answer_failure_tool,
+        is_answer_text_tool,
+        is_terminal_answer_tool,
+        validate_answer_report_failure_payload,
+        validate_answer_text_payload,
+        validate_tool_call_batch,
+        wrap_tool_result_for_llm,
+    )
 
 try:
     from .controller_shared import (
@@ -67,12 +99,39 @@ except ImportError:
     )
 
 
-PIPELINE_WORKER_MAX_ITERATIONS = 10
+PIPELINE_WORKER_MAX_ITERATIONS = 40
 PIPELINE_MAX_STEPS = 10
 logger = logging.getLogger(__name__)
 
 STEP_STATES = {"pending", "running", "done", "failed", "recovered", "skipped", "blocked"}
 TASK_STATES = {"running", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}
+PIPELINE_TERMINAL_TOOL_NAMES = {"answer_text", "answer_report_failure"}
+
+
+def _pipeline_terminal_answer_tools(worker_tools: list[dict] | None) -> list[dict]:
+    tools_by_name = {
+        tool.get("function", {}).get("name"): tool
+        for tool in (worker_tools or []) + DEVICE_TOOL_SCHEMAS
+        if tool.get("function", {}).get("name") in PIPELINE_TERMINAL_TOOL_NAMES
+    }
+    return [tools_by_name[name] for name in ("answer_text", "answer_report_failure") if name in tools_by_name]
+
+
+def _extend_pipeline_run_journal(all_commands: list[dict], worker_commands: list[dict]) -> None:
+    id_map: dict[str, str] = {}
+    for command in worker_commands:
+        old_step_id = command.get("step_id")
+        new_idx = len(all_commands) + 1
+        new_step_id = f"step_{new_idx}"
+        if old_step_id:
+            id_map[str(old_step_id)] = new_step_id
+            command["worker_step_id"] = old_step_id
+        command["idx"] = new_idx
+        command["step_id"] = new_step_id
+        result = command.get("result")
+        if isinstance(result, dict) and isinstance(result.get("basis"), list):
+            result["basis"] = [id_map.get(str(item), str(item)) for item in result["basis"]]
+        all_commands.append(command)
 
 _PIPELINE_MULTI_STEP_MARKERS = (
     " и ",
@@ -402,6 +461,15 @@ def pipeline_worker_prompt(shared: dict, overall_goal: str, step: dict, complete
 
     step_device_id = shared.get("target_device_id") or step.get("device_id") or shared["current_device_id"]
     return f"""\
+Tool-only protocol:
+- Call exactly one tool per iteration.
+- Never return raw assistant text.
+- When the step is complete, call answer_text.
+- If the step failed, call answer_report_failure.
+- For answer_text grounded_report, basis must reference current-run step_id values returned by tool results.
+- Previous chat history and previous step text are context only, not evidence.
+- Do not call answer_text in the same iteration as an action tool.
+
 Ты — SUBAGENT-ИСПОЛНИТЕЛЬ внутри Pipeline Mode ИРУ.
 
 Ты выполняешь ТОЛЬКО ОДИН назначенный шаг. Ты не главный ассистент и не оркестратор.
@@ -464,8 +532,17 @@ Target device context:
 
 
 def pipeline_summary_prompt() -> str:
+    tool_only = """Tool-only protocol:
+- You must call exactly one tool.
+- Never produce raw final prose.
+- Use answer_text for the final user-facing pipeline summary.
+- Use answer_report_failure if the final result cannot be safely summarized.
+- answer_text.basis must reference current-run step_id values from current_run_journal.
+- Do not invent step_id values and do not use tool names as basis.
+
+"""
     """Финальный промпт оркестратора для сборки общего ответа."""
-    return """\
+    return tool_only + """\
 Ты — ОРКЕСТРАТОР Pipeline Mode ИРУ.
 
 Тебе дали результат работы subagent-исполнителей по шагам. Сформируй финальный ответ пользователю:
@@ -999,10 +1076,9 @@ async def run_pipeline_worker(
             "status": status or _pipeline_command_status(action, result),
         }
         if step_id is not None:
-            entry["step_id"] = step_id
+            entry["plan_step_id"] = step_id
         entry.update(tool_log_fields(action, result, command, device_id))
-        commands_log.append(entry)
-        return entry
+        return append_tool_step(commands_log, entry)
 
     for iteration in range(PIPELINE_WORKER_MAX_ITERATIONS):
         print(
@@ -1015,6 +1091,7 @@ async def run_pipeline_worker(
             model=model,
             messages=messages,
             tools=worker_tools,
+            tool_choice="required",
         )
         choice = data["choices"][0]
         assistant_msg = choice["message"]
@@ -1035,22 +1112,91 @@ async def run_pipeline_worker(
                 })
                 continue
 
-        messages.append(assistant_msg)
-
         if not tool_calls:
-            final_text = strip_markdown(assistant_msg.get("content") or "").strip()
-            if final_text:
-                final_text = enforce_trusted_answer(final_text, commands_log)
-                return {
-                    "status": "ok",
-                    "answer": final_text,
-                    "commands": commands_log,
-                }
-            return {
-                "status": "error",
-                "answer": "Subagent завершил шаг без содержательного ответа.",
-                "commands": commands_log,
-            }
+            messages.append({"role": "user", "content": RAW_CONTENT_CORRECTION})
+            continue
+
+        try:
+            tool_call = validate_tool_call_batch(tool_calls)
+        except ProtocolValidationError as exc:
+            messages.append({"role": "user", "content": exc.correction})
+            continue
+
+        fn_name = tool_call["function"]["name"]
+        try:
+            fn_args_preview = json.loads(tool_call["function"].get("arguments") or "{}")
+        except json.JSONDecodeError:
+            messages.append({"role": "user", "content": f"Tool arguments must be valid JSON. {ONE_TOOL_CORRECTION}"})
+            continue
+
+        if is_terminal_answer_tool(fn_name):
+            try:
+                if is_answer_text_tool(fn_name):
+                    payload = validate_answer_text_payload(fn_args_preview, commands_log)
+                    audit_ok, audit_reason, audit_infra_error = await audit_answer_payload(
+                        client=client,
+                        cfg=cfg,
+                        chat_completion_request_fn=chat_completion_request_fn,
+                        user_request=f"{overall_goal}\n{step_title}",
+                        current_run_journal=commands_log,
+                        answer_payload=payload,
+                    )
+                    if audit_infra_error:
+                        append_tool_step(commands_log, {
+                            "action": "answer_auditor",
+                            "command": "[system] answer_auditor",
+                            "device_id": step_device_id,
+                            "target_device_id": step_device_id,
+                            "hostname": shared.get("current_hostname") or step_device_id,
+                            "result": {"error": audit_reason},
+                            "status": "failed",
+                            "tool_type": "system",
+                            "summary": "auditor_error",
+                            "iteration": iteration + 1,
+                        })
+                        return {
+                            "status": "error",
+                            "answer": "Не удалось безопасно проверить корректность ответа шага.",
+                            "commands": commands_log,
+                        }
+                    if not audit_ok:
+                        messages.append({"role": "user", "content": GROUNDED_CORRECTION})
+                        continue
+                    append_answer_step(
+                        commands_log,
+                        fn_name,
+                        payload,
+                        target_device_id=step_device_id,
+                        hostname=shared.get("current_hostname") or step_device_id,
+                        iteration=iteration + 1,
+                    )
+                    return {
+                        "status": "ok",
+                        "answer": enforce_trusted_answer(payload["text"], commands_log),
+                        "commands": commands_log,
+                    }
+                if is_answer_failure_tool(fn_name):
+                    payload = validate_answer_report_failure_payload(fn_args_preview, commands_log)
+                    append_answer_step(
+                        commands_log,
+                        fn_name,
+                        payload,
+                        target_device_id=step_device_id,
+                        hostname=shared.get("current_hostname") or step_device_id,
+                        iteration=iteration + 1,
+                    )
+                    return {
+                        "status": "error",
+                        "answer": str(payload.get("message") or ""),
+                        "commands": commands_log,
+                    }
+            except ProtocolValidationError as exc:
+                messages.append({"role": "user", "content": exc.correction})
+                continue
+
+        assistant_msg["tool_calls"] = [tool_call]
+        messages.append(assistant_msg)
+        tool_calls = [tool_call]
 
         for tool_call in tool_calls:
             fn_name = tool_call["function"]["name"]
@@ -1093,11 +1239,11 @@ async def run_pipeline_worker(
                     if command_error.get("missing_packages"):
                         tool_result["missing_packages"] = command_error["missing_packages"]
 
-                append_step_command(fn_name, fn_args.get("command", ""), target_device, tool_result)
+                entry = append_step_command(fn_name, fn_args.get("command", ""), target_device, tool_result)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call["id"],
-                    "content": json.dumps(tool_result, ensure_ascii=False)[:2000],
+                    "content": json.dumps(wrap_tool_result_for_llm(entry), ensure_ascii=False)[:4000],
                 })
                 continue
 
@@ -1332,15 +1478,32 @@ async def run_pipeline_worker(
             else:
                 tool_result = {"error": f"Неизвестная функция: {fn_name}"}
 
+            if (
+                not commands_log
+                or commands_log[-1].get("iteration") != iteration + 1
+                or commands_log[-1].get("action") != fn_name
+            ):
+                append_step_command(fn_name, f"[tool] {fn_name}", target_device, tool_result)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call["id"],
-                "content": json.dumps(tool_result, ensure_ascii=False)[:2000],
+                "content": json.dumps(wrap_tool_result_for_llm(commands_log[-1]), ensure_ascii=False)[:4000],
             })
 
+    append_tool_step(commands_log, {
+        "action": "tool_only_protocol",
+        "command": "[system] pipeline_worker_answer",
+        "device_id": step_device_id,
+        "target_device_id": step_device_id,
+        "hostname": shared.get("current_hostname") or step_device_id,
+        "result": {"error": "worker did not choose an answer tool before max_iterations"},
+        "status": "failed",
+        "tool_type": "system",
+        "summary": "worker answer tool missing",
+    })
     return {
         "status": "error",
-        "answer": "Subagent достиг лимита итераций и остановил шаг.",
+        "answer": "Subagent достиг лимита итераций и не выбрал инструмент ответа.",
         "commands": commands_log,
     }
 
@@ -1511,7 +1674,7 @@ async def process_pipeline_subagents(
                 worker_result.get("answer", ""),
                 worker_result.get("commands", []),
             )
-            all_commands.extend(worker_result.get("commands", []))
+            _extend_pipeline_run_journal(all_commands, worker_result.get("commands", []))
             step_summary = strip_markdown(worker_result.get("answer", "")).strip() or "Шаг завершён."
             urls = [
                 cmd.get("result", {}).get("url")
@@ -1599,6 +1762,7 @@ async def process_pipeline_subagents(
             "failure_reason": failure_reason,
             "steps": step_results,
             "task_receipt": receipt,
+            "current_run_journal": [wrap_tool_result_for_llm(command) for command in all_commands if command.get("step_id")],
             "conversation_context": conversation_context,
         }
         summary_messages = [
@@ -1606,17 +1770,107 @@ async def process_pipeline_subagents(
             {"role": "user", "content": json.dumps(summary_payload, ensure_ascii=False, indent=2)},
         ]
         try:
-            summary_data = await chat_completion_request_fn(
-                client=client,
-                cfg=cfg,
-                model=cfg.get("model", "deepseek-chat"),
-                messages=summary_messages,
-                tools=None,
-                max_tokens=min(cfg.get("max_tokens", 4096), 1200),
-            )
-            final_answer = (summary_data["choices"][0]["message"].get("content") or "").strip()
+            final_tools = _pipeline_terminal_answer_tools(worker_tools)
+            final_answer = ""
+            for _summary_attempt in range(2):
+                summary_data = await chat_completion_request_fn(
+                    client=client,
+                    cfg=cfg,
+                    model=cfg.get("model", "deepseek-chat"),
+                    messages=summary_messages,
+                    tools=final_tools,
+                    max_tokens=min(cfg.get("max_tokens", 4096), 1200),
+                    tool_choice="required",
+                )
+                assistant_msg = summary_data["choices"][0]["message"]
+                try:
+                    tool_call = validate_tool_call_batch(assistant_msg.get("tool_calls"))
+                except ProtocolValidationError as exc:
+                    summary_messages.append({"role": "user", "content": exc.correction})
+                    continue
+                fn_name = tool_call["function"]["name"]
+                try:
+                    fn_args = json.loads(tool_call["function"].get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    summary_messages.append({"role": "user", "content": f"Tool arguments must be valid JSON. {ONE_TOOL_CORRECTION}"})
+                    continue
+                try:
+                    if is_answer_text_tool(fn_name):
+                        payload = validate_answer_text_payload(fn_args, all_commands)
+                        audit_ok, audit_reason, audit_infra_error = await audit_answer_payload(
+                            client=client,
+                            cfg=cfg,
+                            chat_completion_request_fn=chat_completion_request_fn,
+                            user_request=user_message,
+                            current_run_journal=all_commands,
+                            answer_payload=payload,
+                        )
+                        if audit_infra_error:
+                            append_tool_step(all_commands, {
+                                "action": "answer_auditor",
+                                "command": "[system] answer_auditor",
+                                "device_id": device_id,
+                                "target_device_id": device_id,
+                                "hostname": device_info.get("hostname") or device_id,
+                                "result": {"error": audit_reason},
+                                "status": "failed",
+                                "tool_type": "system",
+                                "summary": "auditor_error",
+                            })
+                            final_answer = "Не удалось безопасно проверить корректность финального ответа. Повтори запрос."
+                            break
+                        if not audit_ok:
+                            summary_messages.append({"role": "user", "content": GROUNDED_CORRECTION})
+                            continue
+                        append_answer_step(
+                            all_commands,
+                            fn_name,
+                            payload,
+                            target_device_id=device_id,
+                            hostname=device_info.get("hostname") or device_id,
+                        )
+                        final_answer = payload["text"]
+                        break
+                    if is_answer_failure_tool(fn_name):
+                        payload = validate_answer_report_failure_payload(fn_args, all_commands)
+                        append_answer_step(
+                            all_commands,
+                            fn_name,
+                            payload,
+                            target_device_id=device_id,
+                            hostname=device_info.get("hostname") or device_id,
+                        )
+                        final_answer = str(payload.get("message") or "")
+                        break
+                    summary_messages.append({"role": "user", "content": "Use answer_text for final user-facing pipeline summary."})
+                except ProtocolValidationError as exc:
+                    summary_messages.append({"role": "user", "content": exc.correction})
+            if not final_answer:
+                append_tool_step(all_commands, {
+                    "action": "tool_only_protocol",
+                    "command": "[system] pipeline_final_answer",
+                    "device_id": device_id,
+                    "target_device_id": device_id,
+                    "hostname": device_info.get("hostname") or device_id,
+                    "result": {"error": "pipeline final summary did not use answer_text"},
+                    "status": "failed",
+                    "tool_type": "system",
+                    "summary": "pipeline final answer missing",
+                })
+                final_answer = "Не удалось завершить pipeline: модель не выбрала инструмент ответа."
         except Exception as exc:
             print(f"[pipeline] summary error: {exc}")
+            append_tool_step(all_commands, {
+                "action": "tool_only_protocol",
+                "command": "[system] pipeline_summary_error",
+                "device_id": device_id,
+                "target_device_id": device_id,
+                "hostname": device_info.get("hostname") or device_id,
+                "result": {"error": str(exc)},
+                "status": "failed",
+                "tool_type": "system",
+                "summary": "pipeline summary error",
+            })
             final_answer = "План выполнен не полностью." if pipeline_failed else "План выполнен."
             if step_results:
                 final_answer += " " + " ".join(

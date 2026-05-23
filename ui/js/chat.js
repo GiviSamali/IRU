@@ -761,12 +761,18 @@ function getToolNameList(commands, type) {
 }
 
 function renderUsedToolsLine(commands) {
-  const typed = getToolEntries(commands)
-    .filter(command => command.tool_type !== 'fallback')
+  const entries = getToolEntries(commands);
+  const typed = entries
+    .filter(command => command.tool_type !== 'fallback' && command.tool_type !== 'answer')
     .map(command => command.tool_name)
     .filter(Boolean);
   const fallback = getToolNameList(commands, 'fallback');
+  const answer = entries
+    .filter(command => command.tool_type === 'answer')
+    .map(command => command.tool_name)
+    .filter(Boolean);
   const typedNames = [...new Set(typed)];
+  const answerNames = [...new Set(answer)];
   const parts = [];
   if (typedNames.length === 1) {
     parts.push(`Использован инструмент: ${escapeHTML(typedNames[0])}`);
@@ -778,6 +784,7 @@ function renderUsedToolsLine(commands) {
   } else if (fallback.length > 1) {
     parts.push(`Использованы fallback: ${escapeHTML(fallback.join(', '))}`);
   }
+  if (!typedNames.length && !fallback.length && answerNames.length) parts.push('Ответ');
   return parts.length ? `<div class="tool-usage-line">${parts.join(' · ')}</div>` : '';
 }
 
@@ -790,6 +797,11 @@ function getCommandDetailsText(command, fallbackOutput) {
   if (command.target_device_id || command.device_id) lines.push(`target_device: ${command.target_device_id || command.device_id}`);
   if (command.summary) lines.push(`summary: ${command.summary}`);
   const result = command.result || {};
+  if (command.tool_type === 'answer') {
+    if (result.answer_type) lines.push(`answer_type: ${result.answer_type}`);
+    if (Array.isArray(result.basis)) lines.push(`basis: ${result.basis.join(', ')}`);
+    if (result.self_check) lines.push(`self_check: ${JSON.stringify(result.self_check)}`);
+  }
   const windowInfo = result.window || result.match || {};
   const detailFields = {
     pid: result.pid || windowInfo.pid,
@@ -809,6 +821,7 @@ function getCommandDetailsText(command, fallbackOutput) {
 
 function getCommandDisplayText(command) {
   if (command?.tool_name) {
+    if (command.tool_type === 'answer') return `Ответ: ${command.tool_name}`;
     const prefix = command.tool_type === 'fallback' ? 'Fallback' : 'Инструмент';
     return `${prefix}: ${command.tool_name}`;
   }
