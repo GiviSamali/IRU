@@ -17,3 +17,5 @@ server/.jwt_secret
 codex/
 
 dist/
+
+dist/
