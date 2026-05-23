@@ -15,3 +15,5 @@ server/.jwt_secret
 
 # Local Codex scratch files
 codex/
+
+dist/
