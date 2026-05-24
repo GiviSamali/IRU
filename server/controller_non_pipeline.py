@@ -14,7 +14,6 @@ try:
         build_chat_messages,
         set_current_step,
     )
-    from .controller_trust import enforce_trusted_answer  # type: ignore
     from .python_env import classify_command_error, is_recoverable_command_error  # type: ignore
     from .python_toolchain import (  # type: ignore
         python_toolchain_from_runtime_summary,
@@ -53,7 +52,6 @@ except ImportError:
         build_chat_messages,
         set_current_step,
     )
-    from controller_trust import enforce_trusted_answer  # type: ignore
     from python_env import classify_command_error, is_recoverable_command_error  # type: ignore
     from python_toolchain import (  # type: ignore
         python_toolchain_from_runtime_summary,
@@ -365,7 +363,7 @@ async def process_non_pipeline_command(
                             iteration=iteration + 1,
                         )
                         return {
-                            "answer": enforce_trusted_answer(answer_payload["text"], commands_log),
+                            "answer": answer_payload["text"],
                             "commands": commands_log,
                             "tasks": [],
                             "training_context": _training_context(device_info),

@@ -133,6 +133,10 @@ def _extend_pipeline_run_journal(all_commands: list[dict], worker_commands: list
             result["basis"] = [id_map.get(str(item), str(item)) for item in result["basis"]]
         all_commands.append(command)
 
+
+def _result_has_validated_answer_text(commands: list[dict] | None) -> bool:
+    return any(command.get("tool_name") == "answer.text" for command in commands or [])
+
 _PIPELINE_MULTI_STEP_MARKERS = (
     " и ",
     " затем ",
@@ -1172,7 +1176,7 @@ async def run_pipeline_worker(
                     )
                     return {
                         "status": "ok",
-                        "answer": enforce_trusted_answer(payload["text"], commands_log),
+                        "answer": payload["text"],
                         "commands": commands_log,
                     }
                 if is_answer_failure_tool(fn_name):
@@ -1670,10 +1674,11 @@ async def process_pipeline_subagents(
                     "commands": [],
                 }
 
-            worker_result["answer"] = enforce_trusted_answer(
-                worker_result.get("answer", ""),
-                worker_result.get("commands", []),
-            )
+            if not _result_has_validated_answer_text(worker_result.get("commands", [])):
+                worker_result["answer"] = enforce_trusted_answer(
+                    worker_result.get("answer", ""),
+                    worker_result.get("commands", []),
+                )
             _extend_pipeline_run_journal(all_commands, worker_result.get("commands", []))
             step_summary = strip_markdown(worker_result.get("answer", "")).strip() or "Шаг завершён."
             urls = [
@@ -1769,6 +1774,7 @@ async def process_pipeline_subagents(
             {"role": "system", "content": pipeline_summary_prompt()},
             {"role": "user", "content": json.dumps(summary_payload, ensure_ascii=False, indent=2)},
         ]
+        final_answer_from_answer_text = False
         try:
             final_tools = _pipeline_terminal_answer_tools(worker_tools)
             final_answer = ""
@@ -1830,6 +1836,7 @@ async def process_pipeline_subagents(
                             hostname=device_info.get("hostname") or device_id,
                         )
                         final_answer = payload["text"]
+                        final_answer_from_answer_text = True
                         break
                     if is_answer_failure_tool(fn_name):
                         payload = validate_answer_report_failure_payload(fn_args, all_commands)
@@ -1878,9 +1885,10 @@ async def process_pipeline_subagents(
                     for step_result in step_results[-3:]
                 )
 
-    final_answer = strip_markdown(final_answer)
-    final_answer = enforce_conversation_context_answer(final_answer, conversation_context)
-    final_answer = enforce_trusted_answer(final_answer, all_commands)
+    if not final_answer_from_answer_text:
+        final_answer = strip_markdown(final_answer)
+        final_answer = enforce_conversation_context_answer(final_answer, conversation_context)
+        final_answer = enforce_trusted_answer(final_answer, all_commands)
     return {
         "answer": final_answer,
         "commands": all_commands,

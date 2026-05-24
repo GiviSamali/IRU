@@ -1,6 +1,8 @@
 import asyncio
 import json
 
+import server.controller_non_pipeline as controller_non_pipeline
+import server.controller_pipeline as controller_pipeline
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_pipeline import process_pipeline_subagents
 from server.run_journal import validate_answer_text_payload
@@ -107,6 +109,20 @@ def test_conceptual_answer_through_answer_text_succeeds_without_external_tool():
 
     assert result["answer"] == "Tool Registry группирует доступные возможности."
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["answer.text"]
+
+
+def test_non_pipeline_answer_text_returns_validated_payload_unchanged(monkeypatch):
+    def _legacy_trust_should_not_run(answer, commands):
+        raise AssertionError("legacy enforce_trusted_answer must not run for answer_text")
+
+    monkeypatch.setattr(controller_non_pipeline, "enforce_trusted_answer", _legacy_trust_should_not_run, raising=False)
+    text = "Keep this exact answer, including failed/error words and /api/download/not_allowed"
+
+    result = _run_case([
+        _message(tool_calls=[_answer_call("call-answer", text)]),
+    ])
+
+    assert result["answer"] == text
 
 
 def test_window_check_raw_text_rejected_then_requires_current_step_basis():
@@ -293,6 +309,11 @@ def test_auditor_rejects_invalid_answer_and_retry_succeeds():
 
 
 def test_pipeline_final_raw_summary_rejected_then_answer_text(monkeypatch):
+    def _legacy_trust_should_not_run(answer, commands):
+        raise AssertionError("legacy enforce_trusted_answer must not run for pipeline answer_text")
+
+    monkeypatch.setattr(controller_pipeline, "enforce_trusted_answer", _legacy_trust_should_not_run)
+    final_text = "pipeline ok with failed/error words and /api/download/not_allowed"
     responses = [
         _message(json.dumps({
             "goal": "verify task",
@@ -301,7 +322,7 @@ def test_pipeline_final_raw_summary_rejected_then_answer_text(monkeypatch):
         _message(tool_calls=[_execute_call("call-exec", "echo ok")]),
         _message(tool_calls=[_answer_call("call-step-answer", "step ok", answer_type="grounded_report", basis=["step_1"])]),
         _message("raw final summary", tool_calls=None, finish_reason="stop"),
-        _message(tool_calls=[_answer_call("call-final", "pipeline ok", answer_type="grounded_report", basis=["step_1"])]),
+        _message(tool_calls=[_answer_call("call-final", final_text, answer_type="grounded_report", basis=["step_1"])]),
     ]
     captured = []
     finished = []
@@ -345,7 +366,7 @@ def test_pipeline_final_raw_summary_rejected_then_answer_text(monkeypatch):
         linux_rules="linux rules",
     ))
 
-    assert result["answer"] == "pipeline ok"
+    assert result["answer"] == final_text
     assert finished == ["completed"]
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text", "answer.text"]
     assert any("Raw assistant content is not allowed" in msg.get("content", "") for msg in captured[-1]["messages"])
