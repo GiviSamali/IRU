@@ -184,6 +184,7 @@ async def _chat_completion_request(
     messages: list[dict],
     tools: list[dict] | None = None,
     max_tokens: int | None = None,
+    tool_choice: str | dict | None = None,
 ) -> dict:
     """Единая обёртка для вызова chat/completions с ретраями."""
     request_json = {
@@ -193,7 +194,10 @@ async def _chat_completion_request(
     }
     if tools is not None:
         request_json["tools"] = tools
-        request_json["tool_choice"] = "auto"
+        if tool_choice is not None and cfg.get("required_tool_choice_supported", True):
+            request_json["tool_choice"] = tool_choice
+        else:
+            request_json["tool_choice"] = "auto"
 
     base_model = cfg.get("model", "deepseek-chat")
     if model == base_model:

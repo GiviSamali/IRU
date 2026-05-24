@@ -222,6 +222,8 @@ WORKER_TOOL_NAMES = {
     "web_search",
     "remember_fact",
     "forget_fact",
+    "answer_text",
+    "answer_report_failure",
 }
 WORKER_TOOLS = [
     tool for tool in NON_PIPELINE_TOOLS

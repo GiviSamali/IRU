@@ -20,6 +20,42 @@ def _execute_call(call_id: str, command: str) -> dict:
     }
 
 
+def _answer_text_call(call_id: str, text: str, basis: list[str]) -> dict:
+    return {
+        "id": call_id,
+        "function": {
+            "name": "answer_text",
+            "arguments": json.dumps({
+                "answer_type": "grounded_report",
+                "text": text,
+                "basis": basis,
+                "self_check": {
+                    "depends_on_current_external_state": True,
+                    "claims_completed_action": True,
+                    "has_sufficient_evidence": True,
+                    "missing_evidence_question": "",
+                },
+            }),
+        },
+    }
+
+
+def _answer_failure_call(call_id: str, message: str, basis: list[str]) -> dict:
+    return {
+        "id": call_id,
+        "function": {
+            "name": "answer_report_failure",
+            "arguments": json.dumps({
+                "message": message,
+                "reason": "step command failed",
+                "recoverable": True,
+                "suggested_next_action": "continue with verification",
+                "basis": basis,
+            }),
+        },
+    }
+
+
 def _completion_fn(responses, captured_messages):
     async def _chat_completion_request_fn(**kwargs):
         captured_messages.append(kwargs["messages"])
@@ -51,15 +87,15 @@ def test_pipeline_recoverable_failure_later_verification_completes_with_recovery
                 "message": {"content": "", "tool_calls": [_execute_call("call-1", 'python -c "import docx"')]},
             }]
         },
-        {"choices": [{"finish_reason": "stop", "message": {"content": ""}}]},
+        {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_failure_call("call-step0-failure", "dependency missing", ["step_1"])]}}]},
         {
             "choices": [{
                 "finish_reason": "tool_calls",
                 "message": {"content": "", "tool_calls": [_execute_call("call-2", "verify generated docx files")]},
             }]
         },
-        {"choices": [{"finish_reason": "stop", "message": {"content": "files verified"}}]},
-        {"choices": [{"finish_reason": "stop", "message": {"content": "Готово, файлы созданы и проверены."}}]},
+        {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_text_call("call-step1-answer", "files verified", ["step_1"])]}}]},
+        {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_text_call("call-final", "Готово, файлы созданы и проверены.", ["step_3"])]}}]},
     ]
     captured_messages = []
     updates = []

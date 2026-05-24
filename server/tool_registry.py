@@ -26,6 +26,10 @@ CANONICAL_TOOL_NAMES = {
     "app_launch": "app.launch",
     "app_verify_launch": "app.verify_launch",
     "app_close": "app.close",
+    "answer_text": "answer.text",
+    "answer_ask_clarification": "answer.ask_clarification",
+    "answer_report_failure": "answer.report_failure",
+    "answer_request_confirmation": "answer.request_confirmation",
     "write_content": "write_content",
     "execute_cmd": "execute_cmd",
 }
@@ -208,6 +212,42 @@ TOOL_METADATA = {
         "returns": "command result",
         "danger": "depends_on_command",
     },
+    "answer.text": {
+        "category": "answer",
+        "tool_type": "answer",
+        "tool_label": "Ответ",
+        "purpose": "Terminal user-facing text response.",
+        "when_to_use": ["final user-facing answer", "conceptual answer", "grounded report after tool result"],
+        "returns": "terminal answer payload",
+        "danger": "safe",
+    },
+    "answer.ask_clarification": {
+        "category": "answer",
+        "tool_type": "answer",
+        "tool_label": "Уточняющий вопрос",
+        "purpose": "Terminal clarification question when the task cannot proceed safely or meaningfully.",
+        "when_to_use": ["need user input", "task is ambiguous or unsafe without clarification"],
+        "returns": "terminal clarification payload",
+        "danger": "safe",
+    },
+    "answer.report_failure": {
+        "category": "answer",
+        "tool_type": "answer",
+        "tool_label": "Сообщение об ошибке",
+        "purpose": "Terminal failure report.",
+        "when_to_use": ["unrecoverable tool error", "policy or configuration prevents completion"],
+        "returns": "terminal failure payload",
+        "danger": "safe",
+    },
+    "answer.request_confirmation": {
+        "category": "answer",
+        "tool_type": "answer",
+        "tool_label": "Запрос подтверждения",
+        "purpose": "Terminal confirmation request before a risky action.",
+        "when_to_use": ["dangerous or destructive action requires confirmation"],
+        "returns": "terminal confirmation payload",
+        "danger": "confirmation",
+    },
 }
 
 
@@ -222,7 +262,7 @@ DEVICE_TOOL_SCHEMAS = [
                 "properties": {
                     "category": {
                         "type": "string",
-                        "enum": ["all", "device", "files", "python", "window", "app", "artifact"],
+                        "enum": ["all", "device", "files", "python", "window", "app", "artifact", "answer"],
                         "default": "all",
                     }
                 },
@@ -471,6 +511,92 @@ DEVICE_TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "answer_text",
+            "description": "Terminal user-facing answer. Use for conceptual text or grounded reports after current-run tool results. Server-side only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "answer_type": {
+                        "type": "string",
+                        "enum": ["pure_text", "grounded_report", "clarification", "failure"],
+                    },
+                    "text": {"type": "string"},
+                    "basis": {"type": "array", "items": {"type": "string"}},
+                    "self_check": {
+                        "type": "object",
+                        "properties": {
+                            "depends_on_current_external_state": {"type": "boolean"},
+                            "claims_completed_action": {"type": "boolean"},
+                            "has_sufficient_evidence": {"type": "boolean"},
+                            "missing_evidence_question": {"type": "string"},
+                        },
+                        "required": [
+                            "depends_on_current_external_state",
+                            "claims_completed_action",
+                            "has_sufficient_evidence",
+                            "missing_evidence_question",
+                        ],
+                    },
+                },
+                "required": ["answer_type", "text", "basis", "self_check"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "answer_ask_clarification",
+            "description": "Terminal clarification question. Server-side only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "options": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["question", "reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "answer_report_failure",
+            "description": "Terminal failure report. Server-side only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "recoverable": {"type": "boolean"},
+                    "suggested_next_action": {"type": "string"},
+                    "basis": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["message", "reason", "recoverable", "suggested_next_action", "basis"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "answer_request_confirmation",
+            "description": "Terminal confirmation request before risky action. Server-side only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string"},
+                    "action": {"type": "string"},
+                    "risk": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "command_preview": {"type": "string"},
+                    "basis": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["message", "action", "risk", "command_preview", "basis"],
+            },
+        },
+    },
 ]
 
 
@@ -567,6 +693,14 @@ def compact_tool_summary(action: str, result: Any = None, command: str = "") -> 
         if name == "execute_cmd":
             rc = result.get("returncode")
             return f"returncode={rc}" if rc is not None else "shell command completed"
+        if name == "answer.text":
+            return f"answer_type={result.get('answer_type') or 'unknown'}"
+        if name == "answer.ask_clarification":
+            return "clarification requested"
+        if name == "answer.report_failure":
+            return "failure reported"
+        if name == "answer.request_confirmation":
+            return "confirmation requested"
     if command:
         return command[:240]
     return f"{name} completed"

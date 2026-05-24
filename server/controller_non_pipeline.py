@@ -7,13 +7,13 @@ import httpx
 
 try:
     from . import database as db  # type: ignore
+    from .answer_auditor import audit_answer_payload  # type: ignore
     from .controller_budget import BUDGET_GUARD_ERROR, CommandBudget, budget_guard_entry  # type: ignore
     from .controller_shared import (  # type: ignore
         ConfirmationRequired,
         build_chat_messages,
         set_current_step,
     )
-    from .controller_trust import enforce_trusted_answer  # type: ignore
     from .python_env import classify_command_error, is_recoverable_command_error  # type: ignore
     from .python_toolchain import (  # type: ignore
         python_toolchain_from_runtime_summary,
@@ -23,15 +23,35 @@ try:
         validate_toolchain_fact_against_receipt,
     )
     from .tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
+    from .run_journal import (  # type: ignore
+        GROUNDED_CORRECTION,
+        INSUFFICIENT_EVIDENCE_CORRECTION,
+        ONE_TOOL_CORRECTION,
+        RAW_CONTENT_CORRECTION,
+        ProtocolValidationError,
+        append_answer_step,
+        append_tool_step,
+        is_answer_clarification_tool,
+        is_answer_confirmation_tool,
+        is_answer_failure_tool,
+        is_answer_text_tool,
+        is_terminal_answer_tool,
+        make_run_step,
+        validate_answer_confirmation_payload,
+        validate_answer_report_failure_payload,
+        validate_answer_text_payload,
+        validate_tool_call_batch,
+        wrap_tool_result_for_llm,
+    )
 except ImportError:
     import database as db  # type: ignore
+    from answer_auditor import audit_answer_payload  # type: ignore
     from controller_budget import BUDGET_GUARD_ERROR, CommandBudget, budget_guard_entry  # type: ignore
     from controller_shared import (  # type: ignore
         ConfirmationRequired,
         build_chat_messages,
         set_current_step,
     )
-    from controller_trust import enforce_trusted_answer  # type: ignore
     from python_env import classify_command_error, is_recoverable_command_error  # type: ignore
     from python_toolchain import (  # type: ignore
         python_toolchain_from_runtime_summary,
@@ -41,6 +61,26 @@ except ImportError:
         validate_toolchain_fact_against_receipt,
     )
     from tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
+    from run_journal import (  # type: ignore
+        GROUNDED_CORRECTION,
+        INSUFFICIENT_EVIDENCE_CORRECTION,
+        ONE_TOOL_CORRECTION,
+        RAW_CONTENT_CORRECTION,
+        ProtocolValidationError,
+        append_answer_step,
+        append_tool_step,
+        is_answer_clarification_tool,
+        is_answer_confirmation_tool,
+        is_answer_failure_tool,
+        is_answer_text_tool,
+        is_terminal_answer_tool,
+        make_run_step,
+        validate_answer_confirmation_payload,
+        validate_answer_report_failure_payload,
+        validate_answer_text_payload,
+        validate_tool_call_batch,
+        wrap_tool_result_for_llm,
+    )
 
 
 def _training_context(device_info: dict) -> dict:
@@ -161,6 +201,20 @@ async def process_non_pipeline_command(
     messages.append({"role": "user", "content": user_message})
 
     commands_log = []
+
+    def add_correction(correction: str):
+        messages.append({"role": "user", "content": correction})
+
+    def append_entry(entry: dict) -> dict:
+        return append_tool_step(commands_log, entry)
+
+    def append_tool_message(tool_call_id: str, entry: dict):
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": json.dumps(wrap_tool_result_for_llm(entry), ensure_ascii=False)[:4000],
+        })
+
     command_budget = CommandBudget()
     device_profile = db.get_device_profile(device_id)
     python_receipt = (
@@ -184,6 +238,7 @@ async def process_non_pipeline_command(
                     messages=messages,
                     tools=non_pipeline_tools,
                     max_tokens=cfg.get("max_tokens", 4096),
+                    tool_choice="required",
                 )
             except httpx.HTTPStatusError as exc:
                 print(f"[llm] HTTP error: {exc.response.status_code} {exc.response.text[:500]}")
@@ -224,13 +279,8 @@ async def process_non_pipeline_command(
                         "training_context": _training_context(device_info),
                     }
 
-                truncated_text = assistant_msg.get("content", "") or ""
-                return {
-                    "answer": truncated_text + "\n\n[Ответ был обрезан из-за ограничения длины. Попробуй задать более конкретный вопрос.]",
-                    "commands": commands_log,
-                    "tasks": [],
-                    "training_context": _training_context(device_info),
-                }
+                add_correction(RAW_CONTENT_CORRECTION)
+                continue
 
             content_text = assistant_msg.get("content") or ""
             suggest_plan_match = re.search(r"\[\[SUGGEST_PLAN:\s*[^\[\]]+?\s*\]\]", content_text)
@@ -247,20 +297,142 @@ async def process_non_pipeline_command(
                     "content": content_text,
                 }
 
-            messages.append(assistant_msg)
-
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
-                final_answer = enforce_trusted_answer(
-                    assistant_msg.get("content", "Готово."),
-                    commands_log,
-                )
-                return {
-                    "answer": final_answer,
-                    "commands": commands_log,
-                    "tasks": [],
-                    "training_context": _training_context(device_info),
-                }
+                add_correction(RAW_CONTENT_CORRECTION)
+                continue
+
+            try:
+                tool_call = validate_tool_call_batch(tool_calls)
+            except ProtocolValidationError as exc:
+                print(f"[tool-only] invalid assistant output: {exc.message}")
+                add_correction(exc.correction)
+                continue
+
+            fn_name = tool_call["function"]["name"]
+            try:
+                fn_args_preview = json.loads(tool_call["function"].get("arguments") or "{}")
+            except json.JSONDecodeError as exc:
+                print(f"[llm] BAD JSON in tool args: {exc}, raw={tool_call['function'].get('arguments', '')[:300]}")
+                add_correction(f"Tool arguments must be valid JSON. {ONE_TOOL_CORRECTION}")
+                continue
+
+            if is_terminal_answer_tool(fn_name):
+                target_device = device_id
+                try:
+                    if is_answer_text_tool(fn_name):
+                        answer_payload = validate_answer_text_payload(fn_args_preview, commands_log)
+                        audit_ok, audit_reason, audit_infra_error = await audit_answer_payload(
+                            client=client,
+                            cfg=cfg,
+                            chat_completion_request_fn=chat_completion_request_fn,
+                            user_request=user_message,
+                            current_run_journal=commands_log,
+                            answer_payload=answer_payload,
+                        )
+                        if audit_infra_error:
+                            auditor_entry = make_run_step(
+                                journal=commands_log,
+                                tool_name="answer_auditor",
+                                result={"error": audit_reason},
+                                command="[system] answer_auditor",
+                                target_device_id=target_device,
+                                hostname=device_info.get("hostname") or target_device,
+                                iteration=iteration + 1,
+                                tool_type="system",
+                                status="failed",
+                                summary="auditor_error",
+                            )
+                            commands_log.append(auditor_entry)
+                            return {
+                                "answer": "Не удалось безопасно проверить корректность финального ответа. Повтори запрос.",
+                                "commands": commands_log,
+                                "tasks": [],
+                                "training_context": _training_context(device_info),
+                            }
+                        if not audit_ok:
+                            print(f"[answer-auditor] rejected answer_text: {audit_reason}")
+                            add_correction(GROUNDED_CORRECTION)
+                            continue
+                        append_answer_step(
+                            commands_log,
+                            fn_name,
+                            answer_payload,
+                            target_device_id=target_device,
+                            hostname=device_info.get("hostname") or target_device,
+                            iteration=iteration + 1,
+                        )
+                        return {
+                            "answer": answer_payload["text"],
+                            "commands": commands_log,
+                            "tasks": [],
+                            "training_context": _training_context(device_info),
+                        }
+                    if is_answer_clarification_tool(fn_name):
+                        question = str(fn_args_preview.get("question") or "").strip()
+                        reason = str(fn_args_preview.get("reason") or "").strip()
+                        if not question or not reason:
+                            raise ProtocolValidationError("answer_ask_clarification requires question and reason", GROUNDED_CORRECTION)
+                        append_answer_step(
+                            commands_log,
+                            fn_name,
+                            fn_args_preview,
+                            target_device_id=target_device,
+                            hostname=device_info.get("hostname") or target_device,
+                            iteration=iteration + 1,
+                        )
+                        return {
+                            "answer": question,
+                            "commands": commands_log,
+                            "tasks": [],
+                            "training_context": _training_context(device_info),
+                        }
+                    if is_answer_failure_tool(fn_name):
+                        payload = validate_answer_report_failure_payload(fn_args_preview, commands_log)
+                        append_answer_step(
+                            commands_log,
+                            fn_name,
+                            payload,
+                            target_device_id=target_device,
+                            hostname=device_info.get("hostname") or target_device,
+                            iteration=iteration + 1,
+                        )
+                        return {
+                            "answer": str(payload.get("message") or ""),
+                            "commands": commands_log,
+                            "tasks": [],
+                            "training_context": _training_context(device_info),
+                        }
+                    if is_answer_confirmation_tool(fn_name):
+                        payload = validate_answer_confirmation_payload(fn_args_preview, commands_log)
+                        append_answer_step(
+                            commands_log,
+                            fn_name,
+                            payload,
+                            target_device_id=target_device,
+                            hostname=device_info.get("hostname") or target_device,
+                            iteration=iteration + 1,
+                        )
+                        raise ConfirmationRequired(
+                            command=payload.get("command_preview") or payload.get("action") or "",
+                            device_id=target_device,
+                            params={
+                                "action": payload.get("action"),
+                                "risk": payload.get("risk"),
+                                "command_preview": payload.get("command_preview"),
+                                "basis": payload.get("basis") or [],
+                            },
+                            answer=payload.get("message") or "Confirmation required",
+                            commands_log=commands_log,
+                        )
+                except ProtocolValidationError as exc:
+                    print(f"[tool-only] invalid answer tool: {exc.message}")
+                    add_correction(exc.correction)
+                    continue
+
+            assistant_msg["tool_calls"] = [tool_call]
+            messages.append(assistant_msg)
+            tool_calls = [tool_call]
 
             for tool_call in tool_calls:
                 fn_name = tool_call["function"]["name"]
@@ -292,7 +464,7 @@ async def process_non_pipeline_command(
 
                 budget_error = command_budget.register(fn_name, fn_args.get("command", ""))
                 if budget_error:
-                    commands_log.append(budget_guard_entry(budget_error))
+                    append_entry(budget_guard_entry(budget_error))
                     return {
                         "answer": budget_error,
                         "commands": commands_log,
@@ -310,7 +482,7 @@ async def process_non_pipeline_command(
                         if command_error.get("missing_packages"):
                             tool_result["missing_packages"] = command_error["missing_packages"]
 
-                    commands_log.append(_command_log_entry(
+                    entry = append_entry(_command_log_entry(
                         fn_name,
                         fn_args.get("command", ""),
                         target_device,
@@ -318,11 +490,7 @@ async def process_non_pipeline_command(
                         tool_result,
                         iteration + 1,
                     ))
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call["id"],
-                        "content": json.dumps(tool_result, ensure_ascii=False)[:2000],
-                    })
+                    append_tool_message(tool_call["id"], entry)
                     continue
 
                 if fn_name == "web_search":
@@ -346,7 +514,7 @@ async def process_non_pipeline_command(
 
                 if fn_name == "system_list_tools":
                     tool_result = list_tools(fn_args.get("category", "all"))
-                    commands_log.append(tool_log_entry(
+                    append_entry(tool_log_entry(
                         fn_name,
                         tool_result,
                         command="[tool] system.list_tools",
@@ -368,7 +536,7 @@ async def process_non_pipeline_command(
                         refreshed = python_toolchain_from_runtime_summary(runtime_summary, device_id=target_device)
                         if refreshed:
                             python_receipt = refreshed
-                    commands_log.append(tool_log_entry(
+                    append_entry(tool_log_entry(
                         fn_name,
                         tool_result,
                         command=f"[tool] {fn_name}",
@@ -393,7 +561,7 @@ async def process_non_pipeline_command(
                                 commands_log=commands_log,
                             )
                         tool_result = {"error": err_str}
-                    commands_log.append(tool_log_entry(
+                    append_entry(tool_log_entry(
                         fn_name,
                         tool_result,
                         command=fn_args.get("command") or f"[tool] {agent_action}",
@@ -447,7 +615,7 @@ async def process_non_pipeline_command(
                         if command_error.get("missing_packages"):
                             tool_result["missing_packages"] = command_error["missing_packages"]
 
-                    commands_log.append(_command_log_entry(
+                    append_entry(_command_log_entry(
                         fn_name,
                         fn_args.get("command", ""),
                         target_device,
@@ -472,7 +640,7 @@ async def process_non_pipeline_command(
                             tool_result["command_error"]["guard_message"] = env_guard_error
                             commands_log[-1]["result"] = tool_result
                         else:
-                            commands_log.append(budget_guard_entry(env_guard_error))
+                            append_entry(budget_guard_entry(env_guard_error))
                             return {
                                 "answer": env_guard_error,
                                 "commands": commands_log,
@@ -513,7 +681,7 @@ async def process_non_pipeline_command(
 
                     preview = fn_args.get("content", "")[:60]
                     mode = "append" if fn_args.get("append") else "write"
-                    commands_log.append(_command_log_entry(
+                    append_entry(_command_log_entry(
                         fn_name,
                         f"[{mode}] {fn_args.get('path', '')} | {preview}...",
                         target_device,
@@ -530,7 +698,7 @@ async def process_non_pipeline_command(
                     except Exception as exc:
                         tool_result = {"error": str(exc)}
 
-                    commands_log.append({
+                    append_entry({
                         "action": fn_name,
                         "command": f"[скачать] {fn_args.get('file_path', '')}",
                         "device_id": target_device,
@@ -542,7 +710,7 @@ async def process_non_pipeline_command(
                     query = fn_args.get("query", "").strip()
                     max_results = min(int(fn_args.get("max_results", 5) or 5), 10)
                     tool_result = await _run_web_search(cfg, query, max_results)
-                    commands_log.append(_command_log_entry(
+                    append_entry(_command_log_entry(
                         fn_name,
                         f"[web_search] {fn_args.get('query', '')[:80]}",
                         target_device,
@@ -571,7 +739,7 @@ async def process_non_pipeline_command(
                         except Exception as exc:
                             print(f"[llm] remember_fact EXCEPTION: {exc}")
                             tool_result = {"error": str(exc)}
-                    commands_log.append(_command_log_entry(
+                    append_entry(_command_log_entry(
                         fn_name,
                         "[memory] remember_fact",
                         target_device,
@@ -591,7 +759,7 @@ async def process_non_pipeline_command(
                         except Exception as exc:
                             print(f"[llm] forget_fact EXCEPTION: {exc}")
                             tool_result = {"error": str(exc)}
-                    commands_log.append(_command_log_entry(
+                    append_entry(_command_log_entry(
                         fn_name,
                         "[memory] forget_fact",
                         target_device,
@@ -603,14 +771,34 @@ async def process_non_pipeline_command(
                 else:
                     tool_result = {"error": f"Неизвестная функция: {fn_name}"}
 
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call["id"],
-                    "content": json.dumps(tool_result, ensure_ascii=False)[:2000],
-                })
+                if (
+                    not commands_log
+                    or commands_log[-1].get("iteration") != iteration + 1
+                    or commands_log[-1].get("action") != fn_name
+                ):
+                    append_entry(_command_log_entry(
+                        fn_name,
+                        f"[tool] {fn_name}",
+                        target_device,
+                        device_info,
+                        tool_result,
+                        iteration + 1,
+                    ))
+                append_tool_message(tool_call["id"], commands_log[-1])
 
+    append_entry(make_run_step(
+        journal=commands_log,
+        tool_name="tool_only_protocol",
+        result={"error": "model did not choose an answer tool before max_iterations"},
+        command="[system] tool_only_protocol",
+        target_device_id=device_id,
+        hostname=device_info.get("hostname") or device_id,
+        tool_type="system",
+        status="failed",
+        summary="model did not choose answer tool",
+    ))
     return {
-        "answer": "Достигнут лимит итераций. Последние результаты в логе.",
+        "answer": "Не удалось завершить задачу: модель не выбрала инструмент ответа.",
         "commands": commands_log,
         "training_context": _training_context(device_info),
         "tasks": [],

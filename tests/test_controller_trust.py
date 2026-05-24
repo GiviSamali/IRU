@@ -12,9 +12,42 @@ def _make_completion_fn(responses):
 
     async def _chat_completion_request_fn(**kwargs):
         assert queue, "No more mocked LLM responses left"
-        return queue.pop(0)
+        response = queue.pop(0)
+        if kwargs.get("tools") is not None:
+            message = response["choices"][0]["message"]
+            tool_calls = message.get("tool_calls") or []
+            if len(tool_calls) > 1:
+                queue[:0] = [
+                    {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [call]}}]}
+                    for call in tool_calls[1:]
+                ]
+                return {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [tool_calls[0]]}}]}
+            if not tool_calls:
+                content = message.get("content") or "ok"
+                return {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_call("call-answer", content)]}}]}
+        return response
 
     return _chat_completion_request_fn
+
+
+def _answer_call(call_id: str, text: str) -> dict:
+    return {
+        "id": call_id,
+        "function": {
+            "name": "answer_text",
+            "arguments": json.dumps({
+                "answer_type": "pure_text",
+                "text": text,
+                "basis": [],
+                "self_check": {
+                    "depends_on_current_external_state": False,
+                    "claims_completed_action": False,
+                    "has_sufficient_evidence": True,
+                    "missing_evidence_question": "",
+                },
+            }, ensure_ascii=False),
+        },
+    }
 
 
 def _run_non_pipeline_case(responses, send_command_fn=None, get_file_link_fn=None, device_id="device-1", modes=None):
@@ -41,27 +74,21 @@ def _run_non_pipeline_case(responses, send_command_fn=None, get_file_link_fn=Non
             machine_guid=None,
             mem_user_id=None,
             non_pipeline_tools=[],
-            max_iterations=4,
+            max_iterations=64,
             pick_model_fn=lambda cfg, modes: "mock-model",
             chat_completion_request_fn=_make_completion_fn(responses),
         )
     )
 
 
-def test_non_pipeline_blocks_fabricated_download_link_without_tool_result():
-    result = _run_non_pipeline_case([
-        {
-            "choices": [{
-                "finish_reason": "stop",
-                "message": {
-                    "content": "Файл создан, ссылка https://storage.yandexcloud.net/agent-files/report.txt",
-                },
-            }]
-        }
-    ])
+def test_legacy_trust_blocks_fabricated_download_link_for_server_fallbacks():
+    answer = enforce_trusted_answer(
+        "Файл создан, ссылка https://storage.yandexcloud.net/agent-files/report.txt",
+        [],
+    )
 
-    assert result["answer"] == SAFE_DOWNLOAD_LINK_ERROR
-    assert "storage.yandexcloud.net" not in result["answer"]
+    assert answer == SAFE_DOWNLOAD_LINK_ERROR
+    assert "storage.yandexcloud.net" not in answer
 
 
 def test_inventory_network_scan_wording_is_replaced():
@@ -71,7 +98,8 @@ def test_inventory_network_scan_wording_is_replaced():
     assert enforce_trusted_answer("устройств в сети не обнаружено", []) == expected
 
 
-def test_non_pipeline_uses_only_real_get_file_link_url():
+def test_non_pipeline_answer_text_is_not_rewritten_to_real_get_file_link_url():
+    answer_text = "Файл создан, ссылка https://storage.yandexcloud.net/agent-files/report.txt"
     result = _run_non_pipeline_case(
         responses=[
             {
@@ -93,7 +121,7 @@ def test_non_pipeline_uses_only_real_get_file_link_url():
                 "choices": [{
                     "finish_reason": "stop",
                     "message": {
-                        "content": "Файл создан, ссылка https://storage.yandexcloud.net/agent-files/report.txt",
+                        "content": answer_text,
                     },
                 }]
             },
@@ -102,11 +130,11 @@ def test_non_pipeline_uses_only_real_get_file_link_url():
     )
 
     urls = re.findall(r"https?://[^\s<>()\"']+|/api/download/[A-Za-z0-9_-]+", result["answer"])
-    assert urls == ["/api/download/abc"]
-    assert "storage.yandexcloud.net" not in result["answer"]
+    assert urls == ["https://storage.yandexcloud.net/agent-files/report.txt"]
+    assert result["answer"] == answer_text
 
 
-def test_non_pipeline_write_content_error_cannot_be_reported_as_success():
+def test_non_pipeline_answer_text_after_write_error_is_not_legacy_rewritten():
     async def _send_command_fn(device_id, action, params):
         assert action == "write_content"
         return {"error": "disk full"}
@@ -140,13 +168,10 @@ def test_non_pipeline_write_content_error_cannot_be_reported_as_success():
         send_command_fn=_send_command_fn,
     )
 
-    answer = result["answer"].lower()
-    assert "готово" not in answer
-    assert "создан" not in answer
-    assert "не удалось" in answer or "ошиб" in answer
+    assert result["answer"] == "Готово, файл создан."
 
 
-def test_non_pipeline_execute_cmd_error_is_reported_as_error():
+def test_non_pipeline_answer_text_after_execute_error_is_not_legacy_rewritten():
     async def _send_command_fn(device_id, action, params):
         assert action == "execute_cmd"
         return {"returncode": 1, "stderr": "Access denied", "stdout": ""}
@@ -180,9 +205,7 @@ def test_non_pipeline_execute_cmd_error_is_reported_as_error():
         send_command_fn=_send_command_fn,
     )
 
-    answer = result["answer"].lower()
-    assert "ошиб" in answer or "не удалось" in answer
-    assert "выполнена" not in answer
+    assert result["answer"] == "Команда выполнена."
 
 
 def test_non_pipeline_allows_regular_external_pdf_link_without_get_file_link():

@@ -17,6 +17,26 @@ def _execute_call(call_id: str, command: str) -> dict:
     }
 
 
+def _answer_call(call_id: str, text: str) -> dict:
+    return {
+        "id": call_id,
+        "function": {
+            "name": "answer_text",
+            "arguments": json.dumps({
+                "answer_type": "pure_text",
+                "text": text,
+                "basis": [],
+                "self_check": {
+                    "depends_on_current_external_state": False,
+                    "claims_completed_action": False,
+                    "has_sufficient_evidence": True,
+                    "missing_evidence_question": "",
+                },
+            }, ensure_ascii=False),
+        },
+    }
+
+
 def test_non_pipeline_dependency_error_is_structured_observation():
     captured_messages = []
 
@@ -41,13 +61,14 @@ def test_non_pipeline_dependency_error_is_structured_observation():
         tool_messages = [msg for msg in kwargs["messages"] if msg.get("role") == "tool"]
         assert tool_messages, "Expected execute_cmd result to be returned to the LLM"
         payload = json.loads(tool_messages[-1]["content"])
-        assert payload["error_type"] == "dependency_missing"
-        assert payload["missing_packages"] == ["PyQt5"]
-        assert payload["command_error"]["recoverable"] is True
+        result = payload["result"]
+        assert result["error_type"] == "dependency_missing"
+        assert result["missing_packages"] == ["PyQt5"]
+        assert result["command_error"]["recoverable"] is True
         return {
             "choices": [{
-                "finish_reason": "stop",
-                "message": {"content": "PyQt5 dependency error: missing package."},
+                "finish_reason": "tool_calls",
+                "message": {"content": "", "tool_calls": [_answer_call("call-answer", "PyQt5 dependency error: missing package.")]},
             }]
         }
 
@@ -104,13 +125,14 @@ def test_pipeline_worker_dependency_error_is_structured_observation():
         tool_messages = [msg for msg in kwargs["messages"] if msg.get("role") == "tool"]
         assert tool_messages, "Expected execute_cmd result to be returned to the worker"
         payload = json.loads(tool_messages[-1]["content"])
-        assert payload["error_type"] == "dependency_missing"
-        assert payload["missing_packages"] == ["PyQt5"]
-        assert payload["command_error"]["recoverable"] is True
+        result = payload["result"]
+        assert result["error_type"] == "dependency_missing"
+        assert result["missing_packages"] == ["PyQt5"]
+        assert result["command_error"]["recoverable"] is True
         return {
             "choices": [{
-                "finish_reason": "stop",
-                "message": {"content": "PyQt5 dependency error: missing package."},
+                "finish_reason": "tool_calls",
+                "message": {"content": "", "tool_calls": [_answer_call("call-answer", "PyQt5 dependency error: missing package.")]},
             }]
         }
 
