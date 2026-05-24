@@ -353,6 +353,22 @@ async def send_command_to_agent(
             dev["python_runtime_receipt"] = result
             dev["python_runtime_summary"] = summary
             update_device_python_runtime_summary(_short_did(device_id), summary)
+    elif action == "device.refresh_state" and isinstance(result, dict) and not result.get("error"):
+        snapshot = result.get("snapshot") if isinstance(result.get("snapshot"), dict) else None
+        identity = result.get("identity_receipt") if isinstance(result.get("identity_receipt"), dict) else {}
+        collected_at = result.get("collected_at") or _utc_now_iso()
+        status = result.get("status") or "ok"
+        if snapshot is not None or identity:
+            record = {
+                "snapshot": snapshot,
+                "collected_at": collected_at,
+                "identity_receipt": identity,
+                "health_summary": result.get("health_summary") if isinstance(result.get("health_summary"), dict) else build_state_health_summary(snapshot, identity, status),
+                "status": status,
+            }
+            dev["last_state_snapshot"] = record
+        if isinstance(result.get("passport_summary"), dict):
+            dev["agent_cached_passport"] = result["passport_summary"]
 
     return _attach_identity_receipt(result, device_id=device_id, dev=dev)
 
@@ -382,13 +398,15 @@ def _snapshot_command_for_device(device_info: dict) -> str:
         "$cs=Get-CimInstance Win32_ComputerSystem; $os=Get-CimInstance Win32_OperatingSystem; "
         "$prod=Get-CimInstance Win32_ComputerSystemProduct; $bios=Get-CimInstance Win32_BIOS; "
         "$cpu=Get-CimInstance Win32_Processor | Select-Object -First 1; "
+        "$gpus=Get-CimInstance Win32_VideoController | ForEach-Object { "
+        "[pscustomobject]@{name=$_.Name; adapter_ram_mb=if($_.AdapterRAM){[math]::Round($_.AdapterRAM/1MB,0)}else{$null}; driver_version=$_.DriverVersion; status=$_.Status} }; "
         "$disks=Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" | ForEach-Object { "
         "[pscustomobject]@{drive=$_.DeviceID; total_gb=[math]::Round($_.Size/1GB,2); free_gb=[math]::Round($_.FreeSpace/1GB,2)} }; "
         "[pscustomobject]@{observed_hostname=[System.Net.Dns]::GetHostName(); observed_computer_name=$env:COMPUTERNAME; "
         "observed_machine_guid=$prod.UUID; bios_serial=$bios.SerialNumber; observed_username=[Environment]::UserName; "
         "os_caption=$os.Caption; os_version=$os.Version; os_build=$os.BuildNumber; cpu=$cpu.Name; cpu_load=$cpu.LoadPercentage; "
         "ram_total_gb=[math]::Round($cs.TotalPhysicalMemory/1GB,2); ram_free_gb=[math]::Round($os.FreePhysicalMemory/1MB,2); "
-        "disks=$disks; process_count=@(Get-Process).Count; uptime=((Get-Date)-$os.LastBootUpTime).ToString()} | ConvertTo-Json -Depth 5 -Compress"
+        "disks=$disks; gpus=$gpus; process_count=@(Get-Process).Count; uptime=((Get-Date)-$os.LastBootUpTime).ToString()} | ConvertTo-Json -Depth 6 -Compress"
     )
 
 
@@ -417,6 +435,14 @@ def _pct(used: float | None, total: float | None) -> float | None:
     if used is None or not total:
         return None
     return round(max(0.0, min(100.0, used * 100.0 / total)), 1)
+
+
+def _gpu_names(snapshot: dict | None) -> list[str]:
+    gpus = (snapshot or {}).get("gpus")
+    if isinstance(gpus, list):
+        return [str(gpu.get("name") or "").strip() for gpu in gpus if isinstance(gpu, dict) and str(gpu.get("name") or "").strip()]
+    gpu = str((snapshot or {}).get("gpu") or "").strip()
+    return [item.strip() for item in gpu.split(";") if item.strip()] if gpu else []
 
 
 def build_state_health_summary(snapshot: dict | None, identity_receipt: dict | None = None, status: str = "ok") -> dict:
@@ -460,6 +486,8 @@ def build_state_health_summary(snapshot: dict | None, identity_receipt: dict | N
         "disk_used_pct": disk_used_pct,
         "process_count": snapshot.get("process_count"),
         "uptime": snapshot.get("uptime"),
+        "gpu_summary": _gpu_names(snapshot),
+        "gpu_count": len(_gpu_names(snapshot)),
     }
 
 
@@ -474,8 +502,11 @@ def compact_state_snapshot_summary(state_record: dict | None) -> dict:
             "disk_used_pct": None,
             "process_count": None,
             "uptime": None,
+            "gpu_summary": [],
+            "gpu_count": 0,
         }
     health = state_record.get("health_summary") if isinstance(state_record.get("health_summary"), dict) else {}
+    snapshot = state_record.get("snapshot") if isinstance(state_record.get("snapshot"), dict) else {}
     return {
         "health_status": health.get("health_status") or "unknown",
         "last_snapshot_at": state_record.get("collected_at"),
@@ -485,6 +516,8 @@ def compact_state_snapshot_summary(state_record: dict | None) -> dict:
         "disk_used_pct": health.get("disk_used_pct"),
         "process_count": health.get("process_count"),
         "uptime": health.get("uptime"),
+        "gpu_summary": health.get("gpu_summary") or _gpu_names(snapshot),
+        "gpu_count": health.get("gpu_count") if health.get("gpu_count") is not None else len(_gpu_names(snapshot)),
     }
 
 

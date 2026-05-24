@@ -412,6 +412,55 @@ def test_devices_api_includes_state_summary_fields(monkeypatch):
     assert item["disk_used_pct"] == 71
     assert item["process_count"] == 180
     assert item["uptime"] == "1 day"
+    assert item["state_snapshot_source"] == "live"
+    assert item["state_snapshot_fresh"] is True
+
+
+def test_devices_api_falls_back_to_agent_cached_passport(monkeypatch):
+    from server.routers import devices as devices_router
+    from server.runtime_state import devices
+
+    device_key = "7:givi"
+    devices.clear()
+    devices[device_key] = {
+        "user_id": 7,
+        "short_device_id": "givi",
+        "info": {"hostname": "GIVI", "os": "Windows"},
+        "pending": {},
+        "ws": object(),
+        "agent_cached_passport": {
+            "activation_summary": {"activation_status": "activated", "runtime_status": "ok", "capabilities_summary": {"execute_cmd": "available"}},
+            "runtime_summary": {"runtime_status": "ok", "python_version": "3.11.9", "pip_status": "ok"},
+            "state_snapshot_summary": {
+                "health_status": "ok",
+                "last_snapshot_at": "2026-05-16T09:00:00Z",
+                "identity_status": "ok",
+                "cpu_load": 8,
+                "ram_used_pct": 55,
+                "disk_used_pct": 61,
+                "process_count": 111,
+                "uptime": "2 days",
+                "gpu_summary": ["Intel UHD", "NVIDIA RTX 4060"],
+                "gpu_count": 2,
+            },
+            "hardware_summary": {"cpu": "Intel", "gpus": [{"name": "Intel UHD"}, {"name": "NVIDIA RTX 4060"}], "ram_total_gb": 16},
+        },
+    }
+
+    monkeypatch.setattr(devices_router, "get_current_user", lambda request: {"id": 7, "name": "tester"})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: None)
+
+    result = asyncio.run(devices_router.get_devices_api(object()))
+    item = result["devices"]["givi"]
+
+    assert item["state_snapshot_source"] == "agent_cache"
+    assert item["state_snapshot_fresh"] is False
+    assert item["last_snapshot_at"] == "2026-05-16T09:00:00Z"
+    assert item["process_count"] == 111
+    assert item["python_runtime_status"] == "ok"
+    assert item["activation_status"] == "activated"
+    assert item["gpu_summary"] == ["Intel UHD", "NVIDIA RTX 4060"]
+    assert item["gpu_count"] == 2
 
 
 def test_device_state_endpoint_returns_structured_snapshot(monkeypatch):
@@ -433,13 +482,21 @@ def test_device_state_endpoint_returns_structured_snapshot(monkeypatch):
     }
 
     async def fake_send(device_id, action, params, user_id=None):
-        payload = {"observed_hostname": "givi", "observed_machine_guid": "guid", "process_count": 200, "ram_total_gb": 8, "ram_free_gb": 2}
-        return {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+        assert action == "device.refresh_state"
+        payload = {"observed_hostname": "givi", "observed_machine_guid": "guid", "process_count": 200, "ram_total_gb": 8, "ram_free_gb": 2, "gpus": [{"name": "RTX 4060"}]}
+        return {
+            "status": "ok",
+            "snapshot": payload,
+            "identity_receipt": {"identity_status": "ok", "observed_hostname": "givi"},
+            "health_summary": {"health_status": "ok", "identity_status": "ok", "process_count": 200, "ram_used_pct": 75.0, "gpu_summary": ["RTX 4060"], "gpu_count": 1},
+            "collected_at": "2026-05-16T10:00:00Z",
+            "passport_summary": {"hardware_summary": {"gpus": [{"name": "RTX 4060"}]}},
+        }
 
     monkeypatch.setattr(devices_router, "get_current_user", lambda request: {"id": user_id, "name": "tester"})
     monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
     monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
-    monkeypatch.setattr(task_runtime, "send_command_to_agent", fake_send)
+    monkeypatch.setattr(devices_router, "send_command_to_agent", fake_send)
 
     result = asyncio.run(devices_router.api_device_state("givi", Request()))
 
@@ -447,6 +504,146 @@ def test_device_state_endpoint_returns_structured_snapshot(monkeypatch):
     assert result["snapshot"]["process_count"] == 200
     assert result["health_summary"]["ram_used_pct"] == 75.0
     assert result["last_state_snapshot"]["snapshot"]["process_count"] == 200
+    assert result["health_summary"]["gpu_summary"] == ["RTX 4060"]
+
+
+def test_device_state_endpoint_falls_back_for_old_agent(monkeypatch):
+    from server.routers import devices as devices_router
+
+    class Request:
+        async def json(self):
+            return {"mode": "snapshot"}
+
+    user_id = 7
+    device_key = f"{user_id}:givi"
+    task_runtime.devices[device_key] = {
+        "user_id": user_id,
+        "short_device_id": "givi",
+        "info": {"hostname": "givi", "os": "Windows"},
+        "registered_identity": {"target_device_id": "givi", "registered_hostname": "givi", "registered_machine_guid": "guid"},
+        "pending": {},
+        "ws": object(),
+    }
+
+    async def fake_agent_send(device_id, action, params, user_id=None):
+        assert action == "device.refresh_state"
+        return {"error": "unknown action: device.refresh_state"}
+
+    async def fake_collect(device_id, user_id=None):
+        task_runtime.devices[device_id]["last_state_snapshot"] = {
+            "snapshot": {"process_count": 77},
+            "collected_at": "2026-05-16T10:00:00Z",
+            "identity_receipt": {"identity_status": "ok"},
+            "health_summary": {"health_status": "ok", "identity_status": "ok", "process_count": 77},
+            "status": "ok",
+        }
+        return {
+            "status": "ok",
+            "snapshot": {"process_count": 77},
+            "identity_receipt": {"identity_status": "ok"},
+            "health_summary": {"health_status": "ok", "identity_status": "ok", "process_count": 77},
+        }
+
+    monkeypatch.setattr(devices_router, "get_current_user", lambda request: {"id": user_id, "name": "tester"})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
+    monkeypatch.setattr(devices_router, "send_command_to_agent", fake_agent_send)
+    monkeypatch.setattr(devices_router, "collect_device_live_snapshot", fake_collect)
+
+    result = asyncio.run(devices_router.api_device_state("givi", Request()))
+
+    assert result["status"] == "ok"
+    assert result["snapshot"]["process_count"] == 77
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "unknown action: device.refresh_state",
+        "неизвестное действие: device.refresh_state",
+        "device.refresh_state not implemented",
+        "unsupported action: device.refresh_state",
+    ],
+)
+def test_device_state_endpoint_old_agent_error_detection(error):
+    from server.routers import devices as devices_router
+
+    assert devices_router._is_unknown_agent_action_error(error)
+
+
+def test_unavailable_refresh_does_not_wipe_previous_cached_state(monkeypatch):
+    from server.routers import devices as devices_router
+    from server.runtime_state import devices
+
+    class Request:
+        async def json(self):
+            return {"mode": "snapshot"}
+
+    user_id = 7
+    device_key = f"{user_id}:givi"
+    previous_record = {
+        "snapshot": {"process_count": 88, "gpus": [{"name": "RTX 4060"}]},
+        "collected_at": "2026-05-16T10:00:00Z",
+        "identity_receipt": {"identity_status": "ok"},
+        "health_summary": {
+            "health_status": "ok",
+            "identity_status": "ok",
+            "process_count": 88,
+            "ram_used_pct": 60,
+            "gpu_summary": ["RTX 4060"],
+            "gpu_count": 1,
+        },
+        "status": "ok",
+    }
+    devices[device_key] = {
+        "user_id": user_id,
+        "short_device_id": "givi",
+        "info": {"hostname": "givi", "os": "Windows"},
+        "registered_identity": {"target_device_id": "givi", "registered_hostname": "givi", "registered_machine_guid": "guid"},
+        "pending": {},
+        "ws": object(),
+        "last_state_snapshot": previous_record,
+    }
+
+    async def fake_send(device_id, action, params, user_id=None):
+        assert action == "device.refresh_state"
+        return {"status": "unavailable", "snapshot": None, "health_summary": {}, "identity_receipt": {}}
+
+    monkeypatch.setattr(devices_router, "get_current_user", lambda request: {"id": user_id, "name": "tester"})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
+    monkeypatch.setattr(devices_router, "send_command_to_agent", fake_send)
+
+    result = asyncio.run(devices_router.api_device_state("givi", Request()))
+
+    assert result["status"] == "unavailable"
+    assert devices[device_key]["last_state_snapshot"] is previous_record
+    item = devices_router._device_api_item("givi", devices[device_key], None)
+    assert item["process_count"] == 88
+    assert item["gpu_summary"] == ["RTX 4060"]
+    assert item["state_snapshot_source"] == "live"
+
+
+def test_state_summary_for_api_falls_back_to_agent_cache_when_live_record_empty():
+    from server.routers import devices as devices_router
+
+    summary, source, hardware = devices_router._state_summary_for_api({
+        "last_state_snapshot": {"snapshot": None, "health_summary": {}, "status": "unavailable"},
+        "agent_cached_passport": {
+            "state_snapshot_summary": {
+                "health_status": "ok",
+                "last_snapshot_at": "2026-05-16T09:00:00Z",
+                "identity_status": "ok",
+                "process_count": 111,
+                "gpu_summary": ["Intel UHD"],
+                "gpu_count": 1,
+            },
+            "hardware_summary": {"gpus": [{"name": "Intel UHD"}]},
+        },
+    })
+
+    assert source == "agent_cache"
+    assert summary["process_count"] == 111
+    assert summary["gpu_summary"] == ["Intel UHD"]
+    assert hardware["gpus"][0]["name"] == "Intel UHD"
 
 
 def test_agent_control_endpoints_ack_or_explicit_501(monkeypatch):

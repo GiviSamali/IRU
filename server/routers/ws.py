@@ -53,6 +53,23 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
             if msg_type == "register":
                 payload = data.get("payload", {})
                 devices[composite_key]["info"] = payload
+                cached_passport = payload.get("cached_passport") if isinstance(payload.get("cached_passport"), dict) else {}
+                if cached_passport:
+                    devices[composite_key]["agent_cached_passport"] = cached_passport
+                activation_summary = payload.get("activation_summary") or cached_passport.get("activation_summary")
+                runtime_summary = payload.get("runtime_summary") or cached_passport.get("runtime_summary")
+                state_summary = payload.get("state_snapshot_summary") or cached_passport.get("state_snapshot_summary")
+                state_record = cached_passport.get("state_snapshot") if isinstance(cached_passport.get("state_snapshot"), dict) else None
+                if isinstance(activation_summary, dict) and activation_summary:
+                    devices[composite_key]["activation_summary"] = activation_summary
+                if isinstance(runtime_summary, dict) and runtime_summary:
+                    devices[composite_key]["python_runtime_summary"] = runtime_summary
+                if isinstance(state_record, dict) and state_record:
+                    devices[composite_key]["agent_cached_state_snapshot"] = state_record
+                elif isinstance(state_summary, dict) and state_summary:
+                    devices[composite_key]["last_state_snapshot_summary"] = state_summary
+                if isinstance(payload.get("hardware_summary"), dict):
+                    devices[composite_key]["hardware_summary"] = payload.get("hardware_summary")
                 devices[composite_key]["registered_identity"] = {
                     "target_device_id": device_id,
                     "registered_hostname": payload.get("hostname"),

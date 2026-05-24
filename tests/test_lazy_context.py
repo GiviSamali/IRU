@@ -79,6 +79,26 @@ def test_state_handle_and_manifest_include_fresh_last_snapshot():
     assert handle == {"status": "ok", "source": "agent_live", "data": state_record}
 
 
+def test_state_manifest_can_use_agent_cached_snapshot():
+    cached_record = {
+        "snapshot": {"process_count": 180, "gpus": [{"name": "RTX 4060"}]},
+        "collected_at": "2026-05-16T10:00:00Z",
+        "identity_receipt": {"identity_status": "ok"},
+        "health_summary": {"health_status": "ok", "identity_status": "ok", "process_count": 180, "gpu_summary": ["RTX 4060"], "gpu_count": 1},
+        "status": "ok",
+    }
+    all_devices = {"givi": {"info": {"hostname": "GIVI"}, "ws": object(), "agent_cached_passport": {"state_snapshot": cached_record}}}
+
+    context = build_minimal_llm_context("givi", all_devices)
+    state_summary = context["current_device"]["state_summary"]
+    handle = get_context_handle("ctx://device/givi/state", all_devices=all_devices)
+
+    assert state_summary["state_snapshot_source"] == "agent_cache"
+    assert state_summary["state_snapshot_fresh"] is False
+    assert state_summary["gpu_summary"] == ["RTX 4060"]
+    assert handle == {"status": "stale", "source": "agent_cache", "data": cached_record}
+
+
 def test_prompt_includes_context_budget_rule():
     assert "Context budget rule:" in SYSTEM_PROMPT_TEMPLATE
     assert "Lazy context rule:" in SYSTEM_PROMPT_TEMPLATE

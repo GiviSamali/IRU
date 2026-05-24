@@ -102,6 +102,17 @@ function metricValue(value, suffix) {
   return `${value}${suffix || ''}`;
 }
 
+function snapshotSourceLabel(dev) {
+  if (dev.state_snapshot_source === 'live') return 'свежий снимок';
+  if (dev.state_snapshot_source === 'agent_cache') return `кэш агента: ${formatSnapshotTime(dev.last_snapshot_at)}`;
+  return 'Снимок ещё не собирался';
+}
+
+function gpuValue(dev) {
+  const gpus = Array.isArray(dev.gpu_summary) ? dev.gpu_summary.filter(Boolean) : [];
+  return gpus.length ? gpus.join(' + ') : '—';
+}
+
 function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -169,6 +180,7 @@ function renderDevicePassport() {
         <div>Health</div><span class="device-passport-badge ${deviceStatusClass(healthStatus)}">${escapeHTML(deviceStatusLabel(healthStatus))}</span>
         <div>Identity</div><span class="device-passport-badge ${deviceStatusClass(identityStatus)}">${escapeHTML(deviceStatusLabel(identityStatus))}</span>
         <div>Snapshot</div><strong>${escapeHTML(formatSnapshotTime(dev.last_snapshot_at))}</strong>
+        <div>Source</div><strong>${escapeHTML(snapshotSourceLabel(dev))}</strong>
       </div>
     </div>
     <div class="device-passport-section">
@@ -180,10 +192,11 @@ function renderDevicePassport() {
         <div><span>Processes</span><strong>${escapeHTML(metricValue(dev.process_count))}</strong></div>
       </div>
       <div class="device-passport-uptime">Uptime: ${escapeHTML(metricValue(dev.uptime))}</div>
+      <div class="device-passport-uptime">GPU: ${escapeHTML(gpuValue(dev))}</div>
     </div>
     <details class="device-passport-details">
       <summary>Технические детали</summary>
-      <pre>${escapeHTML(JSON.stringify({ info, capabilities: capsList, python_runtime: { status: pythonRuntimeStatus, version: dev.python_version, pip_status: dev.pip_status, venv_python: dev.venv_python, last_runtime_check: dev.last_runtime_check } }, null, 2))}</pre>
+      <pre>${escapeHTML(JSON.stringify({ info, capabilities: capsList, hardware_summary: dev.hardware_summary, python_runtime: { status: pythonRuntimeStatus, version: dev.python_version, pip_status: dev.pip_status, venv_python: dev.venv_python, last_runtime_check: dev.last_runtime_check } }, null, 2))}</pre>
     </details>
   `;
   if (runtimeNotice) {
@@ -241,7 +254,11 @@ async function runDevicePassportAction(action, mode) {
         disk_used_pct: data.health_summary.disk_used_pct,
         process_count: data.health_summary.process_count,
         uptime: data.health_summary.uptime,
+        gpu_summary: data.health_summary.gpu_summary || [],
+        gpu_count: data.health_summary.gpu_count || 0,
         last_snapshot_at: data.last_state_snapshot?.collected_at,
+        state_snapshot_source: 'live',
+        state_snapshot_fresh: true,
       });
     }
     if (data.summary && state.devices[id]) {
