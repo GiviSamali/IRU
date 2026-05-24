@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .local_state import load_device_passport_cache, update_device_passport_cache, write_json_state
 from platforms import get_platform
 
 platform_mod = get_platform()
@@ -159,6 +160,139 @@ def _write_json(path: Path, data: dict) -> None:
     tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _activation_summary(receipt: dict | None) -> dict:
+    if not isinstance(receipt, dict):
+        return {}
+    identity = receipt.get("identity") or {}
+    paths = receipt.get("paths") or {}
+    runtime = receipt.get("runtime") or {}
+    caps = receipt.get("capabilities") or {}
+    status = str(receipt.get("activation_status") or "")
+    activation_status = "activated" if status in {"ok", "repaired"} else ("degraded" if status in {"partial", "degraded"} else "activation_failed")
+    return {
+        "device_id": receipt.get("device_id"),
+        "hostname": identity.get("hostname") or identity.get("computer_name"),
+        "machine_guid": identity.get("machine_guid"),
+        "activation_status": activation_status,
+        "iru_home": paths.get("iru_home"),
+        "runtime_status": runtime.get("managed_python_status") or "unknown",
+        "python_capability": (caps or {}).get("python") or "unknown",
+        "capabilities_summary": {k: v for k, v in caps.items() if v == "available"} if isinstance(caps, dict) else {},
+        "last_activation_check": receipt.get("created_at"),
+    }
+
+
+def _runtime_summary(receipt: dict | None) -> dict:
+    if not isinstance(receipt, dict):
+        return {}
+    paths = receipt.get("paths") or {}
+    python = receipt.get("python") or {}
+    pip = receipt.get("pip") or {}
+    return {
+        "runtime_status": receipt.get("status") or "unknown",
+        "python_source": python.get("source") or "unknown",
+        "venv_python": paths.get("venv_python") or python.get("venv_python"),
+        "python_version": python.get("venv_version") or python.get("base_version"),
+        "pip_status": pip.get("status") or "unknown",
+        "last_runtime_check": receipt.get("created_at"),
+    }
+
+
+def _safe_float(value) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _pct(used: float | None, total: float | None) -> float | None:
+    if used is None or not total:
+        return None
+    return round(max(0.0, min(100.0, used * 100.0 / total)), 1)
+
+
+def _gpu_names(snapshot: dict | None) -> list[str]:
+    gpus = (snapshot or {}).get("gpus")
+    if isinstance(gpus, list):
+        return [str(gpu.get("name") or "").strip() for gpu in gpus if isinstance(gpu, dict) and str(gpu.get("name") or "").strip()]
+    gpu = str((snapshot or {}).get("gpu") or "").strip()
+    return [item.strip() for item in gpu.split(";") if item.strip()] if gpu else []
+
+
+def _state_health_summary(snapshot: dict | None, identity_receipt: dict | None = None, status: str = "ok") -> dict:
+    snapshot = snapshot or {}
+    identity_receipt = identity_receipt or {}
+    cpu_load = _safe_float(snapshot.get("cpu_load") or snapshot.get("load_percentage"))
+    ram_total = _safe_float(snapshot.get("ram_total_gb"))
+    ram_free = _safe_float(snapshot.get("ram_free_gb"))
+    ram_used_pct = _safe_float(snapshot.get("ram_used_pct"))
+    if ram_used_pct is None and ram_total is not None and ram_free is not None:
+        ram_used_pct = _pct(ram_total - ram_free, ram_total)
+    disk_used_pct = _safe_float(snapshot.get("disk_used_pct"))
+    disks = snapshot.get("disks")
+    if disk_used_pct is None and isinstance(disks, list):
+        values = []
+        for disk in disks:
+            if not isinstance(disk, dict):
+                continue
+            total = _safe_float(disk.get("total_gb"))
+            free = _safe_float(disk.get("free_gb"))
+            value = _pct(total - free if total is not None and free is not None else None, total)
+            if value is not None:
+                values.append(value)
+        if values:
+            disk_used_pct = max(values)
+    health_status = "ok"
+    if status in {"unavailable", "routing_mismatch"}:
+        health_status = "critical" if status == "routing_mismatch" else "unavailable"
+    elif any(value is not None and value >= 95 for value in (cpu_load, ram_used_pct, disk_used_pct)):
+        health_status = "critical"
+    elif any(value is not None and value >= 85 for value in (cpu_load, ram_used_pct, disk_used_pct)):
+        health_status = "warning"
+    return {
+        "health_status": health_status,
+        "identity_status": identity_receipt.get("identity_status") or "unknown",
+        "cpu_load": cpu_load,
+        "ram_used_pct": ram_used_pct,
+        "disk_used_pct": disk_used_pct,
+        "process_count": snapshot.get("process_count"),
+        "uptime": snapshot.get("uptime"),
+        "gpu_summary": _gpu_names(snapshot),
+        "gpu_count": len(_gpu_names(snapshot)),
+    }
+
+
+def _state_snapshot_summary(record: dict | None) -> dict:
+    if not isinstance(record, dict):
+        return {}
+    health = record.get("health_summary") if isinstance(record.get("health_summary"), dict) else {}
+    snapshot = record.get("snapshot") if isinstance(record.get("snapshot"), dict) else {}
+    return {
+        "health_status": health.get("health_status") or "unknown",
+        "last_snapshot_at": record.get("collected_at"),
+        "identity_status": health.get("identity_status") or (record.get("identity_receipt") or {}).get("identity_status") or "unknown",
+        "cpu_load": health.get("cpu_load"),
+        "ram_used_pct": health.get("ram_used_pct"),
+        "disk_used_pct": health.get("disk_used_pct"),
+        "process_count": health.get("process_count"),
+        "uptime": health.get("uptime"),
+        "gpu_summary": health.get("gpu_summary") or _gpu_names(snapshot),
+        "gpu_count": health.get("gpu_count") if health.get("gpu_count") is not None else len(_gpu_names(snapshot)),
+    }
+
+
+def _hardware_summary(snapshot: dict | None) -> dict:
+    snapshot = snapshot or {}
+    return {
+        "cpu": snapshot.get("cpu") or "",
+        "gpus": snapshot.get("gpus") or [{"name": name} for name in _gpu_names(snapshot)],
+        "ram_total_gb": snapshot.get("ram_total_gb"),
+        "disks": snapshot.get("disks") or [],
+    }
 
 
 def _activation_paths(home: Path) -> dict:
@@ -382,6 +516,135 @@ def _runtime_receipt_v1(
 def _save_runtime_receipt(home: Path, receipt: dict) -> None:
     _write_json(home / "state" / "python_runtime_receipt.json", receipt)
     _write_json(_runtime_home(home) / "receipts" / "python_runtime_receipt.json", receipt)
+    write_json_state("runtime_receipt", receipt)
+    summary = _runtime_summary(receipt)
+    update_device_passport_cache({
+        "device_id": receipt.get("device_id"),
+        "runtime_summary": summary,
+        "python_runtime_status": summary.get("runtime_status"),
+        "python_version": summary.get("python_version"),
+        "pip_status": summary.get("pip_status"),
+        "venv_python": summary.get("venv_python"),
+    })
+
+
+def _agent_snapshot_command() -> tuple[str, str]:
+    if platform.system() != "Windows":
+        return (
+            "python3 - <<'PY'\n"
+            "import json, os, platform, getpass, subprocess\n"
+            "def run(cmd):\n"
+            "    try: return subprocess.check_output(cmd, text=True).strip()\n"
+            "    except Exception: return ''\n"
+            "print(json.dumps({'observed_hostname': platform.node(), 'observed_computer_name': platform.node(), "
+            "'observed_machine_guid': run(['cat','/etc/machine-id']), 'observed_username': getpass.getuser(), "
+            "'os_caption': platform.platform(), 'os_version': platform.version(), 'cpu': platform.processor(), "
+            "'cpu_load': os.getloadavg()[0] if hasattr(os, 'getloadavg') else None, "
+            "'process_count': len([p for p in os.listdir('/proc') if p.isdigit()])}))\n"
+            "PY",
+            "bash",
+        )
+    return (
+        "$ErrorActionPreference='SilentlyContinue'; "
+        "$cs=Get-CimInstance Win32_ComputerSystem; $os=Get-CimInstance Win32_OperatingSystem; "
+        "$prod=Get-CimInstance Win32_ComputerSystemProduct; $bios=Get-CimInstance Win32_BIOS; "
+        "$cpu=Get-CimInstance Win32_Processor | Select-Object -First 1; "
+        "$gpus=Get-CimInstance Win32_VideoController | ForEach-Object { "
+        "[pscustomobject]@{name=$_.Name; adapter_ram_mb=if($_.AdapterRAM){[math]::Round($_.AdapterRAM/1MB,0)}else{$null}; "
+        "driver_version=$_.DriverVersion; status=$_.Status} }; "
+        "$disks=Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" | ForEach-Object { "
+        "[pscustomobject]@{drive=$_.DeviceID; total_gb=[math]::Round($_.Size/1GB,2); free_gb=[math]::Round($_.FreeSpace/1GB,2)} }; "
+        "[pscustomobject]@{observed_hostname=[System.Net.Dns]::GetHostName(); observed_computer_name=$env:COMPUTERNAME; "
+        "observed_machine_guid=$prod.UUID; bios_serial=$bios.SerialNumber; observed_username=[Environment]::UserName; "
+        "os_caption=$os.Caption; os_version=$os.Version; os_build=$os.BuildNumber; cpu=$cpu.Name; cpu_load=$cpu.LoadPercentage; "
+        "ram_total_gb=[math]::Round($cs.TotalPhysicalMemory/1GB,2); ram_free_gb=[math]::Round($os.FreePhysicalMemory/1MB,2); "
+        "disks=$disks; gpus=$gpus; process_count=@(Get-Process).Count; uptime=((Get-Date)-$os.LastBootUpTime).ToString()} | ConvertTo-Json -Depth 6 -Compress",
+        "powershell",
+    )
+
+
+def _parse_json_stdout(stdout: str) -> dict:
+    text = (stdout or "").strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end <= start:
+        return {}
+    try:
+        parsed = json.loads(text[start:end + 1])
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _identity_receipt(device_id: str, snapshot: dict, collected_at: str) -> dict:
+    info = collect_system_info(device_id=device_id)
+    observed_hostname = snapshot.get("observed_hostname") or snapshot.get("observed_computer_name")
+    observed_guid = snapshot.get("observed_machine_guid")
+    registered_hostname = info.get("hostname")
+    registered_guid = info.get("machine_guid")
+    status = "unknown"
+    if registered_guid and observed_guid:
+        status = "ok" if str(registered_guid).lower() == str(observed_guid).lower() else "mismatch"
+    elif registered_hostname and observed_hostname:
+        status = "ok" if str(registered_hostname).lower() == str(observed_hostname).lower() else "mismatch"
+    return {
+        "target_device_id": device_id,
+        "registered_hostname": registered_hostname,
+        "registered_machine_guid": registered_guid,
+        "observed_hostname": observed_hostname,
+        "observed_computer_name": snapshot.get("observed_computer_name"),
+        "observed_machine_guid": observed_guid,
+        "observed_username": snapshot.get("observed_username"),
+        "identity_status": status,
+        "collected_at": collected_at,
+    }
+
+
+def refresh_device_state(mode: str = "snapshot", device_id: str = "") -> dict:
+    if (mode or "snapshot") != "snapshot":
+        return {"status": "failed", "error": "mode must be snapshot"}
+    collected_at = datetime.now(timezone.utc).isoformat()
+    command, shell = _agent_snapshot_command()
+    result = platform_mod.execute_cmd(command, timeout=30, shell=shell)
+    if result.get("returncode") not in (None, 0, "0") or result.get("error"):
+        return {"status": "unavailable", "error": result.get("error") or result.get("stderr") or "snapshot failed", "collected_at": collected_at}
+    snapshot = _parse_json_stdout(str(result.get("stdout") or ""))
+    snapshot["collected_at"] = collected_at
+    identity = _identity_receipt(device_id, snapshot, collected_at)
+    status = "routing_mismatch" if identity.get("identity_status") == "mismatch" else "ok"
+    health = _state_health_summary(snapshot, identity, status)
+    record = {
+        "snapshot": snapshot,
+        "collected_at": collected_at,
+        "identity_receipt": identity,
+        "health_summary": health,
+        "status": status,
+    }
+    write_json_state("state_snapshot", record)
+    passport = update_device_passport_cache({
+        "device_id": device_id,
+        "hostname": identity.get("observed_hostname") or identity.get("registered_hostname") or device_id,
+        "state_snapshot": record,
+        "state_snapshot_summary": _state_snapshot_summary(record),
+        "hardware_summary": _hardware_summary(snapshot),
+    })
+    return {
+        "status": status,
+        "snapshot": snapshot if status == "ok" else None,
+        "identity_receipt": identity,
+        "health_summary": health,
+        "collected_at": collected_at,
+        "passport_summary": passport,
+    }
+
+
+def get_cached_passport(device_id: str = "") -> dict:
+    passport = load_device_passport_cache()
+    if not passport:
+        return {"status": "missing", "source": "agent_local_cache", "passport": {}}
+    if device_id and not passport.get("device_id"):
+        passport["device_id"] = device_id
+    return {"status": "ok", "source": "agent_local_cache", "passport": passport}
 
 
 def _process_alive(pid: int | None) -> bool | None:
@@ -1036,6 +1299,16 @@ def activate_device(mode: str = "soft", device_id: str = "") -> dict:
     _write_json(state_dir / "python_receipt.json", runtime)
     _write_json(state_dir / "health.json", health)
     _write_json(state_dir / "activation.json", receipt)
+    write_json_state("activation_receipt", receipt)
+    update_device_passport_cache({
+        "device_id": device_id,
+        "hostname": identity.get("hostname") or identity.get("computer_name"),
+        "identity": identity,
+        "paths": paths,
+        "activation_summary": _activation_summary(receipt),
+        "capabilities": capabilities,
+        "health": health,
+    })
     return receipt
 
 
@@ -1046,6 +1319,8 @@ ACTIONS = {
     "write_content": lambda **params: write_content(**params),
     "device.activate": lambda **params: activate_device(**params),
     "device.prepare_runtime": lambda **params: prepare_runtime(**params),
+    "device.refresh_state": lambda **params: refresh_device_state(**params),
+    "device.get_cached_passport": lambda **params: get_cached_passport(**params),
     "window.list": lambda **params: window_list(**params),
     "window.find": lambda **params: window_find(**params),
     "window.verify": lambda **params: window_verify(**params),

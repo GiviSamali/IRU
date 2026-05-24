@@ -36,6 +36,9 @@ def _summary_from(dev: dict | None, profile: dict | None) -> dict:
         return compact_activation_summary(dev["activation_receipt"])
     if isinstance(dev, dict) and isinstance(dev.get("activation_summary"), dict):
         return dict(dev["activation_summary"])
+    cached = dev.get("agent_cached_passport") if isinstance(dev, dict) and isinstance(dev.get("agent_cached_passport"), dict) else {}
+    if isinstance(cached.get("activation_summary"), dict):
+        return dict(cached["activation_summary"])
     if isinstance(profile, dict):
         return parse_activation_summary(profile.get("activation_summary"))
     return {}
@@ -44,6 +47,9 @@ def _summary_from(dev: dict | None, profile: dict | None) -> dict:
 def _runtime_summary_from(dev: dict | None, profile: dict | None) -> dict:
     if isinstance(dev, dict) and isinstance(dev.get("python_runtime_summary"), dict):
         return dict(dev["python_runtime_summary"])
+    cached = dev.get("agent_cached_passport") if isinstance(dev, dict) and isinstance(dev.get("agent_cached_passport"), dict) else {}
+    if isinstance(cached.get("runtime_summary"), dict):
+        return dict(cached["runtime_summary"])
     if isinstance(profile, dict):
         return parse_python_runtime_summary(profile.get("python_runtime_summary"))
     return {}
@@ -71,11 +77,27 @@ def _capability_list(summary: dict) -> list[str]:
 
 def _state_summary_from(dev: dict | None) -> dict:
     record = dev.get("last_state_snapshot") if isinstance(dev, dict) else None
+    source = "live"
+    if not isinstance(record, dict) and isinstance(dev, dict):
+        cached = dev.get("agent_cached_passport") if isinstance(dev.get("agent_cached_passport"), dict) else {}
+        record = dev.get("agent_cached_state_snapshot") if isinstance(dev.get("agent_cached_state_snapshot"), dict) else cached.get("state_snapshot")
+        source = "agent_cache"
     if not isinstance(record, dict):
+        cached_summary = {}
+        if isinstance(dev, dict):
+            cached = dev.get("agent_cached_passport") if isinstance(dev.get("agent_cached_passport"), dict) else {}
+            cached_summary = dev.get("last_state_snapshot_summary") if isinstance(dev.get("last_state_snapshot_summary"), dict) else cached.get("state_snapshot_summary", {})
+        if isinstance(cached_summary, dict) and cached_summary:
+            return {
+                **cached_summary,
+                "state_snapshot_source": "agent_cache",
+                "state_snapshot_fresh": False,
+            }
         return {
             "health_status": "unknown",
             "last_snapshot_at": None,
             "identity_status": "unknown",
+            "state_snapshot_source": "missing",
             "state_snapshot_fresh": False,
         }
     health = record.get("health_summary") if isinstance(record.get("health_summary"), dict) else {}
@@ -83,12 +105,15 @@ def _state_summary_from(dev: dict | None) -> dict:
         "health_status": health.get("health_status") or "unknown",
         "last_snapshot_at": record.get("collected_at"),
         "identity_status": health.get("identity_status") or (record.get("identity_receipt") or {}).get("identity_status") or "unknown",
-        "state_snapshot_fresh": bool(record.get("collected_at")),
+        "state_snapshot_source": source,
+        "state_snapshot_fresh": bool(record.get("collected_at")) and source == "live",
         "cpu_load": health.get("cpu_load"),
         "ram_used_pct": health.get("ram_used_pct"),
         "disk_used_pct": health.get("disk_used_pct"),
         "process_count": health.get("process_count"),
         "uptime": health.get("uptime"),
+        "gpu_summary": health.get("gpu_summary") or [],
+        "gpu_count": health.get("gpu_count") or 0,
     }
 
 
@@ -191,6 +216,13 @@ def get_context_handle(handle: str, *, all_devices: dict | None = None) -> dict:
         record = dev.get("last_state_snapshot") if isinstance(dev, dict) else None
         if isinstance(record, dict):
             return {"status": "ok" if live else "stale", "source": "agent_live" if live else "server_cache", "data": record}
+        cached = dev.get("agent_cached_passport") if isinstance(dev, dict) and isinstance(dev.get("agent_cached_passport"), dict) else {}
+        cached_record = dev.get("agent_cached_state_snapshot") if isinstance(dev, dict) and isinstance(dev.get("agent_cached_state_snapshot"), dict) else cached.get("state_snapshot")
+        if isinstance(cached_record, dict):
+            return {"status": "stale", "source": "agent_cache", "data": cached_record}
+        cached_summary = dev.get("last_state_snapshot_summary") if isinstance(dev, dict) and isinstance(dev.get("last_state_snapshot_summary"), dict) else cached.get("state_snapshot_summary")
+        if isinstance(cached_summary, dict) and cached_summary:
+            return {"status": "stale", "source": "agent_cache", "data": cached_summary}
         return {"status": "not_found", "source": "missing", "data": None}
     if kind in {"artifacts", "traces"}:
         return {"status": "unavailable", "source": "missing", "data": None}

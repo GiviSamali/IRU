@@ -34,4 +34,9 @@ def test_device_passport_runtime_prepare_disconnect_message():
     source = (ROOT / "ui" / "js" / "devices.js").read_text(encoding="utf-8")
 
     assert "runtime_prepare_interrupted" in source
+    assert "function gpuValue" in source
+    assert "function snapshotSourceLabel" in source
+    assert "state_snapshot_source" in source
+    assert "gpu_summary" in source
+    assert "GPU:" in source
     assert "Подготовка прервана. Агент переподключился — нажмите Проверить runtime." in source

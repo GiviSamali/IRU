@@ -9,9 +9,23 @@ from typing import Any
 import websockets
 
 from .actions import ACTIONS, collect_system_info
+from .local_state import load_device_passport_cache
 from .state import AgentState
 
 _PARAM_LOG_LIMIT = 180
+
+
+def build_registration_payload(device_id: str, agent_version: str) -> dict:
+    system_info = collect_system_info(device_id=device_id)
+    cached_passport = load_device_passport_cache()
+    if cached_passport:
+        system_info["cached_passport"] = cached_passport
+        system_info["activation_summary"] = cached_passport.get("activation_summary") or {}
+        system_info["runtime_summary"] = cached_passport.get("runtime_summary") or {}
+        system_info["state_snapshot_summary"] = cached_passport.get("state_snapshot_summary") or {}
+        system_info["hardware_summary"] = cached_passport.get("hardware_summary") or {}
+    system_info["agent_version"] = agent_version
+    return system_info
 
 
 class AgentRuntime:
@@ -136,8 +150,7 @@ class AgentRuntime:
             device_id,
             self._safe_connection_target(server_url, device_id),
         )
-        system_info = collect_system_info(device_id=device_id)
-        system_info["agent_version"] = self._agent_version
+        system_info = build_registration_payload(device_id, self._agent_version)
         self._logger.info(
             "[agent] system info collected: cpu=%s, ram=%sGB, disks=%s",
             system_info.get("cpu", "?"),
