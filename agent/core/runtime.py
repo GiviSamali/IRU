@@ -150,13 +150,6 @@ class AgentRuntime:
             device_id,
             self._safe_connection_target(server_url, device_id),
         )
-        system_info = build_registration_payload(device_id, self._agent_version)
-        self._logger.info(
-            "[agent] system info collected: cpu=%s, ram=%sGB, disks=%s",
-            system_info.get("cpu", "?"),
-            system_info.get("ram_gb", "?"),
-            len(system_info.get("disks", [])),
-        )
 
         while not self._stop_event.is_set():
             self._state.mark_connecting()
@@ -174,6 +167,13 @@ class AgentRuntime:
                     self._state.mark_connected()
                     self._logger.info("[agent] connected")
 
+                    system_info = build_registration_payload(device_id, self._agent_version)
+                    self._logger.info(
+                        "[agent] system info collected: cpu=%s, ram=%sGB, disks=%s",
+                        system_info.get("cpu", "?"),
+                        system_info.get("ram_gb", "?"),
+                        len(system_info.get("disks", [])),
+                    )
                     await ws.send(json.dumps({"type": "register", "payload": system_info}))
 
                     while not self._stop_event.is_set():

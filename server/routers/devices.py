@@ -60,8 +60,34 @@ def _agent_cached_passport(dev: dict | None) -> dict:
     return dev.get("agent_cached_passport") if isinstance(dev, dict) and isinstance(dev.get("agent_cached_passport"), dict) else {}
 
 
+def _is_unknown_agent_action_error(error: str) -> bool:
+    text = (error or "").casefold()
+    return any(marker in text for marker in ("unknown", "неизвест", "not implemented", "unsupported"))
+
+
+def _state_summary_has_metrics(summary: dict) -> bool:
+    if not isinstance(summary, dict):
+        return False
+    for key in ("cpu_load", "ram_used_pct", "disk_used_pct", "process_count", "uptime", "gpu_summary"):
+        value = summary.get(key)
+        if value not in (None, "", [], {}):
+            return True
+    gpu_count = summary.get("gpu_count")
+    if isinstance(gpu_count, (int, float)) and gpu_count > 0:
+        return True
+    return False
+
+
+def _live_state_record_is_useful(record: dict | None) -> bool:
+    if not isinstance(record, dict):
+        return False
+    if isinstance(record.get("snapshot"), dict) and record.get("snapshot"):
+        return True
+    return _state_summary_has_metrics(compact_state_snapshot_summary(record))
+
+
 def _state_summary_for_api(dev: dict) -> tuple[dict, str, dict]:
-    if isinstance(dev.get("last_state_snapshot"), dict):
+    if _live_state_record_is_useful(dev.get("last_state_snapshot")):
         hardware = dev.get("hardware_summary") if isinstance(dev.get("hardware_summary"), dict) else {}
         return compact_state_snapshot_summary(dev.get("last_state_snapshot")), "live", hardware
     cached = _agent_cached_passport(dev)
@@ -262,11 +288,17 @@ async def api_device_state(device_id: str, request: Request):
         result = {"error": str(exc)}
     error = str(result.get("error") or "") if isinstance(result, dict) else ""
     if not isinstance(result, dict) or error:
-        if "unknown" in error.lower() or "РЅРµРёР·РІРµСЃС‚" in error.lower():
+        if _is_unknown_agent_action_error(error):
             result = await collect_device_live_snapshot(device_key, user_id=user["id"])
         else:
             raise HTTPException(status_code=409, detail=f"Device state refresh failed: {error or 'invalid response'}")
-    elif result.get("status") in {"ok", "routing_mismatch", "unavailable"}:
+
+    if isinstance(result, dict) and isinstance(result.get("passport_summary"), dict):
+        dev["agent_cached_passport"] = result["passport_summary"]
+        if isinstance(result["passport_summary"].get("hardware_summary"), dict):
+            dev["hardware_summary"] = result["passport_summary"]["hardware_summary"]
+
+    if isinstance(result, dict) and result.get("status") == "ok" and isinstance(result.get("snapshot"), dict):
         record = {
             "snapshot": result.get("snapshot"),
             "collected_at": result.get("collected_at") or (result.get("last_state_snapshot") or {}).get("collected_at"),
@@ -275,10 +307,6 @@ async def api_device_state(device_id: str, request: Request):
             "status": result.get("status"),
         }
         dev["last_state_snapshot"] = record
-        if isinstance(result.get("passport_summary"), dict):
-            dev["agent_cached_passport"] = result["passport_summary"]
-            if isinstance(result["passport_summary"].get("hardware_summary"), dict):
-                dev["hardware_summary"] = result["passport_summary"]["hardware_summary"]
     return {
         "status": result.get("status"),
         "device_id": device_id,

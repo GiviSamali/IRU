@@ -103,14 +103,14 @@ function metricValue(value, suffix) {
 }
 
 function snapshotSourceLabel(dev) {
-  if (dev.state_snapshot_source === 'live') return 'СЃРІРµР¶РёР№ СЃРЅРёРјРѕРє';
-  if (dev.state_snapshot_source === 'agent_cache') return `РєСЌС€ Р°РіРµРЅС‚Р°: ${formatSnapshotTime(dev.last_snapshot_at)}`;
-  return 'РЎРЅРёРјРѕРє РµС‰С‘ РЅРµ СЃРѕР±РёСЂР°Р»СЃСЏ';
+  if (dev.state_snapshot_source === 'live') return 'свежий снимок';
+  if (dev.state_snapshot_source === 'agent_cache') return `кэш агента: ${formatSnapshotTime(dev.last_snapshot_at)}`;
+  return 'Снимок ещё не собирался';
 }
 
 function gpuValue(dev) {
   const gpus = Array.isArray(dev.gpu_summary) ? dev.gpu_summary.filter(Boolean) : [];
-  return gpus.length ? gpus.join(' + ') : 'вЂ”';
+  return gpus.length ? gpus.join(' + ') : '—';
 }
 
 function wait(ms) {

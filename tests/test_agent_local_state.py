@@ -89,3 +89,13 @@ def test_registration_payload_includes_cached_passport(monkeypatch, tmp_path):
     assert payload["state_snapshot_summary"]["process_count"] == 9
     assert payload["hardware_summary"]["gpus"][0]["name"] == "Intel UHD"
     assert payload["agent_version"] == "1.2.3"
+
+
+def test_registration_payload_is_rebuilt_inside_reconnect_loop():
+    source = (AGENT_DIR / "core" / "runtime.py").read_text(encoding="utf-8")
+
+    connect_pos = source.index("async with websockets.connect")
+    payload_pos = source.index("build_registration_payload(device_id, self._agent_version)", connect_pos)
+    register_pos = source.index('"type": "register"', connect_pos)
+
+    assert connect_pos < payload_pos < register_pos
