@@ -35,8 +35,10 @@ try:
         build_device_profile_block,
         build_devices_block,
         build_memory_block,
+        build_recent_artifact_context,
         build_target_device_block,
         current_datetime_msk as _current_datetime_msk,
+        format_recent_artifact_context_block,
         strip_markdown,
     )
     from .controller_tools import TOOLSET_REGISTRY  # type: ignore
@@ -57,8 +59,10 @@ except ImportError:
         build_device_profile_block,
         build_devices_block,
         build_memory_block,
+        build_recent_artifact_context,
         build_target_device_block,
         current_datetime_msk as _current_datetime_msk,
+        format_recent_artifact_context_block,
         strip_markdown,
     )
     from controller_tools import TOOLSET_REGISTRY  # type: ignore
@@ -160,6 +164,7 @@ class LLMRuntimeContext:
     mem_user_id: str | None
     python_toolchain_block: str = ""
     device_context_block: str = ""
+    recent_artifact_context_block: str = ""
 
 
 @dataclass(frozen=True)
@@ -282,6 +287,7 @@ def _build_runtime_context(
     device_info: dict,
     device_profile: dict | None,
     user_id: int | None,
+    chat_history: list[dict] | None = None,
 ) -> LLMRuntimeContext:
     os_info = device_info.get("os", "Windows")
     hostname = device_info.get("hostname", "unknown")
@@ -290,6 +296,7 @@ def _build_runtime_context(
     mem_user_id = _resolve_memory_user_id(user_id, machine_guid)
     python_receipt = get_cached_python_toolchain({"device_id": device_id, "machine_guid": machine_guid})
     manifest = build_minimal_llm_context(device_id, all_devices, device_profile)
+    recent_artifact_context = build_recent_artifact_context(chat_history)
 
     return LLMRuntimeContext(
         cfg=load_llm_config(),
@@ -302,6 +309,7 @@ def _build_runtime_context(
         target_device_block=build_target_device_block("", device_info, device_profile),
         python_toolchain_block=build_python_toolchain_block(python_receipt),
         device_context_block=format_minimal_llm_context_block(manifest),
+        recent_artifact_context_block=format_recent_artifact_context_block(recent_artifact_context),
         os_rules=_resolve_os_rules(os_info),
         current_datetime_msk=_current_datetime_msk(),
         machine_guid=machine_guid,
@@ -323,6 +331,7 @@ def _build_non_pipeline_system_prompt(
         device_profile_block=runtime.profile_block,
         device_memory_block=runtime.memory_block,
         device_context_block=runtime.device_context_block,
+        recent_artifact_context_block=runtime.recent_artifact_context_block,
         target_device_block=(
             runtime.target_device_block.replace("device_id: ", f"device_id: {device_id}", 1)
             + "\n"
@@ -354,6 +363,7 @@ def _build_pipeline_route_kwargs(
     device_profile: dict | None,
     modes: dict,
     poll_task_id: str | None,
+    device_tool_fn=None,
 ) -> dict:
     return {
         "user_message": user_message,
@@ -374,6 +384,7 @@ def _build_pipeline_route_kwargs(
         "worker_tools": _get_toolset(route.toolset_name),
         "windows_rules": WINDOWS_RULES,
         "linux_rules": LINUX_RULES,
+        "device_tool_fn": device_tool_fn,
     }
 
 
@@ -451,6 +462,7 @@ def _build_route_kwargs(
             device_profile=device_profile,
             modes=modes,
             poll_task_id=poll_task_id,
+            device_tool_fn=device_tool_fn,
         )
 
     system_msg = _build_non_pipeline_system_prompt(runtime=runtime, device_id=device_id)
@@ -531,6 +543,7 @@ async def process_nl_command(
         device_info=device_info,
         device_profile=device_profile,
         user_id=user_id,
+        chat_history=chat_history,
     )
     route = _select_llm_route(modes)
     route_kwargs = _build_route_kwargs(

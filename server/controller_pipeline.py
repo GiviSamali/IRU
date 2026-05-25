@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import ntpath
+import posixpath
 import re
 from datetime import datetime, timezone
 
@@ -18,6 +20,7 @@ try:
         get_cached_python_toolchain,
         python_toolchain_from_runtime_summary,
         resolve_python_toolchain,
+        rewrite_python_app_launch_command,
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
@@ -49,6 +52,7 @@ except ImportError:
         get_cached_python_toolchain,
         python_toolchain_from_runtime_summary,
         resolve_python_toolchain,
+        rewrite_python_app_launch_command,
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
@@ -76,9 +80,12 @@ try:
         build_device_profile_block,
         build_devices_block,
         build_memory_block,
+        build_recent_artifact_context,
+        broad_desktop_scan_error,
         build_target_device_block,
         collect_tasks,
         current_datetime_msk,
+        format_recent_artifact_context_block,
         push_tasks_view,
         set_current_step,
         strip_markdown,
@@ -90,9 +97,12 @@ except ImportError:
         build_device_profile_block,
         build_devices_block,
         build_memory_block,
+        build_recent_artifact_context,
+        broad_desktop_scan_error,
         build_target_device_block,
         collect_tasks,
         current_datetime_msk,
+        format_recent_artifact_context_block,
         push_tasks_view,
         set_current_step,
         strip_markdown,
@@ -106,6 +116,23 @@ logger = logging.getLogger(__name__)
 STEP_STATES = {"pending", "running", "done", "failed", "recovered", "skipped", "blocked"}
 TASK_STATES = {"running", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}
 PIPELINE_TERMINAL_TOOL_NAMES = {"answer_text", "answer_report_failure"}
+PIPELINE_DEVICE_TOOL_NAMES = {"device_refresh_state", "device_check_runtime", "device_prepare_runtime"}
+PIPELINE_APP_WINDOW_ACTIONS = {
+    "window_list": "window.list",
+    "window_find": "window.find",
+    "window_verify": "window.verify",
+    "window_focus": "window.focus",
+    "window_close": "window.close",
+    "app_launch": "app.launch",
+    "app_verify_launch": "app.verify_launch",
+    "app_close": "app.close",
+}
+PIPELINE_WORKER_HANDLED_TOOL_NAMES = (
+    PIPELINE_TERMINAL_TOOL_NAMES
+    | PIPELINE_DEVICE_TOOL_NAMES
+    | set(PIPELINE_APP_WINDOW_ACTIONS)
+    | {"execute_cmd", "write_content", "get_file_link", "web_search", "remember_fact", "forget_fact"}
+)
 
 
 def _pipeline_terminal_answer_tools(worker_tools: list[dict] | None) -> list[dict]:
@@ -441,6 +468,7 @@ Target device context:
 {user_message}
 
 {format_conversation_context_block(shared.get("conversation_context") or build_conversation_context(None, user_message))}
+{format_recent_artifact_context_block(shared.get("recent_artifact_context"))}
 """
 
 
@@ -534,6 +562,7 @@ Target device context:
 Текущая дата и время: {shared["current_datetime_msk"]}.
 
 {format_conversation_context_block(shared.get("conversation_context") or build_conversation_context(None, ""), redact_paths=True)}
+{format_recent_artifact_context_block(shared.get("recent_artifact_context"))}
 """
 
 
@@ -814,6 +843,24 @@ def _collect_result_paths(result: dict, keys: tuple[str, ...]) -> list[str]:
     return paths
 
 
+def _artifact_parent(path: str) -> str:
+    module = ntpath if re.match(r"^[A-Za-z]:", path) or "\\" in path else posixpath
+    return module.dirname(path.rstrip("\\/")) or path
+
+
+def _common_artifact_parent(paths: list[str]) -> str | None:
+    if not paths:
+        return None
+    parents = [_artifact_parent(path) for path in paths if path]
+    if not parents:
+        return None
+    module = ntpath if any(re.match(r"^[A-Za-z]:", path) or "\\" in path for path in parents) else posixpath
+    try:
+        return module.commonpath(parents)
+    except Exception:
+        return parents[0]
+
+
 def _unique(items: list) -> list:
     seen = set()
     result = []
@@ -936,19 +983,28 @@ def build_pipeline_task_receipt(
 ) -> dict:
     artifacts_created = []
     files_verified = []
+    created_file_evidence = []
     commands_failed = []
     for command in commands:
         result = command.get("result") or {}
         if isinstance(result, dict):
-            artifacts_created.extend(_collect_result_paths(result, (
+            result_artifacts = _collect_result_paths(result, (
                 "artifacts_created",
                 "created_artifacts",
                 "created_files",
                 "files_created",
                 "path",
-            )))
+            ))
+            artifacts_created.extend(result_artifacts)
             if command.get("action") == "write_content":
+                result_artifacts.extend(_collect_result_paths(result, ("file_path",)))
                 artifacts_created.extend(_collect_result_paths(result, ("file_path",)))
+            for path in result_artifacts:
+                created_file_evidence.append({
+                    "path": path,
+                    "step_id": command.get("step_id"),
+                    "tool_name": command.get("tool_name") or command.get("action"),
+                })
             files_verified.extend(_collect_result_paths(result, (
                 "files_verified",
                 "verified_files",
@@ -988,6 +1044,9 @@ def build_pipeline_task_receipt(
     return {
         "task_status": task_status,
         "artifacts_created": _unique(artifacts_created),
+        "project_path": _common_artifact_parent(_unique(artifacts_created)),
+        "created_files": _unique(artifacts_created),
+        "created_file_evidence": _unique(created_file_evidence),
         "files_verified": _unique(files_verified),
         "commands_failed": _unique(commands_failed),
         "recoveries_applied": _unique(recoveries_applied),
@@ -1015,6 +1074,7 @@ async def run_pipeline_worker(
     step_index: int = 0,
     chat_completion_request_fn,
     worker_tools: list[dict],
+    device_tool_fn=None,
 ) -> dict:
     """Subagent-исполнитель одного шага pipeline."""
     worker_prompt = pipeline_worker_prompt(shared, overall_goal, step, completed_steps)
@@ -1216,8 +1276,29 @@ async def run_pipeline_worker(
 
             rewrite_error = None
             if fn_name == "execute_cmd":
+                scope_error = broad_desktop_scan_error(
+                    fn_args.get("command", ""),
+                    shared.get("recent_artifact_context"),
+                )
+                if scope_error:
+                    entry = append_step_command(
+                        fn_name,
+                        fn_args.get("command", ""),
+                        target_device,
+                        {"error": scope_error, "policy": "recent_artifact_scope"},
+                        status="blocked",
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": json.dumps(wrap_tool_result_for_llm(entry), ensure_ascii=False)[:4000],
+                    })
+                    continue
                 rewritten_command, rewrite_error = rewrite_python_command(fn_args.get("command", ""), python_receipt)
                 fn_args["command"] = rewritten_command
+            elif fn_name == "app_launch":
+                rewritten_launch, rewrite_error = rewrite_python_app_launch_command(fn_args.get("command", ""), python_receipt)
+                fn_args.update(rewritten_launch)
 
             budget_error = command_budget.register(fn_name, fn_args.get("command", ""))
             if budget_error:
@@ -1335,6 +1416,50 @@ async def run_pipeline_worker(
                         )
                     except Exception:
                         print("[pipeline/worker] Failed to write command memory")
+
+            elif fn_name in PIPELINE_DEVICE_TOOL_NAMES:
+                set_current_step(poll_task_id, f"Р’С‹РїРѕР»РЅСЏСЋ device tool: {fn_name}")
+                if device_tool_fn is None:
+                    tool_result = {"error": "device tools are unavailable in this route"}
+                else:
+                    try:
+                        tool_result = await device_tool_fn(fn_name, {**fn_args, "device_id": target_device})
+                    except Exception as exc:
+                        tool_result = {"error": str(exc)}
+                if fn_name in {"device_check_runtime", "device_prepare_runtime"} and isinstance(tool_result, dict) and not tool_result.get("error"):
+                    runtime_summary = tool_result.get("runtime_summary") or tool_result.get("summary")
+                    refreshed = python_toolchain_from_runtime_summary(runtime_summary, device_id=target_device)
+                    if refreshed:
+                        python_receipt = refreshed
+                append_step_command(
+                    fn_name,
+                    f"[tool] {fn_name}",
+                    target_device,
+                    tool_result,
+                )
+
+            elif fn_name in PIPELINE_APP_WINDOW_ACTIONS:
+                agent_action = PIPELINE_APP_WINDOW_ACTIONS[fn_name]
+                set_current_step(poll_task_id, f"Р’С‹РїРѕР»РЅСЏСЋ app/window tool: {agent_action}")
+                try:
+                    tool_result = await send_command_fn(target_device, agent_action, fn_args)
+                except Exception as exc:
+                    err_str = str(exc)
+                    if "CONFIRM_REQUIRED" in err_str:
+                        raise ConfirmationRequired(
+                            command=f"{agent_action}: {fn_args.get('command') or fn_args.get('pid') or fn_args.get('title_contains') or ''}",
+                            device_id=target_device,
+                            params=fn_args,
+                            answer=f"Р”Р»СЏ С€Р°РіР° В«{step.get('title', '')}В» С‚СЂРµР±СѓРµС‚СЃСЏ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ РґРµР№СЃС‚РІРёСЏ СЃ РѕРєРЅРѕРј/РїСЂРёР»РѕР¶РµРЅРёРµРј",
+                            commands_log=commands_log,
+                        )
+                    tool_result = {"error": err_str}
+                append_step_command(
+                    fn_name,
+                    fn_args.get("command") or f"[tool] {agent_action}",
+                    target_device,
+                    tool_result,
+                )
 
             elif fn_name == "write_content":
                 set_current_step(poll_task_id, f"Создаю файл для шага: {step.get('title', '')[:50]}")
@@ -1534,6 +1659,7 @@ async def process_pipeline_subagents(
     worker_tools: list[dict],
     windows_rules: str,
     linux_rules: str,
+    device_tool_fn=None,
 ) -> dict:
     """Pipeline Mode: IRU plan -> step workers -> final synthesis."""
     cfg = load_llm_config_fn()
@@ -1553,6 +1679,7 @@ async def process_pipeline_subagents(
     )
     conversation_context = build_conversation_context(chat_history, user_message)
     shared["conversation_context"] = conversation_context
+    shared["recent_artifact_context"] = build_recent_artifact_context(chat_history)
 
     set_current_step(poll_task_id, "ИРУ строит план...")
     history_msgs = build_chat_messages(chat_history[:-1], filter_onboarding=True)[-8:] if chat_history else []
@@ -1642,6 +1769,7 @@ async def process_pipeline_subagents(
                 linux_rules=linux_rules,
             )
             worker_shared["conversation_context"] = conversation_context
+            worker_shared["recent_artifact_context"] = shared.get("recent_artifact_context")
             db.update_step(db_task_id, idx, "running", summary="Подзадача передана исполнителю ИРУ")
             push_tasks_view(poll_task_id, created_task_ids)
             set_current_step(
@@ -1666,6 +1794,7 @@ async def process_pipeline_subagents(
                     step_index=idx,
                     chat_completion_request_fn=chat_completion_request_fn,
                     worker_tools=worker_tools,
+                    device_tool_fn=device_tool_fn,
                 )
             except ConfirmationRequired:
                 raise

@@ -1,3 +1,5 @@
+import ntpath
+import posixpath
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -44,6 +46,162 @@ ONBOARDING_MARKERS = [
 DENY_CONFIRM_MARKERS = [
     "команда отменена пользователем",
 ]
+
+
+ARTIFACT_RESULT_PATH_KEYS = (
+    "artifacts_created",
+    "created_artifacts",
+    "created_files",
+    "files_created",
+    "files_verified",
+    "verified_files",
+    "file_path",
+    "path",
+)
+
+
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _looks_like_artifact_path(path: str) -> bool:
+    text = (path or "").strip()
+    if not text:
+        return False
+    if text.startswith(("ctx://", "http://", "https://")):
+        return False
+    return bool(re.search(r"[/\\]", text) or re.match(r"^[A-Za-z]:", text))
+
+
+def _path_parent(path: str) -> str:
+    module = ntpath if re.match(r"^[A-Za-z]:", path) or "\\" in path else posixpath
+    parent = module.dirname(path.rstrip("\\/"))
+    return parent or path
+
+
+def _path_basename(path: str) -> str:
+    module = ntpath if re.match(r"^[A-Za-z]:", path) or "\\" in path else posixpath
+    return module.basename(path.rstrip("\\/"))
+
+
+def _common_parent(paths: list[str]) -> str | None:
+    if not paths:
+        return None
+    parents = [_path_parent(path) for path in paths if path]
+    if not parents:
+        return None
+    module = ntpath if any(re.match(r"^[A-Za-z]:", path) or "\\" in path for path in parents) else posixpath
+    try:
+        return module.commonpath(parents)
+    except Exception:
+        return parents[0]
+
+
+def _iter_command_artifact_paths(command: dict):
+    result = command.get("result") if isinstance(command, dict) else None
+    if not isinstance(result, dict):
+        return
+    for key in ARTIFACT_RESULT_PATH_KEYS:
+        for item in _as_list(result.get(key)):
+            if isinstance(item, str) and _looks_like_artifact_path(item):
+                yield item.strip()
+
+
+def build_recent_artifact_context(chat_history: list[dict] | None, *, max_files: int = 12) -> dict:
+    """Extract exact artifact paths from previous assistant tool results."""
+    files = []
+    seen = set()
+    source_message_id = None
+    for message in reversed(list(chat_history or [])):
+        if message.get("role") != "assistant":
+            continue
+        commands = message.get("commands") or []
+        if not isinstance(commands, list):
+            continue
+        for command in commands:
+            if not isinstance(command, dict):
+                continue
+            for path in _iter_command_artifact_paths(command):
+                key = path.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                files.append({
+                    "path": path,
+                    "step_id": command.get("step_id"),
+                    "tool_name": command.get("tool_name") or command.get("action"),
+                })
+                source_message_id = source_message_id or message.get("id")
+                if len(files) >= max_files:
+                    break
+            if len(files) >= max_files:
+                break
+        if files:
+            break
+    paths = [item["path"] for item in files]
+    return {
+        "project_path": _common_parent(paths),
+        "created_files": files,
+        "source_message_id": source_message_id,
+    }
+
+
+def format_recent_artifact_context_block(context: dict | None) -> str:
+    context = context or {}
+    files = context.get("created_files") if isinstance(context.get("created_files"), list) else []
+    lines = [
+        "Recent artifact context from previous assistant tool results:",
+        "This is context only, not current-run evidence.",
+        f"project_path: {context.get('project_path') or 'null'}",
+    ]
+    if files:
+        lines.append("created_files:")
+        for item in files[:12]:
+            step = item.get("step_id") or "unknown_step"
+            tool = item.get("tool_name") or "unknown_tool"
+            lines.append(f"- {item.get('path')} (source_step_id={step}; tool={tool})")
+    else:
+        lines.append("created_files: []")
+    lines.extend([
+        "Open/use-created-files rule:",
+        "If the user asks to open, verify, show, or continue work with recently created files, use the exact paths above.",
+        "Do not recursively scan Desktop or another broad parent when exact created_files are known.",
+        "If exact files are missing but project_path is known, search only inside project_path and prefer non-recursive checks.",
+        "If neither exact files nor project_path are known, ask clarification instead of broad recursive search.",
+        "Claims about opened/verified files still require current-run tool results and answer_text basis from current-run step_ids.",
+    ])
+    return "\n".join(lines)
+
+
+def broad_desktop_scan_error(command: str, context: dict | None) -> str | None:
+    """Block broad recursive Desktop scans when exact recent artifacts are known."""
+    context = context or {}
+    files = context.get("created_files") if isinstance(context.get("created_files"), list) else []
+    if not files:
+        return None
+    text = (command or "").lower().replace("/", "\\")
+    if not text:
+        return None
+    recursive = "-recurse" in text or "os.walk" in text or "\\**\\" in text or "/**/" in text
+    if not recursive or "desktop" not in text:
+        return None
+
+    project_path = str(context.get("project_path") or "")
+    project_norm = project_path.lower().replace("/", "\\")
+    project_name = _path_basename(project_path).lower()
+    if project_norm and project_norm in text:
+        return None
+    if project_name and project_name in text:
+        return None
+
+    return (
+        "Broad recursive Desktop scan is not allowed when recent created_files are known. "
+        "Use the exact created_files paths from recent artifact context, or search only inside project_path."
+    )
 
 
 def current_datetime_msk() -> str:

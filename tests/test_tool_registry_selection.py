@@ -2,8 +2,14 @@ import asyncio
 import json
 
 from server.controller_non_pipeline import process_non_pipeline_command
+from server.controller_pipeline import PIPELINE_WORKER_HANDLED_TOOL_NAMES
 from server.controller_prompts import SYSTEM_PROMPT_TEMPLATE
 from server.controller_tools import WORKER_TOOLS
+from server.controller_shared import (
+    broad_desktop_scan_error,
+    build_recent_artifact_context,
+    format_recent_artifact_context_block,
+)
 from server.tool_registry import compact_device_passport, list_tools, tool_log_entry
 
 
@@ -341,6 +347,62 @@ def test_pipeline_worker_toolset_exposes_demo_typed_tools_without_planner_tools(
     assert "window_verify" in names
     assert "app_launch" in names
     assert "app_verify_launch" in names
+
+
+def test_pipeline_worker_toolset_is_handled_by_pipeline_dispatch():
+    names = {tool["function"]["name"] for tool in WORKER_TOOLS}
+
+    assert names <= PIPELINE_WORKER_HANDLED_TOOL_NAMES
+
+
+def test_recent_artifact_context_uses_exact_project_files_without_demo_phrase():
+    chat_history = [{
+        "role": "assistant",
+        "commands": [
+            {
+                "step_id": "step_1",
+                "tool_name": "write_content",
+                "result": {"file_path": r"C:\Users\russa\Desktop\CourseLaunchKit\index.html"},
+            },
+            {
+                "step_id": "step_2",
+                "tool_name": "execute_cmd",
+                "result": {
+                    "artifacts_created": [
+                        r"C:\Users\russa\Desktop\CourseLaunchKit\plan_zadach.xlsx",
+                        r"C:\Users\russa\Desktop\CourseLaunchKit\description.docx",
+                    ]
+                },
+            },
+        ],
+    }]
+
+    context = build_recent_artifact_context(chat_history)
+    block = format_recent_artifact_context_block(context)
+
+    assert context["project_path"] == r"C:\Users\russa\Desktop\CourseLaunchKit"
+    assert [item["path"] for item in context["created_files"]] == [
+        r"C:\Users\russa\Desktop\CourseLaunchKit\index.html",
+        r"C:\Users\russa\Desktop\CourseLaunchKit\plan_zadach.xlsx",
+        r"C:\Users\russa\Desktop\CourseLaunchKit\description.docx",
+    ]
+    assert "Do not recursively scan Desktop" in block
+    assert r"C:\Users\russa\Desktop\CourseLaunchKit\description.docx" in block
+    assert "онлайн-школ" not in block
+
+
+def test_recent_artifact_scope_blocks_broad_desktop_recursive_scan():
+    context = {
+        "project_path": r"C:\Users\russa\Desktop\CourseLaunchKit",
+        "created_files": [{"path": r"C:\Users\russa\Desktop\CourseLaunchKit\description.docx"}],
+    }
+
+    broad = r'Get-ChildItem -Path "C:\Users\russa\Desktop" -Recurse -Filter *.docx'
+    narrow = r'Get-ChildItem -Path "C:\Users\russa\Desktop\CourseLaunchKit" -Recurse -Filter *.docx'
+
+    assert broad_desktop_scan_error(broad, context) is not None
+    assert broad_desktop_scan_error(narrow, context) is None
+    assert broad_desktop_scan_error("Start-Process notepad.exe", context) is None
 
 
 def test_prompt_contains_tool_selection_policy():

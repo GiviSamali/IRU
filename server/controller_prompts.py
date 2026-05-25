@@ -35,6 +35,7 @@ Hostname: {current_hostname}
 ОС: {current_os} ({current_os_version})
 {target_device_block}
 {device_context_block}
+{recent_artifact_context_block}
 {device_profile_block}
 {device_memory_block}
 Device state grounding hard rule:
