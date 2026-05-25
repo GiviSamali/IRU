@@ -8,6 +8,7 @@ const state = {
   selectedDevice: null,
   devicePanelBusy: null,
   devicePanelError: '',
+  devicePassportExpanded: false,
   sendTarget: 'single', // 'single' = selected device, 'all' = all devices
   modes: { pipeline: false, autonomous: false }, // флаги режимов для следующего запроса
   explorerOpen: false,
@@ -165,6 +166,7 @@ function doLogout() {
   state.devices = {};
   state.selectedDevice = null;
   state.sendTarget = 'single';
+  state.devicePassportExpanded = false;
   state.pendingTasks = [];
   state.explorerOpen = false;
   state.devModeOpen = false;
