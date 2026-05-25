@@ -116,16 +116,20 @@
   }
   .sidebar-overlay.show { display: block; }
   .auth-logo img { height: 88px; width: 88px; }
-  .header { padding: 0 8px; gap: 6px; }
+  .header { height: 56px; min-height: 56px; padding: 0 8px; gap: 6px; }
   .header-title { display: none; }
+  .header-left,
+  .header-right { min-width: 0; }
   .header-right { gap: 6px; }
+  .device-select { min-width: 0; }
   .btn-header-link { display: none; }
   .sidebar-mobile-links { display: flex; }
   
   /* ── MOBILE CHAT INPUT — Telegram/ChatGPT style (Point 6) ── */
   .chat-input-area {
     padding: 0;
-    position: sticky; bottom: 0; z-index: 10;
+    position: relative; bottom: auto; z-index: 10;
+    flex: 0 0 auto;
     background: rgba(2, 3, 8, 0.85);
     backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
     border-top: 1px solid rgba(0, 212, 255, 0.15);
@@ -987,4 +991,16 @@ img[src*="iru_logo"] {
   outline: 2px dashed #00d4ff;
   outline-offset: -10px;
   background: rgba(0, 212, 255, 0.04);
+}
+
+@media (max-width: 768px) {
+  .input-device-select,
+  .input-mode-select,
+  .attach-btn { display: none; }
+  .mobile-plus-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .mobile-plus-popover.show { display: block; }
 }
