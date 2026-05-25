@@ -148,57 +148,12 @@
 
 @media (max-width: 768px) {
   .device-passport-panel {
-    max-height: 58px;
-    overflow: hidden;
-  }
-  .device-passport-panel.expanded {
+    display: none;
     max-height: min(42dvh, 320px);
     overflow-y: auto;
   }
-  .device-passport-head {
-    align-items: center;
-    justify-content: flex-start;
-    margin-bottom: 0;
-    cursor: pointer;
-    outline: none;
-  }
-  .device-passport-head > div {
-    flex: 1;
-    min-width: 0;
-  }
-  .device-passport-head .device-passport-dot {
-    margin: 0 8px;
-  }
-  .device-passport-head:focus-visible {
-    box-shadow: 0 0 0 2px var(--accent-glow);
-    border-radius: var(--radius);
-  }
-  .device-passport-head::after {
-    content: "+";
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    margin-left: auto;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--accent);
-    font-size: 14px;
-    flex-shrink: 0;
-  }
-  .device-passport-panel.expanded .device-passport-head {
-    margin-bottom: 8px;
-  }
-  .device-passport-panel.expanded .device-passport-head::after {
-    content: "-";
-  }
-  .device-passport-panel:not(.expanded) .device-passport-actions,
-  .device-passport-panel:not(.expanded) .device-passport-error,
-  .device-passport-panel:not(.expanded) .device-passport-notice,
-  .device-passport-panel:not(.expanded) .device-passport-section,
-  .device-passport-panel:not(.expanded) .device-passport-details {
-    display: none;
+  .device-passport-panel.expanded {
+    display: block;
   }
 }
 .hints { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 6px; }

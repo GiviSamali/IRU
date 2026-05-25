@@ -1004,3 +1004,9 @@ img[src*="iru_logo"] {
   }
   .mobile-plus-popover.show { display: block; }
 }
+
+.passport-toggle { display: none; }
+
+@media (max-width: 768px) {
+  .passport-toggle { display: flex; }
+}

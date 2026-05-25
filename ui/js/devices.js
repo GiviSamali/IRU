@@ -122,6 +122,11 @@ function renderDevicePassport() {
   const root = document.getElementById('devicePassport');
   const panel = document.getElementById('devicePassportPanel');
   if (panel) panel.classList.toggle('expanded', !!state.devicePassportExpanded);
+  const toggleBtn = document.getElementById('devicePassportToggle');
+  if (toggleBtn) {
+    toggleBtn.classList.toggle('active', !!state.devicePassportExpanded);
+    toggleBtn.setAttribute('aria-expanded', state.devicePassportExpanded ? 'true' : 'false');
+  }
   if (!root) return;
   const ids = Object.keys(state.devices);
   if (!ids.length || !state.selectedDevice || !state.devices[state.selectedDevice]) {
@@ -156,7 +161,7 @@ function renderDevicePassport() {
       : `<button class="device-passport-btn" data-action="passport-runtime" data-mode="repair" ${busy ? 'disabled' : ''}>${busy === 'runtime' ? 'Repair...' : 'Repair runtime'}</button>`;
   const error = state.devicePanelError ? `<div class="device-passport-error">${escapeHTML(state.devicePanelError)}</div>` : '';
   root.innerHTML = `
-    <div class="device-passport-head" data-action="passport-toggle" role="button" tabindex="0" aria-expanded="${state.devicePassportExpanded ? 'true' : 'false'}">
+    <div class="device-passport-head">
       <div>
         <div class="device-passport-title">${escapeHTML(info.hostname || id)}</div>
         <div class="device-passport-subtitle">${escapeHTML(id)} · ${dev.connected ? 'online' : 'offline'}</div>
@@ -316,25 +321,32 @@ function bindDevicePassportActions() {
   root.addEventListener('click', (event) => {
     const target = event.target.closest('[data-action]');
     if (!target || !root.contains(target)) return;
-    if (target.dataset.action === 'passport-toggle') {
-      state.devicePassportExpanded = !state.devicePassportExpanded;
-      renderDevicePassport();
-      return;
-    }
     if (target.dataset.action === 'passport-state') runDevicePassportAction('state');
     if (target.dataset.action === 'passport-activate') runDevicePassportAction('activate', target.dataset.mode || 'soft');
     if (target.dataset.action === 'passport-runtime') runDevicePassportAction('runtime', target.dataset.mode || 'check');
     if (target.dataset.action === 'passport-disconnect') runDevicePassportAction('disconnect');
     if (target.dataset.action === 'passport-shutdown') runDevicePassportAction('shutdown');
   });
-  root.addEventListener('keydown', (event) => {
-    if (!event.target.closest('[data-action="passport-toggle"]')) return;
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault();
+}
+
+function ensureDevicePassportToggle() {
+  if (document.getElementById('devicePassportToggle')) return;
+  const deviceSelect = document.querySelector('.device-select');
+  if (!deviceSelect || !deviceSelect.parentNode) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn-icon passport-toggle';
+  button.id = 'devicePassportToggle';
+  button.title = 'Device passport';
+  button.setAttribute('aria-label', 'Device passport');
+  button.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="3" width="16" height="18" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>';
+  button.addEventListener('click', () => {
     state.devicePassportExpanded = !state.devicePassportExpanded;
     renderDevicePassport();
   });
+  deviceSelect.parentNode.insertBefore(button, deviceSelect.nextSibling);
 }
+
 function toggleDeviceDropdown() {
   document.getElementById('deviceDropdown').classList.toggle('show');
   fetchDevices();
@@ -469,6 +481,7 @@ function bindInputDeviceActions() {
 bindDeviceListActions();
 bindInputDeviceActions();
 bindDevicePassportActions();
+ensureDevicePassportToggle();
 
 // ── LIVE PROGRESS ─────────────────────────────────────
 
