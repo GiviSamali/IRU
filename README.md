@@ -2,78 +2,86 @@
 
 English version: [README.en.md](README.en.md)
 
----
+ИРУ — experimental AgentOS/Agent Control system: cloud/server orchestrator + local device agents + tool registry + controlled execution.
 
-AI-агент для управления компьютерами через естественный язык.
-Локальный клиент (Windows/Linux) подключается по WebSocket к облачному серверу,
-получает команды от LLM (DeepSeek) и выполняет их в PowerShell/bash.
-Пользователь описывает задачу текстом в браузере — ИРУ сама решает,
-какие команды запустить, и отдаёт результат.
+ИРУ — не просто чат-бот. Это система управления устройствами через локальных агентов, где сервер выбирает инструменты, агент выполняет действия на устройстве, а UI показывает результат и evidence.
 
----
+## Что умеет сейчас
 
-## Возможности
+- подключать Windows/Linux агент к серверу по WebSocket;
+- активировать устройство через Device Activation v1;
+- готовить managed Python runtime на устройстве;
+- выполнять typed tools и записывать их в run journal;
+- создавать и читать файлы через file tools;
+- запускать приложения и проверять реальное GUI-окно;
+- искать, проверять, фокусировать и закрывать окна;
+- собирать Device Passport;
+- показывать CPU/RAM/Disk/GPU/state snapshot;
+- хранить локальное состояние на агенте в `IRU_HOME/state`;
+- использовать Tool-Only Agent Protocol v1;
+- показывать used tools в Web UI;
+- работать в обычном non-pipeline loop и pipeline mode.
 
-- Выполнение команд на ПК через естественный язык
-- Режим План — пошаговое автономное исполнение сложных задач (create_plan / mark_step pipeline с live-прогрессом в UI)
-- Двухэтапная классификация задач: быстрые ключевые слова + LLM-классификатор (PLAN / SIMPLE)
-- Тарифы: free (30 команд/день, 1 устройство, 1 пробный запуск Плана), pro (безлимит, dev_mode), business (безлимит, dev_mode, до 9999 устройств)
-- Broadcast — одна команда на все подключённые устройства
-- Файловый проводник — навигация и скачивание файлов с устройства
-- Память: автоматическое сохранение фактов о пользователе и устройстве, предложение запомнить новые факты
-- Система безопасности: блокировка опасных команд (format, diskpart и др.), подтверждение удалений
-- Голосовой ввод (Web Speech API, ru-RU)
-- Вложение текстовых файлов в сообщения (до 5 файлов, 500 КБ каждый)
-- Админ-панель: управление пользователями, аудит, смена тарифов, профили устройств
-- Сбор training data с согласия пользователя
+`execute_cmd` остается fallback-инструментом, но для известных действий приоритет у typed tools.
 
----
+## Архитектура коротко
 
-## Архитектура
+Основной control center сейчас — Web UI. FastAPI server оркестрирует задачи, LLM выбирает следующий инструмент по Tool Registry, а локальный агент выполняет agent-side actions на устройстве и хранит локальную правду о состоянии.
 
 ```
-┌─────────────┐     HTTPS/WSS      ┌──────────────┐     WebSocket      ┌───────────┐
-│  Браузер UI │ <───────────────── >│  Сервер      │ <─────────────────>│  Агент    │
-│  (SPA)      │                     │  (FastAPI)   │                    │  (Python) │
-└─────────────┘                     │              │     DeepSeek API   └───────────┘
-                                    │  SQLite БД   │ <────────────────>
-                                    │  controller  │     LLM
-                                    └──────────────┘
+Web UI / Agent Shell future
+        |
+        | HTTPS
+        v
+Server Orchestrator
+        |
+        | WSS
+        v
+Local Agent
+        |
+        v
+Device OS / Files / Windows / Python Runtime
 ```
 
-### Поток сообщений
+Ключевые компоненты:
 
-1. Пользователь отправляет текст из UI
-2. Сервер вызывает `classify_task_complexity(message)`:
-   - Стадия 1: ключевые слова ("план", "пошагово", "по шагам") — мгновенно PLAN
-   - Стадия 2: LLM-классификатор (DeepSeek, temperature=0, max_tokens=100) — PLAN или SIMPLE
-3. SIMPLE — LLM-цикл: LLM генерирует tool_call, сервер отправляет команду агенту через WebSocket, результат возвращается в LLM, цикл повторяется (до 20 итераций)
-4. PLAN — UI показывает предложение запустить План. При подтверждении LLM вызывает `create_plan(goal, steps)`, затем последовательно выполняет шаги с `mark_step(task_id, idx, status)`. UI обновляется в реальном времени
+- `ui/` — браузерный control center.
+- `server/main.py` — FastAPI composition root.
+- `server/controller_non_pipeline.py` и `server/controller_pipeline.py` — controller loops.
+- `server/tool_registry.py` — Tool Registry и compact tool metadata.
+- `server/task_runtime.py` — WebSocket dispatch, device mirror, state collection helpers.
+- `agent/agent.py` и `agent/core/runtime.py` — локальный WebSocket client.
+- `agent/core/actions.py` — agent-side tools.
 
-### Компоненты
+## Главные принципы
 
-| Компонент | Путь | Описание |
-|-----------|------|----------|
-| Сервер | `server/main.py` | FastAPI, REST API, WebSocket-хаб, авторизация, rate limiting |
-| Контроллер | `server/controller.py` | LLM-цикл (DeepSeek), system prompt, tool-call loop, pipeline |
-| База данных | `server/database.py` | SQLite: users, chats, messages, tasks, device_memory, audit_log |
-| Авторизация | `server/auth.py` | JWT-токены (access + refresh) |
-| Агент | `agent/agent.py` | WebSocket-клиент, выполнение команд через subprocess |
-| UI | `ui/app.js` | SPA без фреймворков, live-прогресс, план, проводник |
-
----
+- Agent-owned local state: activation/runtime/state snapshot/passport хранятся на устройстве.
+- Server as orchestrator: сервер координирует и временно зеркалирует, но не является владельцем локальной правды.
+- Tool-only execution: LLM вызывает tools; пользовательский ответ тоже идет через `answer.text`.
+- Typed tools before shell fallback: `device.*`, `window.*`, `app.*`, file tools и runtime tools предпочтительнее `execute_cmd`.
+- Fresh evidence for real-world claims: утверждения о состоянии устройства должны опираться на текущий tool result, а не на старую историю чата.
+- Lazy context: LLM получает компактный manifest и context handles, а не полные receipts/logs/artifacts по умолчанию.
+- Safety / confirmation: рискованные операции должны проходить через политику и подтверждение.
 
 ## Быстрый старт
 
-### 1. Установка зависимостей
+### 1. Установить server dependencies
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Зависимости: FastAPI, Uvicorn, websockets, httpx, python-multipart.
+PowerShell:
 
-### 2. Настройка LLM
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+### 2. Настроить LLM
 
 Создайте `server/llm_config.json`:
 
@@ -84,199 +92,57 @@ pip install -r requirements.txt
   "model": "deepseek-chat",
   "model_reasoner": "deepseek-reasoner",
   "max_tokens": 4096,
-  "temperature": 0.0,
-  "tavily_api_key": "tvly-..."
+  "temperature": 0.0
 }
 ```
 
-`llm_config.json` находится в `.gitignore`. API-ключ можно переопределить через переменную окружения `DEEPSEEK_API_KEY`.
+`server/llm_config.json` не коммитится. API key также можно передать через `DEEPSEEK_API_KEY`.
 
-| Поле | Обязательное | Описание |
-|------|:---:|----------|
-| `api_key` | да | API-ключ DeepSeek |
-| `base_url` | да | Базовый URL API |
-| `model` | нет | Модель для обычных запросов (по умолчанию `deepseek-chat`) |
-| `model_reasoner` | нет | Модель для режима План и автономного режима (по умолчанию `deepseek-reasoner`) |
-| `max_tokens` | нет | Максимум токенов в ответе (по умолчанию 4096) |
-| `temperature` | нет | Температура генерации (по умолчанию 0.0, только для базовой модели) |
-| `tavily_api_key` | нет | API-ключ Tavily для инструмента `web_search` |
-
-### 3. Запуск сервера
+### 3. Запустить сервер
 
 ```bash
 cd server
 python main.py
 ```
 
-Сервер запустится на `http://localhost:8000`. При первом запуске создаётся SQLite-база `iru.db` и пользователь admin с уникальным токеном (выводится в консоль).
+Сервер поднимает Web UI на `http://localhost:8000`. При первом запуске создается SQLite DB и admin token выводится в консоль.
 
-### 4. Вход в UI
+### 4. Войти в UI
 
-Откройте `http://localhost:8000`, введите admin-токен.
+Откройте `http://localhost:8000` и войдите с admin token.
 
-### 5. Запуск агента
+### 5. Настроить и запустить агент
 
-Отредактируйте `agent/config.json`:
-
-```json
-{
-  "device_id": "МОЙ_ПК",
-  "server_url": "ws://127.0.0.1:8000",
-  "user_token": "ваш-токен"
-}
-```
+При первом запуске агент может открыть setup flow. Для headless запуска используется config с `device_id`, `server_url` и `user_token`.
 
 ```bash
 cd agent
 python agent.py
 ```
 
-Агент подключится к серверу и появится в списке устройств.
+Агент подключается к `/ws/{device_id}` и отправляет registration payload. Если есть локальный cached passport, он отправляется при reconnect.
 
----
+### 6. Подготовить устройство
 
-## Тарифы
+В Device Passport UI или через задачу:
 
-| | free | pro | business |
-|---|---|---|---|
-| Команд в день | 30 | безлимит | безлимит |
-| Устройств | 1 | безлимит | безлимит (до 9999) |
-| Режим План | 1 пробный запуск | безлимит | безлимит |
-| dev_mode (raw-команды) | нет | да | да |
+1. выполнить `device.activate`;
+2. выполнить `device.prepare_runtime`;
+3. выполнить `device.refresh_state`;
+4. проверить activation/runtime/state/GPU в паспорте устройства.
 
-Пробный запуск Плана для free-тарифа: пользователь может один раз попробовать режим План. После использования флаг `plan_trial_used` выставляется в 1 и повторный запуск недоступен без смены тарифа.
+## Где смотреть подробнее
 
----
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — общая архитектура и поток команды.
+- [docs/AGENT.md](docs/AGENT.md) — локальный агент, `IRU_HOME`, actions и reconnect.
+- [docs/TOOL_ONLY_PROTOCOL.md](docs/TOOL_ONLY_PROTOCOL.md) — Tool-Only Agent Protocol v1.
+- [docs/DEVICE_ACTIVATION_RUNTIME.md](docs/DEVICE_ACTIVATION_RUNTIME.md) — activation и managed Python runtime.
+- [docs/DEVICE_STATE.md](docs/DEVICE_STATE.md) — Device Passport и agent-owned state cache.
+- [docs/TOOLS.md](docs/TOOLS.md) — Tool Registry и категории tools.
+- [docs/WINDOW_APP_OBSERVATION.md](docs/WINDOW_APP_OBSERVATION.md) — проверка GUI-окон и приложений.
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — server deploy и agent build.
+- [docs/ROADMAP.md](docs/ROADMAP.md) — ближайшие планы.
 
-## Развёртывание на VPS
+## Статус проекта
 
-### Требования
-
-- Ubuntu/Debian, Python 3.11+
-- Порты 80, 443 (HTTPS через Caddy)
-
-### Установка
-
-```bash
-mkdir -p /opt/iru/app
-cd /opt/iru
-python3 -m venv venv
-source venv/bin/activate
-pip install -r app/requirements.txt
-```
-
-### HTTPS через Caddy
-
-```bash
-apt install caddy
-```
-
-`/etc/caddy/Caddyfile`:
-
-```
-ваш-домен.ru {
-    reverse_proxy localhost:8000
-}
-```
-
-```bash
-systemctl enable caddy
-systemctl restart caddy
-```
-
-### Автозапуск (systemd)
-
-`/etc/systemd/system/iru.service`:
-
-```ini
-[Unit]
-Description=IRU Server
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/opt/iru/app/server
-ExecStart=/opt/iru/venv/bin/python main.py
-Restart=always
-RestartSec=5
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-systemctl daemon-reload
-systemctl enable iru
-systemctl start iru
-```
-
-### Обновление
-
-```bash
-cd /opt/iru/app && git pull origin main && systemctl restart iru
-```
-
----
-
-## Управление пользователями
-
-### Через админ-панель в UI
-
-Войдите под admin-токеном, откройте админ-панель:
-- Создание, удаление пользователей
-- Смена тарифа (free / pro / business)
-- Копирование токена
-- Аудит-лог действий
-
-### Через API
-
-```bash
-# Создать пользователя
-curl -X POST http://localhost:8000/api/admin/users \
-  -H "Authorization: Bearer <jwt>" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Имя"}'
-
-# Список пользователей
-curl http://localhost:8000/api/admin/users \
-  -H "Authorization: Bearer <jwt>"
-```
-
----
-
-## Структура файлов
-
-```
-├── server/
-│   ├── main.py           # FastAPI, API, WebSocket-хаб, безопасность
-│   ├── controller.py     # LLM-цикл, промпт, инструменты, pipeline
-│   ├── database.py       # SQLite: схема, миграции, PLAN_LIMITS
-│   ├── auth.py           # JWT авторизация
-│   ├── llm_config.json   # Конфиг DeepSeek API (в .gitignore)
-│   └── iru.db            # БД (создаётся при запуске)
-├── agent/
-│   ├── agent.py          # WebSocket-клиент, subprocess
-│   ├── config.json       # device_id, server_url, user_token
-│   └── platforms/        # Платформенные модули (windows.py, linux.py)
-├── ui/
-│   ├── index.html        # HTML-каркас
-│   ├── app.js            # SPA логика
-│   └── style.css         # Стили, тёмная тема
-├── deploy/               # Скрипты деплоя, systemd, Caddy
-├── landing/              # Лендинг
-├── requirements.txt      # Python-зависимости
-└── README.md
-```
-
----
-
-## Технологии
-
-- Python 3.11+, FastAPI, Uvicorn, SQLite (WAL)
-- DeepSeek Chat / DeepSeek Reasoner (OpenAI-совместимый API)
-- Tavily API (веб-поиск)
-- websockets, httpx
-- HTML/CSS/JS (SPA без фреймворков), JetBrains Mono
-- Caddy (HTTPS), systemd
+ИРУ — experimental / beta-ready internal prototype. Архитектура уже ориентирована на AgentOS-подход, evidence и локальных агентов, но проект не заявляет production-grade enterprise security, полноценный sandbox или зрелую политику обновления агентов.
