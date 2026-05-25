@@ -1038,7 +1038,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                         hostname = dev["info"].get("hostname", item["device_id"]) if dev else item["device_id"]
                         answers.append(f"[{hostname}] {item.get('answer', '')}")
 
-            combined_answer = "\n\n".join(answers) if answers else "Готово."
+            combined_answer = "\n\n".join(answers) if answers else "ИРУ завершила задачу без текстового ответа."
             combined_commands = all_commands
             combined_tasks = primary_result.get("tasks", [])
         else:

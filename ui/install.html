@@ -3,103 +3,102 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ИРУ — Инструкция по подключению агента</title>
+<title>ИРУ — Инструкция</title>
 <link rel="icon" type="image/x-icon" href="/static/IruIcon.ico">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/css/static-pages.css">
 </head>
 <body class="static-page install-page">
 <div class="container">
-  <h1>ИРУ — Инструкция по подключению агента</h1>
-  <div class="subtitle">Боевой контур на подключённом домене <strong>irumode.ru</strong> <span id="agent-version"></span></div>
+  <h1>ИРУ — Инструкция по подключению</h1>
+  <div class="subtitle">Как запустить серверный UI, подключить агент и подготовить устройство <span id="agent-version"></span></div>
 
   <h2>Что понадобится</h2>
   <ul>
-    <li>Компьютер на <strong>Windows 10/11</strong></li>
-    <li><strong>Токен доступа</strong> от администратора</li>
-    <li id="need-item-zip" hidden>Архив <code>IruAgent.zip</code></li>
-    <li id="need-item-exe" hidden>Файл <code>IruAgent.exe</code></li>
+    <li>Компьютер Windows 10/11 или Linux для агента;</li>
+    <li>токен доступа пользователя;</li>
+    <li id="need-item-zip" hidden>архив <code>IruAgent.zip</code>;</li>
+    <li id="need-item-exe" hidden>файл <code>IruAgent.exe</code>;</li>
+    <li>доступ к Web UI: <a href="https://irumode.ru" target="_blank" rel="noreferrer">irumode.ru</a> или локальный адрес сервера.</li>
   </ul>
 
   <div id="install-steps-zip" hidden>
-    <h2>Шаг 1: скачайте архив</h2>
-    <p>Нажмите <strong>«Скачать агент»</strong> в интерфейсе ИРУ — начнётся загрузка <code>IruAgent.zip</code>.</p>
+    <h2>Шаг 1: скачайте агент</h2>
+    <p>В интерфейсе ИРУ нажмите <strong>«Скачать агент»</strong>. Если сервер раздаёт архив, загрузится <code>IruAgent.zip</code>.</p>
 
     <h2>Шаг 2: распакуйте архив полностью</h2>
-    <div class="warning">
-      Важно: не запускайте агент прямо из архива. Распакуйте его в отдельную постоянную папку, лучше вне временных директорий и OneDrive.
-    </div>
+    <div class="warning">Не запускайте агент прямо из архива. Распакуйте его в постоянную папку вне временных директорий и OneDrive.</div>
     <ol>
-      <li>Распакуйте <code>IruAgent.zip</code> в папку вроде <code>C:\IRU\</code>.</li>
-      <li>Проверьте, что рядом с <code>IruAgent.exe</code> лежат служебные DLL и папка runtime.</li>
-      <li>Не держите агент внутри архиватора или во временной папке загрузок.</li>
+      <li>Распакуйте архив, например в <code>C:\IRU\IruAgent\</code>.</li>
+      <li>Проверьте, что рядом с exe лежат служебные файлы и папки сборки.</li>
+      <li>Запустите <code>IruAgent.exe</code>.</li>
     </ol>
-
-    <h2>Шаг 3: запустите IruAgent.exe</h2>
-    <p>На первом запуске откроется окно первичной настройки. Вставьте токен доступа и завершите подключение.</p>
-    <div class="info">
-      В актуальной версии агент работает как фоновый tray-first клиент. После настройки он живёт в системном трее, а не как обычное консольное окно.
-    </div>
   </div>
 
   <div id="install-steps-exe" hidden>
-    <h2>Шаг 1: получите исполняемый файл</h2>
-    <p>Если вам передали отдельный <code>IruAgent.exe</code>, просто сохраните его в удобную рабочую папку и запустите.</p>
-
-    <h2>Шаг 2: завершите первичную настройку</h2>
-    <p>Введите токен доступа в окне настройки. После подключения агент появится в системном трее и начнёт держать соединение с сервером.</p>
+    <h2>Шаг 1: сохраните exe</h2>
+    <p>Если вам передали отдельный <code>IruAgent.exe</code>, сохраните его в постоянную папку и запустите.</p>
   </div>
 
-  <h2>Шаг 4: войдите в боевой интерфейс</h2>
+  <h2>Шаг 3: первичная настройка агента</h2>
   <ol>
-    <li>Откройте браузер: <a href="https://irumode.ru" target="_blank" rel="noreferrer">irumode.ru</a></li>
-    <li>Войдите с тем же токеном</li>
-    <li>Дождитесь появления устройства в списке</li>
-    <li>Создайте чат и начните работу</li>
+    <li>Введите серверный адрес и токен доступа.</li>
+    <li>Дождитесь статуса подключения.</li>
+    <li>На Windows агент работает как tray-first приложение; в headless режиме он пишет логи локально.</li>
   </ol>
 
-  <h2>Что вы увидите после запуска</h2>
+  <h2>Шаг 4: войдите в Web UI</h2>
+  <ol>
+    <li>Откройте <a href="https://irumode.ru" target="_blank" rel="noreferrer">irumode.ru</a> или адрес вашего сервера.</li>
+    <li>Войдите с тем же токеном.</li>
+    <li>Выберите устройство в списке.</li>
+    <li>Откройте Device Passport и проверьте подключение.</li>
+  </ol>
+
+  <h2>Шаг 5: подготовьте устройство</h2>
   <ul>
-    <li>Первый запуск — окно настройки и сохранение токена</li>
-    <li>Дальше — агент живёт в системном трее</li>
-    <li>При обновлении — отдельный прогресс загрузки новой версии</li>
+    <li><strong>Активация:</strong> нажмите «Активировать» или попросите ИРУ активировать устройство. Используется `device.activate`.</li>
+    <li><strong>Python runtime:</strong> нажмите «Подготовить Python» или попросите ИРУ подготовить runtime. Используется `device.prepare_runtime`.</li>
+    <li><strong>Снимок состояния:</strong> нажмите «Проверить состояние». Используется `device.refresh_state`.</li>
+  </ul>
+
+  <h2>Что должно быть видно</h2>
+  <ul>
+    <li>Device Passport: activation, runtime, Python, pip, health, identity, snapshot source;</li>
+    <li>used tools в ответах ИРУ;</li>
+    <li>для GUI-задач — `app.launch` и `window.verify` / `app.verify_launch`;</li>
+    <li>для записи текстовых файлов — `write_content`, а не shell fallback.</li>
   </ul>
 
   <h2>Примеры запросов</h2>
   <ul>
-    <li><code>Открой браузер</code></li>
-    <li><code>Покажи IP-адрес</code></li>
-    <li><code>Сколько свободного места на диске?</code></li>
-    <li><code>Покажи запущенные процессы</code></li>
-    <li><code>Создай файл test.txt на рабочем столе с текстом "привет"</code></li>
-    <li><code>Какая версия Windows?</code></li>
+    <li><code>Активируй это устройство</code></li>
+    <li><code>Подготовь managed Python runtime</code></li>
+    <li><code>Проверь состояние устройства и покажи CPU/RAM/GPU</code></li>
+    <li><code>Создай файл на рабочем столе с текстом "проверка ИРУ"</code></li>
+    <li><code>Проверь, открыт ли Блокнот</code></li>
+    <li><code>Запусти PyQt-приложение и проверь, что окно видно</code></li>
   </ul>
+
+  <h2>Локальные данные агента</h2>
+  <p>Основное состояние агента хранится в <code>%LOCALAPPDATA%\IRU</code> на Windows и <code>~/.iru</code> на Linux. Там находятся receipts, runtime, state snapshot, passport cache, logs, traces и artifacts.</p>
 
   <h2>Частые проблемы</h2>
-
   <h3>Агент не подключается</h3>
   <ul>
-    <li>Проверьте интернет-соединение и токен</li>
-    <li>Убедитесь, что сервер доступен по домену <code>irumode.ru</code></li>
-    <li>Если агент уже настроен, откройте меню в системном трее и используйте <strong>«Пере-настроить агент»</strong> или <strong>«Переподключиться»</strong></li>
+    <li>Проверьте адрес сервера и токен.</li>
+    <li>Проверьте интернет-соединение и доступность WebSocket.</li>
+    <li>Откройте диагностику агента из трея и посмотрите последний статус.</li>
   </ul>
 
-  <h3>Нужно сбросить локальную настройку</h3>
-  <p>Актуальный конфиг агента хранится в <code>%LOCALAPPDATA%\IRUAgent\config.json</code>. В большинстве случаев проще использовать пере-настройку из меню трея, чем править файлы вручную.</p>
-
-  <h3>SmartScreen блокирует запуск</h3>
-  <p>Нажмите <strong>«Подробнее»</strong>, затем <strong>«Выполнить в любом случае»</strong>. Это стандартное предупреждение для загруженного из интернета файла без отдельной цифровой подписи.</p>
-
-  <h3>Устройство не появляется в UI</h3>
+  <h3>Device Passport пустой или stale</h3>
   <ul>
-    <li>Проверьте, что агент не завершился и иконка есть в трее</li>
-    <li>Убедитесь, что вход в UI выполнен тем же токеном</li>
-    <li>Откройте диагностику агента из трея и посмотрите статус соединения</li>
+    <li>Нажмите «Проверить состояние».</li>
+    <li>Если агент reconnect только что произошёл, дождитесь registration payload.</li>
+    <li>Если устройство offline, сервер не может прочитать локальный cache до reconnect агента.</li>
   </ul>
 
-  <div class="warning">
-    Агент выполняет команды от имени вашего пользователя Windows. Не запускайте разрушительные сценарии без понимания последствий, даже если ИРУ обычно блокирует опасные действия.
-  </div>
+  <div class="warning">ИРУ выполняет реальные действия на устройстве от имени пользователя. Не запускайте разрушительные сценарии без понимания последствий.</div>
 
   <div class="footer">
     <span class="footer-brand">ИРУ <span id="footer-version"></span> — Интеллектуальный Режим Управления</span>

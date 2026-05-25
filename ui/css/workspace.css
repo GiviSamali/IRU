@@ -76,11 +76,56 @@
 }
 
 @media (max-width: 980px) {
-  .content { flex-direction: column; }
+  .content { flex-direction: column; min-height: 0; }
+  .chat-view { min-height: 0; }
   .device-passport-panel {
-    width: 100%; min-width: 0; max-width: none; max-height: 40vh;
+    width: 100%; min-width: 0; max-width: none; max-height: 34vh;
     border-left: 0; border-top: 1px solid var(--border);
+    padding: 10px;
+    flex-shrink: 0;
   }
+  .device-passport-head { margin-bottom: 8px; }
+  .device-passport-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .device-passport-btn {
+    min-width: 0;
+    width: 100%;
+    padding: 8px 7px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .device-passport-grid {
+    grid-template-columns: minmax(76px, 0.45fr) minmax(0, 1fr);
+    gap: 6px 8px;
+  }
+}
+
+@media (max-width: 520px) {
+  .chat-messages { padding: 10px; gap: 10px; }
+  .device-passport-panel { max-height: 30vh; padding: 9px; }
+  .device-passport-title { font-size: 13px; }
+  .device-passport-subtitle { font-size: 10px; }
+  .device-passport-section { padding-top: 9px; margin-top: 9px; }
+  .device-passport-grid {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+  .device-passport-grid > div {
+    margin-top: 6px;
+    font-size: 10px;
+  }
+  .device-passport-grid > div:first-child { margin-top: 0; }
+  .device-passport-badge {
+    width: 100%;
+    max-width: 100%;
+  }
+  .device-passport-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .device-passport-metrics > div { padding: 7px; }
+  .device-passport-metrics strong { font-size: 12px; }
+  .device-passport-uptime { font-size: 10px; }
 }
 .hints { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 6px; }
 .hint-chip {

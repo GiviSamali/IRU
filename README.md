@@ -2,7 +2,7 @@
 
 English version: [README.en.md](README.en.md)
 
-ИРУ — experimental AgentOS/Agent Control system: cloud/server orchestrator + local device agents + tool registry + controlled execution.
+ИРУ — experimental AgentOS/Agent Control system: cloud/server coordination layer + local device agents + tool registry + controlled execution.
 
 ИРУ — не просто чат-бот. Это система управления устройствами через локальных агентов, где сервер выбирает инструменты, агент выполняет действия на устройстве, а UI показывает результат и evidence.
 
@@ -56,7 +56,7 @@ Device OS / Files / Windows / Python Runtime
 ## Главные принципы
 
 - Agent-owned local state: activation/runtime/state snapshot/passport хранятся на устройстве.
-- Server as orchestrator: сервер координирует и временно зеркалирует, но не является владельцем локальной правды.
+- Server as coordination layer: сервер координирует и временно зеркалирует, но не является владельцем локальной правды.
 - Tool-only execution: LLM вызывает tools; пользовательский ответ тоже идет через `answer.text`.
 - Typed tools before shell fallback: `device.*`, `window.*`, `app.*`, file tools и runtime tools предпочтительнее `execute_cmd`.
 - Fresh evidence for real-world claims: утверждения о состоянии устройства должны опираться на текущий tool result, а не на старую историю чата.

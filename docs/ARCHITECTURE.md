@@ -29,7 +29,7 @@ Device OS / Files / Windows / Python Runtime
 Роли:
 
 - UI — интерфейс управления, Device Passport, used-tools transparency, pipeline progress.
-- Server — оркестратор, auth/API/WebSocket hub, временное зеркало device state, controller loops.
+- Server — координирующий слой, auth/API/WebSocket hub, временное зеркало device state, controller loops.
 - Agent — локальный исполнитель и владелец локального состояния устройства.
 - LLM — выбирает следующий tool по protocol и context, но не выполняет действия напрямую.
 - Tool Registry — карта доступных capabilities, схем, категорий и compact summaries.

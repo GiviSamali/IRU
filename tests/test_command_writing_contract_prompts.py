@@ -33,6 +33,11 @@ def test_windows_rules_use_long_running_for_gui():
     assert "Timeout GUI-процесса не считай обычной ошибкой" in WINDOWS_RULES
 
 
+def test_prompts_keep_document_helper_scripts_under_iru_home():
+    assert "%LOCALAPPDATA%\\IRU\\scripts\\helpers" in SYSTEM_PROMPT_TEMPLATE
+    assert "$env:LOCALAPPDATA\\IRU\\scripts\\helpers" in WINDOWS_RULES
+
+
 def test_windows_rules_forbid_gui_screen_and_focus_checks_without_request():
     for forbidden in ("screenshot", "SendKeys", "GetForegroundWindow"):
         assert forbidden in WINDOWS_RULES
@@ -52,7 +57,8 @@ def test_pipeline_worker_prompt_requires_minimal_commands_and_observable_result(
     assert "Каждая команда должна иметь наблюдаемый результат" in prompt
     assert "PY_COMPILE_OK" in prompt
     assert "py_compile успешен и нужные файлы созданы" in prompt
-    assert "long_running=true" in prompt
+    assert "app_launch" in prompt
+    assert "%LOCALAPPDATA%\\IRU\\scripts\\helpers" in prompt
 
 
 def test_pipeline_worker_prompt_forbids_gui_screen_and_focus_checks_without_request():

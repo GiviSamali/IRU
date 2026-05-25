@@ -217,6 +217,30 @@ async def _chat_completion_request(
             resp.raise_for_status()
             break
         except httpx.HTTPStatusError as _he:
+            if (
+                _he.response.status_code == 400
+                and request_json.get("tool_choice") == "required"
+                and _attempt == 0
+            ):
+                fallback_json = dict(request_json)
+                fallback_json["tool_choice"] = "auto"
+                print(
+                    "[llm] 400 with tool_choice=required; retrying with tool_choice=auto. "
+                    f"body={_he.response.text[:500]}"
+                )
+                try:
+                    resp = await client.post(
+                        f"{cfg['base_url']}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {cfg['api_key']}",
+                            "Content-Type": "application/json",
+                        },
+                        json=fallback_json,
+                    )
+                    resp.raise_for_status()
+                    break
+                except httpx.HTTPStatusError:
+                    raise
             if _he.response.status_code >= 500 and _attempt == 0:
                 print(f"[llm] 5xx retry: {_he.response.status_code}")
                 await asyncio.sleep(2)

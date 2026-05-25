@@ -236,6 +236,7 @@ function renderMessages() {
   let html = '';
   for (let mi = 0; mi < state.messages.length; mi++) {
     const m = state.messages[mi];
+    if (m.hideAfterPlanChoice) continue;
     const roleLabel = m.role === 'user' ? 'вы' : 'иру';
     const linkified = linkifyMessageContent(m.content || m.text || '', m.commands || []);
     let bodyHTML = linkified.html;
@@ -597,9 +598,10 @@ async function pollTask(taskId, msgIndex) {
       }
       if (['done', 'error', 'completed_with_recovery'].includes(task.status)) {
         stopped = true;
+        const fallbackAnswer = task.plan_suggestion ? '' : 'ИРУ завершила задачу без текстового ответа.';
         const msg = {
           role: 'assistant',
-          content: task.answer || 'Готово.',
+          content: task.answer || fallbackAnswer,
           commands: task.commands,
           tasks: task.tasks || [],
         };

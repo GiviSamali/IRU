@@ -12,97 +12,97 @@
 <div class="container">
 
 <div class="page-header">
-  <h1>Об ИРУ — Интеллектуальный Режим Управления</h1>
-  <div class="subtitle">Система удалённого управления компьютерами через естественный язык</div>
+  <h1>ИРУ — Интеллектуальный Режим Управления</h1>
+  <div class="subtitle">AgentOS / Agent Control system для управления устройствами через локальных агентов</div>
 </div>
 
-<h2>Что такое ИРУ?</h2>
-<p>ИРУ — это система, в которой пользователь описывает задачу на естественном языке, языковая модель переводит её в реальные команды, а агент выполняет их непосредственно на устройстве. Это не эмуляция действий пользователя и не набор макросов: ИРУ работает как программный управляющий слой поверх машины.</p>
+<h2>Что такое ИРУ</h2>
+<p>ИРУ — это система управления устройствами, где Web UI служит control center, FastAPI server координирует задачу, а локальный агент выполняет действия на конкретном устройстве.</p>
+<p>Пользователь формулирует задачу обычным языком. ИРУ выбирает typed tools, отправляет действие агенту по WebSocket и показывает результат вместе с evidence: использованные инструменты, статусы шагов и данные наблюдения.</p>
+
 <div class="philosophy">
-  <p>Философия: «научить машину быть машиной».</p>
-  <p class="no-emu">Без скриншотной имитации, ручных кликов и pyautogui. Приоритет — прямые системные вызовы, безопасные инструменты и детерминированное выполнение.</p>
+  <p>ИРУ — не просто чат-бот и не макросный кликер.</p>
+  <p class="no-emu">Приоритет — программные действия, локальное состояние агента, проверяемые результаты и честные ответы через tool-only protocol.</p>
 </div>
 
-<h2>Архитектура системы</h2>
+<h2>Как устроена система</h2>
 <div class="arch-img-wrap">
   <img src="/static/architecture.jpg" alt="Архитектура ИРУ">
 </div>
-
-<h2>Тарифные планы</h2>
-<p>Во время beta-тестирования участники получают расширенный доступ, но сама модель продукта уже рассчитана на живой боевой домен и публичный запуск.</p>
-<div class="plans">
-  <div class="plan-card">
-    <span class="plan-name">Free</span>
-    <span class="plan-desc">1 устройство, базовый лимит команд, короткая история взаимодействий</span>
-  </div>
-  <div class="plan-card active">
-    <span class="plan-name">Pro</span>
-    <span class="plan-desc">Расширенные лимиты, проводник, DEV MODE, более глубокая работа с задачами</span>
-    <span class="plan-beta">BETA</span>
-  </div>
-  <div class="plan-card">
-    <span class="plan-name">Business</span>
-    <span class="plan-desc">Мультипользовательская админка, аудит, API и командная эксплуатация</span>
-  </div>
-</div>
-
-<h2>DEV MODE</h2>
-<p>DEV MODE даёт прямой доступ к командам устройства без участия оркестратора. Это рабочий инструмент для диагностики и ручного вмешательства, а не демонстрационная опция.</p>
 <ul>
-  <li>Прямой raw-command контур в отдельной панели</li>
-  <li>Группировка результата по устройствам</li>
-  <li>Поддержка одиночного и broadcast-сценария</li>
-  <li>Без лишнего сохранения диалога как обычного чата</li>
+  <li><strong>Web UI</strong> — чат, Device Passport, used tools, режим План, проводник и админские панели.</li>
+  <li><strong>Server</strong> — FastAPI, REST API, WebSocket hub, LLM-loop, Tool Registry и временное зеркало подключённых устройств.</li>
+  <li><strong>Local Agent</strong> — WebSocket client, владелец локального состояния, executor typed tools.</li>
+  <li><strong>Tool Registry</strong> — список возможностей: `device.*`, `window.*`, `app.*`, file tools, runtime tools и fallback `execute_cmd`.</li>
+  <li><strong>Device Passport</strong> — activation/runtime/health/state/hardware summary с источником данных.</li>
 </ul>
 
-<h2>Этапы развития</h2>
+<h2>Что уже реализовано</h2>
 <div class="stages">
   <div class="stage-card done">
     <span class="stage-badge done">Готово</span>
     <div class="stage-content">
-      <div class="stage-title">Текст → команды</div>
-      <div class="stage-desc">Естественный язык, выполнение на одном или нескольких устройствах, рабочий pipeline-режим и живой control surface.</div>
+      <div class="stage-title">Локальный агент и WebSocket connection</div>
+      <div class="stage-desc">Windows/Linux агент подключается к серверу, выполняет actions и отдаёт cached passport при reconnect.</div>
     </div>
   </div>
   <div class="stage-card done">
     <span class="stage-badge done">Готово</span>
     <div class="stage-content">
-      <div class="stage-title">Сбор полезного контекста</div>
-      <div class="stage-desc">Training data, профили устройств, память и история выполнения — всё, что делает ИРУ практичнее на реальных задачах.</div>
+      <div class="stage-title">Activation, runtime, state cache</div>
+      <div class="stage-desc">Device Activation v1, managed Python runtime, `device.refresh_state`, GPU/hardware summary и agent-owned state в `IRU_HOME/state`.</div>
+    </div>
+  </div>
+  <div class="stage-card done">
+    <span class="stage-badge done">Готово</span>
+    <div class="stage-content">
+      <div class="stage-title">Tool-only protocol и evidence</div>
+      <div class="stage-desc">ИРУ отвечает через `answer.text`; утверждения о состоянии устройства должны опираться на current-run `step_id` basis.</div>
+    </div>
+  </div>
+  <div class="stage-card done">
+    <span class="stage-badge done">Готово</span>
+    <div class="stage-content">
+      <div class="stage-title">Window/app observation</div>
+      <div class="stage-desc">`app.launch`, `app.verify_launch`, `window.find`, `window.verify`, focus/close и проверка реального GUI-окна.</div>
     </div>
   </div>
   <div class="stage-card coming">
-    <span class="stage-badge coming">Дальше</span>
+    <span class="stage-badge coming">План</span>
     <div class="stage-content">
-      <div class="stage-title">Собственная модель</div>
-      <div class="stage-desc">Дообучение на реальных сценариях эксплуатации и постепенный уход от чисто внешнего LLM-контура.</div>
-    </div>
-  </div>
-  <div class="stage-card coming">
-    <span class="stage-badge coming">Дальше</span>
-    <div class="stage-content">
-      <div class="stage-title">Публичный релиз</div>
-      <div class="stage-desc">Доведение продукта до зрелого продакшн-сценария на уже подключённом домене и серверной инфраструктуре.</div>
+      <div class="stage-title">Agent Shell, голос и overlay</div>
+      <div class="stage-desc">Desktop web mirror, push-to-talk/hotkey, cloud STT, позже wake-word и overlay.</div>
     </div>
   </div>
 </div>
 
+<h2>DEV MODE</h2>
+<p>DEV MODE даёт прямой доступ к командам устройства без обычного LLM-loop ИРУ. Это инструмент диагностики и ручного вмешательства, а не основной сценарий управления.</p>
+<ul>
+  <li>raw-command контур в отдельной панели;</li>
+  <li>одиночный и broadcast-сценарий;</li>
+  <li>результат группируется по устройствам;</li>
+  <li>typed tools остаются предпочтительным путём для обычных задач.</li>
+</ul>
+
+<h2>Статус</h2>
+<p>Проект находится в experimental / beta-stage. Он пригоден для внутренних демо и тестирования, но не заявляет production-grade enterprise security, полноценный sandbox или зрелую модель автообновления всех компонентов.</p>
+
 <h2>Технологический стек</h2>
 <table class="tech-table">
   <tr><td>Сервер</td><td>FastAPI + Uvicorn</td></tr>
-  <tr><td>LLM-оркестрация</td><td>DeepSeek API + tool-calling</td></tr>
-  <tr><td>Агент</td><td>Python, WebSocket client, Windows-oriented runtime</td></tr>
+  <tr><td>LLM</td><td>DeepSeek-compatible chat/completions + tool calling</td></tr>
+  <tr><td>Агент</td><td>Python, WebSocket client, local actions</td></tr>
   <tr><td>Интерфейс</td><td>Vanilla JS + HTML + CSS</td></tr>
-  <tr><td>Хранилище</td><td>SQLite</td></tr>
-  <tr><td>Продакшн-контур</td><td>VPS + Caddy + HTTPS</td></tr>
+  <tr><td>Хранилище</td><td>SQLite + локальное `IRU_HOME/state` на агенте</td></tr>
 </table>
 
 <h2>Контакты</h2>
-<p>Боевой домен: <a href="https://irumode.ru" target="_blank" rel="noreferrer">irumode.ru</a></p>
+<p>Домен: <a href="https://irumode.ru" target="_blank" rel="noreferrer">irumode.ru</a></p>
 <p>Почта: <a href="mailto:russaygushkin@gmail.com">russaygushkin@gmail.com</a></p>
 
 <div class="footer">
-  <span class="footer-brand">ИРУ v3.7 — Интеллектуальный Режим Управления</span>
+  <span class="footer-brand">ИРУ — Интеллектуальный Режим Управления</span>
   <a href="/" class="footer-link">← Вернуться в ИРУ</a>
 </div>
 

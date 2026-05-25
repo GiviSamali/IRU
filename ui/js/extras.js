@@ -242,7 +242,10 @@ function acceptPlanSuggestion(el) {
   const chatId = parseInt(el.dataset.chatId, 10);
   const mi = parseInt(el.dataset.index || el.id.replace('ps-', ''), 10);
   const originalRequest = state.messages[mi]?.planOriginalRequest || el.dataset.origReq || '';
-  if (state.messages[mi]) state.messages[mi].planDismissed = true;
+  if (state.messages[mi]) {
+    state.messages[mi].planDismissed = true;
+    state.messages[mi].hideAfterPlanChoice = true;
+  }
   renderMessages();
   runPlan(chatId, originalRequest);
 }
@@ -250,7 +253,10 @@ function acceptPlanSuggestion(el) {
 function declinePlanSuggestion(el) {
   const mi = parseInt(el.dataset.index || el.id.replace('ps-', ''), 10);
   const originalRequest = state.messages[mi]?.planOriginalRequest || el.dataset.origReq || '';
-  if (state.messages[mi]) state.messages[mi].planDeclined = true;
+  if (state.messages[mi]) {
+    state.messages[mi].planDeclined = true;
+    state.messages[mi].hideAfterPlanChoice = true;
+  }
   renderMessages();
   const taskId = state.messages[mi]?._taskId || '';
   declinePlanAndContinue(taskId, originalRequest);

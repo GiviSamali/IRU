@@ -325,21 +325,22 @@ def test_non_pipeline_execute_cmd_and_write_content_honor_device_id_override():
     assert seen == [("desktop", "execute_cmd"), ("desktop", "write_content")]
 
 
-def test_pipeline_worker_toolset_does_not_expose_unsupported_device_tools():
+def test_pipeline_worker_toolset_exposes_demo_typed_tools_without_planner_tools():
     names = {tool["function"]["name"] for tool in WORKER_TOOLS}
 
     assert "system_list_tools" not in names
-    assert "device_refresh_state" not in names
     assert "device_get_passport" not in names
     assert "device_activate" not in names
     assert "device_repair_activation" not in names
-    assert "device_check_runtime" not in names
-    assert "device_prepare_runtime" not in names
     assert "device_repair_runtime" not in names
-    assert "window_list" not in names
-    assert "window_verify" not in names
-    assert "app_launch" not in names
-    assert "app_verify_launch" not in names
+    assert "device_refresh_state" in names
+    assert "device_check_runtime" in names
+    assert "device_prepare_runtime" in names
+    assert "window_list" in names
+    assert "window_find" in names
+    assert "window_verify" in names
+    assert "app_launch" in names
+    assert "app_verify_launch" in names
 
 
 def test_prompt_contains_tool_selection_policy():

@@ -216,6 +216,17 @@ NON_PIPELINE_TOOLS = [
 ]
 
 WORKER_TOOL_NAMES = {
+    "device_refresh_state",
+    "device_check_runtime",
+    "device_prepare_runtime",
+    "window_list",
+    "window_find",
+    "window_verify",
+    "window_focus",
+    "window_close",
+    "app_launch",
+    "app_verify_launch",
+    "app_close",
     "execute_cmd",
     "write_content",
     "get_file_link",

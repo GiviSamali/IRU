@@ -192,7 +192,7 @@ def extract_json_payload(text: str):
 
 
 def normalize_pipeline_plan(raw_plan, fallback_goal: str, default_device_id: str) -> dict:
-    """Нормализовать план оркестратора к единому виду."""
+    """Нормализовать план ИРУ к единому виду."""
     goal = fallback_goal.strip() or "Выполнить задачу"
     steps_raw = []
     if isinstance(raw_plan, dict):
@@ -286,11 +286,11 @@ def should_force_multi_step_pipeline(plan: dict, user_message: str) -> bool:
 
 
 def pipeline_single_step_refine_prompt(shared: dict, user_message: str, plan: dict) -> str:
-    """Prompt the orchestrator to re-split an over-collapsed one-step plan."""
+    """Prompt IRU to re-split an over-collapsed one-step plan."""
     return f"""\
-Ты — ОРКЕСТРАТОР Pipeline Mode ИРУ.
+Ты — ИРУ в Pipeline Mode.
 
-Предыдущий план оказался СЛИШКОМ СЖАТЫМ: вся задача collapsed в один шаг. Это плохо, потому что subagent-исполнитель
+Предыдущий план оказался СЛИШКОМ СЖАТЫМ: вся задача collapsed в один шаг. Это плохо, потому что исполнитель ИРУ
 получает слишком широкую задачу и снова начинает сам планировать.
 
 Нужно переразбить исходный запрос на 2-5 последовательных шагов.
@@ -302,7 +302,7 @@ def pipeline_single_step_refine_prompt(shared: dict, user_message: str, plan: di
 2. Отдельно выделяй подготовку/проверку среды, основную реализацию и проверку результата, если это уместно.
 3. Если создаётся файл, приложение, виджет, проект или артефакт — отдельным шагом должна идти проверка результата и,
    если возможно, подготовка ссылки или пути к артефакту.
-4. Каждый шаг должен быть достаточно узким, чтобы subagent мог выполнить его без нового перепланирования.
+4. Каждый шаг должен быть достаточно узким, чтобы исполнитель ИРУ мог выполнить его без нового перепланирования.
 
 Верни ТОЛЬКО JSON без Markdown и без пояснений:
 {{
@@ -310,7 +310,7 @@ def pipeline_single_step_refine_prompt(shared: dict, user_message: str, plan: di
   "steps": [
     {{
       "title": "короткое название шага",
-      "instruction": "подробное задание для subagent-исполнителя",
+      "instruction": "подробное задание для исполнителя ИРУ",
       "success_criteria": "как понять, что шаг завершён",
       "device_id": "ID устройства при необходимости"
     }}
@@ -381,11 +381,11 @@ def expand_single_step_pipeline_fallback(plan: dict, user_message: str, default_
 
 
 def pipeline_plan_prompt(shared: dict, user_message: str) -> str:
-    """Промпт для оркестратора: разбить задачу на subagent-шаги."""
+    """Промпт для ИРУ: разбить задачу на шаги исполнителей."""
     return f"""\
-Ты — ОРКЕСТРАТОР конвейерного режима ИРУ.
+Ты — ИРУ в конвейерном режиме.
 
-Твоя роль: НЕ выполнять команды самостоятельно, а разбить общий запрос на понятные subagent-шаги.
+Твоя роль: НЕ выполнять команды самостоятельно, а разбить общий запрос на понятные шаги исполнителей ИРУ.
 Каждый шаг потом пойдёт отдельному LLM-исполнителю. Поэтому шаги должны быть:
 1. Непересекающимися.
 2. Последовательными.
@@ -404,7 +404,7 @@ def pipeline_plan_prompt(shared: dict, user_message: str) -> str:
   "steps": [
     {{
       "title": "короткое название шага",
-      "instruction": "подробное задание для subagent-исполнителя",
+      "instruction": "подробное задание для исполнителя ИРУ",
       "success_criteria": "как понять, что шаг завершён",
       "device_id": "ID устройства, если шаг лучше делать не на текущем устройстве"
     }}
@@ -476,7 +476,7 @@ Tool-only protocol:
 
 Ты — SUBAGENT-ИСПОЛНИТЕЛЬ внутри Pipeline Mode ИРУ.
 
-Ты выполняешь ТОЛЬКО ОДИН назначенный шаг. Ты не главный ассистент и не оркестратор.
+Ты выполняешь ТОЛЬКО ОДИН назначенный шаг. Ты не главный ассистент и не главный контур ИРУ.
 Твоя задача: довести текущий шаг до результата с помощью инструментов и затем коротко отчитаться.
 
 КРИТИЧЕСКИЕ ПРАВИЛА:
@@ -494,7 +494,9 @@ Tool-only protocol:
 3. Не доказывай результат бесконечными проверками. Если понятная проверка уже успешна, остановись и отчитайся.
 4. Если py_compile успешен и нужные файлы созданы, этого достаточно для базовой проверки созданного GUI-проекта.
 5. Не используй screenshot, SendKeys, PrintScreen или GetForegroundWindow без явного запроса пользователя.
-6. Если GUI надо запустить, используй execute_cmd с long_running=true.
+6. Если GUI надо запустить, используй app_launch, затем app_verify_launch/window_verify/window_find для проверки видимого окна. execute_cmd используй только если typed app/window tools недоступны или недостаточны.
+7. Для подготовки Python используй device_prepare_runtime/device_check_runtime, а не ручной venv через execute_cmd.
+8. Временные helper scripts для Word/Excel/PowerPoint/PDF/docx/xlsx/pptx создавай только в `%LOCALAPPDATA%\\IRU\\scripts\\helpers` или `~/.iru/scripts/helpers` и удаляй после выполнения. Итоговые пользовательские документы сохраняй там, где просил пользователь.
 
 Общая цель:
 {overall_goal}
@@ -545,11 +547,11 @@ def pipeline_summary_prompt() -> str:
 - Do not invent step_id values and do not use tool names as basis.
 
 """
-    """Финальный промпт оркестратора для сборки общего ответа."""
+    """Финальный промпт ИРУ для сборки общего ответа."""
     return tool_only + """\
-Ты — ОРКЕСТРАТОР Pipeline Mode ИРУ.
+Ты — ИРУ в Pipeline Mode.
 
-Тебе дали результат работы subagent-исполнителей по шагам. Сформируй финальный ответ пользователю:
+Тебе дали результат работы исполнителей ИРУ по шагам. Сформируй финальный ответ пользователю:
 1. Кратко скажи, что сделано.
 2. Если выполнение остановилось — честно укажи на каком шаге и почему.
 3. Если есть полезный итоговый артефакт или ссылка на скачивание — упомяни это явно.
@@ -571,7 +573,7 @@ def build_pipeline_shared_context(
     windows_rules: str,
     linux_rules: str,
 ) -> dict:
-    """Контекст окружения для оркестратора и subagent-исполнителей."""
+    """Контекст окружения для ИРУ и subagent-исполнителей."""
     os_info = device_info.get("os", "Windows")
     os_lower = (os_info or "").lower()
     python_receipt = (
@@ -1533,7 +1535,7 @@ async def process_pipeline_subagents(
     windows_rules: str,
     linux_rules: str,
 ) -> dict:
-    """Pipeline Mode с субагентностью: orchestrator -> step workers -> final synthesis."""
+    """Pipeline Mode: IRU plan -> step workers -> final synthesis."""
     cfg = load_llm_config_fn()
     modes = modes or {}
     model = pick_model_fn(cfg, {"pipeline": True, "autonomous": bool(modes.get("autonomous"))})
@@ -1552,7 +1554,7 @@ async def process_pipeline_subagents(
     conversation_context = build_conversation_context(chat_history, user_message)
     shared["conversation_context"] = conversation_context
 
-    set_current_step(poll_task_id, "Оркестратор строит план...")
+    set_current_step(poll_task_id, "ИРУ строит план...")
     history_msgs = build_chat_messages(chat_history[:-1], filter_onboarding=True)[-8:] if chat_history else []
     plan_messages = [{"role": "system", "content": pipeline_plan_prompt(shared, user_message)}]
     plan_messages.extend(history_msgs)
@@ -1640,7 +1642,7 @@ async def process_pipeline_subagents(
                 linux_rules=linux_rules,
             )
             worker_shared["conversation_context"] = conversation_context
-            db.update_step(db_task_id, idx, "running", summary="Подзадача передана subagent-исполнителю")
+            db.update_step(db_task_id, idx, "running", summary="Подзадача передана исполнителю ИРУ")
             push_tasks_view(poll_task_id, created_task_ids)
             set_current_step(
                 poll_task_id,
@@ -1670,7 +1672,7 @@ async def process_pipeline_subagents(
             except Exception as exc:
                 worker_result = {
                     "status": "error",
-                    "answer": f"Ошибка subagent-исполнителя: {exc}",
+                    "answer": f"Ошибка исполнителя ИРУ: {exc}",
                     "commands": [],
                 }
 
@@ -1759,7 +1761,7 @@ async def process_pipeline_subagents(
 
         db.finish_task(db_task_id, task_status)
         push_tasks_view(poll_task_id, created_task_ids)
-        set_current_step(poll_task_id, "Оркестратор подводит итоги...")
+        set_current_step(poll_task_id, "ИРУ подводит итоги...")
 
         summary_payload = {
             "goal": normalized_plan["goal"],
