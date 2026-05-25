@@ -76,7 +76,7 @@
 }
 
 @media (max-width: 980px) {
-  .content { flex-direction: column; min-height: 0; overflow: hidden; }
+  .content { min-height: 0; overflow: hidden; }
   .chat-view { order: 2; flex: 1 1 auto; min-height: 0; }
   .device-passport-panel {
     order: 1;
