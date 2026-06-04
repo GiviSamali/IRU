@@ -145,6 +145,13 @@ Checks:
 - [ ] Final answer basis references current-run non-answer step ids.
 - [ ] Basis does not use tool names such as `window.find` or `write_content`.
 
+## UI Status Labels
+
+- [ ] Send a normal task and confirm the compact live status uses a known label such as `ИРУ думает...`, `Выполняю инструмент...`, or `Выполняю задачу...`.
+- [ ] Inspect or force an unknown backend task status/current-step value and confirm the compact label falls back to `Выполняю задачу...` instead of showing raw text.
+- [ ] Confirm final answer text is displayed normally and is not sanitized as a status label.
+- [ ] Confirm used tools and command details still show real tool names, summaries, and evidence.
+
 ## Tool-Only Protocol Validation Inventory
 
 Inspected files:

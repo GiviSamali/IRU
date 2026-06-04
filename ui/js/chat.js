@@ -207,6 +207,100 @@ async function downloadMessageFile(deviceIdEncoded, filePathEncoded, btn) {
   }
 }
 
+const SAFE_TASK_STATUS_LABELS = Object.freeze({
+  thinking: 'ИРУ думает...',
+  running: 'Выполняю задачу...',
+  running_tool: 'Выполняю инструмент...',
+  waiting_agent: 'Жду ответ агента...',
+  preparing_runtime: 'Подготавливаю runtime...',
+  refreshing_state: 'Обновляю состояние устройства...',
+  writing_file: 'Создаю файл...',
+  launching_app: 'Запускаю приложение...',
+  restoring: 'Восстанавливаю статус операции...',
+  done: 'Готово',
+  failed: 'Ошибка',
+});
+
+const SAFE_TASK_STATUS_KEYS = new Set(Object.keys(SAFE_TASK_STATUS_LABELS));
+
+function normalizeTaskStatusKey(status) {
+  const key = String(status || '').trim().toLowerCase();
+  return SAFE_TASK_STATUS_KEYS.has(key) ? key : '';
+}
+
+function normalizeTaskStatusLabel(status) {
+  return SAFE_TASK_STATUS_LABELS[normalizeTaskStatusKey(status)] || SAFE_TASK_STATUS_LABELS.running;
+}
+
+function deriveLiveTaskStatus(task, currentMessage) {
+  const explicitStatus = task?.current_status ?? task?.currentStatus;
+  if (explicitStatus != null) {
+    return normalizeTaskStatusKey(explicitStatus) || 'running';
+  }
+
+  const taskStatus = String(task?.status || '').trim().toLowerCase();
+  if (taskStatus === 'done' || taskStatus === 'completed' || taskStatus === 'completed_with_recovery') return 'done';
+  if (taskStatus === 'error' || taskStatus === 'failed' || taskStatus === 'cancelled') return 'failed';
+  if (taskStatus === 'confirm') return 'waiting_agent';
+  if (taskStatus && taskStatus !== 'running' && taskStatus !== 'pending') return 'running';
+
+  const commands = Array.isArray(task?.commands) ? task.commands : [];
+  if (commands.some(command => getCommandStatus(command) === 'running')) return 'running_tool';
+
+  const tasks = Array.isArray(task?.tasks) ? task.tasks : [];
+  const hasRunningStep = tasks.some(item => (item.steps || []).some(step => normalizeStepStateKey(step?.status) === 'running'));
+  if (hasRunningStep) return 'running_tool';
+
+  return normalizeTaskStatusKey(currentMessage?.currentStatus) || 'thinking';
+}
+
+const SAFE_TASK_STATE_CLASSES = new Set([
+  'pending',
+  'running',
+  'completed',
+  'completed_with_recovery',
+  'done',
+  'recovered',
+  'failed',
+  'error',
+  'cancelled',
+  'blocked',
+  'skipped',
+]);
+
+function normalizeTaskStateKey(status, fallback = 'running') {
+  const key = String(status || '').trim().toLowerCase();
+  return SAFE_TASK_STATE_CLASSES.has(key) ? key : fallback;
+}
+
+function normalizeTaskBadgeLabel(status) {
+  const key = normalizeTaskStateKey(status);
+  if (key === 'completed' || key === 'done') return 'завершено';
+  if (key === 'completed_with_recovery' || key === 'recovered') return 'завершено с recovery';
+  if (key === 'failed' || key === 'error') return 'ошибка';
+  if (key === 'cancelled') return 'отменено';
+  if (key === 'blocked') return 'заблокировано';
+  if (key === 'skipped') return 'пропущено';
+  if (key === 'pending') return 'ожидает';
+  return 'выполняется';
+}
+
+function normalizeStepStateKey(status) {
+  return normalizeTaskStateKey(status, 'pending');
+}
+
+function normalizeStepStatusLabel(status) {
+  const key = normalizeStepStateKey(status);
+  if (key === 'done' || key === 'completed') return 'готово';
+  if (key === 'recovered' || key === 'completed_with_recovery') return 'исправлено';
+  if (key === 'failed' || key === 'error') return 'ошибка';
+  if (key === 'running') return 'выполняется';
+  if (key === 'blocked') return 'блокировано';
+  if (key === 'skipped') return 'пропущено';
+  if (key === 'cancelled') return 'отменено';
+  return 'ожидает';
+}
+
 function renderMessages() {
   const container = document.getElementById('chatMessages');
 
@@ -373,7 +467,7 @@ function renderMessages() {
     }
 
     if (m.loading) {
-      const stepText = escapeHTML(m.currentStep || 'ИРУ думает...');
+      const stepText = escapeHTML(normalizeTaskStatusLabel(m.currentStatus || 'thinking'));
       const liveTasksHTML = renderTaskBlock(m.liveTasks, m.liveCommands || [], m._taskId || `live-${mi}`);
       const taskBlockAttr = liveTasksHTML ? '' : ' hidden';
       html += `<div class="msg assistant msg-thinking"><div class="msg-role">иру</div><div class="msg-body"><div class="live-status"><span class="live-dot"></span><span class="live-text">${stepText}</span></div><div class="task-block-live"${taskBlockAttr}>${liveTasksHTML}</div></div></div>`;
@@ -507,7 +601,7 @@ async function sendMessage() {
   state.messages.push({ role: 'user', content: text });
   // Добавить placeholder для ответа (live-статус вместо точек загрузки)
   const msgIndex = state.messages.length;
-  state.messages.push({ role: 'assistant', content: '', loading: true, currentStep: 'ИРУ думает...', liveTasks: [], liveCommands: [] });
+  state.messages.push({ role: 'assistant', content: '', loading: true, currentStatus: 'thinking', liveTasks: [], liveCommands: [] });
   renderMessages();
 
   try {
@@ -624,8 +718,9 @@ async function pollTask(taskId, msgIndex) {
       const msg = state.messages[msgIndex];
       if (msg && msg.loading) {
         let needRender = false;
-        if (task.current_step && msg.currentStep !== task.current_step) {
-          msg.currentStep = task.current_step;
+        const liveStatus = deriveLiveTaskStatus(task, msg);
+        if (msg.currentStatus !== liveStatus) {
+          msg.currentStatus = liveStatus;
           needRender = true;
         }
         if (task.tasks && task.tasks.length > 0) {
@@ -708,7 +803,7 @@ function restoreActiveChatTasks(chatId) {
       role: 'assistant',
       content: '',
       loading: true,
-      currentStep: '\u0412\u043e\u0441\u0441\u0442\u0430\u043d\u0430\u0432\u043b\u0438\u0432\u0430\u044e \u0441\u0442\u0430\u0442\u0443\u0441 \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u0438...',
+      currentStatus: 'restoring',
       liveTasks: [],
       liveCommands: [],
       _taskId: item.taskId,
@@ -984,20 +1079,17 @@ function renderTaskBlock(tasks, commands = [], fallbackTaskId = '') {
   let html = '';
   for (let ti = 0; ti < normalizedTasks.length; ti++) {
     const t = normalizedTasks[ti];
-    const st = t.status || 'running';
-    const statusLabel = st === 'completed' ? '\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e'
-      : st === 'completed_with_recovery' ? '\u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e \u0441 recovery'
-      : st === 'failed' ? '\u043e\u0448\u0438\u0431\u043a\u0430'
-      : st === 'cancelled' ? '\u043e\u0442\u043c\u0435\u043d\u0435\u043d\u043e'
-      : '\u0432\u044b\u043f\u043e\u043b\u043d\u044f\u0435\u0442\u0441\u044f';
-    html += `<div class="task-block task-${st}">`;
-    html += `<div class="task-goal"><span class="task-goal-label">\u0417\u0430\u0434\u0430\u0447\u0430:</span> ${escapeHTML(t.goal || '')} <span class="task-badge task-badge-${st}">${statusLabel}</span></div>`;
+    const st = normalizeTaskStateKey(t.status);
+    const statusLabel = normalizeTaskBadgeLabel(t.status);
+    html += `<div class="task-block task-${escapeAttr(st)}">`;
+    html += `<div class="task-goal"><span class="task-goal-label">\u0417\u0430\u0434\u0430\u0447\u0430:</span> ${escapeHTML(t.goal || '')} <span class="task-badge task-badge-${escapeAttr(st)}">${escapeHTML(statusLabel)}</span></div>`;
     const steps = t.steps || [];
     if (steps.length > 0) {
       html += '<ul class="task-steps">';
       for (let si = 0; si < steps.length; si++) {
         const s = steps[si];
-        const sst = s.status || 'pending';
+        const sst = normalizeStepStateKey(s.status);
+        const stepStatusLabel = normalizeStepStatusLabel(s.status);
         const resolvedStepIndex = getStepIndex(s, si);
         const stepCommands = getStepCommands(commands, s, si);
         const taskUiId = t.id || t.task_id || t.taskId || fallbackTaskId || `task-${ti}`;
@@ -1027,7 +1119,7 @@ function renderTaskBlock(tasks, commands = [], fallbackTaskId = '') {
           ? `<button type="button" class="step-details-toggle" data-action="toggle-step-commands" data-task-id="${escapeAttr(taskUiId)}" data-step-index="${escapeAttr(resolvedStepIndex)}" aria-expanded="${isOpen ? 'true' : 'false'}" title="\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u043a\u043e\u043c\u0430\u043d\u0434\u044b \u0448\u0430\u0433\u0430"><span class="step-details-arrow">${isOpen ? '\u25be' : '\u25b8'}</span></button>`
           : '';
         const stepStatusLine = getStepStatusLine(sst, stepCommands, s);
-        html += `<li class="task-step step-${sst}${isOpen ? ' open' : ''}" data-step-key="${escapeAttr(stepKey)}" data-task-id="${escapeAttr(taskUiId)}" data-step-index="${escapeAttr(resolvedStepIndex)}"><div class="step-row"><span class="step-icon">${icon}</span><span class="step-desc">${escapeHTML(title)}${description}<span class="step-command-line">${escapeHTML(stepStatusLine)}</span></span><span class="step-status">${escapeHTML(sst)}</span>${toggle}</div>${hasDetails ? `<div class="step-details"${(isOpen || showDetailsByDefault) ? '' : ' hidden'}>${detailsHTML}${commandsHTML}</div>` : ''}</li>`;
+        html += `<li class="task-step step-${escapeAttr(sst)}${isOpen ? ' open' : ''}" data-step-key="${escapeAttr(stepKey)}" data-task-id="${escapeAttr(taskUiId)}" data-step-index="${escapeAttr(resolvedStepIndex)}"><div class="step-row"><span class="step-icon">${icon}</span><span class="step-desc">${escapeHTML(title)}${description}<span class="step-command-line">${escapeHTML(stepStatusLine)}</span></span><span class="step-status">${escapeHTML(stepStatusLabel)}</span>${toggle}</div>${hasDetails ? `<div class="step-details"${(isOpen || showDetailsByDefault) ? '' : ' hidden'}>${detailsHTML}${commandsHTML}</div>` : ''}</li>`;
       }
       html += '</ul>';
     }

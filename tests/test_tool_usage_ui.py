@@ -21,6 +21,22 @@ def test_chat_renderer_can_show_one_or_many_used_tools():
     assert "self_check" in source
 
 
+def test_chat_live_status_uses_safe_status_contract():
+    chat_source = (ROOT / "ui" / "js" / "chat.js").read_text(encoding="utf-8")
+    extras_source = (ROOT / "ui" / "js" / "extras.js").read_text(encoding="utf-8")
+
+    assert "const SAFE_TASK_STATUS_LABELS" in chat_source
+    assert "function normalizeTaskStatusLabel" in chat_source
+    assert "function deriveLiveTaskStatus" in chat_source
+    assert "SAFE_TASK_STATUS_LABELS.running" in chat_source
+    assert "normalizeTaskStatusLabel(m.currentStatus || 'thinking')" in chat_source
+    assert "deriveLiveTaskStatus(task, msg)" in chat_source
+    assert "msg.currentStep = task.current_step" not in chat_source
+    assert "task.current_step && msg.currentStep" not in chat_source
+    assert "currentStep:" not in extras_source
+    assert "currentStatus: 'thinking'" in extras_source
+
+
 def test_device_passport_buttons_show_used_typed_tools():
     source = (ROOT / "ui" / "js" / "devices.js").read_text(encoding="utf-8")
 

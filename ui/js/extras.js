@@ -230,7 +230,7 @@ async function runPlan(chatId, originalRequest) {
     }
     if (data.task_id) {
       const msgIndex = state.messages.length;
-      state.messages.push({ role: 'assistant', loading: true, currentStep: 'Запуск плана...' });
+      state.messages.push({ role: 'assistant', loading: true, currentStatus: 'thinking' });
       state.pendingTasks.push({ task_id: data.task_id, msgIndex });
       renderMessages();
       pollTask(data.task_id, msgIndex);
@@ -286,7 +286,7 @@ async function declinePlanAndContinue(taskId, originalRequest) {
 async function sendMessageDirect(text, extraModes = {}) {
   if (!text || !state.currentChatId) return;
   const msgIndex = state.messages.length;
-  state.messages.push({ role: 'assistant', loading: true, currentStep: 'ИРУ думает...' });
+  state.messages.push({ role: 'assistant', loading: true, currentStatus: 'thinking' });
   renderMessages();
   try {
     const body = {
