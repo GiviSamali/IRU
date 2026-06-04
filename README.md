@@ -135,6 +135,7 @@ python agent.py
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — общая архитектура и поток команды.
 - [docs/AGENT.md](docs/AGENT.md) — локальный агент, `IRU_HOME`, actions и reconnect.
+- [docs/AGENT_SHELL.md](docs/AGENT_SHELL.md) — Agent Shell WebView wrapper существующего Web UI.
 - [docs/TOOL_ONLY_PROTOCOL.md](docs/TOOL_ONLY_PROTOCOL.md) — Tool-Only Agent Protocol v1.
 - [docs/DEVICE_ACTIVATION_RUNTIME.md](docs/DEVICE_ACTIVATION_RUNTIME.md) — activation и managed Python runtime.
 - [docs/DEVICE_STATE.md](docs/DEVICE_STATE.md) — Device Passport и agent-owned state cache.

@@ -2,6 +2,8 @@
 
 Агент — локальный runtime ИРУ на устройстве. Он подключается к серверу как WebSocket client, выполняет actions, хранит `IRU_HOME` и является владельцем локального состояния устройства.
 
+Agent Shell описан отдельно: [docs/AGENT_SHELL.md](AGENT_SHELL.md). Это desktop wrapper существующего Web UI, а не второй UI и не замена локального агента.
+
 ## Роль агента
 
 - поддерживает WebSocket connection с сервером;
