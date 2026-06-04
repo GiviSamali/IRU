@@ -164,13 +164,21 @@
                 <img src="assets/IruIcon.ico" alt="Логотип ИРУ" class="hero-logo">
             </div>
             <div class="hero-text">
-                <span class="hero-top-text">Просто управлять...</span>
+                <span class="hero-top-text">AgentOS для компьютеров</span>
                 <h1 class="hero-title">
-                    <span>Везде.</span>
-                    <span>Уверенно.</span>
-                    <span class="accent">Безопасно.</span>
+                    <span>ПК, которому</span>
+                    <span>можно ставить</span>
+                    <span class="accent">задачи.</span>
                 </h1>
-                <p>Новый взгляд на взаимодействие с устройствами.</p>
+                <p>ИРУ соединяет сервер, локальных агентов, инструменты, память, Device Passport и человека-оператора в одну управляемую экосистему.</p>
+            </div>
+            <div class="hero-system-strip" aria-label="Связанные узлы ИРУ">
+                <span>Server</span>
+                <span>Local Agent</span>
+                <span>Tools</span>
+                <span>Memory</span>
+                <span>Devices</span>
+                <span>Human Operator</span>
             </div>
             <div class="hero-actions">
                 <a href="https://irumode.ru" class="hero-cta">Перейти на irumode.ru</a>
@@ -179,19 +187,19 @@
     </section>
     <section class="benefits">
         <div class="benefits-inner">
-            <h2 class="benefits-title">ИРУ обеспечивает</h2>
+            <h2 class="benefits-title">Один организм управления</h2>
             <div class="benefits-grid">
                 <div class="benefit-card">
-                    <h3>Прямую работу с системой</h3>
-                    <p>ИРУ взаимодействует с устройством как с машиной — через системные команды и интерфейсы, без эмуляции кликов и движений мыши.</p>
+                    <h3>Локальный агент владеет состоянием</h3>
+                    <p>Устройство хранит свой паспорт, runtime, snapshot и локальный cache. Сервер оркестрирует, но не притворяется владельцем локальной правды.</p>
                 </div>
                 <div class="benefit-card">
-                    <h3>Безопасные действия</h3>
-                    <p>Потенциально опасные операции блокируются или требуют явного подтверждения — ассистент не сможет удалить ваши данные сам по себе.</p>
+                    <h3>Видимые инструменты и evidence</h3>
+                    <p>Каждое действие проходит через tool-only протокол, журнал шагов и used tools. Ответы о реальном мире опираются на текущие наблюдения.</p>
                 </div>
                 <div class="benefit-card">
-                    <h3>Доступ на расстоянии</h3>
-                    <p>Вы сохраняете контроль над устройствами, даже находясь далеко — ИРУ доступен с ваших привычных устройств, в любом месте.</p>
+                    <h3>Pipeline, Stop и контроль</h3>
+                    <p>ИРУ может строить шаги, показывать прогресс, останавливать выполнение и честно сообщать, где есть результат, а где нужна проверка.</p>
                 </div>
             </div>
         </div>
@@ -253,38 +261,118 @@
 
     <section class="cta-bottom">
         <div class="cta-inner">
-            <h2 class="cta-title">Начните с вашего компьютера</h2>
-            <p class="cta-text">Сейчас агент ИРУ доступен для Windows 10 и 11. Установите его на основной компьютер, чтобы управлять им из любой точки.</p>
+            <h2 class="cta-title">Подключите первый узел экосистемы</h2>
+            <p class="cta-text">Установите локального агента на Windows 10 или 11, активируйте устройство и управляйте задачами через Web UI с видимыми инструментами, паспортом устройства и журналом действий.</p>
             <button class="cta-button" onclick="window.scrollTo({ top: 0, behavior: 'smooth' });">Вернуться к скачиванию</button>
         </div>
     </section>
     <section class="security">
         <div class="security-inner">
-            <h2 class="security-title">Безопасность и контроль</h2>
+            <h2 class="security-title">Контроль, журнал и границы</h2>
             <div class="security-grid">
                 <div class="security-item">
-                    <h3>Может ли ИРУ удалить мои данные без меня?</h3>
-                    <p>Нет. Потенциально опасные действия помечаются и блокируются или требуют явного подтверждения с вашей стороны. ИРУ не удаляет данные самостоятельно.</p>
+                    <h3>Почему это не обычный чат-бот?</h3>
+                    <p>ИРУ выбирает typed tools, получает результат, пишет шаг в журнал и только потом формирует ответ. Старый контекст помогает понять задачу, но не является evidence.</p>
                 </div>
                 <div class="security-item">
                     <h3>Кто принимает финальное решение?</h3>
-                    <p>ИРУ выполняет только те действия, которые вы явно разрешили. Система остаётся инструментом: человек принимает решения, машина их исполняет.</p>
+                    <p>Человек остаётся оператором. ИРУ выполняет управляемые действия, показывает used tools, умеет ждать подтверждение и может быть остановлена кнопкой Stop.</p>
                 </div>
                 <div class="security-item">
-                    <h3>Чем ИРУ отличается от эмуляции пользователя?</h3>
-                    <p>ИРУ не двигает мышь и не жмёт кнопки за вас. Он работает с системой напрямую — через команды и интерфейсы, где каждое действие прозрачно и контролируемо.</p>
+                    <h3>Что делает локальный агент?</h3>
+                    <p>Агент работает на устройстве, выполняет file/window/app/runtime tools, обновляет Device Passport и возвращает серверу проверяемые результаты вместо догадок.</p>
                 </div>
             </div>
         </div>
     </section>
-    <section class="founder">
+    <section class="founder" data-founder-orbit>
         <div class="founder-inner">
-            <h2 class="founder-title">О создателе ИРУ</h2>
-            <p class="founder-text">ИРУ — это личный проект Руслана Сайгушкина, разработчика, который верит, что машина должна оставаться машиной. Вместо эмуляции действий пользователя, ИРУ работает с системой напрямую — через понятные и контролируемые команды.</p>
-            <p class="founder-text">Если вы хотите поделиться идеями, фидбеком или обсудить ИРУ, вы можете написать:<br></p>
-            <div class="contacts">
-                <span class="contact-item">Email: <a href="mailto:russaygushkin@gmail.com">russaygushkin@gmail.com</a></span>
-                <span class="contact-item">Telegram: <a href="https://t.me/IRU_Founder" target="_blank">@IRU_Founder</a></span>
+            <div class="founder-grid">
+                <div class="founder-copy">
+                    <span class="founder-eyebrow">Создатель / оператор экосистемы</span>
+                    <h2 class="founder-title">Руслан Сайгушкин</h2>
+                    <p class="founder-lead">Я строю ИРУ как AgentOS: систему, где сервер оркестрирует, локальный агент владеет состоянием устройства, а каждое действие проходит через инструменты и остаётся видимым.</p>
+                    <p class="founder-secondary">Моя цель — не ещё один чат-бот. Я собираю управляемую экосистему для компьютеров: с Device Passport, памятью, pipeline, кнопкой Stop, журналом used tools и будущими пользовательскими инструментами.</p>
+                    <div class="founder-chips" aria-label="Модули экосистемы ИРУ">
+                        <span>AgentOS</span>
+                        <span>Local Agent</span>
+                        <span>Tool Registry</span>
+                        <span>Evidence</span>
+                        <span>Device Passport</span>
+                        <span>Memory</span>
+                        <span>Pipeline</span>
+                        <span>Stop</span>
+                        <span>Sandbox / Review / Test</span>
+                    </div>
+                    <div class="founder-actions">
+                        <a href="https://t.me/chat_IRU" target="_blank" rel="noopener noreferrer">Следить за развитием</a>
+                        <a href="https://vk.com/irumode" target="_blank" rel="noopener noreferrer">Группа ВК</a>
+                        <a href="https://t.me/IRU_Founder" target="_blank" rel="noopener noreferrer">Написать Руслану</a>
+                    </div>
+                </div>
+                <div class="founder-portrait-card">
+                    <div class="founder-portrait-placeholder">
+                        <span>Фото будет здесь</span>
+                    </div>
+                    <div class="founder-status">
+                        <span class="status-dot"></span>
+                        <span>Разработка AgentOS / локальных агентов / прозрачной автоматизации ПК</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="founder-system-map" aria-label="Направления разработки">
+                <div class="founder-node">
+                    <span class="node-kicker">ядро</span>
+                    <h3>ИРУ / AgentOS</h3>
+                    <p>Прототип управляемой экосистемы, где задачи проходят через сервер, локального агента, инструменты и evidence.</p>
+                </div>
+                <div class="founder-node">
+                    <span class="node-kicker">устройство</span>
+                    <h3>Локальный агент</h3>
+                    <p>Направление разработки для владения локальным состоянием, runtime, Device Passport и действиями на ПК.</p>
+                </div>
+                <div class="founder-node">
+                    <span class="node-kicker">протокол</span>
+                    <h3>Tool-only protocol</h3>
+                    <p>Экспериментальный слой, где обычный ответ тоже является tool, а реальные утверждения требуют basis.</p>
+                </div>
+                <div class="founder-node">
+                    <span class="node-kicker">desktop</span>
+                    <h3>Agent Shell</h3>
+                    <p>Локальная WebView-обёртка существующего Web UI без дублирования чата и без обхода авторизации.</p>
+                </div>
+                <div class="founder-node">
+                    <span class="node-kicker">работа</span>
+                    <h3>Документные и офисные сценарии</h3>
+                    <p>Прототипы задач для файлов, Word/Excel-планов, проектов на рабочем столе и честной проверки результата.</p>
+                </div>
+                <div class="founder-node">
+                    <span class="node-kicker">ПК</span>
+                    <h3>Автоматизация ПК</h3>
+                    <p>Разработка typed tools для файлов, приложений, окон, runtime и наблюдаемого запуска GUI-приложений.</p>
+                </div>
+                <div class="founder-node founder-node-wide">
+                    <span class="node-kicker">следующий слой</span>
+                    <h3>User tools / sandbox future</h3>
+                    <p>Направление для пользовательских инструментов, review/test контуров и более безопасного расширения возможностей ИРУ.</p>
+                </div>
+            </div>
+
+            <div class="founder-proof-grid" aria-label="Будущие материалы">
+                <div class="proof-placeholder">Скрин отзыва</div>
+                <div class="proof-placeholder">Видео-кейс</div>
+                <div class="proof-placeholder">Демо результата</div>
+                <div class="proof-placeholder">Публикация / новость</div>
+            </div>
+
+            <div class="founder-links">
+                <a href="mailto:russaygushkin@gmail.com">russaygushkin@gmail.com</a>
+                <a href="https://t.me/IRU_Founder" target="_blank" rel="noopener noreferrer">Telegram: @IRU_Founder</a>
+                <a href="https://t.me/chat_IRU" target="_blank" rel="noopener noreferrer">Telegram group: chat_IRU</a>
+                <a href="https://vk.com/irumode" target="_blank" rel="noopener noreferrer">VK: irumode</a>
+                <span>Дзен: ссылка будет добавлена</span>
+                <span>YouTube / видео-кейсы: ссылка будет добавлена</span>
             </div>
         </div>
     </section>
