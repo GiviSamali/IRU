@@ -17,6 +17,9 @@ TOKEN_TTL = 1800  # 30 minutes
 tasks: dict = {}
 TASK_TTL = 3600  # 1 hour
 
+RUNNING_TASK_STATUSES = {"running", "pending", "confirm", "cancelling"}
+TERMINAL_TASK_STATUSES = {"done", "error", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}
+
 
 # Declined plan suggestions keyed by chat_id + request hash
 declined_plan_requests: dict[str, float] = {}
@@ -125,3 +128,41 @@ def cleanup_old_tasks() -> None:
     expired_fact_declines = [key for key, created_at in declined_suggested_facts.items() if now - created_at > TASK_TTL]
     for key in expired_fact_declines:
         declined_suggested_facts.pop(key, None)
+
+
+def request_task_cancel(task_id: str, user_id: int | None = None) -> dict | None:
+    task = tasks.get(task_id)
+    if not task:
+        return None
+    if user_id is not None and task.get("user_id") != user_id:
+        return None
+    task["cancel_requested"] = True
+    task["cancel_requested_at"] = time.time()
+    if task.get("status") not in TERMINAL_TASK_STATUSES:
+        task["status"] = "cancelling"
+        task["current_step"] = "Остановка запрошена. Текущий инструмент может завершиться с задержкой."
+    return task
+
+
+def is_task_cancel_requested(task_id: str | None) -> bool:
+    if not task_id:
+        return False
+    task = tasks.get(task_id)
+    return bool(task and (task.get("cancel_requested") or task.get("status") in {"cancelling", "cancelled"}))
+
+
+def mark_task_cancelled(task_id: str | None, *, answer: str | None = None, commands: list | None = None) -> dict | None:
+    if not task_id:
+        return None
+    task = tasks.get(task_id)
+    if not task:
+        return None
+    task["status"] = "cancelled"
+    task["cancel_requested"] = True
+    task["cancelled_at"] = time.time()
+    task["current_step"] = "Остановлено пользователем."
+    if answer is not None:
+        task["answer"] = answer
+    if commands is not None:
+        task["commands"] = commands
+    return task

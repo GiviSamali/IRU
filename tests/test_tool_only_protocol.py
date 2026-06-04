@@ -4,7 +4,7 @@ import json
 import server.controller_non_pipeline as controller_non_pipeline
 import server.controller_pipeline as controller_pipeline
 from server.controller_non_pipeline import process_non_pipeline_command
-from server.controller_pipeline import process_pipeline_subagents
+from server.controller_pipeline import process_pipeline_subagents, run_pipeline_worker
 from server.run_journal import validate_answer_text_payload
 from server.tool_registry import canonical_tool_name, list_tools
 
@@ -72,6 +72,7 @@ def _run_case(
     user_id=None,
     mem_user_id=None,
     device_id="device-1",
+    poll_task_id=None,
     max_iterations=6,
     device_tool_fn=None,
 ):
@@ -90,7 +91,7 @@ def _run_case(
         user_id=user_id,
         chat_id=None,
         modes={},
-        poll_task_id=None,
+        poll_task_id=poll_task_id,
         cfg=cfg or {"model": "mock-model", "max_tokens": 512, "answer_auditor_enabled": False},
         system_msg="system",
         machine_guid=None,
@@ -113,6 +114,68 @@ def test_raw_conceptual_answer_is_rejected_then_answer_text_succeeds():
     assert result["answer"] == "Tool Registry нужен для выбора инструментов."
     assert any("Raw assistant content is not allowed" in msg["content"] for msg in captured[1]["messages"])
     assert result["commands"][0]["tool_name"] == "answer.text"
+
+
+def test_non_pipeline_cancelled_task_stops_before_next_tool():
+    import server.runtime_state as runtime_state
+
+    runtime_state.tasks["cancel-test"] = {
+        "task_id": "cancel-test",
+        "user_id": 1,
+        "status": "cancelling",
+        "cancel_requested": True,
+    }
+    captured = []
+
+    result = _run_case(
+        [_message(tool_calls=[_execute_call("call-exec", "echo should-not-run")])],
+        captured=captured,
+        user_id=1,
+        poll_task_id="cancel-test",
+    )
+
+    assert captured == []
+    assert result["cancelled"] is True
+    assert result["answer"] == "Остановлено пользователем."
+    assert result["commands"][0]["tool_name"] == "task.cancel"
+    assert result["commands"][0]["status"] == "cancelled"
+
+
+def test_pipeline_worker_cancelled_task_stops_before_llm_and_tool(monkeypatch):
+    monkeypatch.setattr(controller_pipeline, "is_task_cancel_requested", lambda task_id: task_id == "pipeline-cancel")
+
+    async def _completion_should_not_run(**kwargs):
+        raise AssertionError("pipeline worker must not call LLM after cancellation")
+
+    async def _send_should_not_run(device_id, action, params):
+        raise AssertionError("pipeline worker must not run tools after cancellation")
+
+    result = asyncio.run(run_pipeline_worker(
+        client=None,
+        cfg={"model": "mock-model"},
+        model="mock-model",
+        shared={
+            "current_device_id": "device-1",
+            "target_device_id": "device-1",
+            "current_hostname": "devbox",
+        },
+        overall_goal="goal",
+        step={"id": "s1", "title": "Step 1", "instruction": "Do work"},
+        completed_steps=[],
+        chat_history=[],
+        send_command_fn=_send_should_not_run,
+        get_file_link_fn=lambda device_id, path: "/api/download/mock",
+        machine_guid=None,
+        mem_user_id=None,
+        poll_task_id="pipeline-cancel",
+        step_index=0,
+        chat_completion_request_fn=_completion_should_not_run,
+        worker_tools=[],
+    ))
+
+    assert result["status"] == "cancelled"
+    assert result["commands"][0]["tool_name"] == "task.cancel"
+    assert result["commands"][0]["status"] == "cancelled"
 
 
 def test_conceptual_answer_through_answer_text_succeeds_without_external_tool():

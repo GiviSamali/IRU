@@ -347,6 +347,7 @@ async function runPlan(chatId, originalRequest) {
       state.messages.push({ role: 'assistant', loading: true, currentStatus: 'thinking' });
       state.pendingTasks.push({ task_id: data.task_id, msgIndex });
       renderMessages();
+      updateStopButton();
       pollTask(data.task_id, msgIndex);
     }
   } catch (e) { showToast('Ошибка запуска плана', true); }
@@ -417,6 +418,7 @@ async function sendMessageDirect(text, extraModes = {}) {
     const data = await resp.json();
     if (data.task_id) {
       state.pendingTasks.push({ task_id: data.task_id, msgIndex });
+      updateStopButton();
       pollTask(data.task_id, msgIndex);
     }
   } catch (e) {

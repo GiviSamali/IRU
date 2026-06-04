@@ -24,6 +24,7 @@ try:
         validate_toolchain_fact_against_receipt,
     )
     from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
+    from .runtime_state import is_task_cancel_requested  # type: ignore
     from .tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
     from .tool_repeat_guard import (  # type: ignore
         duplicate_read_only_tool_message,
@@ -69,6 +70,7 @@ except ImportError:
         validate_toolchain_fact_against_receipt,
     )
     from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
+    from runtime_state import is_task_cancel_requested  # type: ignore
     from tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
     from tool_repeat_guard import (  # type: ignore
         duplicate_read_only_tool_message,
@@ -229,6 +231,32 @@ async def process_non_pipeline_command(
             "content": json.dumps(wrap_tool_result_for_llm(entry), ensure_ascii=False)[:4000],
         })
 
+    def cancelled_result(iteration: int | None = None) -> dict:
+        entry = append_entry(make_run_step(
+            journal=commands_log,
+            tool_name="task.cancel",
+            result={
+                "status": "cancelled",
+                "reason": "user_requested_cancellation",
+                "message": "Остановлено пользователем.",
+            },
+            command="[system] task.cancel",
+            target_device_id=device_id,
+            hostname=device_info.get("hostname") or device_id,
+            iteration=iteration,
+            tool_type="system",
+            status="cancelled",
+            summary="user requested cancellation",
+        ))
+        return {
+            "answer": "Остановлено пользователем.",
+            "commands": commands_log,
+            "tasks": [],
+            "training_context": _training_context(device_info),
+            "cancelled": True,
+            "cancel_entry": entry,
+        }
+
     command_budget = CommandBudget()
     device_profile = db.get_device_profile(device_id)
     python_receipt = (
@@ -242,6 +270,8 @@ async def process_non_pipeline_command(
     timeout = httpx.Timeout(120.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         for iteration in range(max_iterations):
+            if is_task_cancel_requested(poll_task_id):
+                return cancelled_result(iteration + 1)
             set_current_step(poll_task_id, "ИРУ думает...")
             print(f"[llm] iteration {iteration + 1}/{max_iterations}, messages={len(messages)}")
             try:
@@ -485,6 +515,9 @@ async def process_non_pipeline_command(
                         "Do not call the same read-only tool again. Call answer_text."
                     )
                     continue
+
+                if is_task_cancel_requested(poll_task_id):
+                    return cancelled_result(iteration + 1)
 
                 rewrite_error = None
                 if fn_name == "execute_cmd":

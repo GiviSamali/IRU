@@ -48,8 +48,10 @@ try:
         create_download_link,
         devices,
         get_user_devices,
+        is_task_cancel_requested,
         is_plan_declined,
         is_suggested_fact_declined,
+        mark_task_cancelled,
         tasks,
     )
     from .tool_registry import compact_device_passport
@@ -91,8 +93,10 @@ except ImportError:
         create_download_link,
         devices,
         get_user_devices,
+        is_task_cancel_requested,
         is_plan_declined,
         is_suggested_fact_declined,
+        mark_task_cancelled,
         tasks,
     )
     from tool_registry import compact_device_passport
@@ -738,7 +742,39 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
     plan_declined_for_request = bool(task_modes.get("plan_declined")) or is_plan_declined(chat_id, message)
     print(f"[run_nl_task] START task={task_id[:8]}, user={user_id}, devices={device_ids}")
 
+    def cancellation_payload(commands: list | None = None) -> dict:
+        return {
+            "device_id": device_ids[0] if device_ids else "",
+            "status": "cancelled",
+            "answer": "Остановлено пользователем.",
+            "commands": commands or [
+                {
+                    "action": "task.cancel",
+                    "command": "[system] task.cancel",
+                    "tool_name": "task.cancel",
+                    "tool_type": "system",
+                    "status": "cancelled",
+                    "tool_status": "cancelled",
+                    "summary": "user requested cancellation",
+                    "result": {"status": "cancelled", "reason": "user_requested_cancellation"},
+                }
+            ],
+            "tasks": task.get("tasks", []),
+        }
+
+    def finish_cancelled(commands: list | None = None) -> None:
+        answer = "Остановлено пользователем."
+        mark_task_cancelled(task_id, answer=answer, commands=commands or cancellation_payload().get("commands", []))
+        task["answer"] = answer
+        task["tasks"] = task.get("tasks", [])
+        try:
+            add_message(chat_id, "assistant", answer, task.get("commands", []))
+        except Exception:
+            pass
+
     async def run_on_device(device_id: str):
+        if is_task_cancel_requested(task_id):
+            return cancellation_payload()
         dev = devices.get(device_id)
         if not dev or dev.get("user_id") != user_id:
             return {
@@ -780,6 +816,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         all_devices_info[_short_did(device_id)]["activation_context_markers"] = activation_markers
 
         async def send_fn(target_device_id, action, params):
+            if is_task_cancel_requested(task_id):
+                raise RuntimeError("Task cancellation requested before starting next device command")
             target_dk = _dk(user_id, target_device_id) if ":" not in target_device_id else target_device_id
             target_dev = devices.get(target_dk)
             if not target_dev or target_dev.get("user_id") != user_id:
@@ -796,6 +834,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             return get_file_link_fn(dev_id, path, user_id=user_id)
 
         async def device_tool_fn(tool_name: str, args: dict) -> dict:
+            if is_task_cancel_requested(task_id):
+                return {"status": "cancelled", "error": "Task cancellation requested before starting next device tool"}
             requested = _short_did(str(args.get("device_id") or device_id))
             target_key = _dk(user_id, requested) if ":" not in requested else requested
             target_dev = devices.get(target_key)
@@ -905,6 +945,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 poll_task_id=task_id,
                 device_tool_fn=device_tool_fn,
             )
+            if is_task_cancel_requested(task_id):
+                return cancellation_payload(result.get("commands", []))
             task_receipt = result.get("task_receipt")
             if activation_markers:
                 task_receipt = dict(task_receipt or {})
@@ -938,6 +980,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 "commands": [],
             }
         except Exception as exc:
+            if is_task_cancel_requested(task_id):
+                return cancellation_payload()
             print(f"[run_nl_task] ERROR on device={device_id}: {type(exc).__name__}: {exc}")
             traceback.print_exc()
             error_text = str(exc).strip() or type(exc).__name__
@@ -960,6 +1004,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
 
         results = []
         for cmd in commands:
+            if is_task_cancel_requested(task_id):
+                return cancellation_payload(results)
             cmd_text = cmd.get("command", "")
             if cmd_text.startswith("["):
                 continue
@@ -983,8 +1029,14 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         }
 
     is_pipeline = bool((task.get("modes") or {}).get("pipeline"))
+    if is_task_cancel_requested(task_id):
+        finish_cancelled()
+        return
     if not is_pipeline:
         if not plan_declined_for_request:
+            if is_task_cancel_requested(task_id):
+                finish_cancelled()
+                return
             kind, plan_desc = await classify_task_complexity(message)
             logger.info(
                 "[classify] kind=%s plan_desc=%r user_id=%s message=%r",
@@ -1011,8 +1063,14 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 return
 
     try:
+        if is_task_cancel_requested(task_id):
+            finish_cancelled()
+            return
         if is_broadcast:
             primary_result = await run_on_device(device_ids[0])
+            if primary_result.get("status") == "cancelled" or is_task_cancel_requested(task_id):
+                finish_cancelled(primary_result.get("commands", []))
+                return
             task["results"][device_ids[0]] = primary_result
 
             all_commands = primary_result.get("commands", [])
@@ -1043,6 +1101,9 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             combined_tasks = primary_result.get("tasks", [])
         else:
             result = await run_on_device(device_ids[0])
+            if result.get("status") == "cancelled" or is_task_cancel_requested(task_id):
+                finish_cancelled(result.get("commands", []))
+                return
             task["results"][device_ids[0]] = result
             if result.get("status") == "confirm":
                 task["status"] = "confirm"
@@ -1101,6 +1162,9 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 combined_answer = "План отключён для этого запроса. Продолжите без режима плана или уточните команду."
 
         combined_answer = strip_markdown(combined_answer)
+        if is_task_cancel_requested(task_id):
+            finish_cancelled(combined_commands)
+            return
         combined_answer = enforce_trusted_answer(combined_answer, combined_commands)
         add_message(chat_id, "assistant", combined_answer, combined_commands)
 
@@ -1133,6 +1197,9 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             print(f"[training] Ошибка записи: {exc}")
 
         receipt_status = (combined_task_receipt or {}).get("task_status") if "combined_task_receipt" in locals() else None
+        if receipt_status == "cancelled":
+            finish_cancelled(combined_commands)
+            return
         if receipt_status == "completed_with_recovery":
             task["status"] = "completed_with_recovery"
         elif receipt_status in {"failed", "blocked"}:

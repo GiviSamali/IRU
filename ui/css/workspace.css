@@ -459,6 +459,29 @@
 }
 .btn-send:hover { filter: brightness(1.15); }
 .btn-send:disabled { opacity: 0.3; cursor: not-allowed; }
+.btn-stop-task {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-radius: var(--radius);
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--error);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.btn-stop-task:hover { border-color: var(--error); background: rgba(239, 68, 68, 0.18); }
+.btn-stop-task:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+.btn-stop-task[hidden] { display: none; }
 /* Device selector in input area */
 .input-device-select {
   position: relative; flex-shrink: 0;

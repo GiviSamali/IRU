@@ -148,7 +148,7 @@ def init_db():
                 idx         INTEGER NOT NULL,
                 description TEXT    NOT NULL,
                 status      TEXT    NOT NULL DEFAULT 'pending',
-                -- 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+                -- 'pending' | 'running' | 'done' | 'failed' | 'skipped' | 'cancelled'
                 summary     TEXT,
                 started_at  REAL,
                 finished_at REAL
@@ -851,7 +851,7 @@ def update_step(task_id: int, idx: int, status: str,
         if status == "running":
             fields.append("started_at = ?")
             values.append(now)
-        elif status in ("done", "failed", "recovered", "skipped", "blocked"):
+        elif status in ("done", "failed", "recovered", "skipped", "blocked", "cancelled"):
             fields.append("finished_at = ?")
             values.append(now)
         if summary is not None:

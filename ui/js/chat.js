@@ -217,6 +217,8 @@ const SAFE_TASK_STATUS_LABELS = Object.freeze({
   writing_file: 'Создаю файл...',
   launching_app: 'Запускаю приложение...',
   restoring: 'Восстанавливаю статус операции...',
+  cancelling: 'Остановка запрошена...',
+  cancelled: 'Остановлено пользователем',
   done: 'Готово',
   failed: 'Ошибка',
 });
@@ -240,7 +242,9 @@ function deriveLiveTaskStatus(task, currentMessage) {
 
   const taskStatus = String(task?.status || '').trim().toLowerCase();
   if (taskStatus === 'done' || taskStatus === 'completed' || taskStatus === 'completed_with_recovery') return 'done';
-  if (taskStatus === 'error' || taskStatus === 'failed' || taskStatus === 'cancelled') return 'failed';
+  if (taskStatus === 'cancelling') return 'cancelling';
+  if (taskStatus === 'cancelled') return 'cancelled';
+  if (taskStatus === 'error' || taskStatus === 'failed') return 'failed';
   if (taskStatus === 'confirm') return 'waiting_agent';
   if (taskStatus && taskStatus !== 'running' && taskStatus !== 'pending') return 'running';
 
@@ -254,9 +258,88 @@ function deriveLiveTaskStatus(task, currentMessage) {
   return normalizeTaskStatusKey(currentMessage?.currentStatus) || 'thinking';
 }
 
+const TERMINAL_TASK_STATUSES = new Set([
+  'done',
+  'error',
+  'completed',
+  'completed_with_recovery',
+  'failed',
+  'cancelled',
+  'blocked',
+]);
+
+function isTaskTerminalStatus(status) {
+  return TERMINAL_TASK_STATUSES.has(String(status || '').trim().toLowerCase());
+}
+
+function getActivePendingTask() {
+  if (!Array.isArray(state.pendingTasks) || state.pendingTasks.length === 0) return null;
+  for (let i = state.pendingTasks.length - 1; i >= 0; i--) {
+    const pending = state.pendingTasks[i];
+    if (!pending?.task_id) continue;
+    const msg = state.messages[pending.msgIndex];
+    if (msg && msg.currentStatus === 'cancelled') continue;
+    return pending;
+  }
+  return null;
+}
+
+function updateStopButton() {
+  const btn = document.getElementById('btnStopTask');
+  if (!btn) return;
+  const active = getActivePendingTask();
+  if (!active) {
+    btn.hidden = true;
+    btn.disabled = true;
+    btn.textContent = 'Стоп';
+    return;
+  }
+  btn.hidden = false;
+  btn.disabled = Boolean(active.cancelRequested);
+  btn.textContent = active.cancelRequested ? 'Остановка...' : 'Стоп';
+}
+
+async function cancelActiveTask() {
+  const active = getActivePendingTask();
+  if (!active?.task_id || active.cancelRequested) return;
+  active.cancelRequested = true;
+  const msg = state.messages[active.msgIndex];
+  const wasConfirm = Boolean(msg?.confirmTaskId);
+  if (msg) {
+    msg.loading = true;
+    msg.currentStatus = 'cancelling';
+    msg.cancelRequested = true;
+  }
+  renderMessages();
+  updateStopButton();
+
+  try {
+    const resp = await apiFetch(`${API}/api/tasks/${encodeURIComponent(active.task_id)}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.status !== 'ok') {
+      throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
+    }
+    showToast(data.message || 'Остановка запрошена. Текущий инструмент может завершиться с задержкой.');
+    if (wasConfirm) pollTask(active.task_id, active.msgIndex);
+  } catch (e) {
+    active.cancelRequested = false;
+    if (msg) {
+      msg.currentStatus = 'running';
+      msg.cancelRequested = false;
+    }
+    updateStopButton();
+    renderMessages();
+    showToast(e.message || 'Не удалось запросить остановку', true);
+  }
+}
+
 const SAFE_TASK_STATE_CLASSES = new Set([
   'pending',
   'running',
+  'cancelling',
   'completed',
   'completed_with_recovery',
   'done',
@@ -278,6 +361,7 @@ function normalizeTaskBadgeLabel(status) {
   if (key === 'completed' || key === 'done') return 'завершено';
   if (key === 'completed_with_recovery' || key === 'recovered') return 'завершено с recovery';
   if (key === 'failed' || key === 'error') return 'ошибка';
+  if (key === 'cancelling') return 'остановка';
   if (key === 'cancelled') return 'отменено';
   if (key === 'blocked') return 'заблокировано';
   if (key === 'skipped') return 'пропущено';
@@ -324,6 +408,7 @@ function renderMessages() {
         <p>${subtitle}</p>
         <div class="hints">${hints}</div>
       </div>`;
+    updateStopButton();
     return;
   }
 
@@ -478,6 +563,7 @@ function renderMessages() {
 
   container.innerHTML = html;
   container.scrollTop = container.scrollHeight;
+  updateStopButton();
 }
 
 function bindChatMessageActions() {
@@ -629,6 +715,7 @@ async function sendMessage() {
       // Задача запущена в фоне — начинаем polling
       state.messages[msgIndex]._taskId = data.task_id;
       state.pendingTasks.push({ task_id: data.task_id, msgIndex });
+      updateStopButton();
       pollTask(data.task_id, msgIndex);
     } else {
       // Ошибка до запуска задачи
@@ -653,6 +740,7 @@ async function pollTask(taskId, msgIndex) {
   let stopped = false;
   rememberActiveTask(taskId, state.currentChatId);
   if (state.messages[msgIndex]) state.messages[msgIndex]._taskId = taskId;
+  updateStopButton();
   const poll = async () => {
     if (stopped) return;
     if (Date.now() - startTime > MAX_POLL_MS) {
@@ -674,6 +762,10 @@ async function pollTask(taskId, msgIndex) {
       }
       const data = await r.json();
       const task = data.task;
+      const pendingTask = state.pendingTasks.find(t => t.task_id === taskId);
+      if (pendingTask && String(task.status || '').trim().toLowerCase() === 'cancelling') {
+        pendingTask.cancelRequested = true;
+      }
 
       if (task.status === 'confirm') {
         stopped = true;
@@ -690,9 +782,10 @@ async function pollTask(taskId, msgIndex) {
         renderMessages();
         return;
       }
-      if (['done', 'error', 'completed_with_recovery'].includes(task.status)) {
+      if (isTaskTerminalStatus(task.status)) {
         stopped = true;
-        const fallbackAnswer = task.plan_suggestion ? '' : 'ИРУ завершила задачу без текстового ответа.';
+        const isCancelled = String(task.status || '').trim().toLowerCase() === 'cancelled';
+        const fallbackAnswer = isCancelled ? 'Остановлено пользователем.' : (task.plan_suggestion ? '' : 'ИРУ завершила задачу без текстового ответа.');
         const msg = {
           role: 'assistant',
           content: task.answer || fallbackAnswer,
@@ -814,6 +907,7 @@ function restoreActiveChatTasks(chatId) {
 
   if (!added) return;
   renderMessages();
+  updateStopButton();
   for (const item of tasksToRestore) {
     const pending = state.pendingTasks.find(task => task.task_id === item.taskId);
     if (pending) pollTask(pending.task_id, pending.msgIndex);
@@ -1073,6 +1167,56 @@ function renderStepCommands(stepCommands) {
   return `<div class="step-command-list">${items.join('')}</div>`;
 }
 
+function calculatePipelineProgress(task) {
+  const steps = Array.isArray(task?.steps) ? task.steps : [];
+  const status = normalizeTaskStateKey(task?.status || 'running');
+  if (!steps.length) {
+    return {
+      total: 0,
+      completed: 0,
+      percent: status === 'completed' || status === 'done' ? 100 : 0,
+      status,
+      currentStep: '',
+      indeterminate: status === 'running' || status === 'cancelling',
+    };
+  }
+  const completeStates = new Set(['done', 'completed', 'recovered', 'completed_with_recovery']);
+  const completed = steps.filter(step => completeStates.has(normalizeStepStateKey(step.status))).length;
+  const runningIndex = steps.findIndex(step => normalizeStepStateKey(step.status) === 'running');
+  const currentIndex = runningIndex >= 0 ? runningIndex : Math.min(completed, steps.length - 1);
+  const current = steps[currentIndex] || {};
+  const percent = Math.max(0, Math.min(100, Math.round((completed / steps.length) * 100)));
+  return {
+    total: steps.length,
+    completed,
+    percent: status === 'completed' || status === 'done' ? 100 : percent,
+    status,
+    currentStep: current.title || current.description || '',
+    currentIndex,
+    indeterminate: false,
+  };
+}
+
+function renderPipelineProgress(task) {
+  const progress = calculatePipelineProgress(task);
+  const statusLabel = normalizeTaskBadgeLabel(progress.status);
+  if (progress.total === 0) {
+    return `<div class="pipeline-progress pipeline-progress-indeterminate">
+      <div class="pipeline-progress-head"><span>Pipeline выполняется...</span><span>${escapeHTML(statusLabel)}</span></div>
+      <div class="pipeline-progress-bar"><span style="width: 38%"></span></div>
+    </div>`;
+  }
+  const stepNumber = Math.min(progress.total, (progress.currentIndex ?? progress.completed) + 1);
+  return `<div class="pipeline-progress">
+    <div class="pipeline-progress-head">
+      <span>Pipeline: шаг ${stepNumber} из ${progress.total} · ${progress.percent}%</span>
+      <span>${escapeHTML(statusLabel)}</span>
+    </div>
+    <div class="pipeline-progress-bar"><span style="width: ${progress.percent}%"></span></div>
+    ${progress.currentStep ? `<div class="pipeline-progress-current">Сейчас: ${escapeHTML(progress.currentStep)}</div>` : ''}
+  </div>`;
+}
+
 function renderTaskBlock(tasks, commands = [], fallbackTaskId = '') {
   const normalizedTasks = (tasks && tasks.length > 0) ? tasks : synthesizePipelineTasks(commands, fallbackTaskId);
   if (!normalizedTasks || normalizedTasks.length === 0) return '';
@@ -1083,6 +1227,7 @@ function renderTaskBlock(tasks, commands = [], fallbackTaskId = '') {
     const statusLabel = normalizeTaskBadgeLabel(t.status);
     html += `<div class="task-block task-${escapeAttr(st)}">`;
     html += `<div class="task-goal"><span class="task-goal-label">\u0417\u0430\u0434\u0430\u0447\u0430:</span> ${escapeHTML(t.goal || '')} <span class="task-badge task-badge-${escapeAttr(st)}">${escapeHTML(statusLabel)}</span></div>`;
+    html += renderPipelineProgress(t);
     const steps = t.steps || [];
     if (steps.length > 0) {
       html += '<ul class="task-steps">';
@@ -1102,6 +1247,7 @@ function renderTaskBlock(tasks, commands = [], fallbackTaskId = '') {
           : sst === 'running' ? '\u23f3'
           : sst === 'blocked' ? '\u25a0'
           : sst === 'skipped' ? '\u2014'
+          : sst === 'cancelled' ? '\u2014'
           : '\u25cb';
         const title = s.title || s.description || `Step ${si + 1}`;
         const description = s.title && s.description && s.description !== s.title

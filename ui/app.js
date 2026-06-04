@@ -45,6 +45,7 @@ function bindStaticEvents() {
   bindOnce('modePipeline', 'change', (event) => setMode('pipeline', event.target.checked));
   bindOnce('modeAutonomous', 'change', (event) => setMode('autonomous', event.target.checked));
   bindOnce('btnSend', 'click', sendMessage);
+  bindOnce('btnStopTask', 'click', cancelActiveTask);
 
   const chatInput = document.getElementById('chatInput');
   if (chatInput) {

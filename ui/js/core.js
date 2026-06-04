@@ -172,6 +172,7 @@ function doLogout() {
   state.sendTarget = 'single';
   state.devicePassportExpanded = false;
   state.pendingTasks = [];
+  if (typeof updateStopButton === 'function') updateStopButton();
   state.explorerOpen = false;
   state.devModeOpen = false;
   document.getElementById('authScreen').style.display = 'flex';

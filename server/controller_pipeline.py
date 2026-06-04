@@ -26,6 +26,7 @@ try:
         validate_toolchain_fact_against_receipt,
     )
     from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
+    from .runtime_state import is_task_cancel_requested  # type: ignore
     from .tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
     from .tool_repeat_guard import (  # type: ignore
         duplicate_read_only_tool_message,
@@ -65,6 +66,7 @@ except ImportError:
         validate_toolchain_fact_against_receipt,
     )
     from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
+    from runtime_state import is_task_cancel_requested  # type: ignore
     from tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
     from tool_repeat_guard import (  # type: ignore
         duplicate_read_only_tool_message,
@@ -127,8 +129,8 @@ PIPELINE_WORKER_MAX_ITERATIONS = 40
 PIPELINE_MAX_STEPS = 10
 logger = logging.getLogger(__name__)
 
-STEP_STATES = {"pending", "running", "done", "failed", "recovered", "skipped", "blocked"}
-TASK_STATES = {"running", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}
+STEP_STATES = {"pending", "running", "done", "failed", "recovered", "skipped", "blocked", "cancelled"}
+TASK_STATES = {"running", "cancelling", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}
 PIPELINE_TERMINAL_TOOL_NAMES = {"answer_text", "answer_report_failure"}
 PIPELINE_DEVICE_TOOL_NAMES = {"device_refresh_state", "device_check_runtime", "device_prepare_runtime"}
 PIPELINE_MEMORY_TOOL_NAMES = MEMORY_TOOL_NAMES
@@ -1093,6 +1095,34 @@ async def run_pipeline_worker(
     device_tool_fn=None,
 ) -> dict:
     """Subagent-исполнитель одного шага pipeline."""
+    if is_task_cancel_requested(poll_task_id):
+        step_device_id = step.get("device_id") or shared.get("target_device_id") or shared.get("current_device_id")
+        step_title = step.get("title") or step.get("instruction") or f"Step {step_index + 1}"
+        entry = {
+            "action": "task.cancel",
+            "command": "[system] task.cancel",
+            "device_id": step_device_id,
+            "target_device_id": step_device_id,
+            "device_name": shared.get("current_hostname") or step_device_id,
+            "hostname": shared.get("current_hostname") or step_device_id,
+            "collected_at": datetime.now(timezone.utc).isoformat(),
+            "result": {"status": "cancelled", "reason": "user_requested_cancellation"},
+            "iteration": 0,
+            "step_index": step_index,
+            "step_title": step_title,
+            "status": "cancelled",
+        }
+        if step.get("id") or step.get("step_id"):
+            entry["plan_step_id"] = step.get("id") or step.get("step_id")
+        entry.update(tool_log_fields("task.cancel", entry["result"], entry["command"], step_device_id))
+        commands_log = []
+        append_tool_step(commands_log, entry)
+        return {
+            "status": "cancelled",
+            "answer": "Остановлено пользователем.",
+            "commands": commands_log,
+        }
+
     worker_prompt = pipeline_worker_prompt(shared, overall_goal, step, completed_steps)
     messages = [{"role": "system", "content": worker_prompt}]
     messages.append({
@@ -1163,6 +1193,19 @@ async def run_pipeline_worker(
         return append_tool_step(commands_log, entry)
 
     for iteration in range(PIPELINE_WORKER_MAX_ITERATIONS):
+        if is_task_cancel_requested(poll_task_id):
+            append_step_command(
+                "task.cancel",
+                "[system] task.cancel",
+                step_device_id,
+                {"status": "cancelled", "reason": "user_requested_cancellation"},
+                status="cancelled",
+            )
+            return {
+                "status": "cancelled",
+                "answer": "Остановлено пользователем.",
+                "commands": commands_log,
+            }
         print(
             f"[pipeline/worker] iteration {iteration + 1}/{PIPELINE_WORKER_MAX_ITERATIONS}, "
             f"step={step.get('title', '')[:60]!r}"
@@ -1310,6 +1353,20 @@ async def run_pipeline_worker(
                     ),
                 })
                 continue
+
+            if is_task_cancel_requested(poll_task_id):
+                append_step_command(
+                    "task.cancel",
+                    "[system] task.cancel",
+                    target_device,
+                    {"status": "cancelled", "reason": "user_requested_cancellation"},
+                    status="cancelled",
+                )
+                return {
+                    "status": "cancelled",
+                    "answer": "Остановлено пользователем.",
+                    "commands": commands_log,
+                }
 
             rewrite_error = None
             if fn_name == "execute_cmd":
@@ -1832,9 +1889,17 @@ async def process_pipeline_subagents(
         push_tasks_view(poll_task_id, created_task_ids)
 
         pipeline_failed = False
+        pipeline_cancelled = False
         failure_reason = ""
         recovery_warnings = []
         for idx, step in enumerate(normalized_plan["steps"]):
+            if is_task_cancel_requested(poll_task_id):
+                pipeline_cancelled = True
+                failure_reason = "Остановлено пользователем."
+                for pending_idx in range(idx, len(normalized_plan["steps"])):
+                    db.update_step(db_task_id, pending_idx, "cancelled", summary="Остановлено пользователем.")
+                push_tasks_view(poll_task_id, created_task_ids)
+                break
             step, step_device_id = validate_pipeline_step_device(step, device_id, all_devices)
             worker_shared, worker_machine_guid = build_pipeline_worker_context(
                 target_device_id=step_device_id,
@@ -1882,6 +1947,26 @@ async def process_pipeline_subagents(
                     "answer": f"Ошибка исполнителя ИРУ: {exc}",
                     "commands": [],
                 }
+
+            if worker_result.get("status") == "cancelled" or is_task_cancel_requested(poll_task_id):
+                _extend_pipeline_run_journal(all_commands, worker_result.get("commands", []))
+                step_summary = strip_markdown(worker_result.get("answer", "")).strip() or "Остановлено пользователем."
+                db.update_step(db_task_id, idx, "cancelled", summary=step_summary[:500])
+                for pending_idx in range(idx + 1, len(normalized_plan["steps"])):
+                    db.update_step(db_task_id, pending_idx, "cancelled", summary="Остановлено пользователем.")
+                push_tasks_view(poll_task_id, created_task_ids)
+                step_results.append({
+                    "idx": idx,
+                    "title": step["title"],
+                    "instruction": step["instruction"],
+                    "device_id": step_device_id,
+                    "hostname": worker_shared.get("current_hostname", "unknown"),
+                    "status": "cancelled",
+                    "summary": step_summary,
+                })
+                pipeline_cancelled = True
+                failure_reason = step_summary
+                break
 
             if not _result_has_validated_answer_text(worker_result.get("commands", [])):
                 worker_result["answer"] = enforce_trusted_answer(
@@ -1952,12 +2037,12 @@ async def process_pipeline_subagents(
             if not pipeline_failed:
                 failure_reason = ""
 
-        task_status = "failed" if pipeline_failed else (
+        task_status = "cancelled" if pipeline_cancelled else ("failed" if pipeline_failed else (
             "completed_with_recovery"
             if any(step.get("status") == "recovered" for step in step_results)
             or any(_command_failed(command) for command in all_commands)
             else "completed"
-        )
+        ))
         receipt = build_pipeline_task_receipt(
             task_status=task_status,
             commands=all_commands,
@@ -1969,6 +2054,15 @@ async def process_pipeline_subagents(
         db.finish_task(db_task_id, task_status)
         push_tasks_view(poll_task_id, created_task_ids)
         set_current_step(poll_task_id, "ИРУ подводит итоги...")
+
+        if pipeline_cancelled:
+            set_current_step(poll_task_id, "Остановлено пользователем.")
+            return {
+                "answer": "Остановлено пользователем.",
+                "commands": all_commands,
+                "tasks": collect_tasks(created_task_ids),
+                "task_receipt": receipt,
+            }
 
         summary_payload = {
             "goal": normalized_plan["goal"],

@@ -40,8 +40,10 @@ try:
         devices,
         download_tokens,
         get_user_devices,
+        mark_task_cancelled,
         mark_suggested_fact_declined,
         mark_plan_declined,
+        request_task_cancel,
         tasks,
         TOKEN_TTL,
     )
@@ -76,8 +78,10 @@ except ImportError:
         devices,
         download_tokens,
         get_user_devices,
+        mark_task_cancelled,
         mark_suggested_fact_declined,
         mark_plan_declined,
+        request_task_cancel,
         tasks,
         TOKEN_TTL,
     )
@@ -453,6 +457,34 @@ async def api_get_task(task_id: str, request: Request):
         response_task["auto_plan"] = True
 
     return {"status": "ok", "task": response_task}
+
+
+@router.post("/api/tasks/{task_id}/cancel")
+async def api_cancel_task(task_id: str, request: Request):
+    user = get_current_user(request)
+    task = tasks.get(task_id)
+    if not task or task["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    previous_status = task.get("status")
+    if previous_status in {"done", "error", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}:
+        return {"status": "ok", "task_status": previous_status, "cancel_requested": bool(task.get("cancel_requested"))}
+    if previous_status == "confirm":
+        updated = mark_task_cancelled(task_id, answer="Остановлено пользователем.", commands=task.get("commands", []))
+        return {
+            "status": "ok",
+            "task_status": updated.get("status") if updated else "cancelled",
+            "cancel_requested": True,
+            "message": "Остановлено пользователем.",
+        }
+    updated = request_task_cancel(task_id, user["id"])
+    if not updated:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    return {
+        "status": "ok",
+        "task_status": updated.get("status"),
+        "cancel_requested": True,
+        "message": "Остановка запрошена. Текущий инструмент может завершиться с задержкой.",
+    }
 
 
 @router.post("/api/tasks/{task_id}/confirm")

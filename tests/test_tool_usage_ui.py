@@ -37,6 +37,27 @@ def test_chat_live_status_uses_safe_status_contract():
     assert "currentStatus: 'thinking'" in extras_source
 
 
+def test_task_stop_and_pipeline_progress_ui_contract_exists():
+    index_source = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
+    chat_source = (ROOT / "ui" / "js" / "chat.js").read_text(encoding="utf-8")
+    app_source = (ROOT / "ui" / "app.js").read_text(encoding="utf-8")
+    workspace_source = (ROOT / "ui" / "css" / "workspace.css").read_text(encoding="utf-8")
+    surfaces_source = (ROOT / "ui" / "css" / "surfaces.css").read_text(encoding="utf-8")
+
+    assert 'id="btnStopTask"' in index_source
+    assert "bindOnce('btnStopTask', 'click', cancelActiveTask)" in app_source
+    assert "async function cancelActiveTask" in chat_source
+    assert "/api/tasks/${encodeURIComponent(active.task_id)}/cancel" in chat_source
+    assert "cancelling: 'Остановка запрошена...'" in chat_source
+    assert "isTaskTerminalStatus(task.status)" in chat_source
+    assert "function calculatePipelineProgress" in chat_source
+    assert "function renderPipelineProgress" in chat_source
+    assert "renderPipelineProgress(t)" in chat_source
+    assert ".btn-stop-task" in workspace_source
+    assert ".pipeline-progress" in surfaces_source
+    assert ".task-block.task-cancelling" in surfaces_source
+
+
 def test_device_passport_buttons_show_used_typed_tools():
     source = (ROOT / "ui" / "js" / "devices.js").read_text(encoding="utf-8")
 
