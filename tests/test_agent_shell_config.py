@@ -47,6 +47,17 @@ def test_get_shell_config_path_prefers_existing_state_then_legacy(monkeypatch, t
     assert shell_config.get_shell_config_path() == state_path
 
 
+def test_get_shell_config_path_can_use_bundled_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("IRU_HOME", str(tmp_path / "empty-home"))
+    bundled_path = tmp_path / "dist" / "IruShell" / "shell_config.json"
+    bundled_path.parent.mkdir(parents=True)
+    bundled_path.write_text(json.dumps({"web_url": "https://irumode.ru"}), encoding="utf-8")
+    monkeypatch.setattr(shell_config, "_bundled_config_path", lambda: bundled_path)
+
+    assert shell_config.get_shell_config_path() == bundled_path
+    assert shell_config.resolve_web_url() == "https://irumode.ru"
+
+
 def test_shell_config_does_not_keep_auth_secrets(tmp_path):
     config_path = tmp_path / "state" / "shell_config.json"
     config_path.parent.mkdir(parents=True)

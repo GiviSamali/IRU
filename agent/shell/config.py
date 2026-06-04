@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -43,14 +44,23 @@ def _legacy_config_path(iru_home: Path | None = None) -> Path:
     return (iru_home or get_iru_home()) / "shell_config.json"
 
 
+def _bundled_config_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "shell_config.json"
+    return Path(__file__).resolve().parent / "shell_config.json"
+
+
 def get_shell_config_path(iru_home: Path | None = None) -> Path:
     home = iru_home or get_iru_home()
     state_path = _state_config_path(home)
     legacy_path = _legacy_config_path(home)
+    bundled_path = _bundled_config_path()
     if state_path.exists():
         return state_path
     if legacy_path.exists():
         return legacy_path
+    if bundled_path.exists():
+        return bundled_path
     return state_path
 
 

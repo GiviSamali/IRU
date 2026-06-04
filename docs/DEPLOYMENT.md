@@ -67,9 +67,62 @@ $env:IRU_ADMIN_TOKEN = "<admin-token>"
 
 Сборка использует PyInstaller, публикует `dist/IruAgent` и ZIP. `dist/` и build artifacts не коммитятся.
 
+Auto-update contract агента не меняется:
+
+```text
+dist/IruAgent/
+dist/IruAgent/IruAgent.exe
+dist/IruAgent/VERSION.txt
+dist/IruAgent.zip
+POST <Server>/api/agent/upload?version=<Version>
+```
+
+`IruAgent.zip` — единственный artifact, который загружается в `/api/agent/upload` текущим скриптом.
+
+## Agent Shell build
+
+Agent Shell — отдельный локальный desktop wrapper существующего Web UI. Он не является update artifact для `IruAgent` и в этой версии не загружается в `/api/agent/upload`.
+
+Сборка agent + shell:
+
+```powershell
+.\deploy\build_windows.ps1 -Version 3.7 -BuildShell -ShellWebUrl "https://irumode.ru"
+```
+
+Локальная сборка без upload:
+
+```powershell
+.\deploy\build_windows.ps1 -Version 3.7 -SkipUpload -BuildShell -ShellWebUrl "https://irumode.ru"
+```
+
+Результат:
+
+```text
+dist/IruAgent/IruAgent.exe
+dist/IruAgent.zip
+dist/IruShell/IruShell.exe
+dist/IruShell/VERSION.txt
+dist/IruShell/BUILD_INFO.json
+dist/IruShell/shell_config.json
+dist/IruShell.zip
+```
+
+Если `-BuildShell` указан, а `-ShellWebUrl` нет, Shell URL берется из `-Server`. Это относится только к сборке shell и не меняет upload URL агента. `-Token` никогда не пишется в `BUILD_INFO.json`, `shell_config.json` или artifact files.
+
+Если source-запуск `python -m agent.shell` открывает `http://127.0.0.1:8000`, значит не задан `IRU_WEB_URL` и нет shell config. Для production URL:
+
+```powershell
+$env:IRU_WEB_URL = "https://irumode.ru"
+python -m agent.shell
+```
+
+Или отредактируйте `IRU_HOME/state/shell_config.json` / `IRU_HOME/shell_config.json`.
+
+После обновления проверяйте Task Manager и Startup shortcut: запущенный процесс должен указывать на актуальный `dist/IruAgent/IruAgent.exe` или `dist/IruShell/IruShell.exe`, а не на старый путь.
+
 ## Versioning
 
-Версию агента задает параметр `-Version`. Build script пишет `VERSION.txt` в собранный agent bundle.
+Версию задает параметр `-Version`. Build script пишет `VERSION.txt` и `BUILD_INFO.json` в собранные bundles `IruAgent` и `IruShell`.
 
 Rebuild required when меняется:
 

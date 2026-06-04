@@ -52,7 +52,8 @@ URL выбирается в таком порядке:
 1. `IRU_WEB_URL` environment variable.
 2. `IRU_HOME/state/shell_config.json`.
 3. `IRU_HOME/shell_config.json`.
-4. fallback: `http://127.0.0.1:8000`.
+4. bundled `shell_config.json` рядом с `IruShell.exe`, если shell собран как artifact.
+5. fallback: `http://127.0.0.1:8000`.
 
 Пример:
 
@@ -77,6 +78,30 @@ python -m agent.shell
 ```
 
 URL можно изменить вручную в JSON. Не добавляйте туда секреты: Shell config не предназначен для токенов, паролей или auth cookies.
+
+Source-запуск `python -m agent.shell` открывает `http://127.0.0.1:8000` по умолчанию, если `IRU_WEB_URL` и config отсутствуют. Для production URL задайте environment variable или создайте shell config.
+
+## Windows build artifact
+
+Unified Windows build script может собрать Agent Shell отдельно от IruAgent:
+
+```powershell
+.\deploy\build_windows.ps1 -Version 3.7 -BuildShell -ShellWebUrl "https://irumode.ru"
+```
+
+Результат:
+
+```text
+dist/IruShell/
+  IruShell.exe
+  VERSION.txt
+  BUILD_INFO.json
+  shell_config.json
+```
+
+`IruShell` — локальный wrapper Web UI. Он не загружается в `/api/agent/upload` и не участвует в текущем auto-update механизме `IruAgent`. Auto-update агента по-прежнему использует только `dist/IruAgent.zip`.
+
+Если `-BuildShell` указан без `-ShellWebUrl`, shell URL берется из параметра `-Server`. Это не меняет server upload contract для `IruAgent`.
 
 ## IRU_HOME
 

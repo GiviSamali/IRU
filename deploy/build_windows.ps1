@@ -11,6 +11,9 @@
 #   -SkipUpload   Только собрать, не загружать на сервер.
 #   -DebugBuild   Собрать с --console (видимый stdout/stderr для отладки).
 #                 ZIP будет называться IruAgent-debug.zip.
+#   -BuildShell   Дополнительно собрать локальный Agent Shell wrapper (IruShell).
+#   -ShellWebUrl  URL Web UI для shell_config.json. По умолчанию равен -Server, только при -BuildShell.
+#   -SkipShellZip Не упаковывать IruShell.zip.
 #
 # Требования:
 #   - Python 3.11+ в PATH
@@ -29,7 +32,13 @@ param(
 
     [switch]$SkipUpload,
 
-    [switch]$DebugBuild
+    [switch]$DebugBuild,
+
+    [switch]$BuildShell,
+
+    [string]$ShellWebUrl = "",
+
+    [switch]$SkipShellZip
 )
 
 $ErrorActionPreference = "Stop"
@@ -152,6 +161,97 @@ function Publish-AgentBuild {
     return $targetDir
 }
 
+function Publish-BuildArtifact {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceDir,
+        [Parameter(Mandatory = $true)]
+        [string]$DistRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$ArtifactName,
+        [Parameter(Mandatory = $true)]
+        [string]$Version
+    )
+
+    if (-not (Test-Path $DistRoot)) {
+        New-Item -ItemType Directory -Path $DistRoot -Force | Out-Null
+    }
+
+    $preferredTarget = Join-Path $DistRoot $ArtifactName
+    $targetDir = $preferredTarget
+
+    if (Test-Path $preferredTarget) {
+        try {
+            Remove-Item -Recurse -Force $preferredTarget -ErrorAction Stop
+        } catch {
+            $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+            $targetDir = Join-Path $DistRoot ("{0}-v{1}-{2}" -f $ArtifactName, $Version, $stamp)
+            Write-Warning ("Не удалось заменить dist\\{0}; публикуем новую папку в {1}" -f $ArtifactName, $targetDir)
+        }
+    }
+
+    if (Test-Path $targetDir) {
+        Remove-Item -Recurse -Force $targetDir -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+
+    Get-ChildItem -LiteralPath $SourceDir -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $targetDir -Recurse -Force
+    }
+
+    return $targetDir
+}
+
+function Test-PythonModule {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ModuleName
+    )
+
+    & python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('$ModuleName') else 1)" 2>$null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Get-GitValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments,
+        [string]$Fallback = "unknown"
+    )
+
+    try {
+        $value = (& git @Arguments 2>$null | Select-Object -First 1)
+        if ($value) { return [string]$value }
+    } catch {}
+    return $Fallback
+}
+
+function Write-BuildInfo {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetDir,
+        [Parameter(Mandatory = $true)]
+        [string]$Version,
+        [Parameter(Mandatory = $true)]
+        [string]$Artifact,
+        [string]$WebUrl = ""
+    )
+
+    $info = [ordered]@{
+        version = $Version
+        git_commit = Get-GitValue -Arguments @("rev-parse", "HEAD")
+        branch = Get-GitValue -Arguments @("branch", "--show-current")
+        built_at = (Get-Date).ToUniversalTime().ToString("o")
+        artifact = $Artifact
+    }
+    if ($WebUrl) {
+        $info.web_url = $WebUrl
+    }
+
+    $json = $info | ConvertTo-Json -Depth 4
+    [System.IO.File]::WriteAllText((Join-Path $TargetDir "BUILD_INFO.json"), $json, [System.Text.UTF8Encoding]::new($false))
+}
+
 # -- Пути ------------------------------------------------------------------
 $repoRoot  = (Get-Item -Path "$PSScriptRoot\..").FullName
 $agentDir  = Join-Path $repoRoot "agent"
@@ -160,6 +260,7 @@ $fallbackIconPath = Join-Path $repoRoot "ui\IruIcon.ico"
 $distDir   = Join-Path $repoRoot "dist"
 $buildDir  = Join-Path $repoRoot "build"
 $specPath  = Join-Path $repoRoot "IruAgent.spec"
+$shellSpecPath = Join-Path $repoRoot "IruShell.spec"
 $stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("iru-agent-build-" + [guid]::NewGuid().ToString("N"))
 $stagingDistDir = Join-Path $stagingRoot "dist"
 $stagingBuildDir = Join-Path $stagingRoot "build"
@@ -167,6 +268,9 @@ $stagingSpecDir = Join-Path $stagingRoot "spec"
 
 if (-not (Test-Path "$agentDir\agent.py")) {
     throw "Не найден agent\agent.py. Запускайте скрипт из репозитория IRU."
+}
+if ($BuildShell -and -not (Test-Path "$agentDir\shell\main.py")) {
+    throw "Не найден agent\shell\main.py. Agent Shell WebView v1 должен быть в репозитории."
 }
 if (-not (Test-Path $iconPath)) {
     if (Test-Path $fallbackIconPath) {
@@ -180,6 +284,12 @@ if (-not (Test-Path $iconPath)) {
 $modeLabel = if ($DebugBuild) { "DEBUG/console" } else { "windowed" }
 Write-Host "== Сборка agent v$Version ($modeLabel, onedir + ZIP) ==" -ForegroundColor Cyan
 Write-Host "Репозиторий: $repoRoot"
+if ($BuildShell) {
+    if (-not $ShellWebUrl) {
+        $ShellWebUrl = $Server
+    }
+    Write-Host "Agent Shell Web URL: $ShellWebUrl" -ForegroundColor DarkGray
+}
 
 # -- Python + зависимости --------------------------------------------------
 $py = (Get-Command python -ErrorAction SilentlyContinue)
@@ -311,6 +421,7 @@ if ($iconPath) {
 # что ломает сравнение версий на агенте. WriteAllText пишет без BOM.
 $versionTxt = Join-Path $stagingDistDir "IruAgent\VERSION.txt"
 [System.IO.File]::WriteAllText($versionTxt, $Version, [System.Text.UTF8Encoding]::new($false))
+Write-BuildInfo -TargetDir (Join-Path $stagingDistDir "IruAgent") -Version $Version -Artifact "IruAgent"
 
 # -- Публикация папки сборки в repo dist ------------------------------------
 $publishedAgentDir = Publish-AgentBuild -SourceDir (Join-Path $stagingDistDir "IruAgent") -DistRoot $distDir -Version $Version
@@ -333,9 +444,111 @@ try {
     Write-Warning "Не удалось посчитать размер папки сборки."
 }
 
+# -- Optional Agent Shell build --------------------------------------------
+if ($BuildShell) {
+    Write-Host ""
+    Write-Host "== Сборка Agent Shell v$Version (IruShell, локальный artifact) ==" -ForegroundColor Cyan
+
+    $shellHiddenImports = @(
+        "agent",
+        "agent.shell",
+        "agent.shell.main",
+        "agent.shell.config",
+        "agent.shell.status",
+        "agent.shell.tray"
+    )
+
+    if (Test-PythonModule -ModuleName "webview") {
+        $shellHiddenImports += "webview"
+    } else {
+        Write-Host "pywebview не установлен — IruShell будет использовать browser fallback." -ForegroundColor DarkGray
+    }
+    if (Test-PythonModule -ModuleName "pystray") {
+        $shellHiddenImports += "pystray"
+    } else {
+        Write-Host "pystray не установлен — tray будет отключен." -ForegroundColor DarkGray
+    }
+    if (Test-PythonModule -ModuleName "PIL") {
+        $shellHiddenImports += @("PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont")
+    } else {
+        Write-Host "Pillow не установлен — tray icon будет недоступен." -ForegroundColor DarkGray
+    }
+
+    $shellPyiArgs = @(
+        "--onedir",
+        "--name", "IruShell",
+        $(if ($DebugBuild) { "--console" } else { "--noconsole" }),
+        "--distpath", $stagingDistDir,
+        "--workpath", $stagingBuildDir,
+        "--specpath", $stagingSpecDir,
+        "--noconfirm",
+        "--paths", $repoRoot,
+        "--collect-submodules", "agent.shell"
+    )
+
+    foreach ($module in $shellHiddenImports) {
+        $shellPyiArgs += @("--hidden-import", $module)
+    }
+    if ($iconPath) {
+        $shellPyiArgs += @("--icon", $iconPath)
+    }
+
+    $shellPyiArgs += (Join-Path $agentDir "shell\main.py")
+
+    Push-Location $repoRoot
+    try {
+        Write-Host "Запуск PyInstaller для IruShell (--onedir)..."
+        & python -m PyInstaller @shellPyiArgs
+        if ($LASTEXITCODE -ne 0) { throw "PyInstaller для IruShell завершился с кодом $LASTEXITCODE" }
+    } finally {
+        Pop-Location
+    }
+
+    $shellExePath = Join-Path $stagingDistDir "IruShell\IruShell.exe"
+    if (-not (Test-Path $shellExePath)) {
+        throw "После сборки не найден $shellExePath"
+    }
+
+    if ($iconPath) {
+        Copy-Item -LiteralPath $iconPath -Destination (Join-Path $stagingDistDir "IruShell\IruIcon.ico") -Force
+    }
+
+    [System.IO.File]::WriteAllText((Join-Path $stagingDistDir "IruShell\VERSION.txt"), $Version, [System.Text.UTF8Encoding]::new($false))
+    Write-BuildInfo -TargetDir (Join-Path $stagingDistDir "IruShell") -Version $Version -Artifact "IruShell" -WebUrl $ShellWebUrl
+
+    $shellConfig = [ordered]@{
+        web_url = $ShellWebUrl
+        window = [ordered]@{
+            title = "ИРУ"
+            width = 1200
+            height = 800
+            min_width = 900
+            min_height = 600
+        }
+    }
+    $shellConfigJson = $shellConfig | ConvertTo-Json -Depth 4
+    [System.IO.File]::WriteAllText((Join-Path $stagingDistDir "IruShell\shell_config.json"), $shellConfigJson, [System.Text.UTF8Encoding]::new($false))
+
+    $publishedShellDir = Publish-BuildArtifact -SourceDir (Join-Path $stagingDistDir "IruShell") -DistRoot $distDir -ArtifactName "IruShell" -Version $Version
+    Write-Host ("Shell папка сборки: {0}" -f $publishedShellDir) -ForegroundColor Green
+
+    if (-not $SkipShellZip) {
+        $shellZipPath = Join-Path $distDir "IruShell.zip"
+        if (Test-Path $shellZipPath) {
+            Remove-Item -Force $shellZipPath
+        }
+        Compress-Archive -Path (Join-Path $stagingDistDir "IruShell") -DestinationPath $shellZipPath -Force
+        $shellZipSize = (Get-Item $shellZipPath).Length
+        Write-Host ("Shell ZIP: {0} ({1:N0} байт)" -f $shellZipPath, $shellZipSize) -ForegroundColor Green
+    }
+
+    Write-Host "IruShell не загружается в /api/agent/upload в этой ветке." -ForegroundColor DarkGray
+}
+
 try {
     if (Test-Path $buildDir) { Remove-Item -Recurse -Force $buildDir -ErrorAction SilentlyContinue }
     if (Test-Path $specPath) { Remove-Item -Force $specPath -ErrorAction SilentlyContinue }
+    if (Test-Path $shellSpecPath) { Remove-Item -Force $shellSpecPath -ErrorAction SilentlyContinue }
     if (Test-Path $stagingRoot) { Remove-Item -Recurse -Force $stagingRoot -ErrorAction SilentlyContinue }
 } catch {
     Write-Warning "Не удалось полностью очистить временные staging-артефакты."
