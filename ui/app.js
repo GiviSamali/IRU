@@ -18,7 +18,12 @@ function bindStaticEvents() {
   bindOnce('sidebarOverlay', 'click', closeMobileSidebar);
   bindOnce('btnMenuMobile', 'click', toggleMobileSidebar);
   bindOnce('btnAdmin', 'click', toggleAdmin);
-  bindOnce('memoryBadge', 'click', toggleMemoryPopover);
+  bindOnce('memoryBadge', 'click', toggleMemoryPanel);
+  bindOnce('memoryPanelCloseBtn', 'click', closeMemoryPanel);
+  bindOnce('memoryFactAddBtn', 'click', addMemoryFactFromPanel);
+  bindOnce('memoryFactInput', 'keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') addMemoryFactFromPanel();
+  });
   bindOnce('deviceBtn', 'click', toggleDeviceDropdown);
   bindOnce('devModeToggle', 'click', toggleDevMode);
   bindOnce('explorerToggle', 'click', toggleExplorer);

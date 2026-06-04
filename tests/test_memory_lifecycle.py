@@ -58,6 +58,46 @@ def test_user_memory_fact_delete_disappears_from_memory_stats(client):
     assert after.json()["memory_stats"]["facts_list"] == []
 
 
+def test_memory_facts_api_add_list_delete_user_fact(client):
+    user, headers = _create_and_login_user(client, "memory-panel-owner")
+
+    empty = client.get("/api/memory/facts", headers=headers)
+    assert empty.status_code == 200
+    assert empty.json() == {"status": "ok", "facts": []}
+
+    created = client.post(
+        "/api/memory/facts",
+        headers=headers,
+        json={"text": "works on IRU", "category": "project"},
+    )
+    assert created.status_code == 200
+    fact = created.json()["fact"]
+    assert fact["text"] == "works on IRU"
+    assert fact["category"] == "project"
+    assert fact["source"] == "user"
+    assert fact["created_at"]
+
+    listed = client.get("/api/memory/facts", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json()["facts"] == [fact]
+
+    deleted = client.delete(f"/api/memory/facts/{fact['id']}", headers=headers)
+    assert deleted.status_code == 200
+    assert deleted.json()["facts"] == []
+
+
+def test_memory_facts_api_does_not_delete_other_users_fact(client):
+    from server.database import add_user_fact, get_user_facts
+
+    user, headers = _create_and_login_user(client, "memory-panel-delete-owner")
+    other, _ = _create_and_login_user(client, "memory-panel-delete-other")
+    other_fact_id = add_user_fact(str(other["id"]), "other private fact", "private")
+
+    deleted = client.delete(f"/api/memory/facts/{other_fact_id}", headers=headers)
+    assert deleted.status_code == 404
+    assert [fact["fact_text"] for fact in get_user_facts(str(other["id"]))] == ["other private fact"]
+
+
 def test_legacy_device_memory_fact_delete_unpins_from_memory_stats(client):
     from server.database import add_fact, get_memory_stats
 

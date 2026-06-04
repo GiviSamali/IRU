@@ -43,13 +43,10 @@ function updateMemoryBadge(stats) {
   if (!badge || !text) return;
   const f = stats.facts || 0;
   const c = stats.commands || 0;
-  if (f === 0 && c === 0) { badge.style.display = 'none'; return; }
   badge.style.display = 'inline-flex';
   const cLabel = c > 20 ? '20+' : c;
   const fLabel = f > 20 ? '20+' : f;
-  const fWord = f > 20 ? 'фактов' : plural(f, 'факт', 'факта', 'фактов');
-  const cWord = c > 20 ? 'команд' : plural(c, 'команда', 'команды', 'команд');
-  text.textContent = `${fLabel} ${fWord}, ${cLabel} ${cWord}`;
+  text.textContent = f || c ? `Память · ${fLabel}/${cLabel}` : 'Память';
 }
 
 function toggleMemoryPopover() {
@@ -91,21 +88,138 @@ async function refreshMemoryStats() {
   return data.memory_stats;
 }
 
-async function deleteMemoryFact(id, source, btn) {
-  if (!id || !source) return;
-  if (btn) btn.disabled = true;
+function memoryPanelQuery() {
+  return state.selectedDevice ? `?device_id=${encodeURIComponent(state.selectedDevice)}` : '';
+}
+
+function formatMemoryDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString();
+}
+
+function renderMemoryPanel() {
+  const panel = document.getElementById('memoryPanel');
+  const list = document.getElementById('memoryPanelList');
+  const error = document.getElementById('memoryPanelError');
+  const badge = document.getElementById('memoryBadge');
+  if (panel) panel.classList.toggle('open', !!state.memoryPanelOpen);
+  if (badge) {
+    badge.classList.toggle('active', !!state.memoryPanelOpen);
+    badge.setAttribute('aria-expanded', state.memoryPanelOpen ? 'true' : 'false');
+  }
+  if (!list) return;
+
+  if (error) {
+    error.hidden = !state.memoryPanelError;
+    error.textContent = state.memoryPanelError || '';
+  }
+
+  if (state.memoryPanelLoading) {
+    list.innerHTML = '<div class="memory-panel-state">Память загружается...</div>';
+    return;
+  }
+
+  const facts = state.memoryFacts || [];
+  if (!facts.length) {
+    list.innerHTML = '<div class="memory-panel-state">Память пока пустая. Добавьте факт вручную или сохраните его из ответа ИРУ.</div>';
+    return;
+  }
+
+  list.innerHTML = facts.map((fact) => {
+    const source = fact.source || 'user';
+    const category = fact.category || 'general';
+    const createdAt = formatMemoryDate(fact.created_at);
+    const deleteDisabled = fact.id == null ? 'disabled' : '';
+    return `<div class="memory-panel-item">
+      <div class="memory-panel-item-main">
+        <div class="memory-panel-item-text">${escapeHTML(fact.text || fact.fact || '')}</div>
+        <div class="memory-panel-item-meta">
+          <span>${escapeHTML(category)}</span>
+          <span>${escapeHTML(source)}</span>
+          ${createdAt ? `<span>${escapeHTML(createdAt)}</span>` : ''}
+        </div>
+      </div>
+      <button class="memory-panel-delete" data-action="delete-memory-fact" data-id="${escapeAttr(fact.id)}" data-source="${escapeAttr(source)}" title="Удалить" ${deleteDisabled}>Удалить</button>
+    </div>`;
+  }).join('');
+}
+
+async function loadMemoryFacts() {
+  state.memoryPanelLoading = true;
+  state.memoryPanelError = '';
+  renderMemoryPanel();
   try {
-    const resp = await apiFetch(`${API}/api/memory/facts/delete`, {
+    const resp = await apiFetch(`${API}/api/memory/facts${memoryPanelQuery()}`, { headers: authHeaders() });
+    const data = await resp.json();
+    if (!resp.ok || data.status !== 'ok') {
+      throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
+    }
+    state.memoryFacts = data.facts || [];
+  } catch (e) {
+    state.memoryPanelError = e.message || 'Ошибка загрузки памяти';
+  } finally {
+    state.memoryPanelLoading = false;
+    renderMemoryPanel();
+  }
+}
+
+function toggleMemoryPanel() {
+  state.memoryPanelOpen = !state.memoryPanelOpen;
+  const pop = document.getElementById('memoryPopover');
+  if (pop) pop.classList.remove('show');
+  renderMemoryPanel();
+  if (state.memoryPanelOpen) loadMemoryFacts();
+}
+
+function closeMemoryPanel() {
+  state.memoryPanelOpen = false;
+  renderMemoryPanel();
+}
+
+async function addMemoryFactFromPanel() {
+  const input = document.getElementById('memoryFactInput');
+  const button = document.getElementById('memoryFactAddBtn');
+  const text = (input?.value || '').trim();
+  if (!text) return;
+  if (button) button.disabled = true;
+  try {
+    const resp = await apiFetch(`${API}/api/memory/facts`, {
       method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ id: Number(id), source, device_id: state.selectedDevice }),
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, category: 'general' }),
     });
     const data = await resp.json();
     if (!resp.ok || data.status !== 'ok') {
       throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
     }
-    updateMemoryBadge(data.memory_stats);
+    if (input) input.value = '';
     await refreshMemoryStats();
+    await loadMemoryFacts();
+  } catch (e) {
+    showToast(e.message || 'Ошибка сохранения факта', true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function deleteMemoryFact(id, source, btn) {
+  if (!id || !source) return;
+  if (btn) btn.disabled = true;
+  try {
+    const params = new URLSearchParams({ source });
+    if (state.selectedDevice) params.set('device_id', state.selectedDevice);
+    const resp = await apiFetch(`${API}/api/memory/facts/${encodeURIComponent(id)}?${params.toString()}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.status !== 'ok') {
+      throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
+    }
+    await refreshMemoryStats();
+    if (state.memoryPanelOpen) await loadMemoryFacts();
   } catch (e) {
     showToast(e.message || 'Ошибка удаления факта', true);
   } finally {

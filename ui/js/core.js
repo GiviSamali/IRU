@@ -14,6 +14,10 @@ const state = {
   explorerOpen: false,
   explorerPath: null,
   explorerHistory: [],
+  memoryPanelOpen: false,
+  memoryPanelLoading: false,
+  memoryPanelError: '',
+  memoryFacts: [],
   pendingTasks: [],  // [{task_id, msgIndex}]
   expandedStepDetails: new Set(),
   expandedStepCommands: new Set(),

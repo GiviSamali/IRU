@@ -25,6 +25,7 @@ try:
         get_chat,
         get_device_profile,
         get_memory_stats,
+        get_user_facts,
         get_plan_trial_used,
         get_user_device_profiles,
         get_user_plan,
@@ -60,6 +61,7 @@ except ImportError:
         get_chat,
         get_device_profile,
         get_memory_stats,
+        get_user_facts,
         get_plan_trial_used,
         get_user_device_profiles,
         get_user_plan,
@@ -112,6 +114,44 @@ class MemoryFactDeleteBody(BaseModel):
     id: int
     source: str
     device_id: str | None = None
+
+
+class MemoryFactCreateBody(BaseModel):
+    text: str
+    category: str | None = "general"
+
+
+def _format_user_fact(row: dict) -> dict:
+    return {
+        "id": row.get("id"),
+        "text": row.get("fact_text") or row.get("text") or "",
+        "category": row.get("category"),
+        "source": "user",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("created_at"),
+    }
+
+
+def _memory_facts_for_profile(user: dict, profile: dict | None) -> list[dict]:
+    stats = _memory_stats_for_profile(user, profile)
+    user_rows = {
+        row.get("id"): _format_user_fact(row)
+        for row in get_user_facts(str(user["id"]))
+    }
+    facts = []
+    for fact in stats.get("facts_list", []):
+        if fact.get("source") == "user" and fact.get("id") in user_rows:
+            facts.append(user_rows[fact.get("id")])
+        else:
+            facts.append({
+                "id": fact.get("id"),
+                "text": fact.get("text") or fact.get("fact") or "",
+                "category": fact.get("category"),
+                "source": fact.get("source") or "user",
+                "created_at": fact.get("created_at"),
+                "updated_at": fact.get("updated_at") or fact.get("created_at"),
+            })
+    return facts
 
 
 def _owned_device_profile(user: dict, device_id: str | None = None, machine_guid: str | None = None) -> dict | None:
@@ -294,6 +334,58 @@ async def api_memory_stats(request: Request, device_id: str | None = None):
     user = get_current_user(request)
     profile = _owned_device_profile(user, device_id)
     return {"status": "ok", "memory_stats": _memory_stats_for_profile(user, profile)}
+
+
+@router.get("/api/memory/facts")
+async def api_memory_facts(request: Request, device_id: str | None = None):
+    user = get_current_user(request)
+    profile = _owned_device_profile(user, device_id)
+    return {"status": "ok", "facts": _memory_facts_for_profile(user, profile)}
+
+
+@router.post("/api/memory/facts")
+async def api_add_memory_fact(body: MemoryFactCreateBody, request: Request):
+    user = get_current_user(request)
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Memory fact text is required")
+    if len(text) > 1000:
+        raise HTTPException(status_code=400, detail="Memory fact text is too long")
+    category = (body.category or "general").strip() or "general"
+    if len(category) > 64:
+        raise HTTPException(status_code=400, detail="Memory fact category is too long")
+
+    fact_id = add_user_fact(str(user["id"]), text, category)
+    fact = next(
+        (_format_user_fact(row) for row in get_user_facts(str(user["id"])) if row.get("id") == fact_id),
+        {"id": fact_id, "text": text, "category": category, "source": "user", "created_at": None, "updated_at": None},
+    )
+    return {"status": "ok", "fact": fact}
+
+
+@router.delete("/api/memory/facts/{fact_id}")
+async def api_delete_memory_fact_v1(
+    fact_id: int,
+    request: Request,
+    source: str = "user",
+    device_id: str | None = None,
+):
+    user = get_current_user(request)
+    source = (source or "user").strip().lower()
+    if source not in {"user", "device"}:
+        raise HTTPException(status_code=400, detail="Invalid memory source")
+    if source == "device" and not device_id:
+        raise HTTPException(status_code=400, detail="Device id required for device memory source")
+
+    profile = _owned_device_profile(user, device_id)
+    machine_guid = profile.get("machine_guid") if profile else None
+    if source == "device" and not machine_guid:
+        raise HTTPException(status_code=404, detail="Device memory source not found")
+
+    ok = delete_memory_fact(str(user["id"]), fact_id, source, machine_guid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Memory fact not found")
+    return {"status": "ok", "facts": _memory_facts_for_profile(user, profile)}
 
 
 @router.post("/api/memory/facts/delete")

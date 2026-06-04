@@ -65,3 +65,20 @@ def test_device_passport_runtime_prepare_disconnect_message():
     assert "Снимок ещё не собирался" in source
     assert "—" in source
     assert "Подготовка прервана. Агент переподключился — нажмите Проверить runtime." in source
+
+
+def test_memory_panel_ui_contract_exists():
+    index_source = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
+    extras_source = (ROOT / "ui" / "js" / "extras.js").read_text(encoding="utf-8")
+    workspace_source = (ROOT / "ui" / "css" / "workspace.css").read_text(encoding="utf-8")
+
+    assert 'id="memoryBadge"' in index_source
+    assert 'id="memoryPanel"' in index_source
+    assert 'id="memoryFactInput"' in index_source
+    assert "Память" in index_source
+    assert "Добавить факт, который ИРУ должна помнить" in index_source
+    assert "function toggleMemoryPanel" in extras_source
+    assert "function addMemoryFactFromPanel" in extras_source
+    assert "/api/memory/facts" in extras_source
+    assert "Память пока пустая" in extras_source
+    assert ".memory-panel.open" in workspace_source
