@@ -577,7 +577,7 @@ DEVICE_TOOL_SCHEMAS = [
                 "properties": {
                     "answer_type": {
                         "type": "string",
-                        "enum": ["pure_text", "grounded_report", "clarification", "failure"],
+                        "enum": ["pure_text", "grounded_report", "partial_report", "error_report", "clarification", "failure"],
                     },
                     "text": {"type": "string"},
                     "basis": {"type": "array", "items": {"type": "string"}},

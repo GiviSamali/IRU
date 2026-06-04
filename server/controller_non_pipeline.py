@@ -8,6 +8,7 @@ import httpx
 try:
     from . import database as db  # type: ignore
     from .answer_auditor import audit_answer_payload  # type: ignore
+    from .answer_repair import run_answer_only_repair_turn  # type: ignore
     from .controller_budget import BUDGET_GUARD_ERROR, CommandBudget, budget_guard_entry  # type: ignore
     from .controller_shared import (  # type: ignore
         ConfirmationRequired,
@@ -47,6 +48,7 @@ try:
 except ImportError:
     import database as db  # type: ignore
     from answer_auditor import audit_answer_payload  # type: ignore
+    from answer_repair import run_answer_only_repair_turn  # type: ignore
     from controller_budget import BUDGET_GUARD_ERROR, CommandBudget, budget_guard_entry  # type: ignore
     from controller_shared import (  # type: ignore
         ConfirmationRequired,
@@ -808,10 +810,34 @@ async def process_non_pipeline_command(
                     ))
                 append_tool_message(tool_call["id"], commands_log[-1])
 
+    print("[tool-only] max_iterations reached; attempting answer_text-only repair turn")
+    repair_result = await run_answer_only_repair_turn(
+        client=client,
+        cfg=cfg,
+        model=model,
+        messages=messages,
+        user_request=user_message,
+        journal=commands_log,
+        chat_completion_request_fn=chat_completion_request_fn,
+        target_device_id=device_id,
+        hostname=device_info.get("hostname") or device_id,
+        iteration=max_iterations + 1,
+    )
+    if repair_result.get("ok"):
+        return {
+            "answer": repair_result["answer"],
+            "commands": commands_log,
+            "training_context": _training_context(device_info),
+            "tasks": [],
+        }
+
     append_entry(make_run_step(
         journal=commands_log,
         tool_name="tool_only_protocol",
-        result={"error": "model did not choose an answer tool before max_iterations"},
+        result={
+            "error": "model did not choose an answer tool before max_iterations",
+            "repair_reason": repair_result.get("reason"),
+        },
         command="[system] tool_only_protocol",
         target_device_id=device_id,
         hostname=device_info.get("hostname") or device_id,

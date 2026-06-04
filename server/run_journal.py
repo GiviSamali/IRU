@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -34,6 +35,8 @@ GROUNDED_CORRECTION = (
 INSUFFICIENT_EVIDENCE_CORRECTION = (
     "Your answer_text says evidence is insufficient. Call the needed tool first or use clarification/failure."
 )
+
+ANSWER_TEXT_TYPES = {"pure_text", "grounded_report", "partial_report", "error_report", "clarification", "failure"}
 
 
 class ProtocolValidationError(ValueError):
@@ -216,6 +219,61 @@ def wrap_tool_result_for_llm(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _repair_step_line(entry: dict[str, Any]) -> dict[str, Any]:
+    wrapped = wrap_tool_result_for_llm(entry)
+    result = wrapped.get("result")
+    if isinstance(result, dict):
+        compact_result = {
+            key: value
+            for key, value in result.items()
+            if key not in {"stdout", "stderr", "raw_stdout", "raw_stderr", "content"}
+        }
+    else:
+        compact_result = result
+    wrapped["result"] = compact_result
+    return wrapped
+
+
+def build_terminal_answer_repair_prompt(user_request: str, journal: list[dict[str, Any]]) -> str:
+    evidence_steps = [
+        _repair_step_line(entry)
+        for entry in journal
+        if entry.get("step_id")
+        and entry.get("tool_type") != "answer"
+        and not is_terminal_answer_tool(entry.get("tool_name"))
+        and entry.get("status") not in {"failed", "error", "blocked"}
+    ]
+    failed_steps = [
+        _repair_step_line(entry)
+        for entry in journal
+        if entry.get("step_id")
+        and entry.get("tool_type") != "answer"
+        and not is_terminal_answer_tool(entry.get("tool_name"))
+        and entry.get("status") in {"failed", "error", "blocked"}
+    ]
+    evidence_ids = [str(step.get("step_id")) for step in evidence_steps if step.get("step_id")]
+    failed_ids = [str(step.get("step_id")) for step in failed_steps if step.get("step_id")]
+
+    return (
+        "Terminal answer repair turn.\n"
+        "The normal tool-only loop reached its iteration limit without a terminal answer_text.\n"
+        "You must call exactly one tool: answer_text. No other tool is available.\n"
+        "Use only current-run journal entries below as evidence. Old chat history is context only, not evidence.\n"
+        "Do not pretend success if the evidence is missing or failed.\n"
+        "If successful evidence supports the answer, use answer_type=grounded_report and basis with existing step_id values.\n"
+        "If only partial evidence exists, use answer_type=partial_report and cite the supporting step_id values.\n"
+        "If there are no valid evidence steps or the task failed, use answer_type=error_report, set has_sufficient_evidence=false, "
+        "and keep basis empty unless citing failed current-run step_id values helps explain the failure.\n"
+        f"Original user request:\n{user_request}\n\n"
+        f"Successful evidence step_ids: {evidence_ids}\n"
+        f"Failed step_ids: {failed_ids}\n"
+        "Successful evidence steps:\n"
+        f"{json.dumps(evidence_steps[-12:], ensure_ascii=False, indent=2)}\n\n"
+        "Failed/blocked steps:\n"
+        f"{json.dumps(failed_steps[-12:], ensure_ascii=False, indent=2)}"
+    )
+
+
 def validate_tool_call_batch(tool_calls: list[dict[str, Any]] | None) -> dict[str, Any]:
     if not tool_calls:
         raise ProtocolValidationError("missing tool call", RAW_CONTENT_CORRECTION)
@@ -270,7 +328,7 @@ def validate_answer_text_payload(payload: Any, journal: list[dict[str, Any]]) ->
     missing = sorted(required - set(payload))
     if missing:
         raise ProtocolValidationError(f"answer_text missing required fields: {missing}", GROUNDED_CORRECTION)
-    if payload.get("answer_type") not in {"pure_text", "grounded_report", "clarification", "failure"}:
+    if payload.get("answer_type") not in ANSWER_TEXT_TYPES:
         raise ProtocolValidationError("answer_text answer_type is invalid", GROUNDED_CORRECTION)
     if not isinstance(payload.get("text"), str) or not payload.get("text").strip():
         raise ProtocolValidationError("answer_text text must be a non-empty string", GROUNDED_CORRECTION)
@@ -294,10 +352,10 @@ def validate_answer_text_payload(payload: Any, journal: list[dict[str, Any]]) ->
         raise ProtocolValidationError("answer_text self_check.missing_evidence_question must be string", GROUNDED_CORRECTION)
 
     answer_type = payload["answer_type"]
-    if self_check.get("has_sufficient_evidence") is False and answer_type not in {"clarification", "failure"}:
+    if self_check.get("has_sufficient_evidence") is False and answer_type not in {"clarification", "failure", "error_report", "partial_report"}:
         raise ProtocolValidationError("answer_text declares insufficient evidence", INSUFFICIENT_EVIDENCE_CORRECTION)
     requires_basis = (
-        answer_type == "grounded_report"
+        answer_type in {"grounded_report", "partial_report"}
         or bool(self_check.get("depends_on_current_external_state"))
         or bool(self_check.get("claims_completed_action"))
     )

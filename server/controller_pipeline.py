@@ -11,6 +11,7 @@ import httpx
 try:
     from . import database as db  # type: ignore
     from .answer_auditor import audit_answer_payload  # type: ignore
+    from .answer_repair import run_answer_only_repair_turn  # type: ignore
     from .controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from .controller_trust import enforce_trusted_answer  # type: ignore
     from .device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
@@ -44,6 +45,7 @@ try:
 except ImportError:
     import database as db  # type: ignore
     from answer_auditor import audit_answer_payload  # type: ignore
+    from answer_repair import run_answer_only_repair_turn  # type: ignore
     from controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from controller_trust import enforce_trusted_answer  # type: ignore
     from device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
@@ -1642,13 +1644,36 @@ async def run_pipeline_worker(
                 "content": json.dumps(wrap_tool_result_for_llm(commands_log[-1]), ensure_ascii=False)[:4000],
             })
 
+    print("[pipeline/worker] max_iterations reached; attempting answer_text-only repair turn")
+    repair_result = await run_answer_only_repair_turn(
+        client=client,
+        cfg=cfg,
+        model=model,
+        messages=messages,
+        user_request=f"{overall_goal}\n{step_title}",
+        journal=commands_log,
+        chat_completion_request_fn=chat_completion_request_fn,
+        target_device_id=step_device_id,
+        hostname=shared.get("current_hostname") or step_device_id,
+        iteration=PIPELINE_WORKER_MAX_ITERATIONS + 1,
+    )
+    if repair_result.get("ok"):
+        return {
+            "status": "ok",
+            "answer": repair_result["answer"],
+            "commands": commands_log,
+        }
+
     append_tool_step(commands_log, {
         "action": "tool_only_protocol",
         "command": "[system] pipeline_worker_answer",
         "device_id": step_device_id,
         "target_device_id": step_device_id,
         "hostname": shared.get("current_hostname") or step_device_id,
-        "result": {"error": "worker did not choose an answer tool before max_iterations"},
+        "result": {
+            "error": "worker did not choose an answer tool before max_iterations",
+            "repair_reason": repair_result.get("reason"),
+        },
         "status": "failed",
         "tool_type": "system",
         "summary": "worker answer tool missing",

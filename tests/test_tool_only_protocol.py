@@ -72,6 +72,7 @@ def _run_case(
     user_id=None,
     mem_user_id=None,
     device_id="device-1",
+    max_iterations=6,
 ):
     async def _send(device_id, action, params):
         if send_command_fn:
@@ -94,7 +95,7 @@ def _run_case(
         machine_guid=None,
         mem_user_id=mem_user_id,
         non_pipeline_tools=[],
-        max_iterations=6,
+        max_iterations=max_iterations,
         pick_model_fn=lambda cfg, modes: "mock-model",
         chat_completion_request_fn=_completion_fn(responses, captured),
     ))
@@ -323,6 +324,75 @@ def test_memory_list_facts_tool_only_run_uses_current_step_basis(monkeypatch):
     assert all(cmd["tool_name"] not in {"execute_cmd", "device.get_passport"} for cmd in result["commands"])
 
 
+def test_max_iterations_answer_only_repair_returns_grounded_answer():
+    captured = []
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append(action)
+        return {"status": "not_found", "matches": []}
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "Notepad"})]),
+        _message(tool_calls=[_answer_call(
+            "call-repair-answer",
+            "Notepad window was not found.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], send_command_fn=_send, captured=captured, max_iterations=1)
+
+    assert sent == ["window.find"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["window.find", "answer.text"]
+    assert result["commands"][1]["result"]["basis"] == ["step_1"]
+    repair_tools = captured[-1]["tools"]
+    assert [tool["function"]["name"] for tool in repair_tools] == ["answer_text"]
+
+
+def test_max_iterations_repair_rejects_raw_assistant_text():
+    captured = []
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append(action)
+        return {"status": "not_found", "matches": []}
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "Notepad"})]),
+        _message("raw repair answer", tool_calls=None, finish_reason="stop"),
+    ], send_command_fn=_send, captured=captured, max_iterations=1)
+
+    assert sent == ["window.find"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["window.find", "tool_only_protocol"]
+    assert result["commands"][-1]["result"]["repair_reason"].startswith("repair answer invalid")
+    assert [tool["function"]["name"] for tool in captured[-1]["tools"]] == ["answer_text"]
+
+
+def test_max_iterations_repair_can_return_honest_no_evidence_error_report():
+    captured = []
+    payload = {
+        "answer_type": "error_report",
+        "text": "I do not have current-run evidence for this request.",
+        "basis": [],
+        "self_check": {
+            "depends_on_current_external_state": False,
+            "claims_completed_action": False,
+            "has_sufficient_evidence": False,
+            "missing_evidence_question": "No tool result exists in the current run.",
+        },
+    }
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-repair-answer", "answer_text", payload)]),
+    ], captured=captured, max_iterations=0)
+
+    assert result["answer"] == "I do not have current-run evidence for this request."
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["answer.text"]
+    assert result["commands"][0]["result"]["answer_type"] == "error_report"
+    assert result["commands"][0]["result"]["basis"] == []
+    assert [tool["function"]["name"] for tool in captured[-1]["tools"]] == ["answer_text"]
+
+
 def test_auditor_rejects_invalid_answer_and_retry_succeeds():
     captured = []
 
@@ -423,3 +493,66 @@ def test_pipeline_final_raw_summary_rejected_then_answer_text(monkeypatch):
     assert finished == ["completed"]
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text", "answer.text"]
     assert any("Raw assistant content is not allowed" in msg.get("content", "") for msg in captured[-1]["messages"])
+
+
+def test_pipeline_worker_max_iterations_runs_answer_only_repair(monkeypatch):
+    monkeypatch.setattr(controller_pipeline, "PIPELINE_WORKER_MAX_ITERATIONS", 1)
+    final_text = "pipeline final ok"
+    responses = [
+        _message(json.dumps({
+            "goal": "verify task",
+            "steps": [{"title": "run check", "instruction": "run check", "device_id": "device-1"}],
+        }), tool_calls=None, finish_reason="stop"),
+        _message(tool_calls=[_execute_call("call-exec", "echo ok")]),
+        _message(tool_calls=[_answer_call("call-repair-step", "step repaired", answer_type="grounded_report", basis=["step_1"])]),
+        _message(tool_calls=[_answer_call("call-final", final_text, answer_type="grounded_report", basis=["step_1"])]),
+    ]
+    captured = []
+    finished = []
+    step_status = {}
+    sent = []
+
+    monkeypatch.setattr("server.controller_pipeline.db.create_task", lambda **kwargs: 1)
+    monkeypatch.setattr("server.controller_pipeline.db.update_step", lambda task_id, idx, status, summary=None: step_status.__setitem__(idx, status) or True)
+    monkeypatch.setattr("server.controller_pipeline.db.finish_task", lambda task_id, status: finished.append(status) or True)
+    monkeypatch.setattr("server.controller_pipeline.collect_tasks", lambda task_ids: [{
+        "id": 1,
+        "goal": "verify task",
+        "status": finished[-1] if finished else "running",
+        "steps": [{"idx": idx, "status": status} for idx, status in sorted(step_status.items())],
+    }])
+    monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
+    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id: None)
+    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id: "")
+    monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
+
+    async def _send(device_id, action, params):
+        sent.append(action)
+        return {"returncode": 0, "stdout": "ok", "stderr": ""}
+
+    result = asyncio.run(process_pipeline_subagents(
+        user_message="verify task",
+        device_id="device-1",
+        device_info={"hostname": "devbox", "os": "Windows"},
+        all_devices={"device-1": {"info": {"hostname": "devbox", "os": "Windows"}}},
+        send_command_fn=_send,
+        get_file_link_fn=lambda device_id, path: "/api/download/mock",
+        chat_history=[],
+        user_id=1,
+        chat_id=1,
+        device_profile=None,
+        modes={},
+        poll_task_id=None,
+        load_llm_config_fn=lambda: {"model": "mock-model", "max_tokens": 1000, "answer_auditor_enabled": False},
+        pick_model_fn=lambda cfg, modes: "mock-model",
+        chat_completion_request_fn=_completion_fn(responses, captured),
+        worker_tools=[],
+        windows_rules="windows rules",
+        linux_rules="linux rules",
+    ))
+
+    assert result["answer"] == final_text
+    assert sent == ["execute_cmd"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text", "answer.text"]
+    repair_calls = [kwargs for kwargs in captured if [tool["function"]["name"] for tool in (kwargs.get("tools") or [])] == ["answer_text"]]
+    assert repair_calls
