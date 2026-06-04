@@ -9,6 +9,7 @@ Agent Shell v1 — минимальная desktop-обертка для суще
 - открывает существующий Web UI URL;
 - использует `pywebview`, если он установлен и доступен;
 - если WebView недоступен, открывает тот же URL в браузере через `webbrowser.open`;
+- запускает optional tray/status слой, если доступны `pystray` и `Pillow`;
 - не внедряет scripts в сайт;
 - не обходит auth;
 - не хранит пароль, access token или refresh token в shell config.
@@ -115,11 +116,30 @@ WebView недоступен, открываю ИРУ в браузере: <url>
 pip install pywebview
 ```
 
+## Tray dependency
+
+Tray тоже опционален. Если `pystray` или `Pillow` недоступны, Shell пишет понятное сообщение и продолжает работать без tray.
+
+Для desktop-окна и tray:
+
+```bash
+pip install pywebview pystray pillow
+```
+
+Tray menu v1:
+
+- `Открыть ИРУ` — фокусирует WebView window, если это поддерживает текущий backend `pywebview`; иначе открывает URL в браузере.
+- `Открыть в браузере` — всегда открывает текущий `web_url` через браузер.
+- `Настройки` — открывает shell config в Explorer/Finder/file manager, если возможно; иначе печатает путь.
+- `Статус` — показывает или печатает минимальный status: `web_url`, `config_path`, доступность WebView и tray.
+- `Выход` — останавливает tray и закрывает shell window, если это поддерживается.
+
+Если WebView недоступен, но tray доступен, Shell открывает URL в браузере и остается в tray до выхода через menu.
+
 ## Roadmap
 
 Планируется позже, не реализовано в v1:
 
-- tray icon;
 - hotkey / push-to-talk;
 - voice input;
 - overlay;
