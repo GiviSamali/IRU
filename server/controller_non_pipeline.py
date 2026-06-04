@@ -25,6 +25,11 @@ try:
     )
     from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from .tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
+    from .tool_repeat_guard import (  # type: ignore
+        duplicate_read_only_tool_message,
+        find_prior_successful_read_only_tool_step,
+        mark_read_only_tool_step,
+    )
     from .run_journal import (  # type: ignore
         GROUNDED_CORRECTION,
         INSUFFICIENT_EVIDENCE_CORRECTION,
@@ -65,6 +70,11 @@ except ImportError:
     )
     from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
+    from tool_repeat_guard import (  # type: ignore
+        duplicate_read_only_tool_message,
+        find_prior_successful_read_only_tool_step,
+        mark_read_only_tool_step,
+    )
     from run_journal import (  # type: ignore
         GROUNDED_CORRECTION,
         INSUFFICIENT_EVIDENCE_CORRECTION,
@@ -453,10 +463,28 @@ async def process_non_pipeline_command(
 
                 requested_device_id = fn_args.pop("device_id", None)
                 target_device = requested_device_id or device_id
+                repeat_guard_args = dict(fn_args)
+                if requested_device_id:
+                    repeat_guard_args["device_id"] = requested_device_id
                 print(
                     f"[llm] tool_call: {fn_name}({json.dumps(fn_args, ensure_ascii=False)[:250]}) "
                     f"-> device={target_device}"
                 )
+
+                prior_read_only_step = find_prior_successful_read_only_tool_step(commands_log, fn_name, repeat_guard_args)
+                if prior_read_only_step:
+                    duplicate_message = duplicate_read_only_tool_message(fn_name, prior_read_only_step)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": json.dumps(duplicate_message, ensure_ascii=False)[:4000],
+                    })
+                    previous_step_id = duplicate_message["previous_step_id"]
+                    add_correction(
+                        f"You already have current-run evidence from {previous_step_id}. "
+                        "Do not call the same read-only tool again. Call answer_text."
+                    )
+                    continue
 
                 rewrite_error = None
                 if fn_name == "execute_cmd":
@@ -808,6 +836,7 @@ async def process_non_pipeline_command(
                         tool_result,
                         iteration + 1,
                     ))
+                mark_read_only_tool_step(commands_log[-1], fn_name, repeat_guard_args)
                 append_tool_message(tool_call["id"], commands_log[-1])
 
     print("[tool-only] max_iterations reached; attempting answer_text-only repair turn")

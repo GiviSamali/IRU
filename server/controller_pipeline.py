@@ -27,6 +27,11 @@ try:
     )
     from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from .tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
+    from .tool_repeat_guard import (  # type: ignore
+        duplicate_read_only_tool_message,
+        find_prior_successful_read_only_tool_step,
+        mark_read_only_tool_step,
+    )
     from .run_journal import (  # type: ignore
         GROUNDED_CORRECTION,
         ONE_TOOL_CORRECTION,
@@ -61,6 +66,11 @@ except ImportError:
     )
     from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
+    from tool_repeat_guard import (  # type: ignore
+        duplicate_read_only_tool_message,
+        find_prior_successful_read_only_tool_step,
+        mark_read_only_tool_step,
+    )
     from run_journal import (  # type: ignore
         GROUNDED_CORRECTION,
         ONE_TOOL_CORRECTION,
@@ -1275,10 +1285,31 @@ async def run_pipeline_worker(
             fn_args = json.loads(tool_call["function"]["arguments"] or "{}")
             requested_device_id = fn_args.pop("device_id", None)
             target_device = step_device_id
+            repeat_guard_args = dict(fn_args)
+            if requested_device_id:
+                repeat_guard_args["device_id"] = requested_device_id
             print(
                 f"[pipeline/worker] tool_call: {fn_name}"
                 f"({json.dumps(fn_args, ensure_ascii=False)[:250]}) -> device={target_device}"
             )
+
+            prior_read_only_step = find_prior_successful_read_only_tool_step(commands_log, fn_name, repeat_guard_args)
+            if prior_read_only_step:
+                duplicate_message = duplicate_read_only_tool_message(fn_name, prior_read_only_step)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "content": json.dumps(duplicate_message, ensure_ascii=False)[:4000],
+                })
+                previous_step_id = duplicate_message["previous_step_id"]
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"You already have current-run evidence from {previous_step_id}. "
+                        "Do not call the same read-only tool again. Call answer_text."
+                    ),
+                })
+                continue
 
             rewrite_error = None
             if fn_name == "execute_cmd":
@@ -1638,6 +1669,7 @@ async def run_pipeline_worker(
                 or commands_log[-1].get("action") != fn_name
             ):
                 append_step_command(fn_name, f"[tool] {fn_name}", target_device, tool_result)
+            mark_read_only_tool_step(commands_log[-1], fn_name, repeat_guard_args)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call["id"],

@@ -73,6 +73,7 @@ def _run_case(
     mem_user_id=None,
     device_id="device-1",
     max_iterations=6,
+    device_tool_fn=None,
 ):
     async def _send(device_id, action, params):
         if send_command_fn:
@@ -98,6 +99,7 @@ def _run_case(
         max_iterations=max_iterations,
         pick_model_fn=lambda cfg, modes: "mock-model",
         chat_completion_request_fn=_completion_fn(responses, captured),
+        device_tool_fn=device_tool_fn,
     ))
 
 
@@ -322,6 +324,125 @@ def test_memory_list_facts_tool_only_run_uses_current_step_basis(monkeypatch):
     assert result["commands"][0]["step_id"] == "step_1"
     assert result["commands"][1]["result"]["basis"] == ["step_1"]
     assert all(cmd["tool_name"] not in {"execute_cmd", "device.get_passport"} for cmd in result["commands"])
+
+
+def test_duplicate_system_list_tools_is_guarded_then_answer_text(monkeypatch):
+    calls = []
+    captured = []
+
+    def fake_list_tools(category="all"):
+        calls.append(category)
+        return {"system": [{"name": "system.list_tools"}]}
+
+    monkeypatch.setattr(controller_non_pipeline, "list_tools", fake_list_tools)
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-tools-1", "system_list_tools", {})]),
+        _message(tool_calls=[_tool_call("call-tools-2", "system_list_tools", {"category": "all"})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Tool list is available.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], captured=captured)
+
+    assert calls == ["all"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["system.list_tools", "answer.text"]
+    duplicate_messages = [
+        json.loads(msg["content"])
+        for msg in captured[2]["messages"]
+        if msg.get("role") == "tool"
+        and "duplicate_read_only_tool_call" in msg.get("content", "")
+    ]
+    assert duplicate_messages[-1]["previous_step_id"] == "step_1"
+    assert "Call answer_text" in captured[2]["messages"][-1]["content"]
+
+
+def test_duplicate_memory_list_facts_is_guarded_then_answer_text(monkeypatch):
+    calls = []
+
+    def fake_run_memory_tool(tool_name, args, *, user_id):
+        calls.append((tool_name, args, user_id))
+        return {
+            "status": "ok",
+            "source": "server_user_memory",
+            "facts_count": 1,
+            "facts": [{"id": 1, "text": "remembered fact", "source": "user"}],
+        }
+
+    monkeypatch.setattr(controller_non_pipeline, "run_memory_tool", fake_run_memory_tool)
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-memory-1", "memory_list_facts", {})]),
+        _message(tool_calls=[_tool_call("call-memory-2", "memory_list_facts", {"limit": 20})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "There is one remembered fact.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], mem_user_id="user-1")
+
+    assert calls == [("memory_list_facts", {}, "user-1")]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["memory.list_facts", "answer.text"]
+
+
+def test_duplicate_device_get_passport_is_guarded_then_answer_text():
+    calls = []
+
+    async def device_tool_fn(name, args):
+        calls.append((name, args["device_id"]))
+        return {"status": "ok", "device_id": args["device_id"], "hostname": "devbox"}
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-passport-1", "device_get_passport", {})]),
+        _message(tool_calls=[_tool_call("call-passport-2", "device_get_passport", {})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Device passport was read.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], device_tool_fn=device_tool_fn)
+
+    assert calls == [("device_get_passport", "device-1")]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["device.get_passport", "answer.text"]
+
+
+def test_repeat_guard_does_not_block_execute_write_or_window_find():
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append((action, dict(params)))
+        if action == "window.find":
+            return {"status": "not_found", "matches": []}
+        return {"status": "ok", "returncode": 0, "stdout": "ok", "stderr": "", "path": params.get("path")}
+
+    execute_result = _run_case([
+        _message(tool_calls=[_tool_call("call-exec-1", "execute_cmd", {"command": "echo ok"})]),
+        _message(tool_calls=[_tool_call("call-exec-2", "execute_cmd", {"command": "echo ok"})]),
+        _message(tool_calls=[_answer_call("call-answer", "done", answer_type="grounded_report", basis=["step_1", "step_2"])]),
+    ], send_command_fn=_send)
+
+    write_result = _run_case([
+        _message(tool_calls=[_tool_call("call-write-1", "write_content", {"path": "C:/Temp/a.txt", "content": "a"})]),
+        _message(tool_calls=[_tool_call("call-write-2", "write_content", {"path": "C:/Temp/a.txt", "content": "a"})]),
+        _message(tool_calls=[_answer_call("call-answer", "done", answer_type="grounded_report", basis=["step_1", "step_2"])]),
+    ], send_command_fn=_send)
+
+    window_result = _run_case([
+        _message(tool_calls=[_tool_call("call-window-1", "window_find", {"title_contains": "Demo"})]),
+        _message(tool_calls=[_tool_call("call-window-2", "window_find", {"title_contains": "Demo"})]),
+        _message(tool_calls=[_answer_call("call-answer", "done", answer_type="grounded_report", basis=["step_1", "step_2"])]),
+    ], send_command_fn=_send)
+
+    assert [cmd["tool_name"] for cmd in execute_result["commands"]] == ["execute_cmd", "execute_cmd", "answer.text"]
+    assert [cmd["tool_name"] for cmd in write_result["commands"]] == ["write_content", "write_content", "answer.text"]
+    assert [cmd["tool_name"] for cmd in window_result["commands"]] == ["window.find", "window.find", "answer.text"]
+    assert [action for action, _ in sent].count("execute_cmd") == 2
+    assert [action for action, _ in sent].count("write_content") == 2
+    assert [action for action, _ in sent].count("window.find") == 2
 
 
 def test_max_iterations_answer_only_repair_returns_grounded_answer():
