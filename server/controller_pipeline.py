@@ -24,6 +24,7 @@ try:
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
+    from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from .tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
     from .run_journal import (  # type: ignore
         GROUNDED_CORRECTION,
@@ -56,6 +57,7 @@ except ImportError:
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
+    from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
     from run_journal import (  # type: ignore
         GROUNDED_CORRECTION,
@@ -117,6 +119,7 @@ STEP_STATES = {"pending", "running", "done", "failed", "recovered", "skipped", "
 TASK_STATES = {"running", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}
 PIPELINE_TERMINAL_TOOL_NAMES = {"answer_text", "answer_report_failure"}
 PIPELINE_DEVICE_TOOL_NAMES = {"device_refresh_state", "device_check_runtime", "device_prepare_runtime"}
+PIPELINE_MEMORY_TOOL_NAMES = MEMORY_TOOL_NAMES
 PIPELINE_APP_WINDOW_ACTIONS = {
     "window_list": "window.list",
     "window_find": "window.find",
@@ -130,6 +133,7 @@ PIPELINE_APP_WINDOW_ACTIONS = {
 PIPELINE_WORKER_HANDLED_TOOL_NAMES = (
     PIPELINE_TERMINAL_TOOL_NAMES
     | PIPELINE_DEVICE_TOOL_NAMES
+    | PIPELINE_MEMORY_TOOL_NAMES
     | set(PIPELINE_APP_WINDOW_ACTIONS)
     | {"execute_cmd", "write_content", "get_file_link", "web_search", "remember_fact", "forget_fact"}
 )
@@ -1267,7 +1271,7 @@ async def run_pipeline_worker(
         for tool_call in tool_calls:
             fn_name = tool_call["function"]["name"]
             fn_args = json.loads(tool_call["function"]["arguments"] or "{}")
-            fn_args.pop("device_id", None)
+            requested_device_id = fn_args.pop("device_id", None)
             target_device = step_device_id
             print(
                 f"[pipeline/worker] tool_call: {fn_name}"
@@ -1334,7 +1338,24 @@ async def run_pipeline_worker(
                 })
                 continue
 
-            if fn_name == "execute_cmd":
+            if fn_name in PIPELINE_MEMORY_TOOL_NAMES:
+                set_current_step(poll_task_id, "Checking memory")
+                memory_args = dict(fn_args)
+                if requested_device_id:
+                    memory_args["device_id"] = requested_device_id
+                tool_result = run_memory_tool(
+                    fn_name,
+                    memory_args,
+                    user_id=mem_user_id,
+                )
+                append_step_command(
+                    fn_name,
+                    f"[tool] {fn_name}",
+                    None,
+                    tool_result,
+                )
+
+            elif fn_name == "execute_cmd":
                 set_current_step(poll_task_id, f"Исполняю шаг: {step.get('title', '')[:60]}")
                 is_long_running = fn_args.pop("long_running", False)
                 try:

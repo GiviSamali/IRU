@@ -10,7 +10,7 @@ from server.controller_shared import (
     build_recent_artifact_context,
     format_recent_artifact_context_block,
 )
-from server.tool_registry import compact_device_passport, list_tools, tool_log_entry
+from server.tool_registry import canonical_tool_name, compact_device_passport, list_tools, tool_log_entry
 
 
 def _tool_call(name: str, args: dict | None = None) -> dict:
@@ -76,11 +76,13 @@ def test_system_list_tools_returns_compact_grouped_tools():
     registry = list_tools("all")
 
     assert "device" in registry
+    assert "memory" in registry
     assert "python" in registry
     assert "window" in registry
     assert "app" in registry
     assert "fallback" in registry
     assert any(tool["name"] == "device.refresh_state" for tool in registry["device"])
+    assert any(tool["name"] == "memory.list_facts" for tool in registry["memory"])
     assert any(tool["name"] == "device.prepare_runtime" for tool in registry["python"])
     assert any(tool["name"] == "window.verify" for tool in registry["window"])
     assert any(tool["name"] == "app.launch" for tool in registry["app"])
@@ -238,6 +240,24 @@ def test_runtime_tools_call_callback_and_log_compact_summary():
     assert prepare["commands"][0]["summary"] == "runtime=ok"
 
 
+def test_memory_tool_log_entry_is_compact_and_typed():
+    entry = tool_log_entry(
+        "memory_list_facts",
+        {
+            "status": "ok",
+            "source": "server_user_memory",
+            "facts_count": 2,
+            "facts": [{"text": "x" * 500}],
+        },
+    )
+
+    assert canonical_tool_name("memory_list_facts") == "memory.list_facts"
+    assert entry["tool_name"] == "memory.list_facts"
+    assert entry["tool_type"] == "typed"
+    assert entry["summary"] == "facts=2"
+    assert "x" * 100 not in entry["summary"]
+
+
 def test_non_pipeline_uses_freshly_prepared_runtime_for_following_execute_cmd():
     sent = []
     venv_python = r"C:\Users\tester\AppData\Local\IRU\runtime\venv\Scripts\python.exe"
@@ -335,6 +355,8 @@ def test_pipeline_worker_toolset_exposes_demo_typed_tools_without_planner_tools(
     names = {tool["function"]["name"] for tool in WORKER_TOOLS}
 
     assert "system_list_tools" not in names
+    assert "memory_get_stats" in names
+    assert "memory_list_facts" in names
     assert "device_get_passport" not in names
     assert "device_activate" not in names
     assert "device_repair_activation" not in names

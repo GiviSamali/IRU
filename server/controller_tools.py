@@ -216,6 +216,8 @@ NON_PIPELINE_TOOLS = [
 ]
 
 WORKER_TOOL_NAMES = {
+    "memory_get_stats",
+    "memory_list_facts",
     "device_refresh_state",
     "device_check_runtime",
     "device_prepare_runtime",

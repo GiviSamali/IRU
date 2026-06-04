@@ -62,7 +62,17 @@ def _message(content="", tool_calls=None, finish_reason="tool_calls"):
     return {"choices": [{"finish_reason": finish_reason, "message": msg}]}
 
 
-def _run_case(responses, *, send_command_fn=None, captured=None, chat_history=None, cfg=None):
+def _run_case(
+    responses,
+    *,
+    send_command_fn=None,
+    captured=None,
+    chat_history=None,
+    cfg=None,
+    user_id=None,
+    mem_user_id=None,
+    device_id="device-1",
+):
     async def _send(device_id, action, params):
         if send_command_fn:
             return await send_command_fn(device_id, action, params)
@@ -70,19 +80,19 @@ def _run_case(responses, *, send_command_fn=None, captured=None, chat_history=No
 
     return asyncio.run(process_non_pipeline_command(
         user_message="Задача",
-        device_id="device-1",
+        device_id=device_id,
         device_info={"hostname": "devbox", "os": "Windows"},
         send_command_fn=_send,
         get_file_link_fn=lambda device_id, path: "/api/download/mock",
         chat_history=chat_history or [],
-        user_id=None,
+        user_id=user_id,
         chat_id=None,
         modes={},
         poll_task_id=None,
         cfg=cfg or {"model": "mock-model", "max_tokens": 512, "answer_auditor_enabled": False},
         system_msg="system",
         machine_guid=None,
-        mem_user_id=None,
+        mem_user_id=mem_user_id,
         non_pipeline_tools=[],
         max_iterations=6,
         pick_model_fn=lambda cfg, modes: "mock-model",
@@ -268,6 +278,49 @@ def test_tool_registry_answer_tools_exist_and_canonical_names_map():
     assert {"answer.text", "answer.ask_clarification", "answer.report_failure", "answer.request_confirmation"} <= names
     assert canonical_tool_name("answer_text") == "answer.text"
     assert canonical_tool_name("answer_report_failure") == "answer.report_failure"
+
+
+def test_tool_registry_memory_tools_exist_and_canonical_names_map():
+    tools = list_tools("memory")
+    names = {tool["name"] for tool in tools["memory"]}
+
+    assert {"memory.get_stats", "memory.list_facts"} <= names
+    assert canonical_tool_name("memory_get_stats") == "memory.get_stats"
+    assert canonical_tool_name("memory_list_facts") == "memory.list_facts"
+
+
+def test_memory_list_facts_tool_only_run_uses_current_step_basis(monkeypatch):
+    calls = []
+
+    def fake_run_memory_tool(tool_name, args, *, user_id):
+        calls.append((tool_name, args, user_id))
+        return {
+            "status": "ok",
+            "source": "server_user_memory",
+            "facts_count": 1,
+            "facts": [{"id": 7, "text": "likes typed tools", "category": "preference", "source": "user"}],
+        }
+
+    async def _send(device_id, action, params):
+        raise AssertionError("memory tools must not call device command execution")
+
+    monkeypatch.setattr(controller_non_pipeline, "run_memory_tool", fake_run_memory_tool)
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-memory", "memory_list_facts", {"limit": 10})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "В памяти 1 факт: likes typed tools.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], send_command_fn=_send, mem_user_id="user-1", device_id="")
+
+    assert calls == [("memory_list_facts", {"limit": 10}, "user-1")]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["memory.list_facts", "answer.text"]
+    assert result["commands"][0]["step_id"] == "step_1"
+    assert result["commands"][1]["result"]["basis"] == ["step_1"]
+    assert all(cmd["tool_name"] not in {"execute_cmd", "device.get_passport"} for cmd in result["commands"])
 
 
 def test_auditor_rejects_invalid_answer_and_retry_succeeds():

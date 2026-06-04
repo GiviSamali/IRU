@@ -22,6 +22,7 @@ try:
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
+    from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from .tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
     from .run_journal import (  # type: ignore
         GROUNDED_CORRECTION,
@@ -60,6 +61,7 @@ except ImportError:
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
+    from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
     from run_journal import (  # type: ignore
         GROUNDED_CORRECTION,
@@ -498,6 +500,8 @@ async def process_non_pipeline_command(
                     set_current_step(poll_task_id, f"Ищу в интернете: {query}")
                 elif fn_name == "system_list_tools":
                     set_current_step(poll_task_id, "Checking tool registry")
+                elif fn_name in MEMORY_TOOL_NAMES:
+                    set_current_step(poll_task_id, "Checking memory")
                 elif fn_name.startswith("device_"):
                     set_current_step(poll_task_id, "Running device tool")
                 elif fn_name.startswith("window_"):
@@ -520,6 +524,24 @@ async def process_non_pipeline_command(
                         command="[tool] system.list_tools",
                         target_device_id=target_device,
                         hostname=device_info.get("hostname") or target_device,
+                        iteration=iteration + 1,
+                    ))
+
+                elif fn_name in MEMORY_TOOL_NAMES:
+                    memory_args = dict(fn_args)
+                    if requested_device_id:
+                        memory_args["device_id"] = requested_device_id
+                    tool_result = run_memory_tool(
+                        fn_name,
+                        memory_args,
+                        user_id=mem_user_id or user_id,
+                    )
+                    append_entry(tool_log_entry(
+                        fn_name,
+                        tool_result,
+                        command=f"[tool] {fn_name}",
+                        target_device_id=None,
+                        hostname=None,
                         iteration=iteration + 1,
                     ))
 

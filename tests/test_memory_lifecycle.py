@@ -98,6 +98,44 @@ def test_memory_facts_api_does_not_delete_other_users_fact(client):
     assert [fact["fact_text"] for fact in get_user_facts(str(other["id"]))] == ["other private fact"]
 
 
+def test_memory_list_facts_tool_returns_only_current_user_facts(client):
+    from server.database import add_user_fact
+    from server.memory_tools import run_memory_tool
+
+    user, _ = _create_and_login_user(client, "memory-tool-owner")
+    other, _ = _create_and_login_user(client, "memory-tool-other")
+    owner_fact_id = add_user_fact(str(user["id"]), "owner private fact", "preference")
+    add_user_fact(str(other["id"]), "other private fact", "private")
+
+    result = run_memory_tool("memory_list_facts", {"limit": 20}, user_id=str(user["id"]))
+
+    assert result["status"] == "ok"
+    assert result["facts_count"] == 1
+    assert result["facts"] == [{
+        "id": owner_fact_id,
+        "text": "owner private fact",
+        "category": "preference",
+        "source": "user",
+        "created_at": result["facts"][0]["created_at"],
+    }]
+
+
+def test_memory_get_stats_tool_works_without_connected_device(client):
+    from server.database import add_user_fact
+    from server.memory_tools import run_memory_tool
+
+    user, _ = _create_and_login_user(client, "memory-tool-no-device")
+    add_user_fact(str(user["id"]), "works without agent", "capability")
+
+    result = run_memory_tool("memory_get_stats", {}, user_id=str(user["id"]))
+
+    assert result == {
+        "status": "ok",
+        "source": "server_user_memory",
+        "facts_count": 1,
+    }
+
+
 def test_legacy_device_memory_fact_delete_unpins_from_memory_stats(client):
     from server.database import add_fact, get_memory_stats
 

@@ -11,6 +11,8 @@ except ImportError:
 
 CANONICAL_TOOL_NAMES = {
     "system_list_tools": "system.list_tools",
+    "memory_get_stats": "memory.get_stats",
+    "memory_list_facts": "memory.list_facts",
     "device_get_passport": "device.get_passport",
     "device_refresh_state": "device.refresh_state",
     "device_activate": "device.activate",
@@ -43,6 +45,32 @@ TOOL_METADATA = {
         "purpose": "List available typed tools grouped by category",
         "when_to_use": ["need available capabilities", "before choosing a tool"],
         "returns": "compact grouped tool registry",
+        "danger": "safe",
+    },
+    "memory.get_stats": {
+        "category": "memory",
+        "tool_type": "typed",
+        "tool_label": "Memory stats",
+        "purpose": "Read count of saved user memory facts from server-side memory",
+        "when_to_use": [
+            "user asks how many facts are saved in memory",
+            "need current user memory count",
+            "memory question that does not require device state",
+        ],
+        "returns": "facts_count for the current authenticated user",
+        "danger": "safe",
+    },
+    "memory.list_facts": {
+        "category": "memory",
+        "tool_type": "typed",
+        "tool_label": "Memory facts",
+        "purpose": "List saved user memory facts from server-side memory",
+        "when_to_use": [
+            "user asks what IRU remembers",
+            "need current user memory facts",
+            "memory question that does not require device passport, local files, or shell",
+        ],
+        "returns": "compact facts list for the current authenticated user",
         "danger": "safe",
     },
     "device.get_passport": {
@@ -262,8 +290,36 @@ DEVICE_TOOL_SCHEMAS = [
                 "properties": {
                     "category": {
                         "type": "string",
-                        "enum": ["all", "device", "files", "python", "window", "app", "artifact", "answer"],
+                        "enum": ["all", "system", "memory", "device", "files", "python", "window", "app", "artifact", "answer"],
                         "default": "all",
+                    }
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "memory_get_stats",
+            "description": "Get count of saved memory facts for the current authenticated user. This is server-side and works without a connected device. Use for memory count questions instead of device_get_passport or execute_cmd.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "memory_list_facts",
+            "description": "List saved memory facts for the current authenticated user. This is server-side and works without a connected device. Use for questions about what IRU remembers instead of device_get_passport, local files, or execute_cmd.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum facts to return. Defaults to 20, maximum 100.",
+                        "default": 20,
                     }
                 },
             },
@@ -687,6 +743,11 @@ def compact_tool_summary(action: str, result: Any = None, command: str = "") -> 
             return "; ".join(bits)
         if name == "device.get_passport":
             return f"passport={result.get('device_id') or 'device'}"
+        if name.startswith("memory."):
+            count = result.get("facts_count")
+            if count is not None:
+                return f"facts={count}"
+            return f"memory={result.get('status') or 'unknown'}"
         if name == "write_content":
             path = result.get("path") or result.get("file_path") or ""
             return f"file written: {path}" if path else "file write completed"
