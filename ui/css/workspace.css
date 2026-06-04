@@ -22,8 +22,14 @@
 
 /* Device Passport */
 .device-passport-panel {
-  width: 320px; min-width: 320px; max-width: 320px;
-  border-left: 1px solid var(--border); background: var(--bg-secondary);
+  width: 0; min-width: 0; max-width: 0;
+  border-left: 0; background: var(--bg-secondary);
+  overflow: hidden; padding: 0;
+  transition: width 0.22s ease, min-width 0.22s ease, max-width 0.22s ease, padding 0.22s ease;
+}
+.device-passport-panel.expanded {
+  width: 340px; min-width: 340px; max-width: 340px;
+  border-left: 1px solid var(--border);
   overflow-y: auto; padding: 12px;
 }
 .device-passport-panel::-webkit-scrollbar { width: 6px; }
@@ -32,8 +38,14 @@
 .device-passport-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .device-passport-title { font-size: 15px; font-weight: 600; color: var(--text-primary); overflow-wrap: anywhere; }
 .device-passport-subtitle { margin-top: 3px; font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+.device-passport-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .device-passport-dot { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
 .device-passport-dot.online { background: var(--success); box-shadow: 0 0 6px var(--success); }
+.device-passport-close {
+  border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-secondary);
+  border-radius: var(--radius-sm); padding: 5px 8px; font: 10px var(--font); cursor: pointer;
+}
+.device-passport-close:hover { border-color: var(--accent-dim); color: var(--accent); }
 .device-passport-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .device-passport-btn {
   border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-secondary);
@@ -77,15 +89,24 @@
 
 @media (max-width: 980px) {
   .content { min-height: 0; overflow: hidden; }
-  .chat-view { order: 2; flex: 1 1 auto; min-height: 0; }
+  .chat-view { flex: 1 1 auto; min-height: 0; }
   .device-passport-panel {
-    order: 1;
-    width: 100%; min-width: 0; max-width: none;
-    max-height: min(30dvh, 220px);
-    border-left: 0; border-top: 1px solid var(--border);
-    padding: 10px;
-    flex: 0 0 auto;
+    position: absolute;
+    top: 0; right: 0; bottom: 0;
+    width: min(380px, 92vw); min-width: 0; max-width: 92vw;
+    border-left: 1px solid var(--border); border-top: 0;
+    padding: 12px;
+    transform: translateX(100%);
+    transition: transform 0.22s ease;
+    z-index: 170;
+    box-shadow: -18px 0 40px rgba(0,0,0,0.35);
     overscroll-behavior: contain;
+  }
+  .device-passport-panel.expanded {
+    width: min(380px, 92vw); min-width: 0; max-width: 92vw;
+    transform: translateX(0);
+    padding: 12px;
+    overflow-y: auto;
   }
   .device-passport-head { margin-bottom: 8px; }
   .device-passport-actions {
@@ -109,9 +130,10 @@
 @media (max-width: 520px) {
   .chat-messages { padding: 10px; gap: 10px; }
   .device-passport-panel {
-    max-height: min(24dvh, 170px);
-    padding: 8px 10px;
+    width: 100%; max-width: 100%;
+    padding: 10px;
   }
+  .device-passport-panel.expanded { width: 100%; max-width: 100%; padding: 10px; }
   .device-passport-title { font-size: 13px; }
   .device-passport-subtitle { font-size: 10px; }
   .device-passport-actions {
@@ -146,16 +168,6 @@
   .device-passport-uptime { font-size: 10px; }
 }
 
-@media (max-width: 768px) {
-  .device-passport-panel {
-    display: none;
-    max-height: min(42dvh, 320px);
-    overflow-y: auto;
-  }
-  .device-passport-panel.expanded {
-    display: block;
-  }
-}
 .hints { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 6px; }
 .hint-chip {
   padding: 6px 12px; background: var(--bg-tertiary);
@@ -533,6 +545,43 @@
 }
 .btn-header-link:hover { border-color: var(--accent-dim); color: var(--accent); background: var(--accent-glow); }
 .btn-header-link svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+.device-compact-status {
+  display: flex; align-items: center; gap: 5px; min-width: 0; flex-shrink: 1;
+}
+.device-compact-connection {
+  font-size: 9px; color: var(--text-muted); text-transform: uppercase; white-space: nowrap;
+}
+.device-compact-connection.online { color: var(--success); }
+.device-compact-connection.offline { color: var(--text-muted); }
+.device-compact-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  max-width: 130px; min-width: 0; padding: 3px 6px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-secondary); font-size: 9px; white-space: nowrap;
+}
+.device-compact-badge.ok { color: var(--success); border-color: rgba(34,197,94,0.35); }
+.device-compact-badge.warning { color: #fbbf24; border-color: rgba(251,191,36,0.35); }
+.device-compact-badge.critical { color: var(--error); border-color: rgba(239,68,68,0.35); }
+.device-compact-prefix { flex-shrink: 0; color: currentColor; opacity: 0.9; }
+.device-compact-value {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: currentColor; opacity: 0.85;
+}
+.device-passport-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 30px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-tertiary); color: var(--text-secondary);
+  font: 11px var(--font); cursor: pointer; white-space: nowrap; flex-shrink: 0;
+}
+.device-passport-toggle:hover,
+.device-passport-toggle.active {
+  border-color: var(--accent-dim); color: var(--accent); background: var(--accent-glow);
+}
+.device-passport-toggle:disabled {
+  opacity: 0.45; cursor: default; color: var(--text-muted); background: var(--bg-tertiary);
+}
 
 /* Task status indicator on messages */
 .msg-status {

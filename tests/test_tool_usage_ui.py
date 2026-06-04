@@ -40,6 +40,11 @@ def test_chat_live_status_uses_safe_status_contract():
 def test_device_passport_buttons_show_used_typed_tools():
     source = (ROOT / "ui" / "js" / "devices.js").read_text(encoding="utf-8")
 
+    assert "Паспорт" in source
+    assert "device-passport-toggle" in source
+    assert "function renderSelectedDeviceHeader" in source
+    assert "device-passport-section-title" in source
+    assert "data-action=\"passport-close\"" in source
     assert "Использован инструмент: device.refresh_state" in source
     assert "Использован инструмент: device.activate" in source
     assert "Использован инструмент: device.repair_activation" in source

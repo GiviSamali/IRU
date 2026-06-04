@@ -221,6 +221,11 @@
   .input-device-dropdown { min-width: 180px; }
   .device-indicator { font-size: 10px; padding: 4px 6px; gap: 4px; }
   .device-indicator #deviceLabel { max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .device-compact-status { gap: 4px; }
+  .device-compact-connection { display: none; }
+  .device-compact-badge { max-width: none; padding: 3px 5px; }
+  .device-compact-value { display: none; }
+  .device-passport-toggle { height: 30px; padding: 0 8px; font-size: 10px; }
 
   .msg { max-width: 95%; }
   .msg-body { font-size: 12px; padding: 8px 10px; }
@@ -1003,10 +1008,4 @@ img[src*="iru_logo"] {
     justify-content: center;
   }
   .mobile-plus-popover.show { display: block; }
-}
-
-.passport-toggle { display: none; }
-
-@media (max-width: 768px) {
-  .passport-toggle { display: flex; }
 }
