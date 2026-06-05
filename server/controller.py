@@ -43,6 +43,7 @@ try:
     )
     from .controller_tools import TOOLSET_REGISTRY  # type: ignore
     from .device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
+    from .llm_usage import extract_usage, record_llm_usage_event  # type: ignore
     from .python_toolchain import build_python_toolchain_block, get_cached_python_toolchain  # type: ignore
 except ImportError:
     from controller_non_pipeline import process_non_pipeline_command as _process_non_pipeline_command  # type: ignore
@@ -67,6 +68,7 @@ except ImportError:
     )
     from controller_tools import TOOLSET_REGISTRY  # type: ignore
     from device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
+    from llm_usage import extract_usage, record_llm_usage_event  # type: ignore
     from python_toolchain import build_python_toolchain_block, get_cached_python_toolchain  # type: ignore
 import asyncio
 import httpx
@@ -129,8 +131,25 @@ async def classify_task_complexity(message: str) -> tuple[str, str]:
             )
             resp.raise_for_status()
             data = resp.json()
+            record_llm_usage_event(
+                usage_context={"route": "classification", "phase": "classify_task_complexity"},
+                model="deepseek-chat",
+                usage=extract_usage(data),
+                cfg=cfg,
+                request_ok=True,
+                phase="classify_task_complexity",
+            )
         answer = (data["choices"][0]["message"].get("content") or "").strip()
     except Exception as exc:
+        record_llm_usage_event(
+            usage_context={"route": "classification", "phase": "classify_task_complexity"},
+            model="deepseek-chat",
+            cfg=cfg if "cfg" in locals() else None,
+            request_ok=False,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            phase="classify_task_complexity",
+        )
         logger.warning("[classify] LLM error, fallback to SIMPLE: %s", exc)
         return ("SIMPLE", "")
 
@@ -190,6 +209,8 @@ async def _chat_completion_request(
     tools: list[dict] | None = None,
     max_tokens: int | None = None,
     tool_choice: str | dict | None = None,
+    usage_context: dict | None = None,
+    phase: str | None = None,
 ) -> dict:
     """Единая обёртка для вызова chat/completions с ретраями."""
     request_json = {
@@ -209,6 +230,7 @@ async def _chat_completion_request(
         request_json["temperature"] = cfg.get("temperature", 0.0)
 
     resp = None
+    last_error: Exception | None = None
     for _attempt in range(2):
         try:
             resp = await client.post(
@@ -222,6 +244,7 @@ async def _chat_completion_request(
             resp.raise_for_status()
             break
         except httpx.HTTPStatusError as _he:
+            last_error = _he
             if (
                 _he.response.status_code == 400
                 and request_json.get("tool_choice") == "required"
@@ -244,21 +267,76 @@ async def _chat_completion_request(
                     )
                     resp.raise_for_status()
                     break
-                except httpx.HTTPStatusError:
+                except httpx.HTTPStatusError as fallback_error:
+                    last_error = fallback_error
+                    record_llm_usage_event(
+                        usage_context=usage_context,
+                        model=model,
+                        cfg=cfg,
+                        request_ok=False,
+                        error_type=type(fallback_error).__name__,
+                        error_message=fallback_error.response.text,
+                        phase=phase,
+                    )
                     raise
             if _he.response.status_code >= 500 and _attempt == 0:
                 print(f"[llm] 5xx retry: {_he.response.status_code}")
                 await asyncio.sleep(2)
                 continue
+            record_llm_usage_event(
+                usage_context=usage_context,
+                model=model,
+                cfg=cfg,
+                request_ok=False,
+                error_type=type(_he).__name__,
+                error_message=_he.response.text,
+                phase=phase,
+            )
             raise
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as _ne:
+            last_error = _ne
             if _attempt == 0:
                 print(f"[llm] network retry: {type(_ne).__name__}")
                 await asyncio.sleep(2)
                 continue
+            record_llm_usage_event(
+                usage_context=usage_context,
+                model=model,
+                cfg=cfg,
+                request_ok=False,
+                error_type=type(_ne).__name__,
+                error_message=str(_ne),
+                phase=phase,
+            )
+            raise
+        except Exception as exc:
+            last_error = exc
+            record_llm_usage_event(
+                usage_context=usage_context,
+                model=model,
+                cfg=cfg,
+                request_ok=False,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                phase=phase,
+            )
             raise
 
-    return resp.json()
+    try:
+        data = resp.json()
+        record_llm_usage_event(
+            usage_context=usage_context,
+            model=model,
+            usage=extract_usage(data),
+            cfg=cfg,
+            request_ok=True,
+            phase=phase,
+        )
+        return data
+    except Exception as exc:
+        if isinstance(exc, (httpx.HTTPError, RuntimeError)):
+            raise
+        raise
 
 
 def _get_toolset(name: str | None) -> list[dict] | None:
@@ -546,6 +624,12 @@ async def process_nl_command(
         chat_history=chat_history,
     )
     route = _select_llm_route(modes)
+    usage_context = {
+        "user_id": user_id,
+        "chat_id": chat_id,
+        "poll_task_id": poll_task_id,
+        "route": route.name,
+    }
     route_kwargs = _build_route_kwargs(
         route=route,
         runtime=runtime,
@@ -563,6 +647,7 @@ async def process_nl_command(
         poll_task_id=poll_task_id,
         device_tool_fn=device_tool_fn,
     )
+    route_kwargs["usage_context"] = usage_context
     return await route.executor(**route_kwargs)
 
 

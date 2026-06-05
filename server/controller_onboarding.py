@@ -3,9 +3,11 @@ import httpx
 try:
     from .controller_prompts import INSTRUCTION_TEXT, ONBOARDING_PROMPT  # type: ignore
     from .controller_shared import build_chat_messages  # type: ignore
+    from .llm_usage import extract_usage, record_llm_usage_event  # type: ignore
 except ImportError:
     from controller_prompts import INSTRUCTION_TEXT, ONBOARDING_PROMPT  # type: ignore
     from controller_shared import build_chat_messages  # type: ignore
+    from llm_usage import extract_usage, record_llm_usage_event  # type: ignore
 
 
 async def process_onboarding_message(
@@ -34,22 +36,42 @@ async def process_onboarding_message(
 
     messages.append({"role": "user", "content": user_message})
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
-        resp = await client.post(
-            f"{cfg['base_url']}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {cfg['api_key']}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": cfg["model"],
-                "messages": messages,
-                "max_tokens": cfg.get("max_tokens", 4096),
-                "temperature": cfg.get("temperature", 0.0),
-            },
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+            resp = await client.post(
+                f"{cfg['base_url']}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {cfg['api_key']}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": cfg["model"],
+                    "messages": messages,
+                    "max_tokens": cfg.get("max_tokens", 4096),
+                    "temperature": cfg.get("temperature", 0.0),
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            record_llm_usage_event(
+                usage_context={"route": "onboarding", "phase": "onboarding"},
+                model=cfg.get("model"),
+                usage=extract_usage(data),
+                cfg=cfg,
+                request_ok=True,
+                phase="onboarding",
+            )
+    except Exception as exc:
+        record_llm_usage_event(
+            usage_context={"route": "onboarding", "phase": "onboarding"},
+            model=cfg.get("model"),
+            cfg=cfg,
+            request_ok=False,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            phase="onboarding",
         )
-        resp.raise_for_status()
-        data = resp.json()
+        raise
 
     answer = data["choices"][0]["message"].get("content", "")
     return {"answer": answer, "commands": []}

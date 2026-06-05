@@ -48,6 +48,7 @@ async def run_answer_only_repair_turn(
     target_device_id: str | None = None,
     hostname: str | None = None,
     iteration: int | None = None,
+    usage_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     repair_prompt = build_terminal_answer_repair_prompt(user_request, journal)
     repair_messages = list(messages) + [{"role": "user", "content": repair_prompt}]
@@ -60,6 +61,8 @@ async def run_answer_only_repair_turn(
             tools=ANSWER_TEXT_ONLY_TOOLS,
             max_tokens=cfg.get("max_tokens", 4096),
             tool_choice="required",
+            usage_context=usage_context,
+            phase=(usage_context or {}).get("phase") or "answer_repair",
         )
     except Exception as exc:
         return {"ok": False, "reason": f"repair request failed: {type(exc).__name__}: {exc}"}
@@ -84,6 +87,7 @@ async def run_answer_only_repair_turn(
         user_request=user_request,
         current_run_journal=journal,
         answer_payload=answer_payload,
+        usage_context={**(usage_context or {}), "phase": f"{(usage_context or {}).get('phase') or 'answer_repair'}.auditor"},
     )
     if audit_infra_error:
         journal.append(make_run_step(

@@ -191,6 +191,39 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_user_memory_user_created
                 ON user_memory(user_id, created_at DESC);
 
+            CREATE TABLE IF NOT EXISTS llm_usage_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at REAL NOT NULL,
+                user_id INTEGER,
+                chat_id INTEGER,
+                task_id TEXT,
+                poll_task_id TEXT,
+                route TEXT,
+                phase TEXT,
+                provider TEXT DEFAULT 'deepseek',
+                model TEXT,
+                prompt_tokens INTEGER DEFAULT 0,
+                completion_tokens INTEGER DEFAULT 0,
+                total_tokens INTEGER DEFAULT 0,
+                cache_hit_tokens INTEGER DEFAULT 0,
+                cache_miss_tokens INTEGER DEFAULT 0,
+                reasoning_tokens INTEGER DEFAULT 0,
+                estimated_cost_usd REAL DEFAULT 0.0,
+                request_ok INTEGER DEFAULT 1,
+                error_type TEXT,
+                error_message TEXT,
+                metadata TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_llm_usage_user_created
+                ON llm_usage_events(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_llm_usage_chat_created
+                ON llm_usage_events(chat_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_llm_usage_task_created
+                ON llm_usage_events(task_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_llm_usage_poll_task_created
+                ON llm_usage_events(poll_task_id, created_at DESC);
+
             -- миграция: добавить agent_version если не существует
         """)
         try:
@@ -1102,6 +1135,172 @@ def delete_memory_fact(user_id: str, fact_id: int, source: str, machine_guid: st
         )
         return cur.rowcount > 0
 
+
+# ── LLM usage ledger ─────────────────────────────────────────────────────────
+
+def add_llm_usage_event(
+    *,
+    user_id: int | None = None,
+    chat_id: int | None = None,
+    task_id: str | None = None,
+    poll_task_id: str | None = None,
+    route: str | None = None,
+    phase: str | None = None,
+    provider: str | None = "deepseek",
+    model: str | None = None,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    total_tokens: int = 0,
+    cache_hit_tokens: int = 0,
+    cache_miss_tokens: int = 0,
+    reasoning_tokens: int = 0,
+    estimated_cost_usd: float = 0.0,
+    request_ok: bool = True,
+    error_type: str | None = None,
+    error_message: str | None = None,
+    metadata: dict | str | None = None,
+) -> int | None:
+    """Store one LLM usage event. Failure must never break user requests."""
+    try:
+        if isinstance(metadata, dict):
+            metadata_text = json.dumps(metadata, ensure_ascii=False)[:1000]
+        elif metadata is None:
+            metadata_text = None
+        else:
+            metadata_text = str(metadata)[:1000]
+        with get_db() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO llm_usage_events (
+                    created_at, user_id, chat_id, task_id, poll_task_id, route, phase,
+                    provider, model, prompt_tokens, completion_tokens, total_tokens,
+                    cache_hit_tokens, cache_miss_tokens, reasoning_tokens,
+                    estimated_cost_usd, request_ok, error_type, error_message, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    time.time(),
+                    user_id,
+                    chat_id,
+                    task_id,
+                    poll_task_id,
+                    route,
+                    phase,
+                    provider or "deepseek",
+                    model,
+                    int(prompt_tokens or 0),
+                    int(completion_tokens or 0),
+                    int(total_tokens or 0),
+                    int(cache_hit_tokens or 0),
+                    int(cache_miss_tokens or 0),
+                    int(reasoning_tokens or 0),
+                    float(estimated_cost_usd or 0.0),
+                    1 if request_ok else 0,
+                    error_type,
+                    (error_message or "")[:500] if error_message else None,
+                    metadata_text,
+                ),
+            )
+            return int(cur.lastrowid)
+    except Exception as exc:
+        print(f"[llm-usage] warning: failed to insert usage event: {exc}")
+        return None
+
+
+def _usage_window_start(period: str) -> float | None:
+    now = datetime.now()
+    if period == "today":
+        return datetime(now.year, now.month, now.day).timestamp()
+    if period == "month":
+        return datetime(now.year, now.month, 1).timestamp()
+    return None
+
+
+def _empty_usage_summary() -> dict:
+    return {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cache_hit_tokens": 0,
+        "cache_miss_tokens": 0,
+        "reasoning_tokens": 0,
+        "estimated_cost_usd": 0.0,
+        "llm_calls": 0,
+        "failed_calls": 0,
+    }
+
+
+def _summary_from_row(row) -> dict:
+    summary = _empty_usage_summary()
+    if not row:
+        return summary
+    summary.update({
+        "prompt_tokens": int(row["prompt_tokens"] or 0),
+        "completion_tokens": int(row["completion_tokens"] or 0),
+        "total_tokens": int(row["total_tokens"] or 0),
+        "cache_hit_tokens": int(row["cache_hit_tokens"] or 0),
+        "cache_miss_tokens": int(row["cache_miss_tokens"] or 0),
+        "reasoning_tokens": int(row["reasoning_tokens"] or 0),
+        "estimated_cost_usd": float(row["estimated_cost_usd"] or 0.0),
+        "llm_calls": int(row["llm_calls"] or 0),
+        "failed_calls": int(row["failed_calls"] or 0),
+    })
+    return summary
+
+
+def _usage_summary_where(where_sql: str, params: tuple) -> dict:
+    with get_db() as conn:
+        row = conn.execute(
+            f"""
+            SELECT
+                COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                COALESCE(SUM(cache_hit_tokens), 0) AS cache_hit_tokens,
+                COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens,
+                COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+                COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd,
+                COUNT(*) AS llm_calls,
+                COALESCE(SUM(CASE WHEN request_ok = 0 THEN 1 ELSE 0 END), 0) AS failed_calls
+            FROM llm_usage_events
+            WHERE {where_sql}
+            """,
+            params,
+        ).fetchone()
+        return _summary_from_row(row)
+
+
+def get_llm_usage_summary(user_id: int, period: str = "today") -> dict:
+    start = _usage_window_start(period)
+    if start is None:
+        return _usage_summary_where("user_id = ?", (user_id,))
+    return _usage_summary_where("user_id = ? AND created_at >= ?", (user_id, start))
+
+
+def get_llm_usage_summary_for_chat(user_id: int, chat_id: int) -> dict:
+    return _usage_summary_where("user_id = ? AND chat_id = ?", (user_id, chat_id))
+
+
+def get_llm_usage_summary_for_poll_task(user_id: int, poll_task_id: str) -> dict:
+    return _usage_summary_where("user_id = ? AND poll_task_id = ?", (user_id, poll_task_id))
+
+
+def get_recent_llm_usage_events(user_id: int, limit: int = 50) -> list[dict]:
+    limit = max(1, min(int(limit or 50), 200))
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT created_at, model, route, phase, prompt_tokens, completion_tokens,
+                   total_tokens, cache_hit_tokens, cache_miss_tokens, reasoning_tokens,
+                   estimated_cost_usd, request_ok, error_type
+            FROM llm_usage_events
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 def get_user_facts(user_id: str) -> list[dict]:
     """Все факты пользователя (старые первыми)."""

@@ -207,6 +207,7 @@ async def process_non_pipeline_command(
     pick_model_fn,
     chat_completion_request_fn,
     device_tool_fn=None,
+    usage_context: dict | None = None,
 ) -> dict:
     messages = [{"role": "system", "content": system_msg}]
 
@@ -283,6 +284,8 @@ async def process_non_pipeline_command(
                     tools=non_pipeline_tools,
                     max_tokens=cfg.get("max_tokens", 4096),
                     tool_choice="required",
+                    usage_context={**(usage_context or {}), "phase": f"non_pipeline.iteration.{iteration + 1}"},
+                    phase=f"non_pipeline.iteration.{iteration + 1}",
                 )
             except httpx.HTTPStatusError as exc:
                 print(f"[llm] HTTP error: {exc.response.status_code} {exc.response.text[:500]}")
@@ -373,6 +376,7 @@ async def process_non_pipeline_command(
                             user_request=user_message,
                             current_run_journal=commands_log,
                             answer_payload=answer_payload,
+                            usage_context={**(usage_context or {}), "phase": "answer_auditor"},
                         )
                         if audit_infra_error:
                             auditor_entry = make_run_step(
@@ -884,6 +888,7 @@ async def process_non_pipeline_command(
         target_device_id=device_id,
         hostname=device_info.get("hostname") or device_id,
         iteration=max_iterations + 1,
+        usage_context={**(usage_context or {}), "phase": "answer_repair"},
     )
     if repair_result.get("ok"):
         return {

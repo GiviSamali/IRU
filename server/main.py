@@ -21,6 +21,7 @@ try:
     from .routers.devices import router as devices_router
     from .routers.public import create_router as create_public_router
     from .routers.tasks import router as tasks_router
+    from .routers.usage import router as usage_router
     from .routers.ws import router as ws_router
 except ImportError:
     from database import cleanup_expired_refresh_tokens, init_db
@@ -31,6 +32,7 @@ except ImportError:
     from routers.devices import router as devices_router
     from routers.public import create_router as create_public_router
     from routers.tasks import router as tasks_router
+    from routers.usage import router as usage_router
     from routers.ws import router as ws_router
 
 
@@ -75,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(devices_router)
     app.include_router(chats_router)
     app.include_router(tasks_router)
+    app.include_router(usage_router)
     app.include_router(create_agent_update_router(UPDATES_DIR))
     app.include_router(ws_router)
 

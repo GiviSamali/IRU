@@ -121,6 +121,8 @@
   .header-left,
   .header-right { min-width: 0; }
   .header-right { gap: 6px; }
+  .usage-badge { max-width: 128px; padding: 4px 6px; font-size: 10px; }
+  .usage-popover { right: -80px; width: min(320px, calc(100vw - 18px)); }
   .device-select { min-width: 0; }
   .btn-header-link { display: none; }
   .sidebar-mobile-links { display: flex; }

@@ -1093,6 +1093,7 @@ async def run_pipeline_worker(
     chat_completion_request_fn,
     worker_tools: list[dict],
     device_tool_fn=None,
+    usage_context: dict | None = None,
 ) -> dict:
     """Subagent-исполнитель одного шага pipeline."""
     if is_task_cancel_requested(poll_task_id):
@@ -1217,6 +1218,8 @@ async def run_pipeline_worker(
             messages=messages,
             tools=worker_tools,
             tool_choice="required",
+            usage_context={**(usage_context or {}), "phase": f"pipeline.worker.step_{step_index + 1}.iteration.{iteration + 1}"},
+            phase=f"pipeline.worker.step_{step_index + 1}.iteration.{iteration + 1}",
         )
         choice = data["choices"][0]
         assistant_msg = choice["message"]
@@ -1265,6 +1268,7 @@ async def run_pipeline_worker(
                         user_request=f"{overall_goal}\n{step_title}",
                         current_run_journal=commands_log,
                         answer_payload=payload,
+                        usage_context={**(usage_context or {}), "phase": f"pipeline.worker.step_{step_index + 1}.answer_auditor"},
                     )
                     if audit_infra_error:
                         append_tool_step(commands_log, {
@@ -1745,6 +1749,7 @@ async def run_pipeline_worker(
         target_device_id=step_device_id,
         hostname=shared.get("current_hostname") or step_device_id,
         iteration=PIPELINE_WORKER_MAX_ITERATIONS + 1,
+        usage_context={**(usage_context or {}), "phase": f"pipeline.worker.step_{step_index + 1}.answer_repair"},
     )
     if repair_result.get("ok"):
         return {
@@ -1795,6 +1800,7 @@ async def process_pipeline_subagents(
     windows_rules: str,
     linux_rules: str,
     device_tool_fn=None,
+    usage_context: dict | None = None,
 ) -> dict:
     """Pipeline Mode: IRU plan -> step workers -> final synthesis."""
     cfg = load_llm_config_fn()
@@ -1833,6 +1839,8 @@ async def process_pipeline_subagents(
             messages=plan_messages,
             tools=None,
             max_tokens=min(cfg.get("max_tokens", 4096), 2500),
+            usage_context={**(usage_context or {}), "phase": "pipeline.plan"},
+            phase="pipeline.plan",
         )
         planner_text = (planner_data["choices"][0]["message"].get("content") or "").strip()
         normalized_plan = normalize_pipeline_plan(
@@ -1854,6 +1862,8 @@ async def process_pipeline_subagents(
                     messages=refine_messages,
                     tools=None,
                     max_tokens=min(cfg.get("max_tokens", 4096), 2500),
+                    usage_context={**(usage_context or {}), "phase": "pipeline.refine"},
+                    phase="pipeline.refine",
                 )
                 refine_text = (refine_data["choices"][0]["message"].get("content") or "").strip()
                 refined_plan = normalize_pipeline_plan(
@@ -1938,6 +1948,7 @@ async def process_pipeline_subagents(
                     chat_completion_request_fn=chat_completion_request_fn,
                     worker_tools=worker_tools,
                     device_tool_fn=device_tool_fn,
+                    usage_context=usage_context,
                 )
             except ConfirmationRequired:
                 raise
@@ -2090,6 +2101,8 @@ async def process_pipeline_subagents(
                     tools=final_tools,
                     max_tokens=min(cfg.get("max_tokens", 4096), 1200),
                     tool_choice="required",
+                    usage_context={**(usage_context or {}), "phase": "pipeline.final"},
+                    phase="pipeline.final",
                 )
                 assistant_msg = summary_data["choices"][0]["message"]
                 try:
@@ -2113,6 +2126,7 @@ async def process_pipeline_subagents(
                             user_request=user_message,
                             current_run_journal=all_commands,
                             answer_payload=payload,
+                            usage_context={**(usage_context or {}), "phase": "pipeline.final.answer_auditor"},
                         )
                         if audit_infra_error:
                             append_tool_step(all_commands, {

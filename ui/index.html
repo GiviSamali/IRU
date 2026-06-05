@@ -111,6 +111,13 @@
             <div class="memory-popover-hint">Память обновляется автоматически на основе выполненных команд</div>
           </div>
         </div>
+        <div class="usage-badge" id="usageBadge" role="button" aria-expanded="false" title="Примерная стоимость LLM-вызовов">
+          <span id="usageBadgeText">Токены сегодня: —</span>
+          <div class="usage-popover" id="usagePopover">
+            <div class="usage-popover-title">Использование токенов</div>
+            <div id="usagePopoverBody" class="usage-popover-body">Загрузка...</div>
+          </div>
+        </div>
         <div class="device-select">
           <div class="device-indicator" id="deviceBtn">
             <span class="device-dot" id="deviceDot"></span>
@@ -386,6 +393,7 @@
 <script src="js/utils.js" defer></script>
 <script src="js/devices.js" defer></script>
 <script src="js/chat.js" defer></script>
+<script src="js/usage.js" defer></script>
 <script src="js/explorer.js" defer></script>
 <script src="js/shell.js" defer></script>
 <script src="js/admin.js" defer></script>

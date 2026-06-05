@@ -21,6 +21,21 @@ def test_chat_renderer_can_show_one_or_many_used_tools():
     assert "self_check" in source
 
 
+def test_usage_ledger_ui_contract_exists():
+    index_source = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
+    usage_source = (ROOT / "ui" / "js" / "usage.js").read_text(encoding="utf-8")
+    chat_source = (ROOT / "ui" / "js" / "chat.js").read_text(encoding="utf-8")
+
+    assert 'id="usageBadge"' in index_source
+    assert "js/usage.js" in index_source
+    assert "/api/usage/summary" in usage_source
+    assert "/api/tasks/${encodeURIComponent(taskId)}/usage" in usage_source
+    assert "Примерная стоимость" in usage_source
+    assert "function renderMessageUsage" in usage_source
+    assert "refreshTaskUsage(taskId, msgIndex)" in chat_source
+    assert "renderMessageUsage(m)" in chat_source
+
+
 def test_chat_live_status_uses_safe_status_contract():
     chat_source = (ROOT / "ui" / "js" / "chat.js").read_text(encoding="utf-8")
     extras_source = (ROOT / "ui" / "js" / "extras.js").read_text(encoding="utf-8")

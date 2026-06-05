@@ -425,6 +425,9 @@ function renderMessages() {
 
     const commands = m.commands;
     bodyHTML += renderUsedToolsLine(commands);
+    if (typeof renderMessageUsage === 'function') {
+      bodyHTML += renderMessageUsage(m);
+    }
     bodyHTML += renderCommandDownloadButtons(commands, linkified.usedDownloads);
     if (commands && commands.length > 0) {
       bodyHTML += '<div class="cmd-log">';
@@ -804,6 +807,8 @@ async function pollTask(taskId, msgIndex) {
         // Update memory badge (Point 10)
         if (task.memory_stats) updateMemoryBadge(task.memory_stats);
         renderMessages();
+        if (typeof refreshTaskUsage === 'function') refreshTaskUsage(taskId, msgIndex);
+        if (typeof refreshUsageSummary === 'function') refreshUsageSummary();
         loadChats();
         return;
       }

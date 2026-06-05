@@ -237,6 +237,7 @@ function showApp() {
   checkConsent();
   checkTermsStatus();
   fetchUserInfo();
+  if (typeof refreshUsageSummary === 'function') refreshUsageSummary();
   if (typeof renderInputModeBtn === 'function') renderInputModeBtn();
   if (typeof updateCharCount === 'function') updateCharCount();
 }

@@ -60,6 +60,7 @@ async def audit_answer_payload(
     user_request: str,
     current_run_journal: list[dict[str, Any]],
     answer_payload: dict[str, Any],
+    usage_context: dict[str, Any] | None = None,
 ) -> tuple[bool, str, bool]:
     if not answer_auditor_enabled(cfg):
         return True, "auditor disabled", False
@@ -84,6 +85,8 @@ async def audit_answer_payload(
                 messages=messages,
                 tools=None,
                 max_tokens=min(int(cfg.get("answer_auditor_max_tokens", 300) or 300), 500),
+                usage_context=usage_context,
+                phase=(usage_context or {}).get("phase") or "answer_auditor",
             )
             content = (data["choices"][0]["message"].get("content") or "").strip()
         except Exception as exc:

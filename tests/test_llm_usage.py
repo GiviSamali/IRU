@@ -1,0 +1,153 @@
+import asyncio
+
+import httpx
+
+from server.llm_usage import extract_usage, estimate_deepseek_cost_usd
+
+
+def _login_headers(client, user: dict) -> dict:
+    response = client.post("/api/auth", json={"token": user["token"]})
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def test_extract_usage_normal_and_missing_cache_fields():
+    data = {
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 25,
+            "total_tokens": 125,
+            "prompt_cache_hit_tokens": 70,
+            "prompt_cache_miss_tokens": 30,
+            "completion_tokens_details": {"reasoning_tokens": 3},
+        }
+    }
+
+    usage = extract_usage(data)
+
+    assert usage["prompt_tokens"] == 100
+    assert usage["completion_tokens"] == 25
+    assert usage["total_tokens"] == 125
+    assert usage["cache_hit_tokens"] == 70
+    assert usage["cache_miss_tokens"] == 30
+    assert usage["reasoning_tokens"] == 3
+
+    fallback = extract_usage({"usage": {"prompt_tokens": 10, "completion_tokens": 5}})
+    assert fallback["total_tokens"] == 15
+    assert fallback["cache_hit_tokens"] == 0
+    assert fallback["cache_miss_tokens"] == 10
+
+
+def test_estimate_deepseek_cost_flash_cache_hit_miss():
+    usage = {
+        "cache_hit_tokens": 500_000,
+        "cache_miss_tokens": 500_000,
+        "completion_tokens": 100_000,
+    }
+
+    cost = estimate_deepseek_cost_usd("deepseek-chat", usage)
+
+    assert cost == round((0.5 * 0.0028) + (0.5 * 0.14) + (0.1 * 0.28), 8)
+
+
+def test_add_llm_usage_event_and_summary_aggregation(client):
+    from server.database import add_llm_usage_event, create_user, get_llm_usage_summary
+
+    user = create_user("usage-summary-user")
+    add_llm_usage_event(
+        user_id=user["id"],
+        chat_id=123,
+        poll_task_id="poll-1",
+        route="non_pipeline",
+        phase="non_pipeline.iteration.1",
+        model="deepseek-chat",
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        cache_miss_tokens=100,
+        estimated_cost_usd=0.000028,
+    )
+
+    summary = get_llm_usage_summary(user["id"], "today")
+
+    assert summary["prompt_tokens"] == 100
+    assert summary["completion_tokens"] == 50
+    assert summary["total_tokens"] == 150
+    assert summary["llm_calls"] == 1
+    assert summary["estimated_cost_usd"] == 0.000028
+
+
+def test_usage_summary_api_requires_auth_and_isolates_chat_usage(client):
+    from server.database import add_llm_usage_event, create_chat, create_user
+
+    user = create_user("usage-api-user")
+    other = create_user("usage-api-other")
+    headers = _login_headers(client, user)
+    user_chat = create_chat(user["id"], "user chat")
+    other_chat = create_chat(other["id"], "other chat")
+    add_llm_usage_event(user_id=user["id"], chat_id=user_chat["id"], total_tokens=10, model="deepseek-chat")
+    add_llm_usage_event(user_id=other["id"], chat_id=other_chat["id"], total_tokens=999, model="deepseek-chat")
+
+    assert client.get("/api/usage/summary").status_code in {401, 403}
+
+    summary_response = client.get("/api/usage/summary", headers=headers)
+    assert summary_response.status_code == 200
+    payload = summary_response.json()
+    assert payload["status"] == "ok"
+    assert payload["summary"]["today"]["total_tokens"] == 10
+    assert payload["limits"]["enforced"] is False
+
+    chat_response = client.get(f"/api/chats/{user_chat['id']}/usage", headers=headers)
+    assert chat_response.status_code == 200
+    assert chat_response.json()["summary"]["total_tokens"] == 10
+
+    other_response = client.get(f"/api/chats/{other_chat['id']}/usage", headers=headers)
+    assert other_response.status_code == 404
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self.status_code = 200
+        self.text = ""
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _FakeClient:
+    async def post(self, url, headers=None, json=None):
+        return _FakeResponse({
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 4},
+        })
+
+
+def test_chat_completion_request_records_usage_and_survives_db_failure(client, monkeypatch):
+    from server.controller import _chat_completion_request
+    from server.database import create_user, get_llm_usage_summary
+    import server.llm_usage as llm_usage_module
+
+    user = create_user("usage-wrapper-user")
+    result = asyncio.run(_chat_completion_request(
+        client=_FakeClient(),
+        cfg={"base_url": "https://api.deepseek.com/v1", "api_key": "secret", "model": "deepseek-chat"},
+        model="deepseek-chat",
+        messages=[{"role": "user", "content": "hi"}],
+        usage_context={"user_id": user["id"], "route": "test", "phase": "unit"},
+    ))
+
+    assert result["choices"][0]["message"]["content"] == "ok"
+    assert get_llm_usage_summary(user["id"], "today")["total_tokens"] == 16
+
+    monkeypatch.setattr(llm_usage_module.db, "add_llm_usage_event", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("db down")))
+    result = asyncio.run(_chat_completion_request(
+        client=_FakeClient(),
+        cfg={"base_url": "https://api.deepseek.com/v1", "api_key": "secret", "model": "deepseek-chat"},
+        model="deepseek-chat",
+        messages=[{"role": "user", "content": "hi"}],
+        usage_context={"user_id": user["id"], "route": "test", "phase": "unit"},
+    ))
+    assert result["choices"][0]["message"]["content"] == "ok"
