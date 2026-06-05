@@ -1021,6 +1021,18 @@ main .hero {
     font-size: 13px;
 }
 
+.founder-portrait-image {
+    display: block;
+    width: 100%;
+    min-height: 360px;
+    max-height: 520px;
+    object-fit: cover;
+    object-position: center top;
+    border: 1px solid rgba(94, 234, 255, 0.22);
+    border-radius: 18px;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
+}
+
 .founder-status {
     display: flex;
     gap: 10px;
@@ -1102,15 +1114,59 @@ main .hero {
 }
 
 .proof-placeholder {
-    display: grid;
-    place-items: center;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 8px;
     min-height: 116px;
     padding: 18px;
     border-radius: 16px;
     color: rgba(225, 244, 255, 0.70);
     font-family: "JetBrains Mono", monospace;
     font-size: 13px;
-    text-align: center;
+    text-align: left;
+    text-decoration: none;
+}
+
+.proof-placeholder strong {
+    color: #ffffff;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 17px;
+    line-height: 1.2;
+}
+
+.proof-placeholder span:last-child {
+    color: var(--iru-muted);
+    line-height: 1.45;
+}
+
+.proof-kicker {
+    color: var(--iru-cyan);
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+.proof-screenshot {
+    grid-column: span 2;
+    min-height: 270px;
+    margin: 0;
+    padding: 10px;
+}
+
+.proof-screenshot img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1687 / 768;
+    object-fit: cover;
+    border-radius: 10px;
+    border: 1px solid rgba(94, 234, 255, 0.18);
+}
+
+.proof-screenshot figcaption {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 8px 4px;
 }
 
 @media (max-width: 900px) {
@@ -1130,6 +1186,15 @@ main .hero {
 
     .founder-portrait-placeholder {
         min-height: 260px;
+    }
+
+    .founder-portrait-image {
+        min-height: 260px;
+        max-height: 420px;
+    }
+
+    .proof-screenshot {
+        grid-column: auto;
     }
 
     .founder-actions,

@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1687" height="768" viewBox="0 0 1687 768" role="img" aria-labelledby="title desc">
+  <title id="title">Скриншот результата работы ИРУ</title>
+  <desc id="desc">Тёмный интерфейс ИРУ с задачей на создание сайта-визитки, ответом системы, статусом pipeline и списком использованных инструментов.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e111b"/>
+      <stop offset="0.55" stop-color="#070a11"/>
+      <stop offset="1" stop-color="#020409"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1726"/>
+      <stop offset="1" stop-color="#070b13"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="30" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect width="1687" height="768" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1687" height="768" fill="none" stroke="#063848" stroke-width="1"/>
+  <rect x="1678" y="4" width="5" height="360" rx="3" fill="#00647a" opacity="0.62"/>
+
+  <g font-family="JetBrains Mono, Consolas, monospace" font-weight="700">
+    <text x="1664" y="30" fill="#20dfff" font-size="11">вы</text>
+    <rect x="263" y="38" width="1392" height="56" rx="8" fill="#053f50" stroke="#00c7f4"/>
+    <text x="278" y="61" fill="#fff" font-size="14">Привет. Мне нужен сайт визитка именно меня как специалиста, можешь создать что то такое, оставь место под картинки.</text>
+    <text x="278" y="79" fill="#fff" font-size="14">Создай на рабочем столе отдельную папку. Сделай максимально качественно)</text>
+
+    <text x="20" y="118" fill="#8dc8ff" font-size="11">ИРУ</text>
+    <rect x="18" y="124" width="272" height="38" rx="10" fill="#0a1019" stroke="#083448"/>
+    <text x="31" y="147" fill="#fff" font-size="14">Это сложная задача, нужен план.</text>
+
+    <text x="20" y="185" fill="#8dc8ff" font-size="11">ИРУ</text>
+    <rect x="18" y="192" width="1392" height="570" rx="10" fill="#090e17" stroke="#103047" filter="url(#soft)"/>
+    <text x="31" y="216" fill="#fff" font-size="14">Всё готово! Я создал для вас качественную сайт-визитку на рабочем столе.</text>
+    <text x="31" y="256" fill="#fff" font-size="14">Что сделано:</text>
+
+    <text x="31" y="295" fill="#fff" font-size="14">1. Создана папка SiteVisitingCard_Russian на рабочем столе — она открыта в проводнике.</text>
+    <text x="31" y="335" fill="#fff" font-size="14">2. Внутри папки создан файл index.html — полноценная адаптивная сайт-визитка с современным светлым дизайном,</text>
+    <text x="31" y="354" fill="#fff" font-size="14">   плавными анимациями и встроенной типографикой. На странице представлены имя, описание, разделы и контакты.</text>
+    <text x="31" y="433" fill="#fff" font-size="14">3. Файл уже открыт в браузере Comet — можно сразу посмотреть и оценить.</text>
+    <text x="31" y="473" fill="#fff" font-size="14">Папка находится на рабочем столе, всё в одном месте.</text>
+
+    <rect x="31" y="490" width="1368" height="222" rx="8" fill="url(#panel)" stroke="#07586c"/>
+    <text x="48" y="511" fill="#00ff7a" font-size="12">СТАТУС ОПЕРАЦИИ</text>
+    <text x="48" y="539" fill="#8dc8ff" font-size="12">ЗАДАЧА:</text>
+    <text x="111" y="539" fill="#fff" font-size="13">Pipeline</text>
+    <rect x="166" y="523" width="68" height="21" rx="10" fill="#062915" stroke="#00ff7a"/>
+    <text x="178" y="537" fill="#00ff7a" font-size="10">завершено</text>
+
+    <rect x="48" y="554" width="1320" height="64" rx="5" fill="#070c13" stroke="#18384a"/>
+    <text x="62" y="574" fill="#fff" font-size="12">Pipeline: шаг 2 из 2 · 100%</text>
+    <text x="1320" y="574" fill="#fff" font-size="10">завершено</text>
+    <rect x="58" y="584" width="1310" height="5" rx="3" fill="#082232"/>
+    <rect x="58" y="584" width="1310" height="5" rx="3" fill="#00e8d0"/>
+    <text x="58" y="604" fill="#8dc8ff" font-size="11">Сейчас: Создание и открытие HTML-файла сайта-визитки с дизайном и placeholder-изображениями</text>
+
+    <text x="48" y="651" fill="#00ff7a" font-size="15">✓</text>
+    <text x="70" y="646" fill="#fff" font-size="12">Создание папки для сайта-визитки на рабочем столе</text>
+    <text x="70" y="665" fill="#8dc8ff" font-size="11">Последний инструмент: window.find</text>
+
+    <text x="48" y="693" fill="#00ff7a" font-size="15">✓</text>
+    <text x="70" y="688" fill="#fff" font-size="12">Создание и открытие HTML-файла сайта-визитки с дизайном и placeholder-изображениями</text>
+    <text x="70" y="707" fill="#8dc8ff" font-size="11">Последний инструмент: window.list</text>
+
+    <text x="31" y="728" fill="#fff" font-size="13">Использованы инструменты: window.find, write_content, window.list · Использован fallback: execute_cmd</text>
+  </g>
+</svg>
