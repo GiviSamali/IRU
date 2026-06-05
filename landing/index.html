@@ -8,20 +8,6 @@
     <link rel="stylesheet" href="styles.css">
     <style>
         /* ── HERO FLUID ── */
-        #cursor {
-            position: fixed;
-            width: 14px;
-            height: 14px;
-            border: 1.5px solid rgba(0, 212, 255, 0.75);
-            border-radius: 50%;
-            pointer-events: none;
-            z-index: 9999;
-            transform: translate(-50%, -50%);
-            opacity: 0;
-            transition: opacity 0.3s ease;
-        }
-        #cursor.visible { opacity: 1; }
-
         .hero {
             min-height: 100vh;
             display: flex;
@@ -31,7 +17,6 @@
             position: relative;
             overflow: hidden;
             background: #020308;
-            cursor: none;
         }
         #fluid-canvas {
             position: absolute;
@@ -152,8 +137,6 @@
     </style>
 </head>
 <body>
-
-<div id="cursor"></div>
 
 <header class="site-header"></header>
 <main>
@@ -612,7 +595,6 @@
 <script>
 (function () {
     const canvas = document.getElementById('fluid-canvas');
-    const cursorEl = document.getElementById('cursor');
     let gl = canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
     if (!gl) return;
     let W = 0, H = 0;
@@ -648,14 +630,7 @@
     const SRCS=Array.from({length:4},(_,i)=>({angle:(i/4)*Math.PI*2,speed:0.15+Math.random()*0.10,rx:0.28+Math.random()*0.18,ry:0.16+Math.random()*0.12,cx:0.2+Math.random()*0.6,cy:0.25+Math.random()*0.5,phase:Math.random()*Math.PI*2}));
     function autonomousStep(){const ar=W/H;SRCS.forEach(s=>{s.angle+=s.speed*0.004;const px=s.cx+Math.cos(s.angle+s.phase)*s.rx;const py=s.cy+Math.sin(s.angle+s.phase*0.65)*s.ry;const vx=Math.cos(s.angle+Math.PI*0.5)*0.008;const vy=Math.sin(s.angle+Math.PI*0.5)*0.008;gl.useProgram(prog.inject);bq(prog.inject);tx(prog.inject,'u_target',vel.read,0);gl.uniform2f(prog.inject.u['u_point'],px,1-py);gl.uniform2f(prog.inject.u['u_vel_add'],vx*80,vy*80);gl.uniform1f(prog.inject.u['u_radius'],0.0014);gl.uniform1f(prog.inject.u['u_aspect'],ar);blit(vel.write);vel.swap();if(Math.random()<0.03){gl.useProgram(prog.dye);bq(prog.dye);tx(prog.dye,'u_target',dye_buf.read,0);gl.uniform2f(prog.dye.u['u_point'],px,1-py);gl.uniform3f(prog.dye.u['u_color'],0.04+Math.random()*0.04,0.40+Math.random()*0.20,0.78+Math.random()*0.22);gl.uniform1f(prog.dye.u['u_radius'],0.0022);gl.uniform1f(prog.dye.u['u_aspect'],ar);blit(dye_buf.write);dye_buf.swap();}});}
     setTimeout(()=>{const ar=W/H;for(let i=0;i<20;i++){const px=Math.random(),py=Math.random();gl.useProgram(prog.dye);bq(prog.dye);tx(prog.dye,'u_target',dye_buf.read,0);gl.uniform2f(prog.dye.u['u_point'],px,py);gl.uniform3f(prog.dye.u['u_color'],0.05+Math.random()*0.04,0.38+Math.random()*0.22,0.75+Math.random()*0.25);gl.uniform1f(prog.dye.u['u_radius'],0.006);gl.uniform1f(prog.dye.u['u_aspect'],ar);blit(dye_buf.write);dye_buf.swap();}for(let i=0;i<10;i++){const px=Math.random(),py=Math.random();gl.useProgram(prog.inject);bq(prog.inject);tx(prog.inject,'u_target',vel.read,0);gl.uniform2f(prog.inject.u['u_point'],px,py);gl.uniform2f(prog.inject.u['u_vel_add'],(Math.random()-0.5)*4,(Math.random()-0.5)*4);gl.uniform1f(prog.inject.u['u_radius'],0.003);gl.uniform1f(prog.inject.u['u_aspect'],ar);blit(vel.write);vel.swap();}},60);
-    let mx=-1,my=-1,mActive=false;
-    function doRepulse(x,y){const px=x/W,py=1-(y/H),ar=W/H;gl.useProgram(prog.repulse);bq(prog.repulse);tx(prog.repulse,'u_target',vel.read,0);gl.uniform2f(prog.repulse.u['u_point'],px,py);gl.uniform1f(prog.repulse.u['u_radius'],0.0006);gl.uniform1f(prog.repulse.u['u_aspect'],ar);gl.uniform1f(prog.repulse.u['u_force'],32.0);gl.uniform3f(prog.repulse.u['u_color'],0,0,0);gl.uniform1i(prog.repulse.u['u_mode'],0);blit(vel.write);vel.swap();tx(prog.repulse,'u_target',dye_buf.read,0);gl.uniform1f(prog.repulse.u['u_radius'],0.0010);gl.uniform1f(prog.repulse.u['u_force'],0);gl.uniform1i(prog.repulse.u['u_mode'],1);gl.uniform3f(prog.repulse.u['u_color'],0.06,0.55,0.90);blit(dye_buf.write);dye_buf.swap();}
-    const hero=document.querySelector('.hero');
-    hero.addEventListener('mouseenter',()=>cursorEl.classList.add('visible'));
-    hero.addEventListener('mouseleave',()=>{cursorEl.classList.remove('visible');mActive=false;});
-    document.addEventListener('mousemove',e=>{cursorEl.style.left=e.clientX+'px';cursorEl.style.top=e.clientY+'px';const r=canvas.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;if(x>=0&&y>=0&&x<=W&&y<=H){mx=x;my=y;mActive=true;}else mActive=false;});
-    canvas.addEventListener('touchmove',e=>{e.preventDefault();const r=canvas.getBoundingClientRect(),t=e.touches[0];mx=t.clientX-r.left;my=t.clientY-r.top;mActive=true;},{passive:false});
-    function step(dt){const sw=vel.w,sh=vel.h,txS=1/sw,tyS=1/sh;const dw=dye_buf.w,dh=dye_buf.h,txD=1/dw,tyD=1/dh;gl.disable(gl.BLEND);if(mActive)doRepulse(mx,my);autonomousStep();gl.useProgram(prog.curl);bq(prog.curl);tx(prog.curl,'u_vel',vel.read,0);gl.uniform2f(prog.curl.u['u_texel'],txS,tyS);blit(curl_buf);gl.useProgram(prog.vort);bq(prog.vort);tx(prog.vort,'u_vel',vel.read,0);tx(prog.vort,'u_curl',curl_buf,1);gl.uniform2f(prog.vort.u['u_texel'],txS,tyS);gl.uniform1f(prog.vort.u['u_str'],24.0);gl.uniform1f(prog.vort.u['u_dt'],dt);blit(vel.write);vel.swap();gl.useProgram(prog.div);bq(prog.div);tx(prog.div,'u_vel',vel.read,0);gl.uniform2f(prog.div.u['u_texel'],txS,tyS);blit(div_buf);gl.useProgram(prog.pres);bq(prog.pres);tx(prog.pres,'u_div',div_buf,1);gl.uniform2f(prog.pres.u['u_texel'],txS,tyS);for(let i=0;i<12;i++){tx(prog.pres,'u_pressure',pres.read,0);blit(pres.write);pres.swap();}gl.useProgram(prog.sub);bq(prog.sub);tx(prog.sub,'u_pressure',pres.read,0);tx(prog.sub,'u_vel',vel.read,1);gl.uniform2f(prog.sub.u['u_texel'],txS,tyS);blit(vel.write);vel.swap();gl.useProgram(prog.advect);bq(prog.advect);tx(prog.advect,'u_vel',vel.read,0);tx(prog.advect,'u_src',vel.read,1);gl.uniform2f(prog.advect.u['u_texel'],txS,tyS);gl.uniform1f(prog.advect.u['u_dt'],dt);gl.uniform1f(prog.advect.u['u_diss'],0.990);blit(vel.write);vel.swap();tx(prog.advect,'u_vel',vel.read,0);tx(prog.advect,'u_src',dye_buf.read,1);gl.uniform2f(prog.advect.u['u_texel'],txD,tyD);gl.uniform1f(prog.advect.u['u_dt'],dt);gl.uniform1f(prog.advect.u['u_diss'],0.982);blit(dye_buf.write);dye_buf.swap();}
+    function step(dt){const sw=vel.w,sh=vel.h,txS=1/sw,tyS=1/sh;const dw=dye_buf.w,dh=dye_buf.h,txD=1/dw,tyD=1/dh;gl.disable(gl.BLEND);autonomousStep();gl.useProgram(prog.curl);bq(prog.curl);tx(prog.curl,'u_vel',vel.read,0);gl.uniform2f(prog.curl.u['u_texel'],txS,tyS);blit(curl_buf);gl.useProgram(prog.vort);bq(prog.vort);tx(prog.vort,'u_vel',vel.read,0);tx(prog.vort,'u_curl',curl_buf,1);gl.uniform2f(prog.vort.u['u_texel'],txS,tyS);gl.uniform1f(prog.vort.u['u_str'],24.0);gl.uniform1f(prog.vort.u['u_dt'],dt);blit(vel.write);vel.swap();gl.useProgram(prog.div);bq(prog.div);tx(prog.div,'u_vel',vel.read,0);gl.uniform2f(prog.div.u['u_texel'],txS,tyS);blit(div_buf);gl.useProgram(prog.pres);bq(prog.pres);tx(prog.pres,'u_div',div_buf,1);gl.uniform2f(prog.pres.u['u_texel'],txS,tyS);for(let i=0;i<12;i++){tx(prog.pres,'u_pressure',pres.read,0);blit(pres.write);pres.swap();}gl.useProgram(prog.sub);bq(prog.sub);tx(prog.sub,'u_pressure',pres.read,0);tx(prog.sub,'u_vel',vel.read,1);gl.uniform2f(prog.sub.u['u_texel'],txS,tyS);blit(vel.write);vel.swap();gl.useProgram(prog.advect);bq(prog.advect);tx(prog.advect,'u_vel',vel.read,0);tx(prog.advect,'u_src',vel.read,1);gl.uniform2f(prog.advect.u['u_texel'],txS,tyS);gl.uniform1f(prog.advect.u['u_dt'],dt);gl.uniform1f(prog.advect.u['u_diss'],0.990);blit(vel.write);vel.swap();tx(prog.advect,'u_vel',vel.read,0);tx(prog.advect,'u_src',dye_buf.read,1);gl.uniform2f(prog.advect.u['u_texel'],txD,tyD);gl.uniform1f(prog.advect.u['u_dt'],dt);gl.uniform1f(prog.advect.u['u_diss'],0.982);blit(dye_buf.write);dye_buf.swap();}
     let last=performance.now();
     function render(now){if(!heroVisible){last=now;requestAnimationFrame(render);return;}const dt=Math.min((now-last)/1000,0.033);last=now;step(dt);gl.disable(gl.BLEND);gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,W,H);gl.useProgram(prog.display);bq(prog.display);tx(prog.display,'u_dye',dye_buf.read,0);gl.drawElements(gl.TRIANGLES,6,gl.UNSIGNED_SHORT,0);requestAnimationFrame(render);}
     requestAnimationFrame(render);
