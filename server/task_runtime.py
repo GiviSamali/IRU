@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import inspect
 import json
 import logging
 import time
@@ -103,6 +104,16 @@ except ImportError:
 
 
 logger = logging.getLogger("iru.run_plan")
+
+
+async def _call_with_optional_usage_context(fn, *args, usage_context: dict | None = None, **kwargs):
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        signature = None
+    if signature and "usage_context" in signature.parameters:
+        kwargs["usage_context"] = usage_context
+    return await fn(*args, **kwargs)
 
 
 def _utc_now_iso() -> str:
@@ -1037,7 +1048,17 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if is_task_cancel_requested(task_id):
                 finish_cancelled()
                 return
-            kind, plan_desc = await classify_task_complexity(message)
+            kind, plan_desc = await _call_with_optional_usage_context(
+                classify_task_complexity,
+                message,
+                usage_context={
+                    "user_id": user_id,
+                    "chat_id": chat_id,
+                    "poll_task_id": task_id,
+                    "route": "classification",
+                    "phase": "classify_task_complexity",
+                },
+            )
             logger.info(
                 "[classify] kind=%s plan_desc=%r user_id=%s message=%r",
                 kind,
@@ -1226,7 +1247,18 @@ async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id:
     task["current_step"] = "ИРУ думает..."
     try:
         chat_history = get_messages(chat_id, limit=50)
-        result = await process_onboarding_message(user_message=message, chat_history=chat_history)
+        result = await _call_with_optional_usage_context(
+            process_onboarding_message,
+            user_message=message,
+            chat_history=chat_history,
+            usage_context={
+                "user_id": user_id,
+                "chat_id": chat_id,
+                "poll_task_id": task_id,
+                "route": "onboarding",
+                "phase": "onboarding",
+            },
+        )
         answer = result.get("answer", "")
         task["status"] = "done"
         task["answer"] = answer

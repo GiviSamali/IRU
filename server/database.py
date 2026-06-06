@@ -1302,6 +1302,25 @@ def get_recent_llm_usage_events(user_id: int, limit: int = 50) -> list[dict]:
         ).fetchall()
         return [dict(row) for row in rows]
 
+
+def get_recent_llm_usage_events_for_chat(user_id: int, chat_id: int, limit: int = 20) -> list[dict]:
+    limit = max(1, min(int(limit or 20), 200))
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT created_at, model, route, phase, prompt_tokens, completion_tokens,
+                   total_tokens, cache_hit_tokens, cache_miss_tokens, reasoning_tokens,
+                   estimated_cost_usd, request_ok, error_type
+            FROM llm_usage_events
+            WHERE user_id = ? AND chat_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (user_id, chat_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def get_user_facts(user_id: str) -> list[dict]:
     """Все факты пользователя (старые первыми)."""
     with get_db() as conn:

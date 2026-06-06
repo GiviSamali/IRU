@@ -96,7 +96,7 @@ logger = logging.getLogger("iru.classify")
 # ── Быстрые слова-триггеры для PLAN ──────────────────────────────────────
 _PLAN_KEYWORDS = ("план", "пошагово", "по шагам")
 
-async def classify_task_complexity(message: str) -> tuple[str, str]:
+async def classify_task_complexity(message: str, usage_context: dict | None = None) -> tuple[str, str]:
     """Лёгкий LLM-вызов для классификации задачи: PLAN или SIMPLE.
 
     Возвращает (kind, plan_desc):
@@ -131,8 +131,13 @@ async def classify_task_complexity(message: str) -> tuple[str, str]:
             )
             resp.raise_for_status()
             data = resp.json()
+            usage_ctx = {
+                **(usage_context or {}),
+                "route": (usage_context or {}).get("route") or "classification",
+                "phase": (usage_context or {}).get("phase") or "classify_task_complexity",
+            }
             record_llm_usage_event(
-                usage_context={"route": "classification", "phase": "classify_task_complexity"},
+                usage_context=usage_ctx,
                 model="deepseek-chat",
                 usage=extract_usage(data),
                 cfg=cfg,
@@ -141,8 +146,13 @@ async def classify_task_complexity(message: str) -> tuple[str, str]:
             )
         answer = (data["choices"][0]["message"].get("content") or "").strip()
     except Exception as exc:
+        usage_ctx = {
+            **(usage_context or {}),
+            "route": (usage_context or {}).get("route") or "classification",
+            "phase": (usage_context or {}).get("phase") or "classify_task_complexity",
+        }
         record_llm_usage_event(
-            usage_context={"route": "classification", "phase": "classify_task_complexity"},
+            usage_context=usage_ctx,
             model="deepseek-chat",
             cfg=cfg if "cfg" in locals() else None,
             request_ok=False,
@@ -654,10 +664,12 @@ async def process_nl_command(
 async def process_onboarding_message(
     user_message: str,
     chat_history: list[dict] | None = None,
+    usage_context: dict | None = None,
 ) -> dict:
     return await _process_onboarding_message(
         user_message=user_message,
         chat_history=chat_history,
+        usage_context=usage_context,
         load_llm_config_fn=load_llm_config,
         current_datetime_msk_fn=_current_datetime_msk,
     )

@@ -8,6 +8,7 @@ try:
         get_llm_usage_summary_for_chat,
         get_llm_usage_summary_for_poll_task,
         get_recent_llm_usage_events,
+        get_recent_llm_usage_events_for_chat,
     )
 except ImportError:
     from api_support import get_current_user  # type: ignore
@@ -17,6 +18,7 @@ except ImportError:
         get_llm_usage_summary_for_chat,
         get_llm_usage_summary_for_poll_task,
         get_recent_llm_usage_events,
+        get_recent_llm_usage_events_for_chat,
     )
 
 
@@ -61,7 +63,7 @@ async def api_chat_usage(chat_id: int, request: Request):
         "status": "ok",
         "summary": get_llm_usage_summary_for_chat(user_id, chat_id),
         "limits": _limits_payload(),
-        "recent_events": get_recent_llm_usage_events(user_id, limit=20),
+        "recent_events": get_recent_llm_usage_events_for_chat(user_id, chat_id, limit=20),
     }
 
 

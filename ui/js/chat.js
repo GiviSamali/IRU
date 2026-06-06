@@ -14,6 +14,7 @@ async function loadChats() {
       renderMessages();
       document.getElementById('headerTitle').textContent = 'Новый чат';
     }
+    if (typeof refreshUsageSummary === 'function') refreshUsageSummary();
   } catch (e) { console.error('loadChats:', e); }
 }
 

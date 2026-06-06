@@ -14,6 +14,7 @@ async def process_onboarding_message(
     user_message: str,
     chat_history: list[dict] | None = None,
     *,
+    usage_context: dict | None = None,
     load_llm_config_fn,
     current_datetime_msk_fn,
 ) -> dict:
@@ -35,6 +36,11 @@ async def process_onboarding_message(
         messages.extend(history_msgs)
 
     messages.append({"role": "user", "content": user_message})
+    usage_ctx = {
+        **(usage_context or {}),
+        "route": (usage_context or {}).get("route") or "onboarding",
+        "phase": (usage_context or {}).get("phase") or "onboarding",
+    }
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
@@ -54,7 +60,7 @@ async def process_onboarding_message(
             resp.raise_for_status()
             data = resp.json()
             record_llm_usage_event(
-                usage_context={"route": "onboarding", "phase": "onboarding"},
+                usage_context=usage_ctx,
                 model=cfg.get("model"),
                 usage=extract_usage(data),
                 cfg=cfg,
@@ -63,7 +69,7 @@ async def process_onboarding_message(
             )
     except Exception as exc:
         record_llm_usage_event(
-            usage_context={"route": "onboarding", "phase": "onboarding"},
+            usage_context=usage_ctx,
             model=cfg.get("model"),
             cfg=cfg,
             request_ok=False,
