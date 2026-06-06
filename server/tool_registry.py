@@ -240,6 +240,48 @@ TOOL_METADATA = {
         "returns": "command result",
         "danger": "depends_on_command",
     },
+    "get_file_link": {
+        "category": "artifact",
+        "tool_type": "typed",
+        "tool_label": "Download link",
+        "purpose": "Create a temporary server download link for an exact file path produced or identified by the run",
+        "when_to_use": ["user asks to download a created file", "need a UI-safe link for an exact known file"],
+        "returns": "download URL and file path",
+        "danger": "safe",
+        "visibility": "internal",
+        "status": "hidden",
+    },
+    "web_search": {
+        "category": "web",
+        "tool_type": "typed",
+        "tool_label": "Web search",
+        "purpose": "Search the web through the configured Tavily integration when fresh external facts are required",
+        "when_to_use": ["fresh current information is required", "news or current documentation is required"],
+        "returns": "compact web search results",
+        "danger": "network",
+    },
+    "remember_fact": {
+        "category": "memory",
+        "tool_type": "typed",
+        "tool_label": "Remember fact",
+        "purpose": "Store a validated user or device memory fact",
+        "when_to_use": ["a stable user preference or device fact should be remembered"],
+        "returns": "memory write status and fact id",
+        "danger": "write",
+        "visibility": "internal",
+        "status": "hidden",
+    },
+    "forget_fact": {
+        "category": "memory",
+        "tool_type": "typed",
+        "tool_label": "Forget fact",
+        "purpose": "Delete an existing memory fact by id",
+        "when_to_use": ["user asks IRU to forget a remembered fact"],
+        "returns": "memory delete status",
+        "danger": "write",
+        "visibility": "internal",
+        "status": "hidden",
+    },
     "answer.text": {
         "category": "answer",
         "tool_type": "answer",
@@ -691,6 +733,8 @@ def list_tools(category: str = "all") -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for name, meta in TOOL_METADATA.items():
         group = meta.get("category") or "other"
+        if meta.get("visibility", "public") != "public" or meta.get("status") == "hidden":
+            continue
         if requested != "all" and group != requested:
             continue
         grouped.setdefault(group, []).append(_compact_tool_meta(name, meta))

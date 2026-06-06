@@ -99,11 +99,30 @@ class ToolContract:
     status: str = "active"
 
 
-_SCHEMAS_BY_CANONICAL_NAME: dict[str, dict[str, Any]] = {
-    canonical_tool_name((schema.get("function") or {}).get("name", "")): schema
-    for schema in DEVICE_TOOL_SCHEMAS
-    if (schema.get("function") or {}).get("name")
-}
+def _all_known_tool_schemas() -> list[dict[str, Any]]:
+    schemas = list(DEVICE_TOOL_SCHEMAS)
+    try:
+        from .controller_tools import TOOLS as controller_tools  # type: ignore
+    except ImportError:
+        try:
+            from controller_tools import TOOLS as controller_tools  # type: ignore
+        except ImportError:
+            controller_tools = []
+    for schema in controller_tools:
+        fn_name = (schema.get("function") or {}).get("name")
+        if fn_name:
+            schemas.append(schema)
+    return schemas
+
+
+def _schemas_by_canonical_name() -> dict[str, dict[str, Any]]:
+    schemas: dict[str, dict[str, Any]] = {}
+    for schema in _all_known_tool_schemas():
+        fn_name = (schema.get("function") or {}).get("name")
+        if not fn_name:
+            continue
+        schemas.setdefault(canonical_tool_name(fn_name), schema)
+    return schemas
 
 
 def _aliases_for(canonical_name: str) -> list[str]:
@@ -116,7 +135,7 @@ def _aliases_for(canonical_name: str) -> list[str]:
 
 
 def _input_schema_for(canonical_name: str) -> dict[str, Any]:
-    schema = _SCHEMAS_BY_CANONICAL_NAME.get(canonical_name) or {}
+    schema = _schemas_by_canonical_name().get(canonical_name) or {}
     fn = schema.get("function") or {}
     parameters = fn.get("parameters")
     return parameters if isinstance(parameters, dict) else {"type": "object", "properties": {}}
@@ -151,6 +170,8 @@ def _permissions_for(meta: dict[str, Any], canonical_name: str, risk_level: str)
         permissions.add("answer.emit")
     if canonical_name.startswith("memory."):
         permissions.add("memory.read")
+    if canonical_name in {"remember_fact", "forget_fact"}:
+        permissions.add("memory.write")
     if canonical_name.startswith("device."):
         permissions.add("device.read")
     if canonical_name in {"device.prepare_runtime", "device.repair_runtime"} or "runtime" in danger:
@@ -163,10 +184,14 @@ def _permissions_for(meta: dict[str, Any], canonical_name: str, risk_level: str)
         permissions.add("process.control")
     if canonical_name.startswith("app.") or risk_level == "process_start":
         permissions.add("process.start")
+    if canonical_name == "web_search" or risk_level == "network":
+        permissions.add("network.search")
     if risk_level == "fallback" or canonical_name == "execute_cmd":
         permissions.add("shell.execute")
     if canonical_name == "system.list_tools":
         permissions.add("tool_registry.read")
+    if canonical_name == "get_file_link":
+        permissions.add("artifact.download_link")
     return sorted(permissions)
 
 
@@ -185,6 +210,12 @@ def _side_effects_for(canonical_name: str, risk_level: str) -> list[str]:
         return ["changes_window_state"]
     if canonical_name == "execute_cmd":
         return ["depends_on_command"]
+    if canonical_name == "get_file_link":
+        return ["creates_temporary_download_link"]
+    if canonical_name == "web_search":
+        return ["external_network_request"]
+    if canonical_name in {"remember_fact", "forget_fact"}:
+        return ["updates_memory_store"]
     if risk_level in {"safe", "read_only"}:
         return []
     return ["may_change_device_state"]
@@ -211,6 +242,12 @@ def _evidence_for(canonical_name: str) -> EvidenceContract:
         return EvidenceContract(produced=["memory_summary"], required_for_claims=["current_run_tool_result"], fresh_run_required=True)
     if canonical_name == "execute_cmd":
         return EvidenceContract(produced=["returncode", "stdout", "stderr"], required_for_claims=["returncode"], fresh_run_required=True)
+    if canonical_name == "get_file_link":
+        return EvidenceContract(produced=["download_url", "file_path"], required_for_claims=["download_url"], fresh_run_required=True)
+    if canonical_name == "web_search":
+        return EvidenceContract(produced=["web_results", "source_urls"], required_for_claims=["source_urls"], fresh_run_required=True)
+    if canonical_name in {"remember_fact", "forget_fact"}:
+        return EvidenceContract(produced=["memory_write_status"], required_for_claims=["status"], fresh_run_required=True)
     return EvidenceContract(produced=["tool_result"], required_for_claims=["current_run_tool_result"], fresh_run_required=True)
 
 
@@ -221,6 +258,10 @@ def _idempotency_for(canonical_name: str, risk_level: str) -> str:
         return "safe_repeat"
     if canonical_name in {"app.launch", "window.close", "app.close", "execute_cmd"}:
         return "unknown"
+    if canonical_name in {"get_file_link", "web_search"}:
+        return "safe_repeat"
+    if canonical_name in {"remember_fact", "forget_fact"}:
+        return "not_idempotent"
     if risk_level in {"safe", "read_only"}:
         return "idempotent"
     return "unknown"
@@ -233,6 +274,10 @@ def _when_not_to_use(canonical_name: str, meta: dict[str, Any]) -> list[str]:
         return ["binary files", "Office documents", "when shell execution is specifically needed"]
     if canonical_name == "answer.text":
         return ["before required tool evidence is collected", "together with another action tool in the same iteration"]
+    if canonical_name == "get_file_link":
+        return ["file path is unknown", "file was not created or verified in current context"]
+    if canonical_name == "web_search":
+        return ["local device state is needed", "a typed local tool can answer with current-run evidence"]
     if canonical_name.startswith("window."):
         return ["file system checks", "process launch without window verification"]
     if canonical_name.startswith("device."):
@@ -298,7 +343,7 @@ def build_contract_from_existing_registry(tool_name: str) -> dict[str, Any]:
         test_plan=_test_plan_for(canonical_name),
         ui=_ui_for(canonical_name),
         version=TOOL_CONTRACT_VERSION,
-        status="active",
+        status=str(meta.get("status") or "active"),
     )
     return asdict(contract)
 

@@ -6,6 +6,7 @@ from server.tool_contracts import (
     normalize_tool_contract,
     validate_tool_contract,
 )
+from server.tool_inventory import build_tool_inventory
 from server.tool_registry import DEVICE_TOOL_SCHEMAS, TOOL_METADATA, canonical_tool_name, list_tools
 
 
@@ -120,3 +121,66 @@ def test_normalize_tool_contract_accepts_partial_contract_without_crashing():
     assert normalized["version"] == "v1"
     assert normalized["evidence"]["fresh_run_required"] is True
     assert normalized["ui"]["show_in_used_tools"] is True
+
+
+def test_public_system_list_tools_have_contracts():
+    missing = []
+    for category_tools in list_tools("all").values():
+        for tool in category_tools:
+            if not get_tool_contract(tool["name"]):
+                missing.append(tool["name"])
+
+    assert missing == []
+
+
+def test_public_executable_inventory_actions_are_registered_and_contracted():
+    inventory = build_tool_inventory()
+    offenders = [
+        item
+        for item in inventory
+        if item["visibility"] == "public"
+        and item["executable"]
+        and (not item["registered"] or not item["has_contract"])
+    ]
+
+    assert offenders == []
+
+
+def test_legacy_and_hidden_actions_are_explicitly_marked():
+    inventory = {item["name"]: item for item in build_tool_inventory()}
+
+    assert inventory["create_plan"]["visibility"] == "legacy"
+    assert inventory["mark_step"]["visibility"] == "legacy"
+    assert inventory["agent.disconnect"]["visibility"] == "legacy"
+    assert inventory["window.screencapture"]["visibility"] == "hidden"
+    assert inventory["window.screencapture"]["executable"] is False
+
+
+def test_get_file_link_is_internal_contracted_download_tool_not_public_registry():
+    inventory = {item["name"]: item for item in build_tool_inventory()}
+    public_registry_names = {
+        tool["name"]
+        for tools in list_tools("all").values()
+        for tool in tools
+    }
+
+    assert inventory["get_file_link"]["visibility"] == "internal"
+    assert inventory["get_file_link"]["has_contract"] is True
+    assert "artifact.download_link" in get_tool_contract("get_file_link")["permissions"]
+    assert "get_file_link" not in public_registry_names
+
+
+def test_web_search_is_implemented_and_contracted_but_screencapture_is_not_advertised():
+    inventory = {item["name"]: item for item in build_tool_inventory()}
+    public_registry_names = {
+        tool["name"]
+        for tools in list_tools("all").values()
+        for tool in tools
+    }
+
+    assert inventory["web_search"]["executable"] is True
+    assert inventory["web_search"]["registered"] is True
+    assert inventory["web_search"]["has_contract"] is True
+    assert "network.search" in get_tool_contract("web_search")["permissions"]
+    assert "web_search" in public_registry_names
+    assert "window.screencapture" not in public_registry_names
