@@ -666,7 +666,19 @@ def _compact_tool_meta(name: str, meta: dict[str, Any]) -> dict[str, Any]:
         "purpose": meta.get("purpose"),
         "when_to_use": meta.get("when_to_use") or [],
         "danger": meta.get("danger"),
+        "contract_version": "v1",
     }
+    try:
+        from .tool_contracts import get_tool_contract
+    except ImportError:
+        try:
+            from tool_contracts import get_tool_contract  # type: ignore
+        except ImportError:
+            get_tool_contract = None  # type: ignore
+    if get_tool_contract:
+        contract = get_tool_contract(name) or {}
+        if contract.get("risk_level"):
+            result["risk_level"] = contract["risk_level"]
     if meta.get("returns"):
         result["returns"] = meta["returns"]
     if meta.get("uses_shell_internally") is not None:
