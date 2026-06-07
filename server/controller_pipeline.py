@@ -13,6 +13,7 @@ try:
     from .answer_auditor import audit_answer_payload  # type: ignore
     from .answer_repair import run_answer_only_repair_turn  # type: ignore
     from .controller_budget import CommandBudget, budget_guard_entry  # type: ignore
+    from .controller_tools import TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
     from .controller_trust import enforce_trusted_answer  # type: ignore
     from .device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
     from .python_env import classify_command_error, is_recoverable_command_error  # type: ignore
@@ -26,8 +27,19 @@ try:
         validate_toolchain_fact_against_receipt,
     )
     from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
+    from .memory_intent_guard import (  # type: ignore
+        MEMORY_WRITE_CORRECTION,
+        blocked_memory_write_result,
+        has_explicit_memory_write_intent,
+    )
     from .runtime_state import is_task_cancel_requested  # type: ignore
     from .task_summary import get_last_run_summary  # type: ignore
+    from .tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
+    from .tool_completion import (  # type: ignore
+        TERMINAL_CORRECTION,
+        synthesize_terminal_answer_payload,
+        tool_result_terminal_sufficient,
+    )
     from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from .tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
     from .tool_repeat_guard import (  # type: ignore
@@ -55,6 +67,7 @@ except ImportError:
     from answer_auditor import audit_answer_payload  # type: ignore
     from answer_repair import run_answer_only_repair_turn  # type: ignore
     from controller_budget import CommandBudget, budget_guard_entry  # type: ignore
+    from controller_tools import TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
     from controller_trust import enforce_trusted_answer  # type: ignore
     from device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
     from python_env import classify_command_error, is_recoverable_command_error  # type: ignore
@@ -68,8 +81,19 @@ except ImportError:
         validate_toolchain_fact_against_receipt,
     )
     from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
+    from memory_intent_guard import (  # type: ignore
+        MEMORY_WRITE_CORRECTION,
+        blocked_memory_write_result,
+        has_explicit_memory_write_intent,
+    )
     from runtime_state import is_task_cancel_requested  # type: ignore
     from task_summary import get_last_run_summary  # type: ignore
+    from tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
+    from tool_completion import (  # type: ignore
+        TERMINAL_CORRECTION,
+        synthesize_terminal_answer_payload,
+        tool_result_terminal_sufficient,
+    )
     from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
     from tool_repeat_guard import (  # type: ignore
@@ -156,14 +180,6 @@ PIPELINE_WORKER_HANDLED_TOOL_NAMES = (
     | set(PIPELINE_APP_WINDOW_ACTIONS)
     | {"execute_cmd", "write_content", "get_file_link", "web_search", "remember_fact", "forget_fact", "system_get_last_run_summary"}
 )
-
-
-def _open_url_has_terminal_evidence(entry: dict) -> bool:
-    if (entry.get("action") or entry.get("tool_name")) not in {"app_open_url", "app.open_url"}:
-        return False
-    result = entry.get("result")
-    return isinstance(result, dict) and bool(result.get("launched")) and bool(result.get("window_found"))
-
 
 def _pipeline_terminal_answer_tools(worker_tools: list[dict] | None) -> list[dict]:
     tools_by_name = {
@@ -592,6 +608,9 @@ Target device context:
 Текущая дата и время: {shared["current_datetime_msk"]}.
 
 {format_conversation_context_block(shared.get("conversation_context") or build_conversation_context(None, ""), redact_paths=True)}
+Previous failed run context:
+{json.dumps(shared.get("previous_failed_run_context") or {}, ensure_ascii=False)}
+
 {format_recent_artifact_context_block(shared.get("recent_artifact_context"))}
 """
 
@@ -1173,6 +1192,16 @@ async def run_pipeline_worker(
     })
 
     commands_log = []
+    tool_schemas = {
+        tool.get("function", {}).get("name"): tool
+        for tool in [*DEVICE_TOOL_SCHEMAS, *DEFAULT_CONTROLLER_TOOLS, *(worker_tools or [])]
+        if tool.get("function", {}).get("name")
+    }
+    terminal_sufficient_entry: dict | None = None
+    terminal_sufficient_extra_turn_used = False
+    memory_write_allowed = has_explicit_memory_write_intent(
+        f"{overall_goal}\n{step.get('title', '')}\n{step.get('instruction', '')}"
+    )
     command_budget = CommandBudget()
     step_device_id = step.get("device_id") or shared["current_device_id"]
     step_title = step.get("title") or step.get("instruction") or f"Step {step_index + 1}"
@@ -1253,6 +1282,24 @@ async def run_pipeline_worker(
                 continue
 
         if not tool_calls:
+            if terminal_sufficient_entry is not None:
+                payload = validate_answer_text_payload(
+                    synthesize_terminal_answer_payload(terminal_sufficient_entry),
+                    commands_log,
+                )
+                append_answer_step(
+                    commands_log,
+                    "answer_text",
+                    payload,
+                    target_device_id=step_device_id,
+                    hostname=shared.get("current_hostname") or step_device_id,
+                    iteration=iteration + 1,
+                )
+                return {
+                    "status": "ok",
+                    "answer": payload["text"],
+                    "commands": commands_log,
+                }
             messages.append({"role": "user", "content": RAW_CONTENT_CORRECTION})
             continue
 
@@ -1270,6 +1317,7 @@ async def run_pipeline_worker(
             continue
 
         if is_terminal_answer_tool(fn_name):
+            terminal_sufficient_entry = None
             try:
                 if is_answer_text_tool(fn_name):
                     payload = validate_answer_text_payload(fn_args_preview, commands_log)
@@ -1343,6 +1391,46 @@ async def run_pipeline_worker(
         for tool_call in tool_calls:
             fn_name = tool_call["function"]["name"]
             fn_args = json.loads(tool_call["function"]["arguments"] or "{}")
+            if terminal_sufficient_entry is not None and not is_terminal_answer_tool(fn_name):
+                payload = validate_answer_text_payload(
+                    synthesize_terminal_answer_payload(terminal_sufficient_entry),
+                    commands_log,
+                )
+                append_answer_step(
+                    commands_log,
+                    "answer_text",
+                    payload,
+                    target_device_id=step_device_id,
+                    hostname=shared.get("current_hostname") or step_device_id,
+                    iteration=iteration + 1,
+                )
+                return {
+                    "status": "ok",
+                    "answer": payload["text"],
+                    "commands": commands_log,
+                }
+
+            clean_args, arg_warnings, arg_error = validate_and_sanitize_tool_args(
+                fn_name,
+                fn_args,
+                tool_schemas.get(fn_name),
+            )
+            fn_args = clean_args
+            if arg_error:
+                entry = append_step_command(
+                    fn_name,
+                    f"[tool] {fn_name}",
+                    step_device_id,
+                    {**arg_error, "arg_warnings": arg_warnings} if arg_warnings else arg_error,
+                    status="failed",
+                )
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "content": json.dumps(wrap_tool_result_for_llm(entry), ensure_ascii=False)[:4000],
+                })
+                messages.append({"role": "user", "content": f"Tool arguments failed validation. {ONE_TOOL_CORRECTION}"})
+                continue
             requested_device_id = fn_args.pop("device_id", None)
             target_device = step_device_id
             repeat_guard_args = dict(fn_args)
@@ -1715,7 +1803,9 @@ async def run_pipeline_worker(
                 )
 
             elif fn_name == "remember_fact":
-                if not mem_user_id:
+                if not memory_write_allowed:
+                    tool_result = blocked_memory_write_result()
+                elif not mem_user_id:
                     tool_result = {"error": "Не удалось сохранить факт: пользователь не идентифицирован"}
                 else:
                     try:
@@ -1741,7 +1831,9 @@ async def run_pipeline_worker(
                 )
 
             elif fn_name == "forget_fact":
-                if not mem_user_id:
+                if not memory_write_allowed:
+                    tool_result = blocked_memory_write_result()
+                elif not mem_user_id:
                     tool_result = {"error": "Факт не найден"}
                 else:
                     try:
@@ -1766,22 +1858,39 @@ async def run_pipeline_worker(
                 or commands_log[-1].get("action") != fn_name
             ):
                 append_step_command(fn_name, f"[tool] {fn_name}", target_device, tool_result)
+            if arg_warnings and isinstance(commands_log[-1].get("result"), dict):
+                existing_warnings = list(commands_log[-1]["result"].get("arg_warnings") or [])
+                commands_log[-1]["result"]["arg_warnings"] = existing_warnings + arg_warnings
             mark_read_only_tool_step(commands_log[-1], fn_name, repeat_guard_args)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call["id"],
                 "content": json.dumps(wrap_tool_result_for_llm(commands_log[-1]), ensure_ascii=False)[:4000],
             })
-            if _open_url_has_terminal_evidence(commands_log[-1]):
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "Current-run evidence shows the URL was opened and a browser window was found. "
-                        "Do not call more action tools. Finish now with exactly one answer_text call. "
-                        "If focus_status is not focused, report that the link is open and the window was found, "
-                        "but focusing failed."
-                    ),
-                })
+            if isinstance(commands_log[-1].get("result"), dict) and commands_log[-1]["result"].get("error") == "memory_write_requires_explicit_user_intent":
+                messages.append({"role": "user", "content": MEMORY_WRITE_CORRECTION})
+            if tool_result_terminal_sufficient(commands_log[-1]):
+                terminal_sufficient_entry = commands_log[-1]
+                if terminal_sufficient_extra_turn_used:
+                    payload = validate_answer_text_payload(
+                        synthesize_terminal_answer_payload(commands_log[-1]),
+                        commands_log,
+                    )
+                    append_answer_step(
+                        commands_log,
+                        "answer_text",
+                        payload,
+                        target_device_id=target_device,
+                        hostname=shared.get("current_hostname") or target_device,
+                        iteration=iteration + 1,
+                    )
+                    return {
+                        "status": "ok",
+                        "answer": payload["text"],
+                        "commands": commands_log,
+                    }
+                terminal_sufficient_extra_turn_used = True
+                messages.append({"role": "user", "content": TERMINAL_CORRECTION})
 
     print("[pipeline/worker] max_iterations reached; attempting answer_text-only repair turn")
     repair_result = await run_answer_only_repair_turn(
@@ -1867,6 +1976,20 @@ async def process_pipeline_subagents(
     conversation_context = build_conversation_context(chat_history, user_message)
     shared["conversation_context"] = conversation_context
     shared["recent_artifact_context"] = build_recent_artifact_context(chat_history)
+    if user_id is not None or chat_id is not None:
+        previous_failed = get_last_run_summary(
+            user_id=user_id,
+            chat_id=chat_id,
+            include_success=False,
+            exclude_task_id=poll_task_id,
+        )
+        if previous_failed.get("last_task_id"):
+            shared["previous_failed_run_context"] = {
+                "last_task_id": previous_failed.get("last_task_id"),
+                "status": previous_failed.get("status"),
+                "failure_reason": previous_failed.get("failure_reason"),
+                "instruction": "If the user asks what happened, call system_get_last_run_summary before retrying anything.",
+            }
 
     set_current_step(poll_task_id, "ИРУ строит план...")
     history_msgs = build_chat_messages(chat_history[:-1], filter_onboarding=True)[-8:] if chat_history else []

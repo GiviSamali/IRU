@@ -66,6 +66,7 @@ def _message(content="", tool_calls=None, finish_reason="tool_calls"):
 def _run_case(
     responses,
     *,
+    user_message="Задача",
     send_command_fn=None,
     captured=None,
     chat_history=None,
@@ -84,7 +85,7 @@ def _run_case(
         return {"status": "ok", "returncode": 0, "stdout": "ok", "stderr": "", "path": params.get("path")}
 
     return asyncio.run(process_non_pipeline_command(
-        user_message="Задача",
+        user_message=user_message,
         device_id=device_id,
         device_info={"hostname": "devbox", "os": "Windows"},
         send_command_fn=_send,
@@ -568,6 +569,151 @@ def test_app_open_url_partial_focus_failure_terminates_with_answer_text():
     assert sent == [("app.open_url", {"url": "https://irumode.online/", "browser": "edge", "focus": True})]
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["app.open_url", "answer.text"]
     assert result["answer"] == "Ссылка открыта, окно найдено, но сфокусировать окно не удалось."
+
+
+def test_app_open_url_opened_unverified_synthesizes_terminal_answer():
+    sent = []
+    captured = []
+
+    async def _send(device_id, action, params):
+        sent.append((action, dict(params)))
+        if action != "app.open_url":
+            raise AssertionError("terminal partial URL evidence must not execute follow-up tools")
+        return {
+            "status": "opened_unverified",
+            "url": params["url"],
+            "launched": True,
+            "window_found": False,
+            "terminal_sufficient": True,
+            "completion_state": "partial_success",
+            "recommended_next": "answer_text",
+        }
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-open", "app_open_url", {"url": "https://irumode.online/"})]),
+        _message(tool_calls=[_tool_call("call-window", "window_list", {"visible": True})]),
+    ], send_command_fn=_send, captured=captured)
+
+    assert sent == [("app.open_url", {"url": "https://irumode.online/"})]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["app.open_url", "answer.text"]
+    assert result["commands"][1]["result"]["answer_type"] == "partial_report"
+    assert result["commands"][1]["result"]["basis"] == ["step_1"]
+    assert "команда открытия URL выполнена" in result["answer"]
+    assert len(captured) == 2
+
+
+def test_window_list_args_are_sanitized_before_agent_dispatch():
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append((action, dict(params)))
+        return {"status": "ok", "windows": []}
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-window-list", "window_list", {"visible": True, "process_name": "msedge.exe"})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Окна проверены.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], send_command_fn=_send)
+
+    assert sent == [("window.list", {"include_invisible": False})]
+    assert result["commands"][0]["result"]["arg_warnings"] == [
+        "mapped arg visible to include_invisible",
+        "ignored unknown arg: process_name; use window.find for filtering",
+    ]
+
+
+def test_window_find_process_name_is_preserved_by_arg_validation():
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append((action, dict(params)))
+        return {"status": "not_found", "matches": []}
+
+    _run_case([
+        _message(tool_calls=[_tool_call("call-window-find", "window_find", {"process_name": "msedge.exe", "visible": True})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Окно не найдено.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], send_command_fn=_send)
+
+    assert sent == [("window.find", {"process_name": "msedge.exe", "visible": True})]
+
+
+def test_app_open_url_unknown_arg_is_rejected_before_agent_dispatch():
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append((action, dict(params)))
+        return {"status": "opened_unverified", "launched": True}
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-open", "app_open_url", {"url": "https://irumode.online/", "visible": True})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Аргумент visible не поддерживается для app.open_url.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], send_command_fn=_send)
+
+    assert sent == []
+    assert result["commands"][0]["tool_name"] == "app.open_url"
+    assert result["commands"][0]["result"]["error"] == "unknown_tool_arguments"
+    assert result["commands"][0]["result"]["unknown_args"] == ["visible"]
+
+
+def test_remember_fact_blocked_without_explicit_memory_intent(monkeypatch):
+    def _add_user_fact_should_not_run(**kwargs):
+        raise AssertionError("unsolicited remember_fact must not write memory")
+
+    monkeypatch.setattr(controller_non_pipeline.db, "add_user_fact", _add_user_fact_should_not_run)
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-memory", "remember_fact", {"text": "browser opened"})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Память не изменял, потому что пользователь не просил ничего запоминать.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], mem_user_id="user-1")
+
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["remember_fact", "answer.text"]
+    assert result["commands"][0]["result"] == {
+        "status": "blocked",
+        "error": "memory_write_requires_explicit_user_intent",
+    }
+
+
+def test_remember_fact_allowed_with_explicit_memory_intent(monkeypatch):
+    saved = []
+
+    monkeypatch.setattr(controller_non_pipeline, "validate_toolchain_fact_against_receipt", lambda text, receipt: (True, text))
+    monkeypatch.setattr(
+        controller_non_pipeline.db,
+        "add_user_fact",
+        lambda user_id, text, category=None: saved.append((user_id, text, category)) or 101,
+    )
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-memory", "remember_fact", {"text": "основной браузер - Comet", "category": "preference"})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Запомнил основной браузер.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], user_message="Запомни, что основной браузер на этом ПК - Comet", mem_user_id="user-1")
+
+    assert saved == [("user-1", "основной браузер - Comet", "preference")]
+    assert result["commands"][0]["result"]["status"] == "ok"
 
 
 def test_duplicate_device_get_passport_is_guarded_then_answer_text():

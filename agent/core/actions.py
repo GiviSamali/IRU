@@ -1079,14 +1079,28 @@ def _browser_process_name(browser: str) -> str:
         "edge": "msedge.exe",
         "chrome": "chrome.exe",
         "comet": "comet.exe",
+        "firefox": "firefox.exe",
     }
     return mapping.get(value, "")
+
+
+def _known_browser_process_names() -> list[str]:
+    return ["comet.exe", "msedge.exe", "chrome.exe", "firefox.exe", "browser.exe"]
 
 
 def _browser_executable(browser: str) -> str:
     process_name = _browser_process_name(browser)
     if not process_name:
         return ""
+    if (browser or "").strip().lower() == "comet":
+        local_appdata = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        candidates = [
+            Path("C:/Program Files/Perplexity/Comet/Application/comet.exe"),
+            Path(local_appdata) / "Perplexity" / "Comet" / "Application" / "comet.exe",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
     found = shutil.which(process_name)
     return found or process_name
 
@@ -1096,16 +1110,44 @@ def _url_window_hint(url: str) -> str:
     return parsed.netloc or parsed.path or url
 
 
+def _find_known_browser_window(timeout_sec: float = 2) -> dict | None:
+    if os.name != "nt":
+        return None
+    deadline = time.monotonic() + max(0.0, min(float(timeout_sec or 0), 10.0))
+    while True:
+        windows = _list_windows_internal(include_invisible=False, include_minimized=True, limit=250)
+        for process_name in _known_browser_process_names():
+            for window in windows:
+                actual = (window.get("process_name") or "").lower()
+                if actual == process_name or Path(actual).stem == Path(process_name).stem:
+                    return window
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(0.2)
+
+
+def _url_completion_fields(status: str, launched: bool) -> dict:
+    if status == "opened_verified":
+        return {"terminal_sufficient": True, "completion_state": "success", "recommended_next": "answer_text"}
+    if status in {"opened_visible_focus_failed", "opened_unverified", "opened_browser_visible"}:
+        return {"terminal_sufficient": True, "completion_state": "partial_success", "recommended_next": "answer_text"}
+    return {"terminal_sufficient": False, "completion_state": "failed" if not launched else "partial_success", "recommended_next": "answer_text" if launched else "retry_or_report"}
+
+
 def app_open_url(url: str, browser: str = "default", focus: bool = True, timeout_sec: float = 7) -> dict:
     url = str(url or "").strip()
     browser = (browser or "default").strip().lower()
     if browser == "auto":
         browser = "default"
     if not url:
-        return {"status": "failed", "error": "missing url", "url": url, "launched": False, "window_found": False}
+        result = {"status": "failed", "error": "missing url", "url": url, "launched": False, "window_found": False}
+        result.update(_url_completion_fields("failed", False))
+        return result
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return {"status": "failed", "error": "url must be an absolute http(s) URL", "url": url, "launched": False, "window_found": False}
+        result = {"status": "failed", "error": "url must be an absolute http(s) URL", "url": url, "launched": False, "window_found": False}
+        result.update(_url_completion_fields("failed", False))
+        return result
 
     pid = None
     process_name = _browser_process_name(browser)
@@ -1156,6 +1198,8 @@ def app_open_url(url: str, browser: str = "default", focus: bool = True, timeout
             window_result = window_find(title_contains=title_hint, visible=True, timeout_sec=2)
 
     window = window_result.get("match") if isinstance(window_result, dict) else None
+    if launched and not window:
+        window = _find_known_browser_window(timeout_sec=2)
     focus_result = None
     if focus and window:
         focus_result = window_focus(handle=window.get("handle"))
@@ -1166,7 +1210,7 @@ def app_open_url(url: str, browser: str = "default", focus: bool = True, timeout
     if focus and window_found and focus_status and focus_status != "focused":
         status = "opened_visible_focus_failed"
 
-    return {
+    result = {
         "status": status,
         "url": url,
         "browser": browser,
@@ -1185,6 +1229,8 @@ def app_open_url(url: str, browser: str = "default", focus: bool = True, timeout
             "focus_status": focus_status,
         },
     }
+    result.update(_url_completion_fields(status, launched))
+    return result
 
 
 def app_verify_launch(pid: int, expected_title: str | None = None, expected_process: str | None = None, timeout_sec: float = 5) -> dict:
