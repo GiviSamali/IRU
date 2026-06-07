@@ -25,6 +25,8 @@ try:
     )
     from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from .runtime_state import is_task_cancel_requested  # type: ignore
+    from .task_summary import get_last_run_summary  # type: ignore
+    from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from .tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
     from .tool_repeat_guard import (  # type: ignore
         duplicate_read_only_tool_message,
@@ -71,6 +73,8 @@ except ImportError:
     )
     from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from runtime_state import is_task_cancel_requested  # type: ignore
+    from task_summary import get_last_run_summary  # type: ignore
+    from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
     from tool_repeat_guard import (  # type: ignore
         duplicate_read_only_tool_message,
@@ -130,9 +134,17 @@ APP_WINDOW_ACTIONS = {
     "window_focus": "window.focus",
     "window_close": "window.close",
     "app_launch": "app.launch",
+    "app_open_url": "app.open_url",
     "app_verify_launch": "app.verify_launch",
     "app_close": "app.close",
 }
+
+
+def _open_url_has_terminal_evidence(entry: dict) -> bool:
+    if (entry.get("action") or entry.get("tool_name")) not in {"app_open_url", "app.open_url"}:
+        return False
+    result = entry.get("result")
+    return isinstance(result, dict) and bool(result.get("launched")) and bool(result.get("window_found"))
 
 
 async def _run_web_search(cfg: dict, query: str, max_results: int) -> dict:
@@ -369,6 +381,7 @@ async def process_non_pipeline_command(
                 try:
                     if is_answer_text_tool(fn_name):
                         answer_payload = validate_answer_text_payload(fn_args_preview, commands_log)
+                        answer_payload = sanitize_system_list_tools_answer(answer_payload, commands_log)
                         audit_ok, audit_reason, audit_infra_error = await audit_answer_payload(
                             client=client,
                             cfg=cfg,
@@ -565,7 +578,7 @@ async def process_non_pipeline_command(
                 if fn_name == "web_search":
                     query = fn_args.get("query", "")[:60]
                     set_current_step(poll_task_id, f"Ищу в интернете: {query}")
-                elif fn_name == "system_list_tools":
+                elif fn_name in {"system_list_tools", "system_get_last_run_summary"}:
                     set_current_step(poll_task_id, "Checking tool registry")
                 elif fn_name in MEMORY_TOOL_NAMES:
                     set_current_step(poll_task_id, "Checking memory")
@@ -591,6 +604,21 @@ async def process_non_pipeline_command(
                         command="[tool] system.list_tools",
                         target_device_id=target_device,
                         hostname=device_info.get("hostname") or target_device,
+                        iteration=iteration + 1,
+                    ))
+                elif fn_name == "system_get_last_run_summary":
+                    tool_result = get_last_run_summary(
+                        user_id=user_id,
+                        chat_id=int(fn_args.get("chat_id") or chat_id) if (fn_args.get("chat_id") or chat_id) else None,
+                        include_success=bool(fn_args.get("include_success", True)),
+                        exclude_task_id=poll_task_id,
+                    )
+                    append_entry(tool_log_entry(
+                        fn_name,
+                        tool_result,
+                        command="[tool] system.get_last_run_summary",
+                        target_device_id=None,
+                        hostname=None,
                         iteration=iteration + 1,
                     ))
 
@@ -875,6 +903,16 @@ async def process_non_pipeline_command(
                     ))
                 mark_read_only_tool_step(commands_log[-1], fn_name, repeat_guard_args)
                 append_tool_message(tool_call["id"], commands_log[-1])
+                if _open_url_has_terminal_evidence(commands_log[-1]):
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Current-run evidence shows the URL was opened and a browser window was found. "
+                            "Do not call more action tools. Finish now with exactly one answer_text call. "
+                            "If focus_status is not focused, report that the link is open and the window was found, "
+                            "but focusing failed."
+                        ),
+                    })
 
     print("[tool-only] max_iterations reached; attempting answer_text-only repair turn")
     repair_result = await run_answer_only_repair_turn(

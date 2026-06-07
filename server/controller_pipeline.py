@@ -27,6 +27,8 @@ try:
     )
     from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from .runtime_state import is_task_cancel_requested  # type: ignore
+    from .task_summary import get_last_run_summary  # type: ignore
+    from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from .tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
     from .tool_repeat_guard import (  # type: ignore
         duplicate_read_only_tool_message,
@@ -67,6 +69,8 @@ except ImportError:
     )
     from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from runtime_state import is_task_cancel_requested  # type: ignore
+    from task_summary import get_last_run_summary  # type: ignore
+    from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
     from tool_repeat_guard import (  # type: ignore
         duplicate_read_only_tool_message,
@@ -141,6 +145,7 @@ PIPELINE_APP_WINDOW_ACTIONS = {
     "window_focus": "window.focus",
     "window_close": "window.close",
     "app_launch": "app.launch",
+    "app_open_url": "app.open_url",
     "app_verify_launch": "app.verify_launch",
     "app_close": "app.close",
 }
@@ -149,8 +154,15 @@ PIPELINE_WORKER_HANDLED_TOOL_NAMES = (
     | PIPELINE_DEVICE_TOOL_NAMES
     | PIPELINE_MEMORY_TOOL_NAMES
     | set(PIPELINE_APP_WINDOW_ACTIONS)
-    | {"execute_cmd", "write_content", "get_file_link", "web_search", "remember_fact", "forget_fact"}
+    | {"execute_cmd", "write_content", "get_file_link", "web_search", "remember_fact", "forget_fact", "system_get_last_run_summary"}
 )
+
+
+def _open_url_has_terminal_evidence(entry: dict) -> bool:
+    if (entry.get("action") or entry.get("tool_name")) not in {"app_open_url", "app.open_url"}:
+        return False
+    result = entry.get("result")
+    return isinstance(result, dict) and bool(result.get("launched")) and bool(result.get("window_found"))
 
 
 def _pipeline_terminal_answer_tools(worker_tools: list[dict] | None) -> list[dict]:
@@ -1261,6 +1273,7 @@ async def run_pipeline_worker(
             try:
                 if is_answer_text_tool(fn_name):
                     payload = validate_answer_text_payload(fn_args_preview, commands_log)
+                    payload = sanitize_system_list_tools_answer(payload, commands_log)
                     audit_ok, audit_reason, audit_infra_error = await audit_answer_payload(
                         client=client,
                         cfg=cfg,
@@ -1445,6 +1458,29 @@ async def run_pipeline_worker(
                 append_step_command(
                     fn_name,
                     f"[tool] {fn_name}",
+                    None,
+                    tool_result,
+                )
+
+            elif fn_name == "system_get_last_run_summary":
+                set_current_step(poll_task_id, "Checking previous run summary")
+                try:
+                    summary_user_id = int((usage_context or {}).get("user_id")) if (usage_context or {}).get("user_id") is not None else None
+                except (TypeError, ValueError):
+                    summary_user_id = None
+                try:
+                    summary_chat_id = int(fn_args.get("chat_id") or (usage_context or {}).get("chat_id")) if (fn_args.get("chat_id") or (usage_context or {}).get("chat_id")) else None
+                except (TypeError, ValueError):
+                    summary_chat_id = None
+                tool_result = get_last_run_summary(
+                    user_id=summary_user_id,
+                    chat_id=summary_chat_id,
+                    include_success=bool(fn_args.get("include_success", True)),
+                    exclude_task_id=poll_task_id,
+                )
+                append_step_command(
+                    fn_name,
+                    "[tool] system.get_last_run_summary",
                     None,
                     tool_result,
                 )
@@ -1736,6 +1772,16 @@ async def run_pipeline_worker(
                 "tool_call_id": tool_call["id"],
                 "content": json.dumps(wrap_tool_result_for_llm(commands_log[-1]), ensure_ascii=False)[:4000],
             })
+            if _open_url_has_terminal_evidence(commands_log[-1]):
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Current-run evidence shows the URL was opened and a browser window was found. "
+                        "Do not call more action tools. Finish now with exactly one answer_text call. "
+                        "If focus_status is not focused, report that the link is open and the window was found, "
+                        "but focusing failed."
+                    ),
+                })
 
     print("[pipeline/worker] max_iterations reached; attempting answer_text-only repair turn")
     repair_result = await run_answer_only_repair_turn(
@@ -2119,6 +2165,7 @@ async def process_pipeline_subagents(
                 try:
                     if is_answer_text_tool(fn_name):
                         payload = validate_answer_text_payload(fn_args, all_commands)
+                        payload = sanitize_system_list_tools_answer(payload, all_commands)
                         audit_ok, audit_reason, audit_infra_error = await audit_answer_payload(
                             client=client,
                             cfg=cfg,

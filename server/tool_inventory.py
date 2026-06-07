@@ -63,6 +63,7 @@ LEGACY_OR_INTERNAL_ACTIONS: dict[str, dict[str, Any]] = {
 
 CONTROLLER_EXECUTABLE_TOOL_NAMES = {
     "system.list_tools",
+    "system.get_last_run_summary",
     "memory.get_stats",
     "memory.list_facts",
     "device.get_passport",
@@ -78,6 +79,7 @@ CONTROLLER_EXECUTABLE_TOOL_NAMES = {
     "window.focus",
     "window.close",
     "app.launch",
+    "app.open_url",
     "app.verify_launch",
     "app.close",
     "write_content",
@@ -156,6 +158,7 @@ def _agent_action_names() -> set[str]:
             "window.focus",
             "window.close",
             "app.launch",
+            "app.open_url",
             "app.verify_launch",
             "app.close",
             "agent.shutdown",

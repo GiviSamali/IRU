@@ -190,6 +190,8 @@ def _permissions_for(meta: dict[str, Any], canonical_name: str, risk_level: str)
         permissions.add("shell.execute")
     if canonical_name == "system.list_tools":
         permissions.add("tool_registry.read")
+    if canonical_name == "system.get_last_run_summary":
+        permissions.add("task.read")
     if canonical_name == "get_file_link":
         permissions.add("artifact.download_link")
     return sorted(permissions)
@@ -246,6 +248,8 @@ def _evidence_for(canonical_name: str) -> EvidenceContract:
         return EvidenceContract(produced=["download_url", "file_path"], required_for_claims=["download_url"], fresh_run_required=True)
     if canonical_name == "web_search":
         return EvidenceContract(produced=["web_results", "source_urls"], required_for_claims=["source_urls"], fresh_run_required=True)
+    if canonical_name == "system.get_last_run_summary":
+        return EvidenceContract(produced=["last_task_summary"], required_for_claims=["last_task_id"], fresh_run_required=True)
     if canonical_name in {"remember_fact", "forget_fact"}:
         return EvidenceContract(produced=["memory_write_status"], required_for_claims=["status"], fresh_run_required=True)
     return EvidenceContract(produced=["tool_result"], required_for_claims=["current_run_tool_result"], fresh_run_required=True)

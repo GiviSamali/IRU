@@ -26,8 +26,10 @@ CANONICAL_TOOL_NAMES = {
     "window_focus": "window.focus",
     "window_close": "window.close",
     "app_launch": "app.launch",
+    "app_open_url": "app.open_url",
     "app_verify_launch": "app.verify_launch",
     "app_close": "app.close",
+    "system_get_last_run_summary": "system.get_last_run_summary",
     "answer_text": "answer.text",
     "answer_ask_clarification": "answer.ask_clarification",
     "answer_report_failure": "answer.report_failure",
@@ -45,6 +47,15 @@ TOOL_METADATA = {
         "purpose": "List available typed tools grouped by category",
         "when_to_use": ["need available capabilities", "before choosing a tool"],
         "returns": "compact grouped tool registry",
+        "danger": "safe",
+    },
+    "system.get_last_run_summary": {
+        "category": "system",
+        "tool_type": "system",
+        "tool_label": "Last run summary",
+        "purpose": "Explain the previous task/run result without retrying the action",
+        "when_to_use": ["user asks what happened", "user asks why the previous run failed", "need last failed task evidence"],
+        "returns": "last task status, used tools, failed tools, evidence and failure reason",
         "danger": "safe",
     },
     "memory.get_stats": {
@@ -204,6 +215,15 @@ TOOL_METADATA = {
         "returns": "pid + launch status + optional window",
         "danger": "process_start",
     },
+    "app.open_url": {
+        "category": "app",
+        "tool_type": "typed",
+        "tool_label": "Open URL",
+        "purpose": "Open a URL in the default or selected browser and verify a visible browser window",
+        "when_to_use": ["open URL", "open remembered link", "open webpage in browser"],
+        "returns": "URL open status + browser/window evidence",
+        "danger": "process_start",
+    },
     "app.verify_launch": {
         "category": "app",
         "tool_type": "typed",
@@ -332,9 +352,23 @@ DEVICE_TOOL_SCHEMAS = [
                 "properties": {
                     "category": {
                         "type": "string",
-                        "enum": ["all", "system", "memory", "device", "files", "python", "window", "app", "artifact", "answer"],
+                        "enum": ["all", "system", "memory", "device", "files", "python", "window", "app", "artifact", "web", "answer"],
                         "default": "all",
                     }
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "system_get_last_run_summary",
+            "description": "Get a compact summary of the previous task/run for this chat/user. Use when the user asks what happened or why the previous task failed. Do not retry the previous action unless explicitly asked.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chat_id": {"type": "integer", "description": "Optional current chat id."},
+                    "include_success": {"type": "boolean", "default": True},
                 },
             },
         },
@@ -347,6 +381,24 @@ DEVICE_TOOL_SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "app_open_url",
+            "description": "Open a URL in the default or selected browser and verify a visible browser window. Prefer this over execute_cmd for URL opening.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string", "description": "Optional device ID. Defaults to current device."},
+                    "url": {"type": "string"},
+                    "browser": {"type": "string", "enum": ["default", "edge", "comet", "chrome", "auto"], "default": "default"},
+                    "focus": {"type": "boolean", "default": True},
+                    "timeout_sec": {"type": "number", "default": 7},
+                },
+                "required": ["url"],
             },
         },
     },
@@ -790,6 +842,13 @@ def compact_tool_summary(action: str, result: Any = None, command: str = "") -> 
             pid = result.get("pid") or window.get("pid") or ""
             title = window.get("title") or result.get("window_title") or ""
             bits = [f"status={status}"]
+            if name == "app.open_url":
+                if result.get("url"):
+                    bits.append(f"url={str(result.get('url'))[:120]}")
+                if result.get("window_found") is not None:
+                    bits.append(f"window_found={bool(result.get('window_found'))}")
+                if result.get("focus_status"):
+                    bits.append(f"focus={result.get('focus_status')}")
             if pid:
                 bits.append(f"pid={pid}")
             if result.get("verified") is not None:

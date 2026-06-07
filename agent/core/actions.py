@@ -13,6 +13,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .local_state import load_device_passport_cache, update_device_passport_cache, write_json_state
 from platforms import get_platform
@@ -1072,6 +1073,120 @@ def app_launch(
     }
 
 
+def _browser_process_name(browser: str) -> str:
+    value = (browser or "default").strip().lower()
+    mapping = {
+        "edge": "msedge.exe",
+        "chrome": "chrome.exe",
+        "comet": "comet.exe",
+    }
+    return mapping.get(value, "")
+
+
+def _browser_executable(browser: str) -> str:
+    process_name = _browser_process_name(browser)
+    if not process_name:
+        return ""
+    found = shutil.which(process_name)
+    return found or process_name
+
+
+def _url_window_hint(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed.netloc or parsed.path or url
+
+
+def app_open_url(url: str, browser: str = "default", focus: bool = True, timeout_sec: float = 7) -> dict:
+    url = str(url or "").strip()
+    browser = (browser or "default").strip().lower()
+    if browser == "auto":
+        browser = "default"
+    if not url:
+        return {"status": "failed", "error": "missing url", "url": url, "launched": False, "window_found": False}
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return {"status": "failed", "error": "url must be an absolute http(s) URL", "url": url, "launched": False, "window_found": False}
+
+    pid = None
+    process_name = _browser_process_name(browser)
+    launched = False
+    launch_error = ""
+    try:
+        if browser in {"edge", "chrome", "comet"}:
+            executable = _browser_executable(browser)
+            proc = subprocess.Popen(
+                [executable, url],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                shell=False,
+                creationflags=_launch_creationflags(),
+            )
+            pid = proc.pid
+            launched = True
+        else:
+            if os.name == "nt":
+                os.startfile(url)  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(
+                    ["xdg-open", url],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    shell=False,
+                    creationflags=_launch_creationflags(),
+                )
+            launched = True
+    except Exception as exc:
+        launch_error = str(exc)
+
+    timeout = max(0.0, min(float(timeout_sec or 0), 30.0))
+    title_hint = _url_window_hint(url)
+    window_result = {"status": "not_checked", "match": None}
+    if launched:
+        criteria = {"timeout_sec": timeout, "visible": True}
+        if pid:
+            criteria["pid"] = pid
+        elif process_name:
+            criteria["process_name"] = process_name
+        else:
+            criteria["title_contains"] = title_hint
+        window_result = window_find(**criteria) if os.name == "nt" else {"status": "failed", "match": None}
+        if not window_result.get("match") and title_hint and os.name == "nt":
+            window_result = window_find(title_contains=title_hint, visible=True, timeout_sec=2)
+
+    window = window_result.get("match") if isinstance(window_result, dict) else None
+    focus_result = None
+    if focus and window:
+        focus_result = window_focus(handle=window.get("handle"))
+
+    focus_status = (focus_result or {}).get("status") if isinstance(focus_result, dict) else ""
+    window_found = bool(window)
+    status = "opened_verified" if launched and window_found else ("opened_unverified" if launched else "failed")
+    if focus and window_found and focus_status and focus_status != "focused":
+        status = "opened_visible_focus_failed"
+
+    return {
+        "status": status,
+        "url": url,
+        "browser": browser,
+        "launched": launched,
+        "process_name": process_name,
+        "pid": pid,
+        "window_found": window_found,
+        "window_title": window.get("title") if window else "",
+        "window": window,
+        "focus_status": focus_status,
+        "launch_error": launch_error,
+        "evidence_summary": {
+            "launched": launched,
+            "window_found": window_found,
+            "window_title": window.get("title") if window else "",
+            "focus_status": focus_status,
+        },
+    }
+
+
 def app_verify_launch(pid: int, expected_title: str | None = None, expected_process: str | None = None, timeout_sec: float = 5) -> dict:
     result = window_verify(pid=pid, title_contains=expected_title, process_name=expected_process, timeout_sec=timeout_sec)
     return {
@@ -1327,6 +1442,7 @@ ACTIONS = {
     "window.focus": lambda **params: window_focus(**params),
     "window.close": lambda **params: window_close(**params),
     "app.launch": lambda **params: app_launch(**params),
+    "app.open_url": lambda **params: app_open_url(**params),
     "app.verify_launch": lambda **params: app_verify_launch(**params),
     "app.close": lambda **params: app_close(**params),
 }

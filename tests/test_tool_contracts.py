@@ -184,3 +184,22 @@ def test_web_search_is_implemented_and_contracted_but_screencapture_is_not_adver
     assert "network.search" in get_tool_contract("web_search")["permissions"]
     assert "web_search" in public_registry_names
     assert "window.screencapture" not in public_registry_names
+
+
+def test_open_url_and_last_run_summary_are_public_contracted_tools():
+    inventory = {item["name"]: item for item in build_tool_inventory()}
+    public_registry_names = {
+        tool["name"]
+        for tools in list_tools("all").values()
+        for tool in tools
+    }
+
+    assert inventory["app.open_url"]["visibility"] == "public"
+    assert inventory["app.open_url"]["executable"] is True
+    assert inventory["app.open_url"]["has_contract"] is True
+    assert "process.start" in get_tool_contract("app.open_url")["permissions"]
+    assert "app.open_url" in public_registry_names
+
+    assert inventory["system.get_last_run_summary"]["visibility"] == "public"
+    assert inventory["system.get_last_run_summary"]["has_contract"] is True
+    assert "system.get_last_run_summary" in public_registry_names

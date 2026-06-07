@@ -3,6 +3,7 @@ import json
 
 import server.controller_non_pipeline as controller_non_pipeline
 import server.controller_pipeline as controller_pipeline
+import server.runtime_state as runtime_state
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_pipeline import process_pipeline_subagents, run_pipeline_worker
 from server.run_journal import validate_answer_text_payload
@@ -70,6 +71,7 @@ def _run_case(
     chat_history=None,
     cfg=None,
     user_id=None,
+    chat_id=None,
     mem_user_id=None,
     device_id="device-1",
     poll_task_id=None,
@@ -89,7 +91,7 @@ def _run_case(
         get_file_link_fn=lambda device_id, path: "/api/download/mock",
         chat_history=chat_history or [],
         user_id=user_id,
-        chat_id=None,
+        chat_id=chat_id,
         modes={},
         poll_task_id=poll_task_id,
         cfg=cfg or {"model": "mock-model", "max_tokens": 512, "answer_auditor_enabled": False},
@@ -449,6 +451,123 @@ def test_duplicate_memory_list_facts_is_guarded_then_answer_text(monkeypatch):
 
     assert calls == [("memory_list_facts", {}, "user-1")]
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["memory.list_facts", "answer.text"]
+
+
+def test_system_list_tools_grounded_answer_cannot_add_hidden_tools():
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-tools", "system_list_tools", {"category": "all"})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Доступны system.list_tools, get_file_link и window.screencapture. Насчёт вкладок: попробую открыть.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ])
+
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["system.list_tools", "answer.text"]
+    assert "get_file_link" not in result["answer"]
+    assert "window.screencapture" not in result["answer"]
+    assert "Насчёт вкладок" not in result["answer"]
+    public_names = {
+        tool["name"]
+        for tools in list_tools("all").values()
+        for tool in tools
+    }
+    for token in result["answer"].replace(",", " ").split():
+        if "." in token or "_" in token:
+            clean = token.strip(":-")
+            assert clean in public_names or clean in {"Доступные", "инструменты"}
+
+
+def test_get_last_run_summary_explains_previous_failure_without_retry():
+    runtime_state.tasks["previous-failed"] = {
+        "task_id": "previous-failed",
+        "user_id": 42,
+        "chat_id": 77,
+        "message": "open url",
+        "status": "error",
+        "answer": "model did not choose an answer tool before max_iterations",
+        "commands": [
+            {
+                "action": "execute_cmd",
+                "tool_name": "execute_cmd",
+                "step_id": "old_step_1",
+                "status": "success",
+                "result": {"returncode": 0, "stdout": "started"},
+                "summary": "browser start command succeeded",
+            },
+            {
+                "action": "answer_repair",
+                "tool_name": "answer_repair",
+                "step_id": "old_step_2",
+                "status": "failed",
+                "result": {"error": "model did not choose an answer tool before max_iterations"},
+            },
+        ],
+        "created_at": 1000,
+    }
+    runtime_state.tasks["current-running"] = {
+        "task_id": "current-running",
+        "user_id": 42,
+        "chat_id": 77,
+        "message": "Что случилось?",
+        "status": "running",
+        "commands": [],
+        "created_at": 2000,
+    }
+
+    async def _send(device_id, action, params):
+        raise AssertionError("what happened flow must not retry device actions")
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-last", "system_get_last_run_summary", {})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Предыдущий запуск частично сработал: execute_cmd стартовал браузер, но финальный answer.text не был выбран до лимита.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], send_command_fn=_send, user_id=42, poll_task_id="current-running", chat_id=77)
+
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["system.get_last_run_summary", "answer.text"]
+    summary = result["commands"][0]["result"]
+    assert summary["last_task_id"] == "previous-failed"
+    assert summary["partial_success_likely"] is True
+    assert "execute_cmd" in summary["used_tools"]
+    assert "answer_repair" in summary["failed_tools"]
+
+
+def test_app_open_url_partial_focus_failure_terminates_with_answer_text():
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append((action, dict(params)))
+        assert action == "app.open_url"
+        return {
+            "status": "opened_visible_focus_failed",
+            "url": params["url"],
+            "launched": True,
+            "process_name": "msedge.exe",
+            "pid": 123,
+            "window_found": True,
+            "window_title": "IRU Landing - Edge",
+            "focus_status": "failed",
+            "window": {"title": "IRU Landing - Edge", "pid": 123},
+        }
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-open", "app_open_url", {"url": "https://irumode.online/", "browser": "edge", "focus": True})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Ссылка открыта, окно найдено, но сфокусировать окно не удалось.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], send_command_fn=_send)
+
+    assert sent == [("app.open_url", {"url": "https://irumode.online/", "browser": "edge", "focus": True})]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["app.open_url", "answer.text"]
+    assert result["answer"] == "Ссылка открыта, окно найдено, но сфокусировать окно не удалось."
 
 
 def test_duplicate_device_get_passport_is_guarded_then_answer_text():
