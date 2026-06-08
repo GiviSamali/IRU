@@ -1531,6 +1531,26 @@ def update_tool_proposal_status(
     return get_tool_proposal(proposal_id, user_id=user_id)
 
 
+def update_tool_proposal_notes(
+    proposal_id: int,
+    notes: str | None,
+    user_id: int | None = None,
+) -> dict | None:
+    proposal = get_tool_proposal(proposal_id, user_id=user_id)
+    if not proposal:
+        return None
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE tool_proposals
+            SET notes = ?, updated_at = ?
+            WHERE id = ? AND (? IS NULL OR user_id = ?)
+            """,
+            (notes, time.time(), proposal_id, user_id, user_id),
+        )
+    return get_tool_proposal(proposal_id, user_id=user_id)
+
+
 def get_user_facts(user_id: str) -> list[dict]:
     """Все факты пользователя (старые первыми)."""
     with get_db() as conn:

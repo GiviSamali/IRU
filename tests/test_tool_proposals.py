@@ -211,6 +211,16 @@ def test_api_patch_rejects_approved_but_allows_rejected_and_notes(client):
     assert proposal["status"] == "rejected"
     assert proposal["notes"] == "user cancelled"
 
+    notes_resp = client.patch(
+        f"/api/tool-proposals/{proposal_id}",
+        headers={"X-Token": user["token"]},
+        json={"notes": "updated note only"},
+    )
+    assert notes_resp.status_code == 200
+    proposal = notes_resp.json()["proposal"]
+    assert proposal["status"] == "rejected"
+    assert proposal["notes"] == "updated note only"
+
 
 def test_proposal_name_validation_and_secret_rejection(client):
     from server.database import create_user

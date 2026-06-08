@@ -18,6 +18,11 @@ const state = {
   memoryPanelLoading: false,
   memoryPanelError: '',
   memoryFacts: [],
+  toolProposalsOpen: false,
+  toolProposalsLoading: false,
+  toolProposalsError: '',
+  toolProposals: [],
+  selectedToolProposalId: null,
   pendingTasks: [],  // [{task_id, msgIndex}]
   expandedStepDetails: new Set(),
   expandedStepCommands: new Set(),
@@ -175,6 +180,9 @@ function doLogout() {
   if (typeof updateStopButton === 'function') updateStopButton();
   state.explorerOpen = false;
   state.devModeOpen = false;
+  state.toolProposalsOpen = false;
+  state.toolProposals = [];
+  state.selectedToolProposalId = null;
   document.getElementById('authScreen').style.display = 'flex';
   document.getElementById('appRoot').classList.remove('active');
   const btnAdmin = document.getElementById('btnAdmin');

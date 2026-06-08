@@ -168,20 +168,28 @@ def update_current_user_tool_proposal_status(
     user_id: int | None,
     allow_admin_review: bool = False,
 ) -> dict[str, Any]:
-    if status not in ALLOWED_PROPOSAL_STATUSES:
+    normalized_status = str(status or "").strip()
+    if not normalized_status and notes is not None:
+        if _text_contains_forbidden(notes):
+            raise ToolProposalValidationError("notes must not contain secrets or direct production execution instructions")
+        proposal = _db().update_tool_proposal_notes(proposal_id, notes, user_id=user_id)
+        if not proposal:
+            return {"status": "not_found", "error": "proposal not found"}
+        return {"status": "updated", "proposal": proposal}
+    if normalized_status not in ALLOWED_PROPOSAL_STATUSES:
         raise ToolProposalValidationError(f"unsupported status: {status}")
-    if status in ADMIN_REVIEW_STATUSES and not allow_admin_review:
+    if normalized_status in ADMIN_REVIEW_STATUSES and not allow_admin_review:
         return {
             "status": "error",
             "error": "proposal_status_requires_admin_review",
-            "requested_status": status,
+            "requested_status": normalized_status,
         }
     if _text_contains_forbidden(notes):
         raise ToolProposalValidationError("notes must not contain secrets or direct production execution instructions")
     try:
         proposal = _db().update_tool_proposal_status(
             proposal_id,
-            status,
+            normalized_status,
             notes=notes,
             user_id=user_id,
             allow_admin_review=allow_admin_review,

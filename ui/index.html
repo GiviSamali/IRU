@@ -118,6 +118,7 @@
             <div id="usagePopoverBody" class="usage-popover-body">Загрузка...</div>
           </div>
         </div>
+        <button class="tool-proposals-toggle" id="toolProposalsToggle" type="button" aria-expanded="false" title="Кандидаты в инструменты">Кандидаты</button>
         <div class="device-select">
           <div class="device-indicator" id="deviceBtn">
             <span class="device-dot" id="deviceDot"></span>
@@ -234,6 +235,68 @@
         <div class="memory-panel-list" id="memoryPanelList">
           <div class="memory-panel-state">Память загружается...</div>
         </div>
+      </aside>
+
+      <aside class="tool-proposals-panel" id="toolProposalsPanel">
+        <div class="tool-proposals-header">
+          <div>
+            <h3>Кандидаты в инструменты</h3>
+            <p>Кандидат — это не установленный инструмент. Он требует review/test перед добавлением в production.</p>
+          </div>
+          <button class="btn-icon" id="toolProposalsCloseBtn" title="Закрыть" style="width:24px;height:24px">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="tool-proposals-note">ИРУ может оформлять идеи инструментов как кандидаты. Это безопасная очередь расширения системы: proposed → reviewing → approved → implemented.</div>
+        <div class="tool-proposals-error" id="toolProposalsError" hidden></div>
+        <div class="tool-proposals-body">
+          <section class="tool-proposals-list-section">
+            <div class="tool-proposals-section-head">
+              <span>Список</span>
+              <button type="button" class="tool-proposals-small-btn" id="toolProposalsRefreshBtn">Обновить</button>
+            </div>
+            <div id="toolProposalsList" class="tool-proposals-list">
+              <div class="tool-proposals-state">Кандидаты загружаются...</div>
+            </div>
+          </section>
+          <section class="tool-proposals-detail-section">
+            <div id="toolProposalDetail" class="tool-proposal-detail">
+              <div class="tool-proposals-state">Выберите кандидата из списка.</div>
+            </div>
+          </section>
+        </div>
+        <details class="tool-proposal-create">
+          <summary>Предложить инструмент</summary>
+          <form id="toolProposalCreateForm" class="tool-proposal-form">
+            <input name="name" required placeholder="office.create_docx">
+            <input name="title" placeholder="Название">
+            <textarea name="problem" required rows="2" placeholder="Проблема"></textarea>
+            <textarea name="purpose" required rows="2" placeholder="Назначение"></textarea>
+            <div class="tool-proposal-form-grid">
+              <input name="category" placeholder="Категория" value="tooling">
+              <select name="risk_level">
+                <option value="safe">safe</option>
+                <option value="read_only">read_only</option>
+                <option value="write" selected>write</option>
+                <option value="runtime">runtime</option>
+                <option value="process_start">process_start</option>
+                <option value="process_control">process_control</option>
+                <option value="network">network</option>
+                <option value="destructive">destructive</option>
+                <option value="confirmation_required">confirmation_required</option>
+                <option value="fallback">fallback</option>
+              </select>
+              <select name="priority">
+                <option value="low">low</option>
+                <option value="normal" selected>normal</option>
+                <option value="high">high</option>
+              </select>
+            </div>
+            <input name="permissions" placeholder="Права: file.write, office.generate">
+            <textarea name="notes" rows="2" placeholder="Заметки"></textarea>
+            <button type="submit" id="toolProposalCreateBtn" class="tool-proposals-primary-btn">Создать кандидата</button>
+          </form>
+        </details>
       </aside>
 
       <div class="explorer-panel" id="explorerPanel">
@@ -394,6 +457,7 @@
 <script src="js/devices.js" defer></script>
 <script src="js/chat.js" defer></script>
 <script src="js/usage.js" defer></script>
+<script src="js/tool-proposals.js" defer></script>
 <script src="js/explorer.js" defer></script>
 <script src="js/shell.js" defer></script>
 <script src="js/admin.js" defer></script>

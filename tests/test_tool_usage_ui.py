@@ -118,3 +118,29 @@ def test_memory_panel_ui_contract_exists():
     assert "/api/memory/facts" in extras_source
     assert "Память пока пустая" in extras_source
     assert ".memory-panel.open" in workspace_source
+
+
+def test_tool_proposals_ui_contract_exists():
+    index_source = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
+    proposals_source = (ROOT / "ui" / "js" / "tool-proposals.js").read_text(encoding="utf-8")
+    workspace_source = (ROOT / "ui" / "css" / "workspace.css").read_text(encoding="utf-8")
+
+    assert 'id="toolProposalsToggle"' in index_source
+    assert 'id="toolProposalsPanel"' in index_source
+    assert 'id="toolProposalCreateForm"' in index_source
+    assert "js/tool-proposals.js" in index_source
+    assert "Кандидат — это не установленный инструмент" in index_source
+
+    assert "/api/tool-proposals" in proposals_source
+    assert "function loadToolProposals" in proposals_source
+    assert "function createToolProposal" in proposals_source
+    assert "method: 'POST'" in proposals_source
+    assert "method: 'PATCH'" in proposals_source
+    assert 'data-status="rejected"' in proposals_source
+    assert 'data-status="proposed"' in proposals_source
+    assert 'data-status="approved"' not in proposals_source
+    assert 'data-status="implemented"' not in proposals_source
+    assert 'data-status="deprecated"' not in proposals_source
+
+    assert ".tool-proposals-panel.open" in workspace_source
+    assert ".tool-proposal-list-item" in workspace_source
