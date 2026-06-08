@@ -45,6 +45,7 @@ try:
         tool_result_terminal_sufficient,
     )
     from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
+    from .tool_proposals import run_tool_proposal_tool  # type: ignore
     from .tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
     from .tool_repeat_guard import (  # type: ignore
         duplicate_read_only_tool_message,
@@ -111,6 +112,7 @@ except ImportError:
         tool_result_terminal_sufficient,
     )
     from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
+    from tool_proposals import run_tool_proposal_tool  # type: ignore
     from tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
     from tool_repeat_guard import (  # type: ignore
         duplicate_read_only_tool_message,
@@ -711,6 +713,8 @@ async def process_non_pipeline_command(
                     set_current_step(poll_task_id, f"Ищу в интернете: {query}")
                 elif fn_name in {"system_list_tools", "system_get_last_run_summary"}:
                     set_current_step(poll_task_id, "Checking tool registry")
+                elif fn_name.startswith("tool_"):
+                    set_current_step(poll_task_id, "Working with tool proposals")
                 elif fn_name in MEMORY_TOOL_NAMES:
                     set_current_step(poll_task_id, "Checking memory")
                 elif fn_name.startswith("device_"):
@@ -748,6 +752,23 @@ async def process_non_pipeline_command(
                         fn_name,
                         tool_result,
                         command="[tool] system.get_last_run_summary",
+                        target_device_id=None,
+                        hostname=None,
+                        iteration=iteration + 1,
+                    ))
+
+                elif fn_name.startswith("tool_"):
+                    tool_result = run_tool_proposal_tool(
+                        fn_name,
+                        fn_args,
+                        user_id=user_id,
+                        chat_id=chat_id,
+                        poll_task_id=poll_task_id,
+                    )
+                    append_entry(tool_log_entry(
+                        fn_name,
+                        tool_result,
+                        command=f"[tool] {fn_name}",
                         target_device_id=None,
                         hostname=None,
                         iteration=iteration + 1,

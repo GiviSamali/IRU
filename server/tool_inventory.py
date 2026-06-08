@@ -64,6 +64,10 @@ LEGACY_OR_INTERNAL_ACTIONS: dict[str, dict[str, Any]] = {
 CONTROLLER_EXECUTABLE_TOOL_NAMES = {
     "system.list_tools",
     "system.get_last_run_summary",
+    "tool.propose",
+    "tool.list_proposals",
+    "tool.get_proposal",
+    "tool.update_proposal_status",
     "memory.get_stats",
     "memory.list_facts",
     "device.get_passport",
