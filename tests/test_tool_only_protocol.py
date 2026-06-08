@@ -4,6 +4,7 @@ import json
 import server.controller_non_pipeline as controller_non_pipeline
 import server.controller_pipeline as controller_pipeline
 import server.runtime_state as runtime_state
+from server.answer_auditor_policy import FAIL_CLOSED_MESSAGE
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_pipeline import process_pipeline_subagents, run_pipeline_worker
 from server.run_journal import validate_answer_text_payload
@@ -963,6 +964,134 @@ def test_auditor_rejects_invalid_answer_and_retry_succeeds():
     assert result["answer"] == "Я не проверял текущее состояние."
     assert any(kwargs.get("tools") is None for kwargs in captured)
 
+def test_non_pipeline_auditor_infra_error_returns_grounded_open_url_answer(monkeypatch):
+    async def _audit_infra_error(**kwargs):
+        return False, "auditor_error: ReadError", True
+
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append(action)
+        return {
+            "status": "opened_unverified",
+            "url": params["url"],
+            "launched": True,
+            "window_found": False,
+            "terminal_sufficient": True,
+            "completion_state": "partial_success",
+        }
+
+    monkeypatch.setattr(controller_non_pipeline, "audit_answer_payload", _audit_infra_error)
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-open", "app_open_url", {"url": "https://irumode.online/"})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Готово, открыл https://irumode.online/ в браузере.",
+            answer_type="partial_report",
+            basis=["step_1"],
+        )]),
+    ], send_command_fn=_send, cfg={"model": "real-ish", "max_tokens": 512, "answer_auditor_enabled": True})
+
+    assert sent == ["app.open_url"]
+    assert result["answer"] == "Готово, открыл https://irumode.online/ в браузере."
+    assert "Повтори запрос" not in result["answer"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["app.open_url", "answer_auditor", "answer.text"]
+    assert result["commands"][1]["status"] == "failed"
+    assert result["commands"][2]["result"]["basis"] == ["step_1"]
+
+
+def test_non_pipeline_auditor_infra_error_returns_grounded_write_answer(monkeypatch):
+    async def _audit_infra_error(**kwargs):
+        return False, "auditor_error: ReadTimeout", True
+
+    async def _send(device_id, action, params):
+        return {"status": "ok", "path": params["path"], "bytes_written": len(params["content"])}
+
+    monkeypatch.setattr(controller_non_pipeline, "audit_answer_payload", _audit_infra_error)
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-write", "write_content", {"path": "C:/Temp/a.txt", "content": "hello"})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Файл создан.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], send_command_fn=_send, cfg={"model": "real-ish", "max_tokens": 512, "answer_auditor_enabled": True})
+
+    assert result["answer"] == "Файл создан."
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "answer_auditor", "answer.text"]
+
+
+def test_non_pipeline_auditor_infra_error_empty_basis_fails_closed(monkeypatch):
+    async def _audit_infra_error(**kwargs):
+        return False, "auditor_error: ConnectTimeout", True
+
+    monkeypatch.setattr(controller_non_pipeline, "audit_answer_payload", _audit_infra_error)
+
+    result = _run_case([
+        _message(tool_calls=[_answer_call("call-answer", "Готово.", answer_type="pure_text", basis=[])]),
+    ], cfg={"model": "real-ish", "max_tokens": 512, "answer_auditor_enabled": True})
+
+    assert result["answer"] == FAIL_CLOSED_MESSAGE
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["answer_auditor"]
+
+
+def test_non_pipeline_auditor_semantic_rejection_stays_strict(monkeypatch):
+    calls = []
+
+    async def _audit_semantic_reject(**kwargs):
+        calls.append(kwargs["answer_payload"]["text"])
+        if len(calls) == 1:
+            return False, "overclaims current state", False
+        return True, "valid", False
+
+    monkeypatch.setattr(controller_non_pipeline, "audit_answer_payload", _audit_semantic_reject)
+
+    result = _run_case([
+        _message(tool_calls=[_answer_call("call-bad", "Готово.", answer_type="pure_text", basis=[])]),
+        _message(tool_calls=[_tool_call("call-tools", "system_list_tools", {})]),
+        _message(tool_calls=[_answer_call(
+            "call-good",
+            "Список инструментов получен.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], cfg={"model": "real-ish", "max_tokens": 512, "answer_auditor_enabled": True})
+
+    assert calls[0] == "Готово."
+    assert result["answer"].startswith("Доступные инструменты:")
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["system.list_tools", "answer.text"]
+
+
+def test_non_pipeline_auditor_infra_fail_closed_config_preserves_old_behavior(monkeypatch):
+    async def _audit_infra_error(**kwargs):
+        return False, "auditor_error: ReadError", True
+
+    async def _send(device_id, action, params):
+        return {"status": "ok", "path": params["path"], "bytes_written": len(params["content"])}
+
+    monkeypatch.setattr(controller_non_pipeline, "audit_answer_payload", _audit_infra_error)
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-write", "write_content", {"path": "C:/Temp/a.txt", "content": "hello"})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Файл создан.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], send_command_fn=_send, cfg={
+        "model": "real-ish",
+        "max_tokens": 512,
+        "answer_auditor_enabled": True,
+        "answer_auditor_infra_fail_closed": True,
+    })
+
+    assert result["answer"] == FAIL_CLOSED_MESSAGE
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "answer_auditor"]
+
 
 def test_pipeline_final_raw_summary_rejected_then_answer_text(monkeypatch):
     def _legacy_trust_should_not_run(answer, commands):
@@ -1026,6 +1155,154 @@ def test_pipeline_final_raw_summary_rejected_then_answer_text(monkeypatch):
     assert finished == ["completed"]
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text", "answer.text"]
     assert any("Raw assistant content is not allowed" in msg.get("content", "") for msg in captured[-1]["messages"])
+
+
+def test_pipeline_final_auditor_infra_error_returns_grounded_final_answer(monkeypatch):
+    final_text = "pipeline final ok"
+    responses = [
+        _message(json.dumps({
+            "goal": "verify task",
+            "steps": [{"title": "run check", "instruction": "run check", "device_id": "device-1"}],
+        }), tool_calls=None, finish_reason="stop"),
+        _message(tool_calls=[_execute_call("call-exec", "echo ok")]),
+        _message(tool_calls=[_answer_call("call-step-answer", "step ok", answer_type="grounded_report", basis=["step_1"])]),
+        _message(tool_calls=[_answer_call("call-final", final_text, answer_type="grounded_report", basis=["step_1"])]),
+    ]
+    captured = []
+    finished = []
+    step_status = {}
+    audit_calls = []
+
+    monkeypatch.setattr("server.controller_pipeline.db.create_task", lambda **kwargs: 1)
+    monkeypatch.setattr("server.controller_pipeline.db.update_step", lambda task_id, idx, status, summary=None: step_status.__setitem__(idx, status) or True)
+    monkeypatch.setattr("server.controller_pipeline.db.finish_task", lambda task_id, status: finished.append(status) or True)
+    monkeypatch.setattr("server.controller_pipeline.collect_tasks", lambda task_ids: [{
+        "id": 1,
+        "goal": "verify task",
+        "status": finished[-1] if finished else "running",
+        "steps": [{"idx": idx, "status": status} for idx, status in sorted(step_status.items())],
+    }])
+    monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
+    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id: None)
+    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id: "")
+    monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
+
+    async def _audit_infra_for_final(**kwargs):
+        text = kwargs["answer_payload"]["text"]
+        audit_calls.append(text)
+        if text == final_text:
+            return False, "auditor_error: ReadError", True
+        return True, "valid", False
+
+    monkeypatch.setattr(controller_pipeline, "audit_answer_payload", _audit_infra_for_final)
+
+    async def _send(device_id, action, params):
+        return {"returncode": 0, "stdout": "ok", "stderr": ""}
+
+    result = asyncio.run(process_pipeline_subagents(
+        user_message="verify task",
+        device_id="device-1",
+        device_info={"hostname": "devbox", "os": "Windows"},
+        all_devices={"device-1": {"info": {"hostname": "devbox", "os": "Windows"}}},
+        send_command_fn=_send,
+        get_file_link_fn=lambda device_id, path: "/api/download/mock",
+        chat_history=[],
+        user_id=1,
+        chat_id=1,
+        device_profile=None,
+        modes={},
+        poll_task_id=None,
+        load_llm_config_fn=lambda: {"model": "mock-model", "max_tokens": 1000, "answer_auditor_enabled": True},
+        pick_model_fn=lambda cfg, modes: "mock-model",
+        chat_completion_request_fn=_completion_fn(responses, captured),
+        worker_tools=[],
+        windows_rules="windows rules",
+        linux_rules="linux rules",
+    ))
+
+    assert result["answer"] == final_text
+    assert final_text in audit_calls
+    assert finished == ["completed"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == [
+        "execute_cmd",
+        "answer.text",
+        "answer_auditor",
+        "answer.text",
+    ]
+    assert result["commands"][-2]["status"] == "failed"
+
+
+def test_pipeline_final_auditor_semantic_rejection_retries_answer_text(monkeypatch):
+    bad_final = "bad overclaim"
+    good_final = "pipeline final ok"
+    responses = [
+        _message(json.dumps({
+            "goal": "verify task",
+            "steps": [{"title": "run check", "instruction": "run check", "device_id": "device-1"}],
+        }), tool_calls=None, finish_reason="stop"),
+        _message(tool_calls=[_execute_call("call-exec", "echo ok")]),
+        _message(tool_calls=[_answer_call("call-step-answer", "step ok", answer_type="grounded_report", basis=["step_1"])]),
+        _message(tool_calls=[_answer_call("call-bad-final", bad_final, answer_type="grounded_report", basis=["step_1"])]),
+        _message(tool_calls=[_answer_call("call-good-final", good_final, answer_type="grounded_report", basis=["step_1"])]),
+    ]
+    captured = []
+    finished = []
+    step_status = {}
+    audit_calls = []
+
+    monkeypatch.setattr("server.controller_pipeline.db.create_task", lambda **kwargs: 1)
+    monkeypatch.setattr("server.controller_pipeline.db.update_step", lambda task_id, idx, status, summary=None: step_status.__setitem__(idx, status) or True)
+    monkeypatch.setattr("server.controller_pipeline.db.finish_task", lambda task_id, status: finished.append(status) or True)
+    monkeypatch.setattr("server.controller_pipeline.collect_tasks", lambda task_ids: [{
+        "id": 1,
+        "goal": "verify task",
+        "status": finished[-1] if finished else "running",
+        "steps": [{"idx": idx, "status": status} for idx, status in sorted(step_status.items())],
+    }])
+    monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
+    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id: None)
+    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id: "")
+    monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
+
+    async def _audit_reject_bad_final(**kwargs):
+        text = kwargs["answer_payload"]["text"]
+        audit_calls.append(text)
+        if text == bad_final:
+            return False, "overclaims current state", False
+        return True, "valid", False
+
+    monkeypatch.setattr(controller_pipeline, "audit_answer_payload", _audit_reject_bad_final)
+
+    async def _send(device_id, action, params):
+        return {"returncode": 0, "stdout": "ok", "stderr": ""}
+
+    result = asyncio.run(process_pipeline_subagents(
+        user_message="verify task",
+        device_id="device-1",
+        device_info={"hostname": "devbox", "os": "Windows"},
+        all_devices={"device-1": {"info": {"hostname": "devbox", "os": "Windows"}}},
+        send_command_fn=_send,
+        get_file_link_fn=lambda device_id, path: "/api/download/mock",
+        chat_history=[],
+        user_id=1,
+        chat_id=1,
+        device_profile=None,
+        modes={},
+        poll_task_id=None,
+        load_llm_config_fn=lambda: {"model": "mock-model", "max_tokens": 1000, "answer_auditor_enabled": True},
+        pick_model_fn=lambda cfg, modes: "mock-model",
+        chat_completion_request_fn=_completion_fn(responses, captured),
+        worker_tools=[],
+        windows_rules="windows rules",
+        linux_rules="linux rules",
+    ))
+
+    assert result["answer"] == good_final
+    assert bad_final in audit_calls
+    assert good_final in audit_calls
+    assert finished == ["completed"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text", "answer.text"]
+    assert bad_final not in [cmd.get("result", {}).get("text") for cmd in result["commands"]]
 
 
 def test_pipeline_worker_max_iterations_runs_answer_only_repair(monkeypatch):

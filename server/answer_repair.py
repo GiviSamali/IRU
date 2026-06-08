@@ -5,6 +5,10 @@ from typing import Any
 
 try:
     from .answer_auditor import audit_answer_payload  # type: ignore
+    from .answer_auditor_policy import (  # type: ignore
+        answer_auditor_infra_fail_closed,
+        is_answer_payload_grounded_for_auditor_infra_failure,
+    )
     from .run_journal import (  # type: ignore
         ProtocolValidationError,
         append_answer_step,
@@ -17,6 +21,10 @@ try:
     from .tool_registry import DEVICE_TOOL_SCHEMAS  # type: ignore
 except ImportError:
     from answer_auditor import audit_answer_payload  # type: ignore
+    from answer_auditor_policy import (  # type: ignore
+        answer_auditor_infra_fail_closed,
+        is_answer_payload_grounded_for_auditor_infra_failure,
+    )
     from run_journal import (  # type: ignore
         ProtocolValidationError,
         append_answer_step,
@@ -102,6 +110,19 @@ async def run_answer_only_repair_turn(
             status="failed",
             summary="auditor_error",
         ))
+        if (
+            not answer_auditor_infra_fail_closed(cfg)
+            and is_answer_payload_grounded_for_auditor_infra_failure(answer_payload, journal)
+        ):
+            entry = append_answer_step(
+                journal,
+                "answer_text",
+                answer_payload,
+                target_device_id=target_device_id,
+                hostname=hostname,
+                iteration=iteration,
+            )
+            return {"ok": True, "answer": answer_payload["text"], "entry": entry}
         return {"ok": False, "reason": audit_reason}
     if not audit_ok:
         return {"ok": False, "reason": f"repair answer rejected by auditor: {audit_reason}"}

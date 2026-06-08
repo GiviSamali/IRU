@@ -8,6 +8,11 @@ import httpx
 try:
     from . import database as db  # type: ignore
     from .answer_auditor import audit_answer_payload  # type: ignore
+    from .answer_auditor_policy import (  # type: ignore
+        FAIL_CLOSED_MESSAGE,
+        answer_auditor_infra_fail_closed,
+        is_answer_payload_grounded_for_auditor_infra_failure,
+    )
     from .answer_repair import run_answer_only_repair_turn  # type: ignore
     from .controller_budget import BUDGET_GUARD_ERROR, CommandBudget, budget_guard_entry  # type: ignore
     from .controller_tools import TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
@@ -69,6 +74,11 @@ try:
 except ImportError:
     import database as db  # type: ignore
     from answer_auditor import audit_answer_payload  # type: ignore
+    from answer_auditor_policy import (  # type: ignore
+        FAIL_CLOSED_MESSAGE,
+        answer_auditor_infra_fail_closed,
+        is_answer_payload_grounded_for_auditor_infra_failure,
+    )
     from answer_repair import run_answer_only_repair_turn  # type: ignore
     from controller_budget import BUDGET_GUARD_ERROR, CommandBudget, budget_guard_entry  # type: ignore
     from controller_tools import TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
@@ -469,8 +479,26 @@ async def process_non_pipeline_command(
                                 summary="auditor_error",
                             )
                             commands_log.append(auditor_entry)
+                            if (
+                                not answer_auditor_infra_fail_closed(cfg)
+                                and is_answer_payload_grounded_for_auditor_infra_failure(answer_payload, commands_log)
+                            ):
+                                append_answer_step(
+                                    commands_log,
+                                    fn_name,
+                                    answer_payload,
+                                    target_device_id=target_device,
+                                    hostname=device_info.get("hostname") or target_device,
+                                    iteration=iteration + 1,
+                                )
+                                return {
+                                    "answer": answer_payload["text"],
+                                    "commands": commands_log,
+                                    "tasks": [],
+                                    "training_context": _training_context(device_info),
+                                }
                             return {
-                                "answer": "Не удалось безопасно проверить корректность финального ответа. Повтори запрос.",
+                                "answer": FAIL_CLOSED_MESSAGE,
                                 "commands": commands_log,
                                 "tasks": [],
                                 "training_context": _training_context(device_info),

@@ -11,6 +11,11 @@ import httpx
 try:
     from . import database as db  # type: ignore
     from .answer_auditor import audit_answer_payload  # type: ignore
+    from .answer_auditor_policy import (  # type: ignore
+        FAIL_CLOSED_MESSAGE,
+        answer_auditor_infra_fail_closed,
+        is_answer_payload_grounded_for_auditor_infra_failure,
+    )
     from .answer_repair import run_answer_only_repair_turn  # type: ignore
     from .controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from .controller_tools import TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
@@ -66,6 +71,11 @@ try:
 except ImportError:
     import database as db  # type: ignore
     from answer_auditor import audit_answer_payload  # type: ignore
+    from answer_auditor_policy import (  # type: ignore
+        FAIL_CLOSED_MESSAGE,
+        answer_auditor_infra_fail_closed,
+        is_answer_payload_grounded_for_auditor_infra_failure,
+    )
     from answer_repair import run_answer_only_repair_turn  # type: ignore
     from controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from controller_tools import TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
@@ -1347,9 +1357,26 @@ async def run_pipeline_worker(
                             "summary": "auditor_error",
                             "iteration": iteration + 1,
                         })
+                        if (
+                            not answer_auditor_infra_fail_closed(cfg)
+                            and is_answer_payload_grounded_for_auditor_infra_failure(payload, commands_log)
+                        ):
+                            append_answer_step(
+                                commands_log,
+                                fn_name,
+                                payload,
+                                target_device_id=step_device_id,
+                                hostname=shared.get("current_hostname") or step_device_id,
+                                iteration=iteration + 1,
+                            )
+                            return {
+                                "status": "ok",
+                                "answer": payload["text"],
+                                "commands": commands_log,
+                            }
                         return {
                             "status": "error",
-                            "answer": "Не удалось безопасно проверить корректность ответа шага.",
+                            "answer": FAIL_CLOSED_MESSAGE,
                             "commands": commands_log,
                         }
                     if not audit_ok:
@@ -2314,7 +2341,21 @@ async def process_pipeline_subagents(
                                 "tool_type": "system",
                                 "summary": "auditor_error",
                             })
-                            final_answer = "Не удалось безопасно проверить корректность финального ответа. Повтори запрос."
+                            if (
+                                not answer_auditor_infra_fail_closed(cfg)
+                                and is_answer_payload_grounded_for_auditor_infra_failure(payload, all_commands)
+                            ):
+                                append_answer_step(
+                                    all_commands,
+                                    fn_name,
+                                    payload,
+                                    target_device_id=device_id,
+                                    hostname=device_info.get("hostname") or device_id,
+                                )
+                                final_answer = payload["text"]
+                                final_answer_from_answer_text = True
+                            else:
+                                final_answer = FAIL_CLOSED_MESSAGE
                             break
                         if not audit_ok:
                             summary_messages.append({"role": "user", "content": GROUNDED_CORRECTION})
