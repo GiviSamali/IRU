@@ -11,6 +11,10 @@ except ImportError:
 
 CANONICAL_TOOL_NAMES = {
     "system_list_tools": "system.list_tools",
+    "tool_propose": "tool.propose",
+    "tool_list_proposals": "tool.list_proposals",
+    "tool_get_proposal": "tool.get_proposal",
+    "tool_update_proposal_status": "tool.update_proposal_status",
     "memory_get_stats": "memory.get_stats",
     "memory_list_facts": "memory.list_facts",
     "device_get_passport": "device.get_passport",
@@ -57,6 +61,47 @@ TOOL_METADATA = {
         "when_to_use": ["user asks what happened", "user asks why the previous run failed", "need last failed task evidence"],
         "returns": "last task status, used tools, failed tools, evidence and failure reason",
         "danger": "safe",
+    },
+    "tool.propose": {
+        "category": "tooling",
+        "tool_type": "proposal",
+        "tool_label": "Tool proposal",
+        "purpose": "Create a structured candidate ToolContract for future review without installing or executing a production tool",
+        "when_to_use": [
+            "user asks whether IRU can create a tool",
+            "user asks to add a new future tool capability",
+            "enough details exist to draft a safe tool candidate",
+        ],
+        "returns": "proposal_id, name, proposed status and summary",
+        "danger": "write",
+    },
+    "tool.list_proposals": {
+        "category": "tooling",
+        "tool_type": "proposal",
+        "tool_label": "Tool proposals",
+        "purpose": "List current user's saved tool proposals",
+        "when_to_use": ["user asks for their tool proposals", "need to inspect candidate tools"],
+        "returns": "current user's tool proposals",
+        "danger": "safe",
+    },
+    "tool.get_proposal": {
+        "category": "tooling",
+        "tool_type": "proposal",
+        "tool_label": "Tool proposal detail",
+        "purpose": "Read one current-user tool proposal by id",
+        "when_to_use": ["user asks details about one proposal", "need proposal evidence before answering"],
+        "returns": "one proposal if owned by current user",
+        "danger": "safe",
+    },
+    "tool.update_proposal_status": {
+        "category": "tooling",
+        "tool_type": "proposal",
+        "tool_label": "Tool proposal status",
+        "purpose": "Update status or notes for a current-user proposal without changing production tools",
+        "when_to_use": ["internal/admin review flow", "current user explicitly asks to change proposal status"],
+        "returns": "updated proposal",
+        "danger": "write",
+        "visibility": "internal",
     },
     "memory.get_stats": {
         "category": "memory",
@@ -352,7 +397,7 @@ DEVICE_TOOL_SCHEMAS = [
                 "properties": {
                     "category": {
                         "type": "string",
-                        "enum": ["all", "system", "memory", "device", "files", "python", "window", "app", "artifact", "web", "answer"],
+                        "enum": ["all", "system", "tooling", "memory", "device", "files", "python", "window", "app", "artifact", "web", "answer"],
                         "default": "all",
                     }
                 },
@@ -370,6 +415,81 @@ DEVICE_TOOL_SCHEMAS = [
                     "chat_id": {"type": "integer", "description": "Optional current chat id."},
                     "include_success": {"type": "boolean", "default": True},
                 },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tool_propose",
+            "description": "Create a structured proposal for a future tool. This does not install, execute, import, or modify production tools.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Canonical candidate name like office.create_docx."},
+                    "title": {"type": "string"},
+                    "problem": {"type": "string"},
+                    "purpose": {"type": "string"},
+                    "category": {"type": "string"},
+                    "risk_level": {"type": "string", "enum": ["safe", "read_only", "write", "runtime", "process_start", "process_control", "network", "destructive", "confirmation_required", "fallback"]},
+                    "permissions": {"type": "array", "items": {"type": "string"}},
+                    "input_schema": {"type": "object"},
+                    "output_schema": {"type": "object"},
+                    "evidence_contract": {"type": "object"},
+                    "side_effects": {"type": "array", "items": {"type": "string"}},
+                    "idempotency": {"type": "string"},
+                    "cleanup": {"type": "string"},
+                    "rollback": {"type": "string"},
+                    "examples": {"type": "array", "items": {"type": "object"}},
+                    "test_plan": {"type": "array", "items": {"type": "string"}},
+                    "priority": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["name", "problem", "purpose"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tool_list_proposals",
+            "description": "List the current user's tool proposals. Does not expose proposals from other users.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "enum": ["proposed", "reviewing", "approved", "rejected", "implemented", "deprecated"]},
+                    "limit": {"type": "integer", "default": 50},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tool_get_proposal",
+            "description": "Get one current-user tool proposal by id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "proposal_id": {"type": "integer"},
+                },
+                "required": ["proposal_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tool_update_proposal_status",
+            "description": "Update status/notes for a current-user tool proposal. Does not mark production implementation by itself.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "proposal_id": {"type": "integer"},
+                    "status": {"type": "string", "enum": ["proposed", "reviewing", "approved", "rejected", "implemented", "deprecated"]},
+                    "notes": {"type": "string"},
+                },
+                "required": ["proposal_id", "status"],
             },
         },
     },
@@ -858,6 +978,18 @@ def compact_tool_summary(action: str, result: Any = None, command: str = "") -> 
             return "; ".join(bits)
         if name == "device.get_passport":
             return f"passport={result.get('device_id') or 'device'}"
+        if name.startswith("tool."):
+            proposal_id = result.get("proposal_id") or (result.get("proposal") or {}).get("id")
+            status = result.get("proposal_status") or result.get("status") or (result.get("proposal") or {}).get("status")
+            count = result.get("count")
+            if count is not None:
+                return f"tool proposals={count}"
+            bits = [f"status={status or 'unknown'}"]
+            if proposal_id:
+                bits.append(f"proposal_id={proposal_id}")
+            if result.get("name"):
+                bits.append(f"name={result.get('name')}")
+            return "; ".join(bits)
         if name.startswith("memory."):
             count = result.get("facts_count")
             if count is not None:

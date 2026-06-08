@@ -47,6 +47,7 @@ try:
         tool_result_terminal_sufficient,
     )
     from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
+    from .tool_proposals import run_tool_proposal_tool  # type: ignore
     from .tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
     from .tool_repeat_guard import (  # type: ignore
         duplicate_read_only_tool_message,
@@ -107,6 +108,7 @@ except ImportError:
         tool_result_terminal_sufficient,
     )
     from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
+    from tool_proposals import run_tool_proposal_tool  # type: ignore
     from tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
     from tool_repeat_guard import (  # type: ignore
         duplicate_read_only_tool_message,
@@ -1599,6 +1601,30 @@ async def run_pipeline_worker(
                 append_step_command(
                     fn_name,
                     "[tool] system.get_last_run_summary",
+                    None,
+                    tool_result,
+                )
+
+            elif fn_name.startswith("tool_"):
+                set_current_step(poll_task_id, "Working with tool proposals")
+                try:
+                    proposal_user_id = int((usage_context or {}).get("user_id")) if (usage_context or {}).get("user_id") is not None else None
+                except (TypeError, ValueError):
+                    proposal_user_id = None
+                try:
+                    proposal_chat_id = int((usage_context or {}).get("chat_id")) if (usage_context or {}).get("chat_id") is not None else None
+                except (TypeError, ValueError):
+                    proposal_chat_id = None
+                tool_result = run_tool_proposal_tool(
+                    fn_name,
+                    fn_args,
+                    user_id=proposal_user_id,
+                    chat_id=proposal_chat_id,
+                    poll_task_id=poll_task_id,
+                )
+                append_step_command(
+                    fn_name,
+                    f"[tool] {fn_name}",
                     None,
                     tool_result,
                 )

@@ -224,6 +224,43 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_llm_usage_poll_task_created
                 ON llm_usage_events(poll_task_id, created_at DESC);
 
+            CREATE TABLE IF NOT EXISTS tool_proposals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                user_id INTEGER,
+                chat_id INTEGER,
+                source_task_id TEXT,
+                source_poll_task_id TEXT,
+                name TEXT NOT NULL,
+                title TEXT,
+                problem TEXT,
+                purpose TEXT,
+                category TEXT,
+                tool_type TEXT DEFAULT 'proposal',
+                risk_level TEXT,
+                permissions TEXT,
+                input_schema TEXT,
+                output_schema TEXT,
+                evidence_contract TEXT,
+                side_effects TEXT,
+                idempotency TEXT,
+                cleanup TEXT,
+                rollback TEXT,
+                examples TEXT,
+                test_plan TEXT,
+                status TEXT DEFAULT 'proposed',
+                priority TEXT DEFAULT 'normal',
+                notes TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tool_proposals_user_created
+                ON tool_proposals(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_tool_proposals_status_created
+                ON tool_proposals(status, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_tool_proposals_name
+                ON tool_proposals(name);
+
             -- миграция: добавить agent_version если не существует
         """)
         try:
@@ -1319,6 +1356,175 @@ def get_recent_llm_usage_events_for_chat(user_id: int, chat_id: int, limit: int 
             (user_id, chat_id, limit),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+# ── Tool proposals ───────────────────────────────────────────────────────────
+
+TOOL_PROPOSAL_STATUSES = {"proposed", "reviewing", "approved", "rejected", "implemented", "deprecated"}
+_TOOL_PROPOSAL_JSON_FIELDS = {
+    "permissions",
+    "input_schema",
+    "output_schema",
+    "evidence_contract",
+    "side_effects",
+    "examples",
+    "test_plan",
+}
+
+
+def _proposal_json_dump(value) -> str:
+    return json.dumps(value if value is not None else None, ensure_ascii=False)
+
+
+def _proposal_row_to_dict(row) -> dict:
+    item = dict(row)
+    for field_name in _TOOL_PROPOSAL_JSON_FIELDS:
+        raw = item.get(field_name)
+        if raw in (None, ""):
+            if field_name in {"input_schema", "output_schema", "evidence_contract"}:
+                item[field_name] = {}
+            else:
+                item[field_name] = []
+            continue
+        try:
+            item[field_name] = json.loads(raw)
+        except Exception:
+            item[field_name] = raw
+    return item
+
+
+def add_tool_proposal(
+    *,
+    user_id: int | None = None,
+    chat_id: int | None = None,
+    source_task_id: str | None = None,
+    source_poll_task_id: str | None = None,
+    name: str,
+    title: str | None = None,
+    problem: str | None = None,
+    purpose: str | None = None,
+    category: str | None = None,
+    tool_type: str = "proposal",
+    risk_level: str | None = None,
+    permissions: list | None = None,
+    input_schema: dict | None = None,
+    output_schema: dict | None = None,
+    evidence_contract: dict | None = None,
+    side_effects: list | None = None,
+    idempotency: str | None = None,
+    cleanup: str | None = None,
+    rollback: str | None = None,
+    examples: list | None = None,
+    test_plan: list | None = None,
+    status: str = "proposed",
+    priority: str = "normal",
+    notes: str | None = None,
+) -> int:
+    now = time.time()
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO tool_proposals (
+                created_at, updated_at, user_id, chat_id, source_task_id, source_poll_task_id,
+                name, title, problem, purpose, category, tool_type, risk_level, permissions,
+                input_schema, output_schema, evidence_contract, side_effects, idempotency,
+                cleanup, rollback, examples, test_plan, status, priority, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now,
+                now,
+                user_id,
+                chat_id,
+                source_task_id,
+                source_poll_task_id,
+                name,
+                title,
+                problem,
+                purpose,
+                category,
+                tool_type,
+                risk_level,
+                _proposal_json_dump(permissions or []),
+                _proposal_json_dump(input_schema or {}),
+                _proposal_json_dump(output_schema or {}),
+                _proposal_json_dump(evidence_contract or {}),
+                _proposal_json_dump(side_effects or []),
+                idempotency,
+                cleanup,
+                rollback,
+                _proposal_json_dump(examples or []),
+                _proposal_json_dump(test_plan or []),
+                status,
+                priority,
+                notes,
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+def list_tool_proposals(user_id: int | None = None, status: str | None = None, limit: int = 50) -> list[dict]:
+    limit = max(1, min(int(limit or 50), 200))
+    clauses = []
+    params: list = []
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM tool_proposals
+            {where_sql}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        ).fetchall()
+        return [_proposal_row_to_dict(row) for row in rows]
+
+
+def get_tool_proposal(proposal_id: int, user_id: int | None = None) -> dict | None:
+    clauses = ["id = ?"]
+    params: list = [proposal_id]
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    with get_db() as conn:
+        row = conn.execute(
+            f"SELECT * FROM tool_proposals WHERE {' AND '.join(clauses)}",
+            tuple(params),
+        ).fetchone()
+        return _proposal_row_to_dict(row) if row else None
+
+
+def update_tool_proposal_status(
+    proposal_id: int,
+    status: str,
+    notes: str | None = None,
+    user_id: int | None = None,
+) -> dict | None:
+    if status not in TOOL_PROPOSAL_STATUSES:
+        raise ValueError(f"unsupported tool proposal status: {status}")
+    proposal = get_tool_proposal(proposal_id, user_id=user_id)
+    if not proposal:
+        return None
+    if proposal.get("status") == "implemented" and status != "implemented":
+        raise ValueError("implemented proposals cannot be moved back in v1")
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE tool_proposals
+            SET status = ?, notes = COALESCE(?, notes), updated_at = ?
+            WHERE id = ? AND (? IS NULL OR user_id = ?)
+            """,
+            (status, notes, time.time(), proposal_id, user_id, user_id),
+        )
+    return get_tool_proposal(proposal_id, user_id=user_id)
 
 
 def get_user_facts(user_id: str) -> list[dict]:

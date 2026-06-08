@@ -170,6 +170,10 @@ def _permissions_for(meta: dict[str, Any], canonical_name: str, risk_level: str)
         permissions.add("answer.emit")
     if canonical_name.startswith("memory."):
         permissions.add("memory.read")
+    if canonical_name in {"tool.list_proposals", "tool.get_proposal"}:
+        permissions.add("tool.proposal.read")
+    if canonical_name in {"tool.propose", "tool.update_proposal_status"}:
+        permissions.add("tool.proposal.write")
     if canonical_name in {"remember_fact", "forget_fact"}:
         permissions.add("memory.write")
     if canonical_name.startswith("device."):
@@ -216,6 +220,8 @@ def _side_effects_for(canonical_name: str, risk_level: str) -> list[str]:
         return ["creates_temporary_download_link"]
     if canonical_name == "web_search":
         return ["external_network_request"]
+    if canonical_name in {"tool.propose", "tool.update_proposal_status"}:
+        return ["writes_tool_proposal_metadata"]
     if canonical_name in {"remember_fact", "forget_fact"}:
         return ["updates_memory_store"]
     if risk_level in {"safe", "read_only"}:
@@ -242,6 +248,8 @@ def _evidence_for(canonical_name: str) -> EvidenceContract:
         return EvidenceContract(produced=["device_summary", "context_handle"], required_for_claims=["current_run_tool_result"], fresh_run_required=True)
     if canonical_name.startswith("memory."):
         return EvidenceContract(produced=["memory_summary"], required_for_claims=["current_run_tool_result"], fresh_run_required=True)
+    if canonical_name.startswith("tool."):
+        return EvidenceContract(produced=["tool_proposal_record"], required_for_claims=["proposal_id_or_current_user_scope"], fresh_run_required=True)
     if canonical_name == "execute_cmd":
         return EvidenceContract(produced=["returncode", "stdout", "stderr"], required_for_claims=["returncode"], fresh_run_required=True)
     if canonical_name == "get_file_link":
@@ -266,6 +274,8 @@ def _idempotency_for(canonical_name: str, risk_level: str) -> str:
         return "safe_repeat"
     if canonical_name in {"remember_fact", "forget_fact"}:
         return "not_idempotent"
+    if canonical_name in {"tool.propose", "tool.update_proposal_status"}:
+        return "not_idempotent"
     if risk_level in {"safe", "read_only"}:
         return "idempotent"
     return "unknown"
@@ -282,6 +292,10 @@ def _when_not_to_use(canonical_name: str, meta: dict[str, Any]) -> list[str]:
         return ["file path is unknown", "file was not created or verified in current context"]
     if canonical_name == "web_search":
         return ["local device state is needed", "a typed local tool can answer with current-run evidence"]
+    if canonical_name == "tool.propose":
+        return ["user expects immediate production tool installation", "proposal contains secrets or direct execution instructions"]
+    if canonical_name.startswith("tool."):
+        return ["the requested action should execute a device task rather than manage a proposal"]
     if canonical_name.startswith("window."):
         return ["file system checks", "process launch without window verification"]
     if canonical_name.startswith("device."):
