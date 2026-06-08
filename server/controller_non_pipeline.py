@@ -10,6 +10,7 @@ try:
     from .answer_auditor import audit_answer_payload  # type: ignore
     from .answer_repair import run_answer_only_repair_turn  # type: ignore
     from .controller_budget import BUDGET_GUARD_ERROR, CommandBudget, budget_guard_entry  # type: ignore
+    from .controller_tools import TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
     from .controller_shared import (  # type: ignore
         ConfirmationRequired,
         build_chat_messages,
@@ -24,8 +25,19 @@ try:
         validate_toolchain_fact_against_receipt,
     )
     from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
+    from .memory_intent_guard import (  # type: ignore
+        MEMORY_WRITE_CORRECTION,
+        blocked_memory_write_result,
+        has_explicit_memory_write_intent,
+    )
     from .runtime_state import is_task_cancel_requested  # type: ignore
     from .task_summary import get_last_run_summary  # type: ignore
+    from .tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
+    from .tool_completion import (  # type: ignore
+        TERMINAL_CORRECTION,
+        synthesize_terminal_answer_payload,
+        tool_result_terminal_sufficient,
+    )
     from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from .tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
     from .tool_repeat_guard import (  # type: ignore
@@ -58,6 +70,7 @@ except ImportError:
     from answer_auditor import audit_answer_payload  # type: ignore
     from answer_repair import run_answer_only_repair_turn  # type: ignore
     from controller_budget import BUDGET_GUARD_ERROR, CommandBudget, budget_guard_entry  # type: ignore
+    from controller_tools import TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
     from controller_shared import (  # type: ignore
         ConfirmationRequired,
         build_chat_messages,
@@ -72,8 +85,19 @@ except ImportError:
         validate_toolchain_fact_against_receipt,
     )
     from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
+    from memory_intent_guard import (  # type: ignore
+        MEMORY_WRITE_CORRECTION,
+        blocked_memory_write_result,
+        has_explicit_memory_write_intent,
+    )
     from runtime_state import is_task_cancel_requested  # type: ignore
     from task_summary import get_last_run_summary  # type: ignore
+    from tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
+    from tool_completion import (  # type: ignore
+        TERMINAL_CORRECTION,
+        synthesize_terminal_answer_payload,
+        tool_result_terminal_sufficient,
+    )
     from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
     from tool_repeat_guard import (  # type: ignore
@@ -138,14 +162,6 @@ APP_WINDOW_ACTIONS = {
     "app_verify_launch": "app.verify_launch",
     "app_close": "app.close",
 }
-
-
-def _open_url_has_terminal_evidence(entry: dict) -> bool:
-    if (entry.get("action") or entry.get("tool_name")) not in {"app_open_url", "app.open_url"}:
-        return False
-    result = entry.get("result")
-    return isinstance(result, dict) and bool(result.get("launched")) and bool(result.get("window_found"))
-
 
 async def _run_web_search(cfg: dict, query: str, max_results: int) -> dict:
     tavily_key = cfg.get("tavily_api_key")
@@ -230,6 +246,31 @@ async def process_non_pipeline_command(
     messages.append({"role": "user", "content": user_message})
 
     commands_log = []
+    tool_schemas = {
+        tool.get("function", {}).get("name"): tool
+        for tool in [*DEFAULT_CONTROLLER_TOOLS, *(non_pipeline_tools or [])]
+        if tool.get("function", {}).get("name")
+    }
+    terminal_sufficient_entry: dict | None = None
+    terminal_sufficient_extra_turn_used = False
+    memory_write_allowed = has_explicit_memory_write_intent(user_message)
+
+    if user_id is not None or chat_id is not None:
+        previous_failed = get_last_run_summary(
+            user_id=user_id,
+            chat_id=chat_id,
+            include_success=False,
+            exclude_task_id=poll_task_id,
+        )
+        if previous_failed.get("last_task_id"):
+            messages.append({
+                "role": "system",
+                "content": (
+                    "Previous failed run context is available for this chat. "
+                    "If the user asks what happened or why the previous task failed, "
+                    "call system_get_last_run_summary first and do not retry the previous action unless the user explicitly asks to retry."
+                ),
+            })
 
     def add_correction(correction: str):
         messages.append({"role": "user", "content": correction})
@@ -358,6 +399,25 @@ async def process_non_pipeline_command(
 
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
+                if terminal_sufficient_entry is not None:
+                    payload = validate_answer_text_payload(
+                        synthesize_terminal_answer_payload(terminal_sufficient_entry),
+                        commands_log,
+                    )
+                    append_answer_step(
+                        commands_log,
+                        "answer_text",
+                        payload,
+                        target_device_id=device_id,
+                        hostname=device_info.get("hostname") or device_id,
+                        iteration=iteration + 1,
+                    )
+                    return {
+                        "answer": payload["text"],
+                        "commands": commands_log,
+                        "tasks": [],
+                        "training_context": _training_context(device_info),
+                    }
                 add_correction(RAW_CONTENT_CORRECTION)
                 continue
 
@@ -377,6 +437,7 @@ async def process_non_pipeline_command(
                 continue
 
             if is_terminal_answer_tool(fn_name):
+                terminal_sufficient_entry = None
                 target_device = device_id
                 try:
                     if is_answer_text_tool(fn_name):
@@ -506,6 +567,45 @@ async def process_non_pipeline_command(
                         "tool_call_id": tool_call["id"],
                         "content": json.dumps({"error": f"Ошибка парсинга аргументов: {exc}"}, ensure_ascii=False),
                     })
+                    continue
+
+                if terminal_sufficient_entry is not None and not is_terminal_answer_tool(fn_name):
+                    payload = validate_answer_text_payload(
+                        synthesize_terminal_answer_payload(terminal_sufficient_entry),
+                        commands_log,
+                    )
+                    append_answer_step(
+                        commands_log,
+                        "answer_text",
+                        payload,
+                        target_device_id=device_id,
+                        hostname=device_info.get("hostname") or device_id,
+                        iteration=iteration + 1,
+                    )
+                    return {
+                        "answer": payload["text"],
+                        "commands": commands_log,
+                        "tasks": [],
+                        "training_context": _training_context(device_info),
+                    }
+
+                clean_args, arg_warnings, arg_error = validate_and_sanitize_tool_args(
+                    fn_name,
+                    fn_args,
+                    tool_schemas.get(fn_name),
+                )
+                fn_args = clean_args
+                if arg_error:
+                    entry = append_entry(tool_log_entry(
+                        fn_name,
+                        {**arg_error, "arg_warnings": arg_warnings} if arg_warnings else arg_error,
+                        command=f"[tool] {fn_name}",
+                        target_device_id=device_id,
+                        hostname=device_info.get("hostname") or device_id,
+                        iteration=iteration + 1,
+                    ))
+                    append_tool_message(tool_call["id"], entry)
+                    add_correction(f"Tool arguments failed validation. {ONE_TOOL_CORRECTION}")
                     continue
 
                 requested_device_id = fn_args.pop("device_id", None)
@@ -837,7 +937,9 @@ async def process_non_pipeline_command(
                     ))
 
                 elif fn_name == "remember_fact":
-                    if not mem_user_id:
+                    if not memory_write_allowed:
+                        tool_result = blocked_memory_write_result()
+                    elif not mem_user_id:
                         tool_result = {"error": "Не удалось сохранить факт: пользователь не идентифицирован"}
                     else:
                         try:
@@ -866,7 +968,9 @@ async def process_non_pipeline_command(
                     ))
 
                 elif fn_name == "forget_fact":
-                    if not mem_user_id:
+                    if not memory_write_allowed:
+                        tool_result = blocked_memory_write_result()
+                    elif not mem_user_id:
                         tool_result = {"error": "Факт не найден"}
                     else:
                         try:
@@ -901,18 +1005,36 @@ async def process_non_pipeline_command(
                         tool_result,
                         iteration + 1,
                     ))
+                if arg_warnings and isinstance(commands_log[-1].get("result"), dict):
+                    existing_warnings = list(commands_log[-1]["result"].get("arg_warnings") or [])
+                    commands_log[-1]["result"]["arg_warnings"] = existing_warnings + arg_warnings
                 mark_read_only_tool_step(commands_log[-1], fn_name, repeat_guard_args)
                 append_tool_message(tool_call["id"], commands_log[-1])
-                if _open_url_has_terminal_evidence(commands_log[-1]):
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "Current-run evidence shows the URL was opened and a browser window was found. "
-                            "Do not call more action tools. Finish now with exactly one answer_text call. "
-                            "If focus_status is not focused, report that the link is open and the window was found, "
-                            "but focusing failed."
-                        ),
-                    })
+                if isinstance(commands_log[-1].get("result"), dict) and commands_log[-1]["result"].get("error") == "memory_write_requires_explicit_user_intent":
+                    add_correction(MEMORY_WRITE_CORRECTION)
+                if tool_result_terminal_sufficient(commands_log[-1]):
+                    terminal_sufficient_entry = commands_log[-1]
+                    if terminal_sufficient_extra_turn_used:
+                        payload = validate_answer_text_payload(
+                            synthesize_terminal_answer_payload(commands_log[-1]),
+                            commands_log,
+                        )
+                        append_answer_step(
+                            commands_log,
+                            "answer_text",
+                            payload,
+                            target_device_id=target_device,
+                            hostname=device_info.get("hostname") or target_device,
+                            iteration=iteration + 1,
+                        )
+                        return {
+                            "answer": payload["text"],
+                            "commands": commands_log,
+                            "tasks": [],
+                            "training_context": _training_context(device_info),
+                        }
+                    terminal_sufficient_extra_turn_used = True
+                    messages.append({"role": "user", "content": TERMINAL_CORRECTION})
 
     print("[tool-only] max_iterations reached; attempting answer_text-only repair turn")
     repair_result = await run_answer_only_repair_turn(

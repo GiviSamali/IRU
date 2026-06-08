@@ -227,6 +227,7 @@ WORKER_TOOL_NAMES = {
     "window_focus",
     "window_close",
     "app_launch",
+    "app_open_url",
     "app_verify_launch",
     "app_close",
     "execute_cmd",

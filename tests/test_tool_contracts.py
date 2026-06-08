@@ -8,6 +8,7 @@ from server.tool_contracts import (
 )
 from server.tool_inventory import build_tool_inventory
 from server.tool_registry import DEVICE_TOOL_SCHEMAS, TOOL_METADATA, canonical_tool_name, list_tools
+from server.controller_tools import WORKER_TOOLS
 
 
 def test_all_existing_tool_metadata_can_produce_valid_contracts():
@@ -203,3 +204,8 @@ def test_open_url_and_last_run_summary_are_public_contracted_tools():
     assert inventory["system.get_last_run_summary"]["visibility"] == "public"
     assert inventory["system.get_last_run_summary"]["has_contract"] is True
     assert "system.get_last_run_summary" in public_registry_names
+
+
+def test_app_open_url_is_available_to_pipeline_worker_toolset():
+    worker_names = {tool["function"]["name"] for tool in WORKER_TOOLS}
+    assert "app_open_url" in worker_names
