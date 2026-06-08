@@ -7,6 +7,7 @@ import server.runtime_state as runtime_state
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_pipeline import process_pipeline_subagents, run_pipeline_worker
 from server.run_journal import validate_answer_text_payload
+from server.tool_completion import synthesize_terminal_answer_payload
 from server.tool_registry import canonical_tool_name, list_tools
 
 
@@ -598,8 +599,91 @@ def test_app_open_url_opened_unverified_synthesizes_terminal_answer():
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["app.open_url", "answer.text"]
     assert result["commands"][1]["result"]["answer_type"] == "partial_report"
     assert result["commands"][1]["result"]["basis"] == ["step_1"]
-    assert "команда открытия URL выполнена" in result["answer"]
+    assert result["answer"] == "Готово, открыл https://irumode.online/ в браузере."
+    assert "сайт недоступен" not in result["answer"].lower()
+    assert "не удалось открыть" not in result["answer"].lower()
     assert len(captured) == 2
+
+
+def test_app_open_url_opened_unverified_model_answer_is_sanitized():
+    async def _send(device_id, action, params):
+        return {
+            "status": "opened_unverified",
+            "url": params["url"],
+            "launched": True,
+            "window_found": False,
+            "terminal_sufficient": True,
+            "completion_state": "partial_success",
+            "recommended_next": "answer_text",
+        }
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-open", "app_open_url", {"url": "https://irumode.online/"})]),
+        _message(tool_calls=[_answer_call(
+            "call-answer",
+            "Окно с сайтом не обнаружено, возможно сайт недоступен.",
+            answer_type="grounded_report",
+            basis=["step_1"],
+        )]),
+    ], send_command_fn=_send)
+
+    assert result["answer"] == "Готово, открыл https://irumode.online/ в браузере."
+    assert "сайт недоступен" not in result["answer"].lower()
+    assert result["commands"][1]["result"]["basis"] == ["step_1"]
+
+
+def test_app_open_url_synthesized_failure_when_not_launched():
+    payload = synthesize_terminal_answer_payload({
+        "tool_name": "app.open_url",
+        "step_id": "step_1",
+        "result": {
+            "status": "failed",
+            "url": "https://irumode.online/",
+            "launched": False,
+            "window_found": False,
+        },
+    })
+
+    assert payload["answer_type"] == "error_report"
+    assert "Не удалось открыть https://irumode.online/ в браузере." in payload["text"]
+    assert payload["self_check"]["claims_completed_action"] is False
+
+
+def test_app_open_url_synthesized_failure_when_launch_error_exists():
+    payload = synthesize_terminal_answer_payload({
+        "tool_name": "app.open_url",
+        "step_id": "step_1",
+        "result": {
+            "status": "opened_unverified",
+            "url": "https://irumode.online/",
+            "launched": True,
+            "launch_error": "browser executable not found",
+            "window_found": False,
+        },
+    })
+
+    assert payload["answer_type"] == "error_report"
+    assert "Не удалось открыть https://irumode.online/ в браузере." in payload["text"]
+    assert "browser executable not found" in payload["text"]
+
+
+def test_app_open_url_opened_visible_focus_failed_synthesized_answer():
+    payload = synthesize_terminal_answer_payload({
+        "tool_name": "app.open_url",
+        "step_id": "step_1",
+        "result": {
+            "status": "opened_visible_focus_failed",
+            "url": "https://irumode.online/",
+            "launched": True,
+            "window_found": True,
+            "focus_status": "failed",
+        },
+    })
+
+    assert payload["answer_type"] == "partial_report"
+    assert "Ссылка открыта" in payload["text"]
+    assert "сфокусировать окно не удалось" in payload["text"]
+    assert "сайт недоступен" not in payload["text"].lower()
 
 
 def test_window_list_args_are_sanitized_before_agent_dispatch():

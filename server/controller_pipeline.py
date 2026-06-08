@@ -37,6 +37,7 @@ try:
     from .tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from .tool_completion import (  # type: ignore
         TERMINAL_CORRECTION,
+        sanitize_open_url_answer_payload,
         synthesize_terminal_answer_payload,
         tool_result_terminal_sufficient,
     )
@@ -91,6 +92,7 @@ except ImportError:
     from tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from tool_completion import (  # type: ignore
         TERMINAL_CORRECTION,
+        sanitize_open_url_answer_payload,
         synthesize_terminal_answer_payload,
         tool_result_terminal_sufficient,
     )
@@ -1322,6 +1324,7 @@ async def run_pipeline_worker(
                 if is_answer_text_tool(fn_name):
                     payload = validate_answer_text_payload(fn_args_preview, commands_log)
                     payload = sanitize_system_list_tools_answer(payload, commands_log)
+                    payload = sanitize_open_url_answer_payload(payload, commands_log)
                     audit_ok, audit_reason, audit_infra_error = await audit_answer_payload(
                         client=client,
                         cfg=cfg,
@@ -2289,6 +2292,7 @@ async def process_pipeline_subagents(
                     if is_answer_text_tool(fn_name):
                         payload = validate_answer_text_payload(fn_args, all_commands)
                         payload = sanitize_system_list_tools_answer(payload, all_commands)
+                        payload = sanitize_open_url_answer_payload(payload, all_commands)
                         audit_ok, audit_reason, audit_infra_error = await audit_answer_payload(
                             client=client,
                             cfg=cfg,

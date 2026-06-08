@@ -35,6 +35,7 @@ try:
     from .tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from .tool_completion import (  # type: ignore
         TERMINAL_CORRECTION,
+        sanitize_open_url_answer_payload,
         synthesize_terminal_answer_payload,
         tool_result_terminal_sufficient,
     )
@@ -95,6 +96,7 @@ except ImportError:
     from tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from tool_completion import (  # type: ignore
         TERMINAL_CORRECTION,
+        sanitize_open_url_answer_payload,
         synthesize_terminal_answer_payload,
         tool_result_terminal_sufficient,
     )
@@ -443,6 +445,7 @@ async def process_non_pipeline_command(
                     if is_answer_text_tool(fn_name):
                         answer_payload = validate_answer_text_payload(fn_args_preview, commands_log)
                         answer_payload = sanitize_system_list_tools_answer(answer_payload, commands_log)
+                        answer_payload = sanitize_open_url_answer_payload(answer_payload, commands_log)
                         audit_ok, audit_reason, audit_infra_error = await audit_answer_payload(
                             client=client,
                             cfg=cfg,
