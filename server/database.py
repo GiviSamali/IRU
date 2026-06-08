@@ -1361,6 +1361,7 @@ def get_recent_llm_usage_events_for_chat(user_id: int, chat_id: int, limit: int 
 # ── Tool proposals ───────────────────────────────────────────────────────────
 
 TOOL_PROPOSAL_STATUSES = {"proposed", "reviewing", "approved", "rejected", "implemented", "deprecated"}
+TOOL_PROPOSAL_ADMIN_REVIEW_STATUSES = {"approved", "implemented", "deprecated"}
 _TOOL_PROPOSAL_JSON_FIELDS = {
     "permissions",
     "input_schema",
@@ -1507,9 +1508,12 @@ def update_tool_proposal_status(
     status: str,
     notes: str | None = None,
     user_id: int | None = None,
+    allow_admin_review: bool = False,
 ) -> dict | None:
     if status not in TOOL_PROPOSAL_STATUSES:
         raise ValueError(f"unsupported tool proposal status: {status}")
+    if status in TOOL_PROPOSAL_ADMIN_REVIEW_STATUSES and not allow_admin_review:
+        raise PermissionError("proposal_status_requires_admin_review")
     proposal = get_tool_proposal(proposal_id, user_id=user_id)
     if not proposal:
         return None

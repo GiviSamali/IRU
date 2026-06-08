@@ -5,6 +5,7 @@ from typing import Any
 
 
 ALLOWED_PROPOSAL_STATUSES = {"proposed", "reviewing", "approved", "rejected", "implemented", "deprecated"}
+ADMIN_REVIEW_STATUSES = {"approved", "implemented", "deprecated"}
 ALLOWED_PRIORITIES = {"low", "normal", "high"}
 ALLOWED_RISK_LEVELS = {
     "safe",
@@ -165,12 +166,32 @@ def update_current_user_tool_proposal_status(
     status: str,
     notes: str | None,
     user_id: int | None,
+    allow_admin_review: bool = False,
 ) -> dict[str, Any]:
     if status not in ALLOWED_PROPOSAL_STATUSES:
         raise ToolProposalValidationError(f"unsupported status: {status}")
+    if status in ADMIN_REVIEW_STATUSES and not allow_admin_review:
+        return {
+            "status": "error",
+            "error": "proposal_status_requires_admin_review",
+            "requested_status": status,
+        }
     if _text_contains_forbidden(notes):
         raise ToolProposalValidationError("notes must not contain secrets or direct production execution instructions")
-    proposal = _db().update_tool_proposal_status(proposal_id, status, notes=notes, user_id=user_id)
+    try:
+        proposal = _db().update_tool_proposal_status(
+            proposal_id,
+            status,
+            notes=notes,
+            user_id=user_id,
+            allow_admin_review=allow_admin_review,
+        )
+    except PermissionError:
+        return {
+            "status": "error",
+            "error": "proposal_status_requires_admin_review",
+            "requested_status": status,
+        }
     if not proposal:
         return {"status": "not_found", "error": "proposal not found"}
     return {"status": "updated", "proposal": proposal}

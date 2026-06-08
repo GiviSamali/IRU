@@ -92,6 +92,13 @@ def test_db_helpers_add_list_get_update_scope_to_user(client):
     assert updated["status"] == "reviewing"
     assert updated["notes"] == "Needs review"
 
+    try:
+        update_tool_proposal_status(proposal_id, "approved", user_id=owner["id"])
+    except PermissionError as exc:
+        assert str(exc) == "proposal_status_requires_admin_review"
+    else:
+        raise AssertionError("approved status must require admin review")
+
 
 def test_tool_propose_creates_current_user_proposal(client):
     from server.database import create_user, list_tool_proposals
@@ -128,6 +135,27 @@ def test_tool_list_proposals_returns_only_current_user(client):
     assert result["proposals"][0]["name"] == "office.create_docx"
 
 
+def test_user_cannot_set_implemented_through_tool_update_status(client):
+    from server.database import create_user, get_tool_proposal
+    from server.tool_proposals import run_tool_proposal_tool
+
+    user = create_user("tool-status-guard-user")
+    created = run_tool_proposal_tool("tool_propose", _proposal_payload("office.create_docx"), user_id=user["id"])
+
+    result = run_tool_proposal_tool(
+        "tool_update_proposal_status",
+        {"proposal_id": created["proposal_id"], "status": "implemented"},
+        user_id=user["id"],
+    )
+
+    assert result == {
+        "status": "error",
+        "error": "proposal_status_requires_admin_review",
+        "requested_status": "implemented",
+    }
+    assert get_tool_proposal(created["proposal_id"], user_id=user["id"])["status"] == "proposed"
+
+
 def test_api_routes_do_not_expose_other_users_proposals(client):
     from server.database import create_user
 
@@ -147,6 +175,41 @@ def test_api_routes_do_not_expose_other_users_proposals(client):
 
     other_get = client.get(f"/api/tool-proposals/{proposal_id}", headers={"X-Token": other["token"]})
     assert other_get.status_code == 404
+
+
+def test_api_patch_rejects_approved_but_allows_rejected_and_notes(client):
+    from server.database import create_user
+
+    user = create_user("tool-api-status-user")
+    create_resp = client.post(
+        "/api/tool-proposals",
+        headers={"X-Token": user["token"]},
+        json=_proposal_payload("office.create_docx"),
+    )
+    assert create_resp.status_code == 200
+    proposal_id = create_resp.json()["proposal_id"]
+
+    approved_resp = client.patch(
+        f"/api/tool-proposals/{proposal_id}",
+        headers={"X-Token": user["token"]},
+        json={"status": "approved", "notes": "looks good"},
+    )
+    assert approved_resp.status_code == 200
+    assert approved_resp.json() == {
+        "status": "error",
+        "error": "proposal_status_requires_admin_review",
+        "requested_status": "approved",
+    }
+
+    rejected_resp = client.patch(
+        f"/api/tool-proposals/{proposal_id}",
+        headers={"X-Token": user["token"]},
+        json={"status": "rejected", "notes": "user cancelled"},
+    )
+    assert rejected_resp.status_code == 200
+    proposal = rejected_resp.json()["proposal"]
+    assert proposal["status"] == "rejected"
+    assert proposal["notes"] == "user cancelled"
 
 
 def test_proposal_name_validation_and_secret_rejection(client):
