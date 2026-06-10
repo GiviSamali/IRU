@@ -30,6 +30,7 @@ try:
         validate_toolchain_fact_against_receipt,
     )
     from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
+    from .pc_core_tools import PC_CORE_TOOL_NAMES, run_pc_core_tool  # type: ignore
     from .memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
         blocked_memory_write_result,
@@ -97,6 +98,7 @@ except ImportError:
         validate_toolchain_fact_against_receipt,
     )
     from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
+    from pc_core_tools import PC_CORE_TOOL_NAMES, run_pc_core_tool  # type: ignore
     from memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
         blocked_memory_write_result,
@@ -715,6 +717,8 @@ async def process_non_pipeline_command(
                     set_current_step(poll_task_id, "Checking tool registry")
                 elif fn_name.startswith("tool_"):
                     set_current_step(poll_task_id, "Working with tool proposals")
+                elif fn_name in PC_CORE_TOOL_NAMES:
+                    set_current_step(poll_task_id, "Running PC core tool")
                 elif fn_name in MEMORY_TOOL_NAMES:
                     set_current_step(poll_task_id, "Checking memory")
                 elif fn_name.startswith("device_"):
@@ -771,6 +775,22 @@ async def process_non_pipeline_command(
                         command=f"[tool] {fn_name}",
                         target_device_id=None,
                         hostname=None,
+                        iteration=iteration + 1,
+                    ))
+
+                elif fn_name in PC_CORE_TOOL_NAMES:
+                    tool_result = await run_pc_core_tool(
+                        fn_name,
+                        fn_args,
+                        send_command_fn=send_command_fn,
+                        device_id=target_device,
+                    )
+                    append_entry(tool_log_entry(
+                        fn_name,
+                        tool_result,
+                        command=f"[tool] {fn_name}",
+                        target_device_id=target_device,
+                        hostname=device_info.get("hostname") or target_device,
                         iteration=iteration + 1,
                     ))
 

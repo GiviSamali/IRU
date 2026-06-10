@@ -216,6 +216,17 @@ NON_PIPELINE_TOOLS = [
 ]
 
 WORKER_TOOL_NAMES = {
+    "fs_resolve_path",
+    "fs_open_folder",
+    "fs_list_dir",
+    "fs_stat",
+    "fs_read_file",
+    "fs_write_file",
+    "fs_patch_file",
+    "fs_rename",
+    "fs_copy",
+    "fs_move",
+    "fs_delete",
     "memory_get_stats",
     "memory_list_facts",
     "device_refresh_state",
@@ -228,6 +239,7 @@ WORKER_TOOL_NAMES = {
     "window_close",
     "app_launch",
     "app_open_url",
+    "app_open_file",
     "app_verify_launch",
     "app_close",
     "execute_cmd",

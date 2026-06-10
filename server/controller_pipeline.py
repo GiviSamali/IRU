@@ -32,6 +32,7 @@ try:
         validate_toolchain_fact_against_receipt,
     )
     from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
+    from .pc_core_tools import PC_CORE_TOOL_NAMES, run_pc_core_tool  # type: ignore
     from .memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
         blocked_memory_write_result,
@@ -93,6 +94,7 @@ except ImportError:
         validate_toolchain_fact_against_receipt,
     )
     from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
+    from pc_core_tools import PC_CORE_TOOL_NAMES, run_pc_core_tool  # type: ignore
     from memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
         blocked_memory_write_result,
@@ -191,6 +193,7 @@ PIPELINE_WORKER_HANDLED_TOOL_NAMES = (
     PIPELINE_TERMINAL_TOOL_NAMES
     | PIPELINE_DEVICE_TOOL_NAMES
     | PIPELINE_MEMORY_TOOL_NAMES
+    | PC_CORE_TOOL_NAMES
     | set(PIPELINE_APP_WINDOW_ACTIONS)
     | {"execute_cmd", "write_content", "get_file_link", "web_search", "remember_fact", "forget_fact", "system_get_last_run_summary"}
 )
@@ -1626,6 +1629,21 @@ async def run_pipeline_worker(
                     fn_name,
                     f"[tool] {fn_name}",
                     None,
+                    tool_result,
+                )
+
+            elif fn_name in PC_CORE_TOOL_NAMES:
+                set_current_step(poll_task_id, "Running PC core tool")
+                tool_result = await run_pc_core_tool(
+                    fn_name,
+                    fn_args,
+                    send_command_fn=send_command_fn,
+                    device_id=target_device,
+                )
+                append_step_command(
+                    fn_name,
+                    f"[tool] {fn_name}",
+                    target_device,
                     tool_result,
                 )
 

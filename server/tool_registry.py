@@ -15,6 +15,17 @@ CANONICAL_TOOL_NAMES = {
     "tool_list_proposals": "tool.list_proposals",
     "tool_get_proposal": "tool.get_proposal",
     "tool_update_proposal_status": "tool.update_proposal_status",
+    "fs_resolve_path": "fs.resolve_path",
+    "fs_open_folder": "fs.open_folder",
+    "fs_list_dir": "fs.list_dir",
+    "fs_stat": "fs.stat",
+    "fs_read_file": "fs.read_file",
+    "fs_write_file": "fs.write_file",
+    "fs_patch_file": "fs.patch_file",
+    "fs_rename": "fs.rename",
+    "fs_copy": "fs.copy",
+    "fs_move": "fs.move",
+    "fs_delete": "fs.delete",
     "memory_get_stats": "memory.get_stats",
     "memory_list_facts": "memory.list_facts",
     "device_get_passport": "device.get_passport",
@@ -31,6 +42,7 @@ CANONICAL_TOOL_NAMES = {
     "window_close": "window.close",
     "app_launch": "app.launch",
     "app_open_url": "app.open_url",
+    "app_open_file": "app.open_file",
     "app_verify_launch": "app.verify_launch",
     "app_close": "app.close",
     "system_get_last_run_summary": "system.get_last_run_summary",
@@ -102,6 +114,105 @@ TOOL_METADATA = {
         "returns": "updated proposal",
         "danger": "write",
         "visibility": "internal",
+    },
+    "fs.resolve_path": {
+        "category": "files",
+        "tool_type": "typed",
+        "tool_label": "Resolve path",
+        "purpose": "Resolve human-friendly aliases and relative paths into absolute local paths",
+        "when_to_use": ["need local path evidence", "before file/folder operations", "user mentions Downloads/Documents/Desktop by name"],
+        "returns": "resolved path, exists flag and type",
+        "danger": "safe",
+    },
+    "fs.open_folder": {
+        "category": "files",
+        "tool_type": "typed",
+        "tool_label": "Open folder",
+        "purpose": "Open a folder in Explorer/file manager and verify visible folder window when possible",
+        "when_to_use": ["user asks to open a folder", "user asks to show Downloads/Documents/Desktop"],
+        "returns": "open status, resolved path and window evidence",
+        "danger": "process_start",
+    },
+    "fs.list_dir": {
+        "category": "files",
+        "tool_type": "typed",
+        "tool_label": "List folder",
+        "purpose": "List folder contents with capped output",
+        "when_to_use": ["user asks what files are in a folder", "need directory contents"],
+        "returns": "capped directory item list",
+        "danger": "safe",
+    },
+    "fs.stat": {
+        "category": "files",
+        "tool_type": "typed",
+        "tool_label": "File stat",
+        "purpose": "Check file/folder existence, type, size and modified time",
+        "when_to_use": ["need file existence evidence", "need cheap file/folder metadata"],
+        "returns": "existence/type/size/mtime and optional sha256",
+        "danger": "safe",
+    },
+    "fs.read_file": {
+        "category": "files",
+        "tool_type": "typed",
+        "tool_label": "Read file",
+        "purpose": "Read a text file with output caps and sha256 evidence",
+        "when_to_use": ["user asks to read a file", "need file content preview"],
+        "returns": "text content preview, truncation flag and sha256",
+        "danger": "safe",
+    },
+    "fs.write_file": {
+        "category": "files",
+        "tool_type": "typed",
+        "tool_label": "Write file",
+        "purpose": "Create, append, or replace a text file with backup on replace by default",
+        "when_to_use": ["user asks to create a file", "user asks to write text to a file"],
+        "returns": "write status, path, bytes and sha256",
+        "danger": "write",
+    },
+    "fs.patch_file": {
+        "category": "files",
+        "tool_type": "typed",
+        "tool_label": "Patch file",
+        "purpose": "Patch a text file through deterministic replace/insert/append/delete_block operations",
+        "when_to_use": ["user asks to edit part of a text file", "need targeted file modifications"],
+        "returns": "patch status, backup path and before/after hashes",
+        "danger": "write",
+    },
+    "fs.rename": {
+        "category": "files",
+        "tool_type": "typed",
+        "tool_label": "Rename",
+        "purpose": "Rename one file or folder by new name",
+        "when_to_use": ["user asks to rename a file or folder"],
+        "returns": "old and new path",
+        "danger": "write",
+    },
+    "fs.copy": {
+        "category": "files",
+        "tool_type": "typed",
+        "tool_label": "Copy",
+        "purpose": "Copy a file or folder",
+        "when_to_use": ["user asks to copy a file or folder"],
+        "returns": "source and destination",
+        "danger": "write",
+    },
+    "fs.move": {
+        "category": "files",
+        "tool_type": "typed",
+        "tool_label": "Move",
+        "purpose": "Move a file or folder with risky path guards",
+        "when_to_use": ["user asks to move a file or folder"],
+        "returns": "old and new path",
+        "danger": "write",
+    },
+    "fs.delete": {
+        "category": "files",
+        "tool_type": "typed",
+        "tool_label": "Delete",
+        "purpose": "Delete a file/folder only through guarded confirmation-aware behavior",
+        "when_to_use": ["user asks to delete a file or folder"],
+        "returns": "deleted or needs_confirmation status",
+        "danger": "destructive",
     },
     "memory.get_stats": {
         "category": "memory",
@@ -269,6 +380,15 @@ TOOL_METADATA = {
         "returns": "URL open status + browser/window evidence",
         "danger": "process_start",
     },
+    "app.open_file": {
+        "category": "app",
+        "tool_type": "typed",
+        "tool_label": "Open file",
+        "purpose": "Open a local file with the default app and verify a visible window when possible",
+        "when_to_use": ["user asks to open a file", "need default application launch for a local file"],
+        "returns": "open status, path and optional process/window evidence",
+        "danger": "process_start",
+    },
     "app.verify_launch": {
         "category": "app",
         "tool_type": "typed",
@@ -386,7 +506,208 @@ TOOL_METADATA = {
 }
 
 
+PC_CORE_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_resolve_path",
+            "description": "Resolve aliases like downloads/загрузки/documents/desktop/home into absolute local paths. Use before filesystem operations when path is ambiguous.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path_or_alias": {"type": "string"},
+                    "base_path": {"type": "string"},
+                    "must_exist": {"type": "boolean", "default": False},
+                    "expected_type": {"type": "string", "enum": ["any", "file", "dir"], "default": "any"},
+                },
+                "required": ["path_or_alias"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_open_folder",
+            "description": "Open a folder in Explorer/file manager and return normalized window evidence. Prefer over execute_cmd for opening folders like Downloads.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path_or_alias": {"type": "string"},
+                    "focus": {"type": "boolean", "default": True},
+                },
+                "required": ["path_or_alias"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_list_dir",
+            "description": "List folder contents safely with a limit. Prefer over execute_cmd dir/ls.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path_or_alias": {"type": "string"},
+                    "limit": {"type": "integer", "default": 100},
+                    "offset": {"type": "integer", "default": 0},
+                    "include_hidden": {"type": "boolean", "default": False},
+                    "filter": {"type": "string"},
+                },
+                "required": ["path_or_alias"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_stat",
+            "description": "Check whether a file/folder exists and return type, size, timestamps, and cheap sha256 for small files.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path_or_alias": {"type": "string"},
+                    "expected_type": {"type": "string", "enum": ["any", "file", "dir"], "default": "any"},
+                },
+                "required": ["path_or_alias"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_read_file",
+            "description": "Read a text file safely with max_chars cap and sha256. Rejects binary previews.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "max_chars": {"type": "integer", "default": 20000},
+                    "encoding": {"type": "string", "default": "auto"},
+                    "offset": {"type": "integer", "default": 0},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_write_file",
+            "description": "Create, append, or replace a text file with backup on replace by default. Prefer over raw shell for file writes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "mode": {"type": "string", "enum": ["create_only", "create_or_replace", "append"], "default": "create_or_replace"},
+                    "backup": {"type": "boolean", "default": True},
+                    "encoding": {"type": "string", "default": "utf-8"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_patch_file",
+            "description": "Patch a text file using replace/insert_before/insert_after/append/delete_block operations with backup by default.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "operations": {"type": "array", "items": {"type": "object"}},
+                    "backup": {"type": "boolean", "default": True},
+                },
+                "required": ["path", "operations"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_rename",
+            "description": "Rename a file or folder. new_name must be a simple name, not a path.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "new_name": {"type": "string"},
+                    "overwrite": {"type": "boolean", "default": False},
+                },
+                "required": ["path", "new_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_copy",
+            "description": "Copy a file or folder with overwrite control.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "destination": {"type": "string"},
+                    "overwrite": {"type": "boolean", "default": False},
+                },
+                "required": ["source", "destination"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_move",
+            "description": "Move a file or folder with risky path guards.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "destination": {"type": "string"},
+                    "overwrite": {"type": "boolean", "default": False},
+                },
+                "required": ["source", "destination"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fs_delete",
+            "description": "Delete a file/folder safely. Permanent delete requires confirmed=true; folder delete requires confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "mode": {"type": "string", "enum": ["trash", "permanent"], "default": "trash"},
+                    "confirmed": {"type": "boolean", "default": False},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "app_open_file",
+            "description": "Open a file with the default app and verify a visible window when possible. Prefer over execute_cmd for opening local files.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "app_hint": {"type": "string", "default": "default"},
+                    "focus": {"type": "boolean", "default": True},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+]
+
+
 DEVICE_TOOL_SCHEMAS = [
+    *PC_CORE_TOOL_SCHEMAS,
     {
         "type": "function",
         "function": {
@@ -969,6 +1290,11 @@ def compact_tool_summary(action: str, result: Any = None, command: str = "") -> 
                     bits.append(f"window_found={bool(result.get('window_found'))}")
                 if result.get("focus_status"):
                     bits.append(f"focus={result.get('focus_status')}")
+            if name == "app.open_file":
+                if result.get("path"):
+                    bits.append(f"path={str(result.get('path'))[:120]}")
+                if result.get("window_found") is not None:
+                    bits.append(f"window_found={bool(result.get('window_found'))}")
             if pid:
                 bits.append(f"pid={pid}")
             if result.get("verified") is not None:
@@ -978,6 +1304,18 @@ def compact_tool_summary(action: str, result: Any = None, command: str = "") -> 
             return "; ".join(bits)
         if name == "device.get_passport":
             return f"passport={result.get('device_id') or 'device'}"
+        if name.startswith("fs."):
+            status = result.get("status") or "unknown"
+            path = result.get("resolved_path") or result.get("path") or result.get("new_path") or result.get("destination") or ""
+            if name == "fs.list_dir":
+                return f"status={status}; items={result.get('returned_count', 0)}; path={path}"
+            if name == "fs.open_folder":
+                return f"status={status}; window_found={bool(result.get('window_found'))}; path={path}"
+            if name in {"fs.read_file", "fs.write_file"} and result.get("sha256"):
+                return f"status={status}; sha256={str(result.get('sha256'))[:12]}; path={path}"
+            if name == "fs.patch_file" and result.get("after_sha256"):
+                return f"status={status}; after_sha256={str(result.get('after_sha256'))[:12]}; path={path}"
+            return f"status={status}; path={path}"
         if name.startswith("tool."):
             proposal_id = result.get("proposal_id") or (result.get("proposal") or {}).get("id")
             status = result.get("proposal_status") or result.get("status") or (result.get("proposal") or {}).get("status")
