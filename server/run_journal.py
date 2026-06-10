@@ -6,8 +6,10 @@ from typing import Any
 
 try:
     from .tool_registry import canonical_tool_name, compact_tool_summary, tool_log_fields
+    from .tool_payload_compaction import compact_journal_entry_for_llm
 except ImportError:
     from tool_registry import canonical_tool_name, compact_tool_summary, tool_log_fields  # type: ignore
+    from tool_payload_compaction import compact_journal_entry_for_llm  # type: ignore
 
 
 ANSWER_TOOL_NAMES = {
@@ -144,6 +146,7 @@ def make_run_step(
 
 
 def append_tool_step(journal: list[dict[str, Any]], entry: dict[str, Any]) -> dict[str, Any]:
+    entry = compact_journal_entry_for_llm(entry)
     if entry.get("step_id") and entry.get("idx") is not None:
         journal.append(entry)
         return entry
@@ -210,6 +213,7 @@ def compact_step_summary(action: str, result: Any = None, command: str = "") -> 
 
 
 def wrap_tool_result_for_llm(entry: dict[str, Any]) -> dict[str, Any]:
+    entry = compact_journal_entry_for_llm(entry)
     return {
         "step_id": entry.get("step_id"),
         "tool_name": entry.get("tool_name") or canonical_tool_name(entry.get("action", "")),
