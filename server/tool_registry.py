@@ -300,9 +300,13 @@ TOOL_METADATA = {
         "category": "fallback",
         "tool_type": "fallback",
         "tool_label": "PowerShell / shell fallback",
-        "purpose": "Low-level shell fallback, use only when typed tools are unavailable",
-        "when_to_use": ["no typed tool exists", "no playbook exists"],
-        "returns": "command result",
+        "purpose": "Direct control surface for ordinary PC/system actions through short commands with action and sufficient verification",
+        "when_to_use": [
+            "ordinary OS/system action",
+            "short PowerShell/cmd/bash command can act and verify",
+            "typed tool is unavailable or not the right control surface",
+        ],
+        "returns": "command result with OK/NO/ERROR outcome when possible",
         "danger": "depends_on_command",
     },
     "get_file_link": {

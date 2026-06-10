@@ -5,6 +5,19 @@ try:
 except ImportError:
     from tool_registry import DEVICE_TOOL_SCHEMAS
 
+EXECUTE_CMD_GUIDANCE = (
+    "Run a short PowerShell/cmd/bash command on the user's device. For ordinary PC/system control, "
+    "execute_cmd is the direct control surface: perform the requested action and include sufficient verification "
+    "in the same short command when possible. Print a machine-readable outcome: OK: <confirmed or accepted result>, "
+    "NO: <expected state missing>, or ERROR: <reason>. Visual/window verification is only needed when the user "
+    "explicitly asks for a visible window/focus, the next step must interact with that window, launch evidence is "
+    "ambiguous/noisy, or the task is specifically about window state. For opening/launching, a successful command "
+    "can print OK: open_requested <target>. For copy/move/rename/delete/create-folder, verify the filesystem state. "
+    "Keep commands short. Do not pass long or multiline file content through execute_cmd; use write_content for "
+    "long/multiline text, generated HTML/code/JSON, and large artifacts."
+)
+
+
 TOOLS = [
     *DEVICE_TOOL_SCHEMAS,
     {
@@ -92,7 +105,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "execute_cmd",
-            "description": "Выполнить команду в PowerShell/cmd/bash на устройстве пользователя",
+            "description": EXECUTE_CMD_GUIDANCE,
             "parameters": {
                 "type": "object",
                 "properties": {

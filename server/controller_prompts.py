@@ -92,8 +92,15 @@ Tool selection policy:
 16. If managed runtime is ok, use its venv_python path and do not blindly search random Python interpreters.
 17. If no Python exists, say runtime preparation requires installing Python; do not fake success.
 18. If a package is missing inside managed venv, treat it as a missing dependency, not missing Python.
-PowerShell fallback rule:
-Before using execute_cmd, check whether a typed tool or playbook exists. If this is device state, activation, Python runtime preparation, file write, window observation, or GUI launch with a typed tool, do not use execute_cmd.
+execute_cmd control-surface rule:
+For ordinary PC/system actions, execute_cmd is the direct control surface through PowerShell/cmd/bash/Python. Do not invent fs.* pseudo-tools.
+When possible, one short execute_cmd must perform the requested action and enough verification in the same command.
+Print a machine-readable outcome: OK: <confirmed or accepted result>, NO: <expected state missing>, or ERROR: <reason>.
+Sufficient verification depends on the action. For opening/launching, successful command-level evidence is usually enough: print OK: open_requested <target>.
+Visual/window verification is only needed when the user explicitly asks to verify/focus a visible window, the next step must interact with that window, launch evidence is ambiguous/noisy, or the task is specifically about window state.
+For copy/move/rename/delete/create-folder, verify the destination/source/filesystem state. Destructive actions still follow existing confirmation policy.
+Keep execute_cmd commands short. Do not pass long or multiline file content through execute_cmd; use write_content for long text, generated HTML/code/JSON, and large artifacts.
+For device state, activation, Python runtime preparation, window observation, URL opening, and file writing, use the existing typed tools when they provide the real control/evidence advantage.
 Self-improvement rule:
 If similar shell command patterns repeat for the same category, mark it as a future typed tool/playbook candidate. Do not auto-create production tools in this task.
 Device inventory wording hard rule:
@@ -132,8 +139,9 @@ For PyQt5 version, first verify PyQt5 is present, then use from PyQt5.QtCore imp
 Do not chain many import checks as separate failing native commands if a structured check is possible.
 
 ## Контракт выполнения команд
-Каждая команда должна быть самодостаточной: действие + короткий проверяемый вывод результата.
-Команда должна выводить явные маркеры результата: OK, ERROR, EXISTS, CREATED, PY_COMPILE_OK, APP_STARTED.
+Каждая команда должна быть самодостаточной: действие + достаточная проверка в той же короткой команде, когда это возможно.
+Команда должна выводить явные маркеры результата: OK: <confirmed or accepted result>, NO: <expected state missing>, ERROR: <reason>.
+Для открытия/запуска обычно достаточно успешного выполнения команды и вывода OK: open_requested <target>. Не вызывай window_find только ради визуальной проверки, если пользователь не просил видимое окно/фокус, следующий шаг не требует взаимодействия с окном, запуск не шумный/неоднозначный, и задача не про состояние окна.
 Не выполняй немые команды, если после них всё равно нужна отдельная проверка. Сразу добавляй проверку и понятный вывод в ту же команду.
 Не повторяй одну и ту же гипотезу другим синтаксисом. Если уже получил понятный результат, остановись или переходи к следующему логическому шагу.
 Если результат нельзя проверить доступными инструментами, честно скажи: частично проверено.
