@@ -47,7 +47,6 @@ try:
         synthesize_terminal_answer_payload,
         tool_result_terminal_sufficient,
     )
-    from .tool_payload_compaction import compact_tool_call_for_history  # type: ignore
     from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from .tool_proposals import run_tool_proposal_tool  # type: ignore
     from .tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
@@ -110,7 +109,6 @@ except ImportError:
         synthesize_terminal_answer_payload,
         tool_result_terminal_sufficient,
     )
-    from tool_payload_compaction import compact_tool_call_for_history  # type: ignore
     from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from tool_proposals import run_tool_proposal_tool  # type: ignore
     from tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
@@ -1421,9 +1419,8 @@ async def run_pipeline_worker(
                 messages.append({"role": "user", "content": exc.correction})
                 continue
 
-        assistant_history_msg = dict(assistant_msg)
-        assistant_history_msg["tool_calls"] = [compact_tool_call_for_history(tool_call)]
-        messages.append(assistant_history_msg)
+        assistant_msg["tool_calls"] = [tool_call]
+        messages.append(assistant_msg)
         tool_calls = [tool_call]
 
         for tool_call in tool_calls:
