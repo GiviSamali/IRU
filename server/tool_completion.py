@@ -36,17 +36,13 @@ _TOOL_NAME_ALIASES = {
     "window_verify": "window.verify",
 }
 
-_FS_SUCCESS_STATUSES = {
-    "success",
-    "opened",
-    "found_existing",
-    "written",
-    "appended",
-    "patched",
-    "renamed",
-    "copied",
-    "moved",
-    "deleted",
+_TERMINAL_FS_STATUS_BY_TOOL = {
+    "fs.write_file": {"written", "appended"},
+    "fs.patch_file": {"patched"},
+    "fs.rename": {"renamed"},
+    "fs.copy": {"copied"},
+    "fs.move": {"moved"},
+    "fs.delete": {"deleted"},
 }
 
 
@@ -80,13 +76,13 @@ def tool_result_terminal_sufficient(entry: dict[str, Any] | None) -> bool:
             "opened_browser_visible",
         }
     if tool_name in {"fs.open_folder", "app.open_file"}:
-        return str(result.get("status") or "") in {"opened", "found_existing"} and bool(
+        return str(result.get("status") or "") in {"opened", "opened_unverified", "found_existing"} and bool(
             result.get("window_found")
             or result.get("process_started")
             or result.get("terminal_sufficient")
         )
-    if tool_name.startswith("fs."):
-        return str(result.get("status") or "") in _FS_SUCCESS_STATUSES
+    if tool_name in _TERMINAL_FS_STATUS_BY_TOOL:
+        return str(result.get("status") or "") in _TERMINAL_FS_STATUS_BY_TOOL[tool_name]
     if tool_name in {"window.find", "window.verify"}:
         status = str(result.get("status") or "").lower()
         window = result.get("window") or result.get("match") or {}
