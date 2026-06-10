@@ -174,12 +174,6 @@ def _permissions_for(meta: dict[str, Any], canonical_name: str, risk_level: str)
         permissions.add("tool.proposal.read")
     if canonical_name in {"tool.propose", "tool.update_proposal_status"}:
         permissions.add("tool.proposal.write")
-    if canonical_name.startswith("fs."):
-        permissions.add("file.read")
-    if canonical_name in {"fs.write_file", "fs.patch_file", "fs.rename", "fs.copy", "fs.move"}:
-        permissions.add("file.write")
-    if canonical_name == "fs.delete":
-        permissions.update({"file.write", "file.delete"})
     if canonical_name in {"remember_fact", "forget_fact"}:
         permissions.add("memory.write")
     if canonical_name.startswith("device."):
@@ -226,14 +220,6 @@ def _side_effects_for(canonical_name: str, risk_level: str) -> list[str]:
         return ["creates_temporary_download_link"]
     if canonical_name == "web_search":
         return ["external_network_request"]
-    if canonical_name in {"fs.write_file", "fs.patch_file"}:
-        return ["creates_or_modifies_file", "creates_backup_when_replacing"]
-    if canonical_name in {"fs.rename", "fs.move"}:
-        return ["moves_or_renames_path"]
-    if canonical_name == "fs.copy":
-        return ["copies_path"]
-    if canonical_name == "fs.delete":
-        return ["deletes_path_after_confirmation"]
     if canonical_name in {"tool.propose", "tool.update_proposal_status"}:
         return ["writes_tool_proposal_metadata"]
     if canonical_name in {"remember_fact", "forget_fact"}:
@@ -258,16 +244,6 @@ def _evidence_for(canonical_name: str) -> EvidenceContract:
         return EvidenceContract(produced=["window_match", "visibility_status"], required_for_claims=["window_match"], fresh_run_required=True)
     if canonical_name.startswith("app."):
         return EvidenceContract(produced=["pid", "launch_status", "window_verification"], required_for_claims=["pid_or_window"], fresh_run_required=True)
-    if canonical_name == "fs.open_folder":
-        return EvidenceContract(produced=["resolved_path", "window_found", "window_title"], required_for_claims=["resolved_path"], fresh_run_required=True)
-    if canonical_name in {"fs.resolve_path", "fs.stat"}:
-        return EvidenceContract(produced=["resolved_path", "exists", "type"], required_for_claims=["resolved_path"], fresh_run_required=True)
-    if canonical_name == "fs.list_dir":
-        return EvidenceContract(produced=["resolved_path", "items", "returned_count"], required_for_claims=["current_run_tool_result"], fresh_run_required=True)
-    if canonical_name == "fs.read_file":
-        return EvidenceContract(produced=["content", "sha256", "truncated"], required_for_claims=["sha256"], fresh_run_required=True)
-    if canonical_name.startswith("fs."):
-        return EvidenceContract(produced=["resolved_path", "operation_status", "sha256_or_path"], required_for_claims=["operation_status"], fresh_run_required=True)
     if canonical_name.startswith("device."):
         return EvidenceContract(produced=["device_summary", "context_handle"], required_for_claims=["current_run_tool_result"], fresh_run_required=True)
     if canonical_name.startswith("memory."):
@@ -300,10 +276,6 @@ def _idempotency_for(canonical_name: str, risk_level: str) -> str:
         return "not_idempotent"
     if canonical_name in {"tool.propose", "tool.update_proposal_status"}:
         return "not_idempotent"
-    if canonical_name in {"fs.write_file", "fs.patch_file", "fs.rename", "fs.move", "fs.delete"}:
-        return "not_idempotent"
-    if canonical_name in {"fs.copy", "fs.open_folder", "app.open_file"}:
-        return "unknown"
     if risk_level in {"safe", "read_only"}:
         return "idempotent"
     return "unknown"
@@ -324,10 +296,6 @@ def _when_not_to_use(canonical_name: str, meta: dict[str, Any]) -> list[str]:
         return ["user expects immediate production tool installation", "proposal contains secrets or direct execution instructions"]
     if canonical_name.startswith("tool."):
         return ["the requested action should execute a device task rather than manage a proposal"]
-    if canonical_name == "fs.delete":
-        return ["confirmation is missing for permanent delete or folder delete"]
-    if canonical_name.startswith("fs."):
-        return ["the task requires app/window control rather than filesystem evidence"]
     if canonical_name.startswith("window."):
         return ["file system checks", "process launch without window verification"]
     if canonical_name.startswith("device."):
