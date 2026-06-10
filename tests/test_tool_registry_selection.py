@@ -2,9 +2,9 @@ import asyncio
 import json
 
 from server.controller_non_pipeline import process_non_pipeline_command
-from server.controller_pipeline import PIPELINE_WORKER_HANDLED_TOOL_NAMES
+from server.controller_pipeline import PIPELINE_WORKER_HANDLED_TOOL_NAMES, pipeline_worker_prompt
 from server.controller_prompts import SYSTEM_PROMPT_TEMPLATE
-from server.controller_tools import WORKER_TOOLS
+from server.controller_tools import TOOLS, WORKER_TOOLS
 from server.controller_shared import (
     broad_desktop_scan_error,
     build_recent_artifact_context,
@@ -87,8 +87,66 @@ def test_system_list_tools_returns_compact_grouped_tools():
     assert any(tool["name"] == "window.verify" for tool in registry["window"])
     assert any(tool["name"] == "app.launch" for tool in registry["app"])
     execute = next(tool for tool in registry["fallback"] if tool["name"] == "execute_cmd")
-    assert execute["purpose"].lower().startswith("low-level shell fallback")
+    assert "control surface" in execute["purpose"].lower()
+    assert "verification" in execute["purpose"].lower()
     assert "stdout" not in json.dumps(registry).lower()
+
+
+def test_execute_cmd_schema_describes_act_verify_contract():
+    execute = next(tool for tool in TOOLS if tool["function"]["name"] == "execute_cmd")
+    description = execute["function"]["description"]
+
+    assert "OK:" in description
+    assert "NO:" in description
+    assert "ERROR:" in description
+    assert "perform the requested action" in description
+    assert "sufficient verification" in description
+    assert "Visual/window verification is only needed" in description
+    assert "write_content" in description
+    assert "long/multiline" in description
+
+
+def test_execute_cmd_guidance_is_in_non_pipeline_and_pipeline_prompts():
+    non_pipeline = SYSTEM_PROMPT_TEMPLATE
+    pipeline = pipeline_worker_prompt(
+        {
+            "current_device_id": "device-1",
+            "target_device_id": "device-1",
+            "current_hostname": "devbox",
+            "current_os": "Windows",
+            "current_os_version": "10",
+            "devices_block": "- device-1 devbox Windows online",
+            "device_profile_block": "",
+            "device_context_block": "",
+            "target_device_block": "",
+            "device_memory_block": "",
+            "os_rules": "Use PowerShell on Windows.",
+            "current_datetime_msk": "2026-06-10 12:00:00 MSK",
+        },
+        "goal",
+        {"title": "step", "instruction": "open folder", "success_criteria": "opened"},
+        [],
+    )
+
+    for prompt in (non_pipeline, pipeline):
+        assert "OK:" in prompt
+        assert "NO:" in prompt
+        assert "ERROR:" in prompt
+        assert "sufficient" in prompt or "достаточ" in prompt
+        assert "Visual/window verification" in prompt
+        assert "write_content" in prompt
+
+
+def test_no_fs_pseudo_tools_are_exposed():
+    public_names = {
+        tool["name"]
+        for tools in list_tools("all").values()
+        for tool in tools
+    }
+    schema_names = {tool["function"]["name"] for tool in TOOLS}
+
+    assert not any(name.startswith("fs.") for name in public_names)
+    assert not any(name.startswith("fs_") for name in schema_names)
 
 
 def test_device_get_passport_compact_and_has_context_handles():

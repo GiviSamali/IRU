@@ -30,7 +30,6 @@ try:
         validate_toolchain_fact_against_receipt,
     )
     from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
-    from .pc_core_tools import PC_CORE_TOOL_NAMES, run_pc_core_tool  # type: ignore
     from .memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
         blocked_memory_write_result,
@@ -45,7 +44,6 @@ try:
         synthesize_terminal_answer_payload,
         tool_result_terminal_sufficient,
     )
-    from .tool_payload_compaction import compact_tool_call_for_history  # type: ignore
     from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from .tool_proposals import run_tool_proposal_tool  # type: ignore
     from .tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
@@ -99,7 +97,6 @@ except ImportError:
         validate_toolchain_fact_against_receipt,
     )
     from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
-    from pc_core_tools import PC_CORE_TOOL_NAMES, run_pc_core_tool  # type: ignore
     from memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
         blocked_memory_write_result,
@@ -114,7 +111,6 @@ except ImportError:
         synthesize_terminal_answer_payload,
         tool_result_terminal_sufficient,
     )
-    from tool_payload_compaction import compact_tool_call_for_history  # type: ignore
     from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from tool_proposals import run_tool_proposal_tool  # type: ignore
     from tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
@@ -589,9 +585,8 @@ async def process_non_pipeline_command(
                     add_correction(exc.correction)
                     continue
 
-            assistant_history_msg = dict(assistant_msg)
-            assistant_history_msg["tool_calls"] = [compact_tool_call_for_history(tool_call)]
-            messages.append(assistant_history_msg)
+            assistant_msg["tool_calls"] = [tool_call]
+            messages.append(assistant_msg)
             tool_calls = [tool_call]
 
             for tool_call in tool_calls:
@@ -720,8 +715,6 @@ async def process_non_pipeline_command(
                     set_current_step(poll_task_id, "Checking tool registry")
                 elif fn_name.startswith("tool_"):
                     set_current_step(poll_task_id, "Working with tool proposals")
-                elif fn_name in PC_CORE_TOOL_NAMES:
-                    set_current_step(poll_task_id, "Running PC core tool")
                 elif fn_name in MEMORY_TOOL_NAMES:
                     set_current_step(poll_task_id, "Checking memory")
                 elif fn_name.startswith("device_"):
@@ -778,22 +771,6 @@ async def process_non_pipeline_command(
                         command=f"[tool] {fn_name}",
                         target_device_id=None,
                         hostname=None,
-                        iteration=iteration + 1,
-                    ))
-
-                elif fn_name in PC_CORE_TOOL_NAMES:
-                    tool_result = await run_pc_core_tool(
-                        fn_name,
-                        fn_args,
-                        send_command_fn=send_command_fn,
-                        device_id=target_device,
-                    )
-                    append_entry(tool_log_entry(
-                        fn_name,
-                        tool_result,
-                        command=f"[tool] {fn_name}",
-                        target_device_id=target_device,
-                        hostname=device_info.get("hostname") or target_device,
                         iteration=iteration + 1,
                     ))
 

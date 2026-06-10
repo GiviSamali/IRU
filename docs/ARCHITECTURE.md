@@ -64,6 +64,12 @@ LLM tool call
   +-- execute_cmd           -> server dispatch -> agent fallback
 ```
 
+## Control surfaces, not pseudo-OS tools
+
+ИРУ управляет средами через реальные control surfaces: PowerShell, cmd, Python, browser, window tools, application APIs, local agent и external APIs. Не нужно вводить псевдо-язык для обычных OS-операций вроде открыть папку, скопировать файл или переименовать объект.
+
+Обычные действия на ПК должны идти через короткий `execute_cmd` с явной проверкой результата, например через `window.find`/`window.verify`. Typed tools стоит добавлять только там, где они дают реальное преимущество: safety contract, evidence normalization, сокращение большого контекста, сложную document/app automation, дорогую повторяемую логику или non-shell capabilities.
+
 ## Два режима
 
 ### Non-pipeline

@@ -32,7 +32,6 @@ try:
         validate_toolchain_fact_against_receipt,
     )
     from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
-    from .pc_core_tools import PC_CORE_TOOL_NAMES, run_pc_core_tool  # type: ignore
     from .memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
         blocked_memory_write_result,
@@ -47,7 +46,6 @@ try:
         synthesize_terminal_answer_payload,
         tool_result_terminal_sufficient,
     )
-    from .tool_payload_compaction import compact_tool_call_for_history  # type: ignore
     from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from .tool_proposals import run_tool_proposal_tool  # type: ignore
     from .tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
@@ -95,7 +93,6 @@ except ImportError:
         validate_toolchain_fact_against_receipt,
     )
     from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
-    from pc_core_tools import PC_CORE_TOOL_NAMES, run_pc_core_tool  # type: ignore
     from memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
         blocked_memory_write_result,
@@ -110,7 +107,6 @@ except ImportError:
         synthesize_terminal_answer_payload,
         tool_result_terminal_sufficient,
     )
-    from tool_payload_compaction import compact_tool_call_for_history  # type: ignore
     from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from tool_proposals import run_tool_proposal_tool  # type: ignore
     from tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
@@ -195,7 +191,6 @@ PIPELINE_WORKER_HANDLED_TOOL_NAMES = (
     PIPELINE_TERMINAL_TOOL_NAMES
     | PIPELINE_DEVICE_TOOL_NAMES
     | PIPELINE_MEMORY_TOOL_NAMES
-    | PC_CORE_TOOL_NAMES
     | set(PIPELINE_APP_WINDOW_ACTIONS)
     | {"execute_cmd", "write_content", "get_file_link", "web_search", "remember_fact", "forget_fact", "system_get_last_run_summary"}
 )
@@ -583,13 +578,18 @@ Tool-only protocol:
 
 КОНТРАКТ ВЫПОЛНЕНИЯ КОМАНД ДЛЯ SUBAGENT:
 1. Выполняй минимальный набор команд, достаточный для текущего шага.
-2. Каждая команда должна иметь наблюдаемый результат: действие + короткий вывод с маркером OK, ERROR, EXISTS, CREATED, PY_COMPILE_OK или APP_STARTED.
-3. Не доказывай результат бесконечными проверками. Если понятная проверка уже успешна, остановись и отчитайся.
-4. Если py_compile успешен и нужные файлы созданы, этого достаточно для базовой проверки созданного GUI-проекта.
-5. Не используй screenshot, SendKeys, PrintScreen или GetForegroundWindow без явного запроса пользователя.
-6. Если GUI надо запустить, используй app_launch, затем app_verify_launch/window_verify/window_find для проверки видимого окна. execute_cmd используй только если typed app/window tools недоступны или недостаточны.
-7. Для подготовки Python используй device_prepare_runtime/device_check_runtime, а не ручной venv через execute_cmd.
-8. Временные helper scripts для Word/Excel/PowerPoint/PDF/docx/xlsx/pptx создавай только в `%LOCALAPPDATA%\\IRU\\scripts\\helpers` или `~/.iru/scripts/helpers` и удаляй после выполнения. Итоговые пользовательские документы сохраняй там, где просил пользователь.
+2. Для обычных действий на ПК execute_cmd является прямым control surface через PowerShell/cmd/bash/Python. Не изобретай fs.* псевдо-язык.
+3. Когда возможно, одна короткая execute_cmd-команда должна выполнить действие и достаточную проверку.
+4. Команда должна печатать машинно-читаемый итог: OK: <confirmed or accepted result>, NO: <expected state missing>, ERROR: <reason>.
+5. Для открытия/запуска обычно достаточно command-level evidence: если команда успешно отправила запуск, печатай OK: open_requested <target>.
+6. Visual/window verification нужна только если пользователь явно просит видимое окно/фокус, следующий шаг должен взаимодействовать с окном, запуск шумный/неоднозначный, или задача именно про состояние окна.
+7. Для copy/move/rename/delete/create-folder проверяй состояние файловой системы. Деструктивные действия всё равно проходят существующую confirmation policy.
+8. Не доказывай результат бесконечными проверками. Если понятная проверка уже успешна, остановись и отчитайся.
+9. Не используй screenshot, SendKeys, PrintScreen или GetForegroundWindow без явного запроса пользователя.
+10. Для длинных/многострочных текстов, generated HTML/code/JSON и больших артефактов используй write_content, а не execute_cmd.
+11. Для URL opening, device state, activation, runtime preparation и window observation используй существующие typed tools, когда они дают реальное преимущество control/evidence.
+12. Для подготовки Python используй device_prepare_runtime/device_check_runtime, а не ручной venv через execute_cmd.
+13. Временные helper scripts для Word/Excel/PowerPoint/PDF/docx/xlsx/pptx создавай только в `%LOCALAPPDATA%\\IRU\\scripts\\helpers` или `~/.iru/scripts/helpers` и удаляй после выполнения. Итоговые пользовательские документы сохраняй там, где просил пользователь.
 
 Общая цель:
 {overall_goal}
@@ -1421,9 +1421,8 @@ async def run_pipeline_worker(
                 messages.append({"role": "user", "content": exc.correction})
                 continue
 
-        assistant_history_msg = dict(assistant_msg)
-        assistant_history_msg["tool_calls"] = [compact_tool_call_for_history(tool_call)]
-        messages.append(assistant_history_msg)
+        assistant_msg["tool_calls"] = [tool_call]
+        messages.append(assistant_msg)
         tool_calls = [tool_call]
 
         for tool_call in tool_calls:
@@ -1632,21 +1631,6 @@ async def run_pipeline_worker(
                     fn_name,
                     f"[tool] {fn_name}",
                     None,
-                    tool_result,
-                )
-
-            elif fn_name in PC_CORE_TOOL_NAMES:
-                set_current_step(poll_task_id, "Running PC core tool")
-                tool_result = await run_pc_core_tool(
-                    fn_name,
-                    fn_args,
-                    send_command_fn=send_command_fn,
-                    device_id=target_device,
-                )
-                append_step_command(
-                    fn_name,
-                    f"[tool] {fn_name}",
-                    target_device,
                     tool_result,
                 )
 
