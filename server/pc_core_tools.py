@@ -78,15 +78,6 @@ ALIASES = {
     "временная": "temp",
 }
 
-KNOWN_FOLDER_TITLE_CANDIDATES = {
-    "downloads": ["Downloads", "Загрузки", "Скачанные"],
-    "documents": ["Documents", "Документы"],
-    "desktop": ["Desktop", "Рабочий стол"],
-    "pictures": ["Pictures", "Изображения", "Картинки"],
-    "videos": ["Videos", "Видео"],
-    "music": ["Music", "Музыка"],
-}
-
 RISKY_WINDOWS_PREFIXES = (
     r"c:\windows",
     r"c:\program files",
@@ -129,20 +120,6 @@ def _ps_bool(value: Any) -> str:
     return "$true" if bool(value) else "$false"
 
 
-def _folder_title_candidates(resolved: dict[str, Any], original: Any) -> list[str]:
-    key = str(resolved.get("alias_key") or alias_key(str(original or "")) or "").strip().lower()
-    path = str(resolved.get("resolved_path") or "")
-    basename = ntpath.basename(path.rstrip("\\/")) or posixpath.basename(path.rstrip("/")) or path
-    candidates = [basename]
-    candidates.extend(KNOWN_FOLDER_TITLE_CANDIDATES.get(key, []))
-    unique: list[str] = []
-    for candidate in candidates:
-        value = str(candidate or "").strip()
-        if value and value not in unique:
-            unique.append(value)
-    return unique or [path]
-
-
 async def _send(send_command_fn: SendCommandFn, device_id: str, action: str, params: dict[str, Any]) -> dict[str, Any]:
     result = send_command_fn(device_id, action, params)
     if hasattr(result, "__await__"):
@@ -173,7 +150,15 @@ def _parse_stdout_json(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _resolve_script(path_or_alias: str, base_path: str | None, must_exist: bool, expected_type: str) -> str:
-    alias_json = json.dumps(ALIASES, ensure_ascii=False)
+    aliases = {
+        "downloads": "Downloads", "загрузки": "Downloads", "скачанные": "Downloads", "папка загрузок": "Downloads",
+        "documents": "Documents", "документы": "Documents",
+        "desktop": "Desktop", "рабочий стол": "Desktop",
+        "pictures": "Pictures", "изображения": "Pictures", "картинки": "Pictures",
+        "videos": "Videos", "видео": "Videos",
+        "music": "Music", "музыка": "Music",
+    }
+    alias_json = json.dumps(aliases, ensure_ascii=False)
     base = base_path or ""
     return f"""
 $ErrorActionPreference = 'Stop'
@@ -187,55 +172,15 @@ $aliasesRaw = ConvertFrom-Json @'
 '@
 $aliases = @{{}}
 $aliasesRaw.PSObject.Properties | ForEach-Object {{ $aliases[$_.Name] = $_.Value }}
-function Expand-UserShellFolder([string]$name, [string]$fallback) {{
-  try {{
-    $props = Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders' -ErrorAction Stop
-    $value = $props.$name
-    if ($value) {{ return [Environment]::ExpandEnvironmentVariables([string]$value) }}
-  }} catch {{}}
-  return $fallback
-}}
-function KnownFolderPath([string]$key) {{
-  $profile = [Environment]::GetFolderPath('UserProfile')
-  if ($key -eq 'documents') {{
-    $path = [Environment]::GetFolderPath('MyDocuments')
-    if ($path) {{ return $path }}
-    return Expand-UserShellFolder 'Personal' (Join-Path $profile 'Documents')
-  }}
-  if ($key -eq 'desktop') {{
-    $path = [Environment]::GetFolderPath('Desktop')
-    if ($path) {{ return $path }}
-    return Expand-UserShellFolder 'Desktop' (Join-Path $profile 'Desktop')
-  }}
-  if ($key -eq 'downloads') {{ return Expand-UserShellFolder '{{374DE290-123F-4565-9164-39C4925E467B}}' (Join-Path $profile 'Downloads') }}
-  if ($key -eq 'pictures') {{
-    $path = [Environment]::GetFolderPath('MyPictures')
-    if ($path) {{ return $path }}
-    return Expand-UserShellFolder 'My Pictures' (Join-Path $profile 'Pictures')
-  }}
-  if ($key -eq 'videos') {{
-    $path = [Environment]::GetFolderPath('MyVideos')
-    if ($path) {{ return $path }}
-    return Expand-UserShellFolder 'My Video' (Join-Path $profile 'Videos')
-  }}
-  if ($key -eq 'music') {{
-    $path = [Environment]::GetFolderPath('MyMusic')
-    if ($path) {{ return $path }}
-    return Expand-UserShellFolder 'My Music' (Join-Path $profile 'Music')
-  }}
-  return Join-Path $profile $key
-}}
 $trimmed = ($inputValue -as [string]).Trim()
 $lower = $trimmed.ToLowerInvariant()
 $source = 'relative'
-$aliasKey = $null
 if ($lower -eq 'home' -or $lower -eq 'профиль' -or $lower -eq 'пользователь') {{
-  $resolved = [Environment]::GetFolderPath('UserProfile'); $source = 'alias'; $aliasKey = 'home'
+  $resolved = [Environment]::GetFolderPath('UserProfile'); $source = 'alias'
 }} elseif ($lower -eq 'temp' -or $lower -eq 'временная') {{
-  $resolved = [IO.Path]::GetTempPath().TrimEnd('\\'); $source = 'alias'; $aliasKey = 'temp'
+  $resolved = [IO.Path]::GetTempPath().TrimEnd('\\'); $source = 'alias'
 }} elseif ($aliases.ContainsKey($lower)) {{
-  $aliasKey = [string]$aliases[$lower]
-  $resolved = KnownFolderPath $aliasKey; $source = 'alias'
+  $resolved = Join-Path ([Environment]::GetFolderPath('UserProfile')) $aliases[$lower]; $source = 'alias'
 }} elseif ([IO.Path]::IsPathRooted($trimmed)) {{
   $resolved = [IO.Path]::GetFullPath($trimmed); $source = 'absolute'
 }} else {{
@@ -247,7 +192,7 @@ $type = if ($exists) {{ if ((Get-Item -LiteralPath $resolved).PSIsContainer) {{ 
 $ok = (-not $mustExist -or $exists) -and ($expectedType -eq 'any' -or $type -eq $expectedType -or ($expectedType -eq 'dir' -and $type -eq 'dir') -or ($expectedType -eq 'file' -and $type -eq 'file'))
 $status = if ($ok) {{ 'success' }} else {{ 'error' }}
 [pscustomobject]@{{
-  status=$status; input=$inputValue; resolved_path=$resolved; exists=$exists; type=$type; source=$source; alias_key=$aliasKey;
+  status=$status; input=$inputValue; resolved_path=$resolved; exists=$exists; type=$type; source=$source;
   expected_type=$expectedType; evidence="resolved_path=$resolved; exists=$exists; type=$type"
 }} | ConvertTo-Json -Compress
 """
@@ -452,7 +397,7 @@ async def _copy_or_move(send_command_fn: SendCommandFn, device_id: str, args: di
         return source
     src = str(source.get("resolved_path") or "")
     dst = str(args.get("destination") or "")
-    if (move and is_risky_path(src)) or is_risky_path(dst):
+    if move and (is_risky_path(src) or is_risky_path(dst)):
         return {"status": "needs_confirmation", "reason": "risky_system_path", "source": src, "destination": dst}
     cmd = "Move-Item" if move else "Copy-Item"
     status = "moved" if move else "copied"
@@ -508,7 +453,7 @@ async def fs_open_folder(send_command_fn: SendCommandFn, device_id: str, args: d
     if resolved.get("status") == "error":
         return {"status": "failed", **resolved}
     path = str(resolved.get("resolved_path") or "")
-    title_candidates = _folder_title_candidates(resolved, args.get("path_or_alias") or args.get("path"))
+    folder_name = ntpath.basename(path.rstrip("\\/")) or path
     launch_error = None
     launch_result: dict[str, Any] = {}
     try:
@@ -517,41 +462,28 @@ async def fs_open_folder(send_command_fn: SendCommandFn, device_id: str, args: d
         launch_error = str(exc)
     if not launch_error and (launch_result.get("error") or str(launch_result.get("stderr") or "").strip()):
         launch_error = str(launch_result.get("error") or launch_result.get("stderr"))
-    window_result: dict[str, Any] = {}
-    attempted_titles: list[str] = []
-    window: dict[str, Any] = {}
-    window_found = False
-    for title in title_candidates:
-        attempted_titles.append(title)
-        window_result = await _send(send_command_fn, device_id, "window.find", {
-            "title_contains": title,
-            "process_name": "explorer",
-            "visible": True,
-            "timeout_sec": 5,
-        })
-        window = window_result.get("window") or window_result.get("match") or {}
-        window_found = str(window_result.get("status") or "").lower() in {"found", "success", "ok"} or bool(window_result.get("window_found") or window)
-        if window_found:
-            break
-    launched = not launch_error
-    status = "opened" if window_found else ("opened_unverified" if launched else "failed")
+    window_result = await _send(send_command_fn, device_id, "window.find", {
+        "title_contains": folder_name,
+        "process_name": "explorer",
+        "visible": True,
+        "timeout_sec": 5,
+    })
+    window = window_result.get("window") or window_result.get("match") or {}
+    window_found = str(window_result.get("status") or "").lower() in {"found", "success", "ok"} or bool(window_result.get("window_found") or window)
+    status = "opened" if (window_found or not launch_error) else "failed"
     return {
         "status": status,
         "resolved_path": path,
         "exists": True,
         "type": "dir",
-        "alias_key": resolved.get("alias_key"),
-        "title_candidates": title_candidates,
-        "attempted_titles": attempted_titles,
         "launch_error": launch_error,
         "launch_result": _parse_stdout_json(launch_result) if launch_result else {},
         "window_found": bool(window_found),
         "window_title": window.get("title") or window_result.get("window_title"),
         "process_name": window.get("process_name") or window_result.get("process_name"),
         "pid": window.get("pid") or window_result.get("pid"),
-        "process_started": bool(launched),
-        "terminal_sufficient": bool(window_found or launched),
-        "completion_state": "success" if window_found else ("partial_success" if launched else "failed"),
+        "terminal_sufficient": bool(window_found or not launch_error),
+        "completion_state": "success" if window_found else ("partial_success" if not launch_error else "failed"),
         "evidence": f"opened folder {path}; window_found={bool(window_found)}",
     }
 

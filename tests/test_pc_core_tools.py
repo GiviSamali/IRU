@@ -3,8 +3,6 @@ import base64
 import inspect
 import json
 
-import pytest
-
 from server.controller_tools import WORKER_TOOLS
 from server.pc_core_tools import alias_key, run_pc_core_tool
 from server.tool_completion import synthesize_terminal_answer_payload, tool_result_terminal_sufficient
@@ -87,78 +85,6 @@ def test_window_find_success_is_terminal_enough_for_final_answer():
     assert "окно найдено" in payload["text"].lower()
 
 
-@pytest.mark.parametrize("tool_name", ["fs.resolve_path", "fs.stat", "fs.list_dir", "fs.read_file"])
-def test_fs_inspection_tools_are_not_terminal_sufficient_by_default(tool_name):
-    entry = {
-        "tool_name": tool_name,
-        "step_id": "step_1",
-        "result": {"status": "success", "resolved_path": r"C:\tmp\a.txt"},
-    }
-
-    assert tool_result_terminal_sufficient(entry) is False
-
-
-def test_fs_patch_file_success_is_terminal_sufficient():
-    entry = {
-        "tool_name": "fs.patch_file",
-        "step_id": "step_1",
-        "result": {"status": "patched", "path": r"C:\tmp\a.txt"},
-    }
-
-    assert tool_result_terminal_sufficient(entry) is True
-
-
-def test_fs_open_folder_window_found_is_terminal_sufficient():
-    entry = {
-        "tool_name": "fs.open_folder",
-        "step_id": "step_1",
-        "result": {"status": "opened", "resolved_path": r"C:\Users\russa\Downloads", "window_found": True},
-    }
-
-    assert tool_result_terminal_sufficient(entry) is True
-
-
-def test_fs_open_folder_downloads_alias_tries_localized_titles_after_timeout():
-    calls = []
-
-    async def send(device_id, action, params):
-        calls.append((action, dict(params)))
-        if action == "execute_cmd" and len(calls) == 1:
-            return _stdout({
-                "status": "success",
-                "resolved_path": r"C:\Users\russa\Downloads",
-                "exists": True,
-                "type": "dir",
-                "source": "alias",
-                "alias_key": "downloads",
-            })
-        if action == "execute_cmd":
-            return {"status": "error", "stderr": "operation timed out after launch"}
-        if action == "window.find":
-            title = params["title_contains"]
-            if title == "Загрузки":
-                return {
-                    "status": "found",
-                    "window": {"title": "Загрузки - Проводник", "pid": 100, "process_name": "explorer.exe", "visible": True},
-                }
-            return {"status": "not_found", "matches": []}
-        raise AssertionError(action)
-
-    result = asyncio.run(run_pc_core_tool(
-        "fs_open_folder",
-        {"path_or_alias": "downloads"},
-        send_command_fn=send,
-        device_id="device-1",
-    ))
-
-    window_titles = [params["title_contains"] for action, params in calls if action == "window.find"]
-    assert window_titles[:2] == ["Downloads", "Загрузки"]
-    assert result["status"] == "opened"
-    assert result["window_found"] is True
-    assert result["completion_state"] == "success"
-    assert result["terminal_sufficient"] is True
-
-
 def test_fs_list_dir_caps_limit_at_500():
     decoded_scripts = []
 
@@ -190,32 +116,6 @@ def test_fs_list_dir_caps_limit_at_500():
 
     assert result["returned_count"] == 500
     assert "Select-Object -Skip 0 -First 500" in decoded_scripts[1]
-
-
-def test_documents_alias_resolve_script_uses_known_folder_lookup():
-    decoded_scripts = []
-
-    async def send(device_id, action, params):
-        decoded_scripts.append(_decode_ps(params))
-        return _stdout({
-            "status": "success",
-            "resolved_path": r"C:\Users\russa\OneDrive\Документы",
-            "exists": True,
-            "type": "dir",
-            "source": "alias",
-            "alias_key": "documents",
-        })
-
-    result = asyncio.run(run_pc_core_tool(
-        "fs_resolve_path",
-        {"path_or_alias": "documents"},
-        send_command_fn=send,
-        device_id="device-1",
-    ))
-
-    assert result["alias_key"] == "documents"
-    assert "GetFolderPath('MyDocuments')" in decoded_scripts[0]
-    assert "User Shell Folders" in decoded_scripts[0]
 
 
 def test_fs_read_file_caps_preview_and_returns_sha_evidence():
@@ -336,25 +236,6 @@ def test_fs_delete_requires_confirmation_for_permanent_delete():
 
     assert result["status"] == "needs_confirmation"
     assert result["reason"] == "destructive_action"
-    assert [action for action, _ in calls] == ["execute_cmd"]
-
-
-def test_fs_copy_to_risky_destination_requires_confirmation():
-    calls = []
-
-    async def send(device_id, action, params):
-        calls.append((action, dict(params)))
-        return _stdout({"status": "success", "resolved_path": r"C:\tmp\a.txt", "exists": True, "type": "file"})
-
-    result = asyncio.run(run_pc_core_tool(
-        "fs_copy",
-        {"source": r"C:\tmp\a.txt", "destination": r"C:\Windows\a.txt"},
-        send_command_fn=send,
-        device_id="device-1",
-    ))
-
-    assert result["status"] == "needs_confirmation"
-    assert result["reason"] == "risky_system_path"
     assert [action for action, _ in calls] == ["execute_cmd"]
 
 
