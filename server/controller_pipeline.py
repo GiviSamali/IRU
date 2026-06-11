@@ -570,7 +570,7 @@ Tool-only protocol:
 3. Не доказывай результат бесконечными проверками. Если понятная проверка уже успешна, остановись и отчитайся.
 4. Если py_compile успешен и нужные файлы созданы, этого достаточно для базовой проверки созданного GUI-проекта.
 5. Не используй screenshot, SendKeys, PrintScreen или GetForegroundWindow без явного запроса пользователя.
-6. Если GUI надо запустить, используй app_launch, затем app_verify_launch/window_verify/window_find для проверки видимого окна. execute_cmd используй только если typed app/window tools недоступны или недостаточны.
+6. Для GUI/app/file open requests не выполняй visual/window verification по умолчанию. Command-level acceptance или process launch evidence достаточно, если пользователь явно не просит visibility/focus, следующий шаг не требует window interaction, command output не ambiguous/noisy, и задача не про window/app state.
 7. Для подготовки Python используй device_prepare_runtime/device_check_runtime, а не ручной venv через execute_cmd.
 8. Временные helper scripts для Word/Excel/PowerPoint/PDF/docx/xlsx/pptx создавай только в `%LOCALAPPDATA%\\IRU\\scripts\\helpers` или `~/.iru/scripts/helpers` и удаляй после выполнения. Итоговые пользовательские документы сохраняй там, где просил пользователь.
 
@@ -1236,6 +1236,11 @@ async def run_pipeline_worker(
         entry.update(tool_log_fields(action, result, command, device_id))
         return append_tool_step(commands_log, entry)
 
+    def allow_followup_after_terminal_sufficient(entry: dict | None, next_tool_name: str) -> bool:
+        if not entry:
+            return False
+        return (entry.get("tool_name") or entry.get("action")) == "write_content" and next_tool_name == "execute_cmd"
+
     for iteration in range(PIPELINE_WORKER_MAX_ITERATIONS):
         if is_task_cancel_requested(poll_task_id):
             append_step_command(
@@ -1393,7 +1398,11 @@ async def run_pipeline_worker(
         for tool_call in tool_calls:
             fn_name = tool_call["function"]["name"]
             fn_args = json.loads(tool_call["function"]["arguments"] or "{}")
-            if terminal_sufficient_entry is not None and not is_terminal_answer_tool(fn_name):
+            if (
+                terminal_sufficient_entry is not None
+                and not is_terminal_answer_tool(fn_name)
+                and not allow_followup_after_terminal_sufficient(terminal_sufficient_entry, fn_name)
+            ):
                 payload = validate_answer_text_payload(
                     synthesize_terminal_answer_payload(terminal_sufficient_entry),
                     commands_log,
@@ -1411,6 +1420,8 @@ async def run_pipeline_worker(
                     "answer": payload["text"],
                     "commands": commands_log,
                 }
+            if terminal_sufficient_entry is not None and allow_followup_after_terminal_sufficient(terminal_sufficient_entry, fn_name):
+                terminal_sufficient_entry = None
 
             clean_args, arg_warnings, arg_error = validate_and_sanitize_tool_args(
                 fn_name,
@@ -1586,7 +1597,7 @@ async def run_pipeline_worker(
                         except Exception as long_running_exc:
                             if "Таймаут" in str(long_running_exc):
                                 tool_result = {
-                                    "stdout": "Приложение запущено (long_running)",
+                                    "stdout": "OK: launch_requested long_running",
                                     "stderr": "",
                                     "returncode": 0,
                                     "error": None,

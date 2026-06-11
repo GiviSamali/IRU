@@ -437,9 +437,9 @@ def test_prompt_contains_tool_selection_policy():
     assert "Do not assume device state" in SYSTEM_PROMPT_TEMPLATE
     assert "prefer device_prepare_runtime or device_check_runtime" in SYSTEM_PROMPT_TEMPLATE
     assert "use its venv_python path" in SYSTEM_PROMPT_TEMPLATE
-    assert "GUI success means a matching window is found/visible or the process is alive" in SYSTEM_PROMPT_TEMPLATE
-    assert "window_find" in SYSTEM_PROMPT_TEMPLATE
-    assert "app_launch" in SYSTEM_PROMPT_TEMPLATE
+    assert "do not perform visual/window verification by default" in SYSTEM_PROMPT_TEMPLATE
+    assert "Command-level acceptance or process launch evidence is sufficient" in SYSTEM_PROMPT_TEMPLATE
+    assert "prefer app_launch + window_verify/app_verify_launch" not in SYSTEM_PROMPT_TEMPLATE
 
 
 def test_prompt_prefers_refresh_state_for_explicit_state_checks():

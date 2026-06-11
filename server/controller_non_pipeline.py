@@ -153,6 +153,13 @@ def _command_log_entry(action: str, command: str, target_device: str, device_inf
     return entry
 
 
+def _allow_followup_after_terminal_sufficient(entry: dict | None, next_tool_name: str) -> bool:
+    """Allow a created file to be run/opened, while blocking verification loops."""
+    if not entry:
+        return False
+    return (entry.get("tool_name") or entry.get("action")) == "write_content" and next_tool_name == "execute_cmd"
+
+
 APP_WINDOW_ACTIONS = {
     "window_list": "window.list",
     "window_find": "window.find",
@@ -571,7 +578,11 @@ async def process_non_pipeline_command(
                     })
                     continue
 
-                if terminal_sufficient_entry is not None and not is_terminal_answer_tool(fn_name):
+                if (
+                    terminal_sufficient_entry is not None
+                    and not is_terminal_answer_tool(fn_name)
+                    and not _allow_followup_after_terminal_sufficient(terminal_sufficient_entry, fn_name)
+                ):
                     payload = validate_answer_text_payload(
                         synthesize_terminal_answer_payload(terminal_sufficient_entry),
                         commands_log,
@@ -590,6 +601,8 @@ async def process_non_pipeline_command(
                         "tasks": [],
                         "training_context": _training_context(device_info),
                     }
+                if terminal_sufficient_entry is not None and _allow_followup_after_terminal_sufficient(terminal_sufficient_entry, fn_name):
+                    terminal_sufficient_entry = None
 
                 clean_args, arg_warnings, arg_error = validate_and_sanitize_tool_args(
                     fn_name,
@@ -799,7 +812,7 @@ async def process_non_pipeline_command(
                             except Exception as long_running_exc:
                                 if "Таймаут" in str(long_running_exc):
                                     tool_result = {
-                                        "stdout": "Приложение запущено (long_running)",
+                                        "stdout": "OK: launch_requested long_running",
                                         "stderr": "",
                                         "returncode": 0,
                                         "error": None,

@@ -79,9 +79,9 @@ Tool selection policy:
 7. Use device_get_passport for passive/status-known/passport queries: "покажи паспорт устройства", "что известно об устройстве", "какой статус активации", "какие возможности устройства".
 8. If user asks to activate or repair a device, call device_activate or device_repair_activation.
 9. If user asks to create or write a file, prefer write_content over shell.
-10. If user asks to launch GUI app, prefer app_launch + window_verify/app_verify_launch. GUI success means a matching window is found/visible or the process is alive; do not wait for the GUI process to exit.
+10. For GUI/app/file open requests, do not perform visual/window verification by default. Command-level acceptance or process launch evidence is sufficient unless the user explicitly asks to verify visibility/focus or the next step needs window interaction.
 10a. If user asks whether a window/app is already open, do not launch it again. First use window_list, window_find, or window_verify.
-10b. If user asks to open an app/file and verify it opened, use app_launch first and then app_verify_launch or window_verify.
+10b. Use window/app tools only when visible/focused verification is requested, the next step needs window interaction, command output is ambiguous/noisy, or the task is about window state.
 10c. If a window is found, answer from the observed title/process/visible/minimized facts. If no window is found but the process is alive, say the process is running but no window is detected yet.
 10d. If typed window/app tools are available, do not use raw PowerShell to check windows.
 11. If no external tool/device action is needed, answer through answer_text with answer_type="pure_text".

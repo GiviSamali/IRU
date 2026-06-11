@@ -69,6 +69,8 @@ def tool_result_terminal_sufficient(entry: dict[str, Any] | None) -> bool:
     tool_name = (entry or {}).get("tool_name") or (entry or {}).get("action")
     if tool_name == "execute_cmd":
         return execute_cmd_result_is_ok(result)
+    if tool_name == "write_content":
+        return write_content_result_is_ok(result)
     if tool_name in {"app.open_url", "app_open_url"}:
         return bool(result.get("launched")) and str(result.get("status") or "") in {
             "opened_verified",

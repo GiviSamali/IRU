@@ -7,6 +7,7 @@ import server.runtime_state as runtime_state
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_pipeline import process_pipeline_subagents, run_pipeline_worker
 from server.run_journal import validate_answer_text_payload, wrap_tool_result_for_llm
+from server.tool_completion import tool_result_terminal_sufficient
 from server.tool_registry import canonical_tool_name, list_tools
 
 
@@ -181,6 +182,64 @@ def test_pipeline_worker_cancelled_task_stops_before_llm_and_tool(monkeypatch):
     assert result["commands"][0]["status"] == "cancelled"
 
 
+def test_pipeline_worker_write_then_execute_ok_fast_exits_before_window_find():
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append(action)
+        if action == "write_content":
+            return {"status": "ok", "path": params["path"]}
+        if action == "execute_cmd":
+            return {"returncode": 0, "stdout": "OK: open_requested C:/Temp/page.html", "stderr": ""}
+        if action == "window.find":
+            raise AssertionError("pipeline must not verify window after execute_cmd OK evidence")
+        raise AssertionError(action)
+
+    result = asyncio.run(run_pipeline_worker(
+        client=None,
+        cfg={"model": "mock-model", "answer_auditor_enabled": False},
+        model="mock-model",
+        shared={
+            "current_device_id": "device-1",
+            "target_device_id": "device-1",
+            "current_hostname": "devbox",
+            "current_os": "Windows",
+            "current_os_version": "10",
+            "devices_block": "- device-1 devbox Windows online",
+            "device_profile_block": "",
+            "device_context_block": "",
+            "target_device_block": "",
+            "device_memory_block": "",
+            "os_rules": "Use PowerShell on Windows.",
+            "current_datetime_msk": "2026-06-11 12:00:00 MSK",
+        },
+        overall_goal="create and open html",
+        step={"id": "s1", "title": "Create and open", "instruction": "Create HTML and open it"},
+        completed_steps=[],
+        chat_history=[],
+        send_command_fn=_send,
+        get_file_link_fn=lambda device_id, path: "/api/download/mock",
+        machine_guid=None,
+        mem_user_id=None,
+        poll_task_id=None,
+        step_index=0,
+        chat_completion_request_fn=_completion_fn([
+            _message(tool_calls=[_tool_call("call-write", "write_content", {
+                "path": "C:/Temp/page.html",
+                "content": "<html></html>",
+            })]),
+            _message(tool_calls=[_execute_call("call-open", "start C:/Temp/page.html")]),
+            _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "page.html"})]),
+        ]),
+        worker_tools=[],
+    ))
+
+    assert sent == ["write_content", "execute_cmd"]
+    assert result["status"] == "ok"
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "execute_cmd", "answer.text"]
+    assert result["commands"][2]["result"]["basis"] == ["step_2"]
+
+
 def test_conceptual_answer_through_answer_text_succeeds_without_external_tool():
     result = _run_case([
         _message(tool_calls=[_answer_call("call-answer", "Tool Registry группирует доступные возможности.")]),
@@ -258,6 +317,36 @@ def test_file_creation_raw_success_rejected_then_write_content_basis_accepted():
     assert result["commands"][0]["tool_name"] == "write_content"
     assert result["commands"][1]["tool_name"] == "answer.text"
 
+
+def test_write_content_ok_result_is_terminal_sufficient():
+    assert tool_result_terminal_sufficient({
+        "tool_name": "write_content",
+        "result": {
+            "status": "ok",
+            "path": r"C:\x\a.html",
+            "summary": r"OK: file_written C:\x\a.html",
+        },
+    }) is True
+
+
+def test_write_content_no_result_is_not_terminal_sufficient():
+    assert tool_result_terminal_sufficient({
+        "tool_name": "write_content",
+        "result": {
+            "status": "ok",
+            "path": r"C:\x\a.html",
+            "summary": r"NO: file_missing_after_write C:\x\a.html",
+        },
+    }) is False
+
+
+def test_execute_cmd_open_requested_is_terminal_sufficient():
+    assert tool_result_terminal_sufficient({
+        "tool_name": "execute_cmd",
+        "result": {"returncode": 0, "stdout": r"OK: open_requested C:\x\a.html", "stderr": ""},
+    }) is True
+
+
 def test_write_content_large_payload_is_compacted_in_journal_and_llm_result():
     large_content = "<html>\n" + ("A" * 6000) + "\n</html>"
     sent = []
@@ -334,6 +423,28 @@ def test_write_content_error_basis_blocks_completed_success_claim():
     assert result["commands"][0]["status"] == "failed"
     assert result["commands"][0]["result"]["summary"].startswith("ERROR:")
     assert result["answer"] == "Не удалось записать файл: disk full."
+
+
+def test_write_content_ok_blocks_extra_window_verification_tool():
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append(action)
+        if action == "window.find":
+            raise AssertionError("window.find should not run after write_content OK evidence")
+        return {"status": "ok", "path": params["path"]}
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-write", "write_content", {
+            "path": "C:/Temp/created.txt",
+            "content": "hello",
+        })]),
+        _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "created.txt"})]),
+    ], send_command_fn=_send)
+
+    assert sent == ["write_content"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "answer.text"]
+    assert result["commands"][1]["result"]["basis"] == ["step_1"]
 
 
 def test_grounded_report_empty_basis_rejected():
@@ -815,7 +926,7 @@ def test_duplicate_device_get_passport_is_guarded_then_answer_text():
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["device.get_passport", "answer.text"]
 
 
-def test_repeat_guard_does_not_block_execute_write_or_window_find():
+def test_repeat_guard_allows_execute_and_window_but_write_content_fast_exits():
     sent = []
 
     async def _send(device_id, action, params):
@@ -843,10 +954,10 @@ def test_repeat_guard_does_not_block_execute_write_or_window_find():
     ], send_command_fn=_send)
 
     assert [cmd["tool_name"] for cmd in execute_result["commands"]] == ["execute_cmd", "execute_cmd", "answer.text"]
-    assert [cmd["tool_name"] for cmd in write_result["commands"]] == ["write_content", "write_content", "answer.text"]
+    assert [cmd["tool_name"] for cmd in write_result["commands"]] == ["write_content", "answer.text"]
     assert [cmd["tool_name"] for cmd in window_result["commands"]] == ["window.find", "window.find", "answer.text"]
     assert [action for action, _ in sent].count("execute_cmd") == 2
-    assert [action for action, _ in sent].count("write_content") == 2
+    assert [action for action, _ in sent].count("write_content") == 1
     assert [action for action, _ in sent].count("window.find") == 2
 
 
@@ -869,6 +980,57 @@ def test_execute_cmd_ok_stdout_is_terminal_sufficient_without_window_find():
     assert result["commands"][0]["summary"] == "OK: open_requested Downloads"
     assert result["commands"][1]["result"]["basis"] == ["step_1"]
     assert "OK: open_requested Downloads" in result["answer"]
+
+
+def test_write_content_then_execute_cmd_ok_fast_exits_before_window_find():
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append(action)
+        if action == "write_content":
+            return {"status": "ok", "path": params["path"]}
+        if action == "execute_cmd":
+            return {"returncode": 0, "stdout": "OK: open_requested C:/Temp/page.html", "stderr": ""}
+        if action == "window.find":
+            raise AssertionError("window.find should not run after execute_cmd OK evidence")
+        raise AssertionError(action)
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-write", "write_content", {
+            "path": "C:/Temp/page.html",
+            "content": "<html></html>",
+        })]),
+        _message(tool_calls=[_execute_call("call-open", "start C:/Temp/page.html")]),
+        _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "page.html"})]),
+    ], send_command_fn=_send)
+
+    assert sent == ["write_content", "execute_cmd"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "execute_cmd", "answer.text"]
+    assert result["commands"][2]["result"]["basis"] == ["step_2"]
+    assert "OK: open_requested C:/Temp/page.html" in result["answer"]
+
+
+def test_execute_cmd_long_running_timeout_synthesizes_ok_and_fast_exits():
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append((action, dict(params)))
+        if action == "window.find":
+            raise AssertionError("window.find should not run after long_running OK evidence")
+        raise Exception("Таймаут выполнения команды")
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-exec", "execute_cmd", {
+            "command": "python gui.py",
+            "long_running": True,
+        })]),
+        _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "GUI"})]),
+    ], send_command_fn=_send)
+
+    assert [action for action, _ in sent] == ["execute_cmd"]
+    assert result["commands"][0]["result"]["stdout"] == "OK: launch_requested long_running"
+    assert result["commands"][0]["summary"] == "OK: launch_requested long_running"
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text"]
 
 
 def test_execute_cmd_no_stdout_rejects_completed_action_claim():
