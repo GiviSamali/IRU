@@ -233,7 +233,11 @@ def _evidence_for(canonical_name: str) -> EvidenceContract:
     if canonical_name.startswith("answer."):
         return EvidenceContract(produced=["terminal_answer_payload"], required_for_claims=[], fresh_run_required=True)
     if canonical_name == "write_content":
-        return EvidenceContract(produced=["file_path", "write_status"], required_for_claims=["file_path"], fresh_run_required=True)
+        return EvidenceContract(
+            produced=["file_path", "write_status", "chars_written", "bytes_written", "content_sha256", "summary"],
+            required_for_claims=["file_path", "OK_summary"],
+            fresh_run_required=True,
+        )
     if canonical_name.startswith("window."):
         return EvidenceContract(produced=["window_match", "visibility_status"], required_for_claims=["window_match"], fresh_run_required=True)
     if canonical_name.startswith("app."):
@@ -294,7 +298,7 @@ def _when_not_to_use(canonical_name: str, meta: dict[str, Any]) -> list[str]:
 
 def _examples_for(canonical_name: str) -> list[dict[str, Any]]:
     if canonical_name == "write_content":
-        return [{"input": {"path": "C:/Users/user/Desktop/note.txt", "content": "hello"}, "claims": ["file_path"]}]
+        return [{"input": {"path": "C:/Users/user/Desktop/note.txt", "content": "hello"}, "claims": ["file_path", "OK_summary"]}]
     if canonical_name == "window.verify":
         return [{"input": {"title_contains": "IRU PyQt Smoke", "require_visible": True}, "claims": ["window visible"]}]
     if canonical_name == "answer.text":
@@ -308,11 +312,15 @@ def _test_plan_for(canonical_name: str) -> list[str]:
         plan.append("verify terminal answer validation")
     if canonical_name == "execute_cmd":
         plan.append("verify action plus sufficient verification produces OK/NO/ERROR evidence")
+    if canonical_name == "write_content":
+        plan.append("verify large content is compacted to path, counts, hash, preview and OK/NO/ERROR summary")
     return plan
 
 
 def _ui_for(canonical_name: str) -> ToolUIContract:
     sensitive_fields = ["command"] if canonical_name == "execute_cmd" else []
+    if canonical_name == "write_content":
+        sensitive_fields = ["content"]
     return ToolUIContract(
         show_in_used_tools=True,
         show_details_by_default=False,

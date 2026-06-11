@@ -42,6 +42,24 @@ def execute_cmd_result_is_negative(result: dict[str, Any] | None) -> bool:
     return execute_cmd_outcome_marker(result) in {"NO", "ERROR"}
 
 
+def write_content_result_is_ok(result: dict[str, Any] | None) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if result.get("error") or result.get("status") in {"failed", "error"}:
+        return False
+    summary = str(result.get("summary") or "").lstrip().upper()
+    return summary.startswith("OK:") and bool(result.get("path"))
+
+
+def write_content_result_is_negative(result: dict[str, Any] | None) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if result.get("error") or result.get("status") in {"failed", "error"}:
+        return True
+    summary = str(result.get("summary") or "").lstrip().upper()
+    return summary.startswith("NO:") or summary.startswith("ERROR:")
+
+
 def tool_result_terminal_sufficient(entry: dict[str, Any] | None) -> bool:
     result = (entry or {}).get("result")
     if not isinstance(result, dict):
@@ -72,6 +90,8 @@ def synthesize_terminal_answer_payload(entry: dict[str, Any]) -> dict[str, Any]:
         text = next((line.strip() for line in stdout.splitlines() if line.strip()), "")
         if not text:
             text = str(entry.get("summary") or "Command completed.")
+    elif tool_name == "write_content":
+        text = str(result.get("summary") or entry.get("summary") or "OK: file_written")
     elif tool_name == "app.open_url":
         url = str(result.get("url") or "").strip()
         if status == "opened_visible_focus_failed":
@@ -91,6 +111,8 @@ def synthesize_terminal_answer_payload(entry: dict[str, Any]) -> dict[str, Any]:
     completion_state = result.get("completion_state")
     if tool_name == "execute_cmd" and not completion_state:
         completion_state = "success" if execute_cmd_result_is_ok(result) else None
+    elif tool_name == "write_content" and not completion_state:
+        completion_state = "success" if write_content_result_is_ok(result) else None
     elif tool_name == "app.open_url" and not completion_state:
         completion_state = "success" if status == "opened_verified" else "partial_success"
     answer_type = "grounded_report" if completion_state == "success" else "partial_report"

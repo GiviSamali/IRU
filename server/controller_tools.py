@@ -14,6 +14,14 @@ EXECUTE_CMD_DESCRIPTION = (
     "Keep commands short. Use write_content instead of execute_cmd for long, multiline, or generated file content."
 )
 
+WRITE_CONTENT_DESCRIPTION = (
+    "Canonical tool for writing text content to a file. Use for long, multiline, or generated text content "
+    "instead of execute_cmd/Set-Content/echo/heredoc. Suitable for scripts, HTML, JSON, TXT, CSV, Markdown, "
+    "and source code. For binary or Office documents, future dedicated office tools should be used. "
+    "Returns compact evidence only: path, append mode, encoding, chars_written, bytes_written, content_sha256, "
+    "content_preview, and an OK/NO/ERROR-style summary."
+)
+
 TOOLS = [
     *DEVICE_TOOL_SCHEMAS,
     {
@@ -219,7 +227,8 @@ for _tool in TOOLS:
     _function = _tool.get("function") or {}
     if _function.get("name") == "execute_cmd":
         _function["description"] = EXECUTE_CMD_DESCRIPTION
-        break
+    elif _function.get("name") == "write_content":
+        _function["description"] = WRITE_CONTENT_DESCRIPTION
 
 PLAN_TRACKING_TOOL_NAMES = {
     "create_plan",

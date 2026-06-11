@@ -6,7 +6,7 @@ import server.controller_pipeline as controller_pipeline
 import server.runtime_state as runtime_state
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_pipeline import process_pipeline_subagents, run_pipeline_worker
-from server.run_journal import validate_answer_text_payload
+from server.run_journal import validate_answer_text_payload, wrap_tool_result_for_llm
 from server.tool_registry import canonical_tool_name, list_tools
 
 
@@ -257,6 +257,83 @@ def test_file_creation_raw_success_rejected_then_write_content_basis_accepted():
     assert sent == [("write_content", "C:/Temp/hello.txt")]
     assert result["commands"][0]["tool_name"] == "write_content"
     assert result["commands"][1]["tool_name"] == "answer.text"
+
+def test_write_content_large_payload_is_compacted_in_journal_and_llm_result():
+    large_content = "<html>\n" + ("A" * 6000) + "\n</html>"
+    sent = []
+    captured = []
+
+    async def _send(device_id, action, params):
+        sent.append((action, params["path"], len(params["content"])))
+        return {
+            "status": "ok",
+            "path": params["path"],
+            "bytes_written": len(params["content"].encode("utf-8")),
+            "total_size": len(params["content"].encode("utf-8")),
+        }
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-write", "write_content", {
+            "path": "C:/Temp/large.html",
+            "content": large_content,
+        })]),
+        _message(tool_calls=[_answer_call("call-answer", "Файл создан.", answer_type="grounded_report", basis=["step_1"])]),
+    ], send_command_fn=_send, captured=captured)
+
+    assert sent == [("write_content", "C:/Temp/large.html", len(large_content))]
+    command = result["commands"][0]
+    dumped_command = json.dumps(command, ensure_ascii=False)
+    assert large_content not in dumped_command
+    assert "A" * 5000 not in dumped_command
+    assert command["command"] == "[write] C:/Temp/large.html"
+    assert command["result"]["path"] == "C:/Temp/large.html"
+    assert command["result"]["chars_written"] == len(large_content)
+    assert command["result"]["bytes_written"] == len(large_content.encode("utf-8"))
+    assert len(command["result"]["content_preview"]) <= 120
+    assert len(command["result"]["content_sha256"]) == 64
+    assert command["result"]["summary"].startswith("OK: file_written")
+
+    wrapped = wrap_tool_result_for_llm(command)
+    dumped_wrapped = json.dumps(wrapped, ensure_ascii=False)
+    assert large_content not in dumped_wrapped
+    assert "A" * 5000 not in dumped_wrapped
+    assert wrapped["result"]["content_sha256"] == command["result"]["content_sha256"]
+
+    tool_messages = [msg for msg in captured[1]["messages"] if msg.get("role") == "tool"]
+    assert tool_messages
+    assert large_content not in tool_messages[-1]["content"]
+    assert "A" * 5000 not in tool_messages[-1]["content"]
+
+
+def test_write_content_error_basis_blocks_completed_success_claim():
+    async def _send(device_id, action, params):
+        return {"status": "error", "path": params["path"], "error": "disk full"}
+
+    error_payload = {
+        "answer_type": "error_report",
+        "text": "Не удалось записать файл: disk full.",
+        "basis": ["step_1"],
+        "self_check": {
+            "depends_on_current_external_state": True,
+            "claims_completed_action": False,
+            "has_sufficient_evidence": False,
+            "missing_evidence_question": "write_content returned ERROR.",
+        },
+    }
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call("call-write", "write_content", {
+            "path": "C:/Temp/fail.txt",
+            "content": "hello",
+        })]),
+        _message(tool_calls=[_answer_call("call-bad", "Файл создан.", answer_type="grounded_report", basis=["step_1"])]),
+        _message(tool_calls=[_tool_call("call-good", "answer_text", error_payload)]),
+    ], send_command_fn=_send)
+
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "answer.text"]
+    assert result["commands"][0]["status"] == "failed"
+    assert result["commands"][0]["result"]["summary"].startswith("ERROR:")
+    assert result["answer"] == "Не удалось записать файл: disk full."
 
 
 def test_grounded_report_empty_basis_rejected():

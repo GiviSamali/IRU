@@ -89,7 +89,7 @@ def test_system_list_tools_returns_compact_grouped_tools():
     execute = next(tool for tool in registry["control"] if tool["name"] == "execute_cmd")
     assert execute["purpose"].lower().startswith("first-class generic control surface")
     assert "stdout" not in json.dumps(registry).lower()
-    forbidden = {"fs.open_folder", "fs.copy", "fs.move", "fs.delete", "tool.propose"}
+    forbidden = {"fs.open_folder", "fs.copy", "fs.move", "fs.delete", "fs.read_file", "tool.propose"}
     assert forbidden.isdisjoint({tool["name"] for tools in registry.values() for tool in tools})
 
 

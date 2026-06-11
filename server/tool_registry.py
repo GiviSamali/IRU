@@ -251,9 +251,13 @@ TOOL_METADATA = {
         "category": "files",
         "tool_type": "typed",
         "tool_label": "Запись файла",
-        "purpose": "Create or overwrite a text file without shell escaping",
-        "when_to_use": ["create txt/json/py/html file", "write text to a file"],
-        "returns": "file write result",
+        "purpose": "Canonical transport for long, multiline, or generated text file content without shell escaping",
+        "when_to_use": [
+            "write scripts, HTML, JSON, TXT, CSV, Markdown, or source code",
+            "long or multiline generated content would be unsafe/noisy in execute_cmd",
+            "create or overwrite a text file",
+        ],
+        "returns": "compact write evidence: path, append, encoding, chars_written, bytes_written, content_sha256, preview and OK/NO/ERROR summary",
         "danger": "write",
     },
     "execute_cmd": {
@@ -872,7 +876,12 @@ def compact_tool_summary(action: str, result: Any = None, command: str = "") -> 
             return f"memory={result.get('status') or 'unknown'}"
         if name == "write_content":
             path = result.get("path") or result.get("file_path") or ""
-            return f"file written: {path}" if path else "file write completed"
+            if result.get("summary"):
+                return str(result["summary"])[:240]
+            if path:
+                chars = result.get("chars_written")
+                return f"OK: file_written {path}" + (f"; chars={chars}" if chars is not None else "")
+            return "OK: file_written"
         if name == "execute_cmd":
             marker = execute_cmd_outcome_marker(result)
             if marker:

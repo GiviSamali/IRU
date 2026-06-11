@@ -100,6 +100,23 @@ def test_write_content_contract_includes_file_write_permission():
     assert contract["risk_level"] == "write"
     assert "file.write" in contract["permissions"]
     assert "creates_or_overwrites_file" in contract["side_effects"]
+    assert "content" in contract["ui"]["sensitive_fields"]
+    assert "content_sha256" in contract["evidence"]["produced"]
+    assert "OK_summary" in contract["evidence"]["required_for_claims"]
+
+
+def test_write_content_schema_describes_large_content_transport():
+    schema = next(tool for tool in WORKER_TOOLS if tool["function"]["name"] == "write_content")
+    description = schema["function"]["description"]
+
+    assert "long, multiline, or generated text content" in description
+    assert "instead of execute_cmd" in description
+    assert "scripts, HTML, JSON, TXT, CSV, Markdown" in description
+    assert "binary or Office documents" in description
+    assert "chars_written" in description
+    assert "bytes_written" in description
+    assert "content_sha256" in description
+    assert "OK/NO/ERROR" in description
 
 
 def test_system_list_tools_remains_available_and_compact():

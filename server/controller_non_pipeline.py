@@ -53,6 +53,7 @@ try:
         ProtocolValidationError,
         append_answer_step,
         append_tool_step,
+        compact_write_content_result,
         is_answer_clarification_tool,
         is_answer_confirmation_tool,
         is_answer_failure_tool,
@@ -113,6 +114,7 @@ except ImportError:
         ProtocolValidationError,
         append_answer_step,
         append_tool_step,
+        compact_write_content_result,
         is_answer_clarification_tool,
         is_answer_confirmation_tool,
         is_answer_failure_tool,
@@ -882,6 +884,7 @@ async def process_non_pipeline_command(
                 elif fn_name == "write_content":
                     try:
                         tool_result = await send_command_fn(target_device, "write_content", fn_args)
+                        tool_result = compact_write_content_result(fn_args, tool_result)
                         print(f"[llm] write_content result: {str(tool_result)[:150]}")
                     except Exception as exc:
                         err_str = str(exc)
@@ -896,11 +899,10 @@ async def process_non_pipeline_command(
                             )
                         tool_result = {"error": err_str}
 
-                    preview = fn_args.get("content", "")[:60]
                     mode = "append" if fn_args.get("append") else "write"
                     append_entry(_command_log_entry(
                         fn_name,
-                        f"[{mode}] {fn_args.get('path', '')} | {preview}...",
+                        f"[{mode}] {fn_args.get('path', '')}",
                         target_device,
                         device_info,
                         tool_result,

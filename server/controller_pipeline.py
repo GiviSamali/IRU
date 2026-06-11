@@ -54,6 +54,7 @@ try:
         ProtocolValidationError,
         append_answer_step,
         append_tool_step,
+        compact_write_content_result,
         is_answer_failure_tool,
         is_answer_text_tool,
         is_terminal_answer_tool,
@@ -108,6 +109,7 @@ except ImportError:
         ProtocolValidationError,
         append_answer_step,
         append_tool_step,
+        compact_write_content_result,
         is_answer_failure_tool,
         is_answer_text_tool,
         is_terminal_answer_tool,
@@ -1704,6 +1706,7 @@ async def run_pipeline_worker(
                 set_current_step(poll_task_id, f"Создаю файл для шага: {step.get('title', '')[:50]}")
                 try:
                     tool_result = await send_command_fn(target_device, "write_content", fn_args)
+                    tool_result = compact_write_content_result(fn_args, tool_result)
                 except Exception as exc:
                     err_str = str(exc)
                     if "CONFIRM_REQUIRED" in err_str:
@@ -1716,11 +1719,10 @@ async def run_pipeline_worker(
                         )
                     tool_result = {"error": err_str}
 
-                preview = fn_args.get("content", "")[:60]
                 mode = "append" if fn_args.get("append") else "write"
                 append_step_command(
                     fn_name,
-                    f"[{mode}] {fn_args.get('path', '')} | {preview}...",
+                    f"[{mode}] {fn_args.get('path', '')}",
                     target_device,
                     tool_result,
                 )

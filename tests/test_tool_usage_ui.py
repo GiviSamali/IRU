@@ -29,6 +29,20 @@ def test_chat_renderer_disables_fallback_used_tools_summary():
     assert "NO|ERROR" in source
 
 
+def test_chat_renderer_shows_compact_write_content_details_without_content_dump():
+    source = (ROOT / "ui" / "js" / "chat.js").read_text(encoding="utf-8")
+    details_start = source.index("const toolDetails = command.tool_name")
+    details_end = source.index("].join('\\n'))}</div>` : '';", details_start)
+    details_source = source[details_start:details_end]
+
+    assert "path:" in details_source
+    assert "chars_written:" in details_source
+    assert "bytes_written:" in details_source
+    assert "content_sha256:" in details_source
+    assert "command.result?.content ||" not in details_source
+    assert "content_preview:" not in details_source
+
+
 def test_usage_ledger_ui_contract_exists():
     index_source = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
     usage_source = (ROOT / "ui" / "js" / "usage.js").read_text(encoding="utf-8")

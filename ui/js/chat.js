@@ -990,6 +990,10 @@ function getCommandDetailsText(command, fallbackOutput) {
   if (command.target_device_id || command.device_id) lines.push(`target_device: ${command.target_device_id || command.device_id}`);
   if (command.summary) lines.push(`summary: ${command.summary}`);
   const result = command.result || {};
+  if (result.path || result.file_path) lines.push(`path: ${result.path || result.file_path}`);
+  if (result.chars_written !== undefined && result.chars_written !== null) lines.push(`chars_written: ${result.chars_written}`);
+  if (result.bytes_written !== undefined && result.bytes_written !== null) lines.push(`bytes_written: ${result.bytes_written}`);
+  if (result.content_sha256 || result.content_hash) lines.push(`content_sha256: ${result.content_sha256 || result.content_hash}`);
   if (command.tool_type === 'answer') {
     if (result.answer_type) lines.push(`answer_type: ${result.answer_type}`);
     if (Array.isArray(result.basis)) lines.push(`basis: ${result.basis.join(', ')}`);
@@ -1151,6 +1155,10 @@ function renderStepCommands(stepCommands) {
       `status: ${command.tool_status || status}`,
       `target_device: ${command.target_device_id || command.device_id || ''}`,
       `summary: ${command.summary || ''}`,
+      `path: ${command.result?.path || command.result?.file_path || ''}`,
+      `chars_written: ${command.result?.chars_written ?? ''}`,
+      `bytes_written: ${command.result?.bytes_written ?? ''}`,
+      `content_sha256: ${command.result?.content_sha256 || command.result?.content_hash || ''}`,
       `pid: ${command.result?.pid || command.result?.window?.pid || command.result?.match?.pid || ''}`,
       `verified: ${command.result?.verified ?? ''}`,
       `window_title: ${command.result?.window_title || command.result?.window?.title || command.result?.match?.title || ''}`,

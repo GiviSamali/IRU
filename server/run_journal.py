@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
@@ -39,6 +40,7 @@ INSUFFICIENT_EVIDENCE_CORRECTION = (
 )
 
 ANSWER_TEXT_TYPES = {"pure_text", "grounded_report", "partial_report", "error_report", "clarification", "failure"}
+WRITE_CONTENT_PREVIEW_CHARS = 120
 
 
 class ProtocolValidationError(ValueError):
@@ -46,6 +48,60 @@ class ProtocolValidationError(ValueError):
         super().__init__(message)
         self.message = message
         self.correction = correction or message
+
+
+def _coerce_text(value: Any) -> str:
+    return value if isinstance(value, str) else str(value or "")
+
+
+def _coerce_int(value: Any, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def compact_write_content_result(args: dict[str, Any] | None, result: Any = None) -> dict[str, Any]:
+    """Return a compact write_content result without echoing the full payload."""
+    args = args or {}
+    original = result if isinstance(result, dict) else {}
+    content = _coerce_text(args.get("content"))
+    encoding = _coerce_text(args.get("encoding") or original.get("encoding") or "utf-8")
+    encoded = content.encode(encoding, errors="replace")
+    path = original.get("path") or original.get("file_path") or args.get("path") or ""
+    append = bool(args.get("append") or original.get("append") or original.get("mode") == "append")
+    error = original.get("error")
+    status = original.get("status")
+    if not status:
+        status = "error" if error else "ok"
+    summary = original.get("summary")
+    if not summary:
+        if error:
+            summary = f"ERROR: {error}"
+        elif status in {"failed", "error"}:
+            summary = f"ERROR: write_failed {path}".strip()
+        elif status in {"missing", "not_found"}:
+            summary = f"NO: file_missing_after_write {path}".strip()
+        else:
+            summary = f"OK: file_written {path}".strip() if path else "OK: file_written"
+    compact = {
+        "status": status,
+        "path": str(path),
+        "append": append,
+        "encoding": encoding,
+        "chars_written": _coerce_int(original.get("chars_written"), len(content)),
+        "bytes_written": _coerce_int(original.get("bytes_written"), len(encoded)),
+        "content_sha256": original.get("content_sha256") or hashlib.sha256(encoded).hexdigest(),
+        "content_preview": content[:WRITE_CONTENT_PREVIEW_CHARS],
+        "summary": summary,
+    }
+    if original.get("total_size") is not None:
+        compact["total_size"] = original.get("total_size")
+    if error:
+        compact["error"] = error
+    if original.get("arg_warnings"):
+        compact["arg_warnings"] = original.get("arg_warnings")
+    return compact
 
 
 def is_terminal_answer_tool(tool_name: str | None) -> bool:
@@ -89,6 +145,10 @@ def _status_for_result(result: Any, terminal: bool = False, tool_name: str | Non
     if isinstance(result, dict):
         if canonical_tool_name(tool_name or "") == "execute_cmd" and execute_cmd_result_is_negative(result):
             return "failed"
+        if canonical_tool_name(tool_name or "") == "write_content":
+            summary = str(result.get("summary") or "").lstrip().upper()
+            if summary.startswith("NO:") or summary.startswith("ERROR:"):
+                return "failed"
         if result.get("error"):
             return "failed"
         if result.get("status") in {"failed", "error"}:
@@ -308,6 +368,22 @@ def _negative_execute_cmd_step_ids(journal: list[dict[str, Any]]) -> set[str]:
     }
 
 
+def _negative_write_content_step_ids(journal: list[dict[str, Any]]) -> set[str]:
+    negative_prefixes = ("NO:", "ERROR:")
+    return {
+        str(entry.get("step_id"))
+        for entry in journal
+        if entry.get("step_id")
+        and canonical_tool_name(entry.get("tool_name") or entry.get("action") or "") == "write_content"
+        and isinstance(entry.get("result"), dict)
+        and (
+            entry["result"].get("error")
+            or entry["result"].get("status") in {"failed", "error"}
+            or str(entry["result"].get("summary") or "").lstrip().upper().startswith(negative_prefixes)
+        )
+    }
+
+
 def _has_failed_non_answer_step(journal: list[dict[str, Any]]) -> bool:
     return any(
         entry.get("step_id")
@@ -376,10 +452,11 @@ def validate_answer_text_payload(payload: Any, journal: list[dict[str, Any]]) ->
     basis = validate_basis_references(payload.get("basis"), journal, require_non_empty=requires_basis)
     if self_check.get("claims_completed_action"):
         negative_execute_cmd = _negative_execute_cmd_step_ids(journal)
-        invalid = [step_id for step_id in basis if step_id in negative_execute_cmd]
+        negative_write_content = _negative_write_content_step_ids(journal)
+        invalid = [step_id for step_id in basis if step_id in negative_execute_cmd or step_id in negative_write_content]
         if invalid:
             raise ProtocolValidationError(
-                f"completed-action answer uses execute_cmd NO/ERROR evidence: {invalid}",
+                f"completed-action answer uses NO/ERROR evidence: {invalid}",
                 GROUNDED_CORRECTION,
             )
     return payload
