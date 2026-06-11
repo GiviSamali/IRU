@@ -4,6 +4,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 try:
+    from .tool_completion import execute_cmd_result_is_negative, execute_cmd_outcome_marker
+except ImportError:
+    from tool_completion import execute_cmd_result_is_negative, execute_cmd_outcome_marker  # type: ignore
+
+try:
     from .device_context import build_minimal_llm_context
 except ImportError:
     from device_context import build_minimal_llm_context
@@ -252,11 +257,11 @@ TOOL_METADATA = {
         "danger": "write",
     },
     "execute_cmd": {
-        "category": "fallback",
-        "tool_type": "fallback",
-        "tool_label": "PowerShell / shell fallback",
-        "purpose": "Low-level shell fallback, use only when typed tools are unavailable",
-        "when_to_use": ["no typed tool exists", "no playbook exists"],
+        "category": "control",
+        "tool_type": "control",
+        "tool_label": "PowerShell / shell control",
+        "purpose": "First-class generic control surface for normal shell/system actions with action plus sufficient verification",
+        "when_to_use": ["ordinary shell/system control action", "short command with cheap sufficient verification"],
         "returns": "command result",
         "danger": "depends_on_command",
     },
@@ -793,8 +798,10 @@ def list_tools(category: str = "all") -> dict[str, list[dict[str, Any]]]:
     return grouped
 
 
-def _result_status(result: Any) -> str:
+def _result_status(result: Any, action: str | None = None) -> str:
     if isinstance(result, dict):
+        if canonical_tool_name(action or "") == "execute_cmd" and execute_cmd_result_is_negative(result):
+            return "failed"
         if result.get("error"):
             return "failed"
         if result.get("status") in {"failed", "error"}:
@@ -867,6 +874,11 @@ def compact_tool_summary(action: str, result: Any = None, command: str = "") -> 
             path = result.get("path") or result.get("file_path") or ""
             return f"file written: {path}" if path else "file write completed"
         if name == "execute_cmd":
+            marker = execute_cmd_outcome_marker(result)
+            if marker:
+                stdout = str(result.get("stdout") or "").strip()
+                first_line = next((line.strip() for line in stdout.splitlines() if line.strip()), "")
+                return first_line[:240] if first_line else marker
             rc = result.get("returncode")
             return f"returncode={rc}" if rc is not None else "shell command completed"
         if name == "answer.text":
@@ -891,7 +903,7 @@ def tool_log_fields(action: str, result: Any = None, command: str = "", target_d
         "tool_name": name,
         "tool_type": meta.get("tool_type", "typed"),
         "tool_label": meta.get("tool_label") or name,
-        "tool_status": _result_status(result),
+        "tool_status": _result_status(result, action),
         "target_device_id": target_device_id,
         "summary": compact_tool_summary(action, result, command),
     }

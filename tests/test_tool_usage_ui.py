@@ -10,7 +10,8 @@ def test_chat_renderer_can_show_one_or_many_used_tools():
     assert "function renderUsedToolsLine" in source
     assert "Использован инструмент:" in source
     assert "Использованы инструменты:" in source
-    assert "Использован fallback:" in source
+    assert "const fallback = []" in source
+    assert "NO|ERROR" in source
     assert "command.tool_name" in source
     assert "window_title" in source
     assert "process_alive" in source
@@ -19,6 +20,13 @@ def test_chat_renderer_can_show_one_or_many_used_tools():
     assert "parts.push('Ответ')" in source
     assert "answer_type" in source
     assert "self_check" in source
+
+
+def test_chat_renderer_disables_fallback_used_tools_summary():
+    source = (ROOT / "ui" / "js" / "chat.js").read_text(encoding="utf-8")
+
+    assert "const fallback = []" in source
+    assert "NO|ERROR" in source
 
 
 def test_usage_ledger_ui_contract_exists():

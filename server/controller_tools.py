@@ -5,6 +5,15 @@ try:
 except ImportError:
     from tool_registry import DEVICE_TOOL_SCHEMAS
 
+EXECUTE_CMD_DESCRIPTION = (
+    "First-class generic control surface for normal system actions through PowerShell/cmd/bash. "
+    "Use it to perform the requested action and include the cheapest sufficient verification in the same short command when possible. "
+    "Print a machine-readable outcome line: OK: <confirmed or accepted result>, NO: <expected state missing or not confirmed>, or ERROR: <reason>. "
+    "For ordinary open/launch URL/folder/app commands, command-level acceptance such as OK: open_requested is usually sufficient. "
+    "Visual/window verification is only needed when the user asks for visible/focused verification, the next step requires window interaction, the command result is ambiguous/noisy, or the task is about window state. "
+    "Keep commands short. Use write_content instead of execute_cmd for long, multiline, or generated file content."
+)
+
 TOOLS = [
     *DEVICE_TOOL_SCHEMAS,
     {
@@ -205,6 +214,12 @@ TOOLS = [
         }
     }
 ]
+
+for _tool in TOOLS:
+    _function = _tool.get("function") or {}
+    if _function.get("name") == "execute_cmd":
+        _function["description"] = EXECUTE_CMD_DESCRIPTION
+        break
 
 PLAN_TRACKING_TOOL_NAMES = {
     "create_plan",

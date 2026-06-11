@@ -60,13 +60,27 @@ def test_validate_tool_contract_rejects_missing_required_fields():
     assert any("status is not recognized" in error for error in errors)
 
 
-def test_execute_cmd_contract_marks_fallback_and_shell_permission():
+def test_execute_cmd_contract_marks_control_and_shell_permission():
     contract = get_tool_contract("execute_cmd")
 
     assert contract["risk_level"] == "fallback"
     assert "shell.execute" in contract["permissions"]
-    assert contract["tool_type"] == "fallback"
+    assert contract["category"] == "control"
+    assert contract["tool_type"] == "control"
     assert contract["ui"]["show_in_used_tools"] is True
+
+
+def test_execute_cmd_schema_contains_first_class_outcome_guidance():
+    schema = next(tool for tool in WORKER_TOOLS if tool["function"]["name"] == "execute_cmd")
+    description = schema["function"]["description"]
+
+    assert "OK:" in description
+    assert "NO:" in description
+    assert "ERROR:" in description
+    assert "action" in description and "verification" in description
+    assert "Visual/window verification is only needed" in description
+    assert "write_content" in description
+    assert "long, multiline" in description
 
 
 def test_answer_text_contract_is_terminal_safe_and_visible():

@@ -942,6 +942,7 @@ function getCommandStatus(command) {
   if (command?.action === 'budget_guard' || stripUtfPrefix(command?.command || '') === '[budget_guard]') return 'blocked';
   if (result?.error) return 'error';
   if (result?.returncode != null && result.returncode !== 0) return 'error';
+  if (command?.tool_name === 'execute_cmd' && /^\s*(NO|ERROR):/im.test(String(result?.stdout || ''))) return 'error';
   return 'success';
 }
 
@@ -963,7 +964,7 @@ function renderUsedToolsLine(commands) {
     .filter(command => command.tool_type !== 'fallback' && command.tool_type !== 'answer')
     .map(command => command.tool_name)
     .filter(Boolean);
-  const fallback = getToolNameList(commands, 'fallback');
+  const fallback = [];
   const answer = entries
     .filter(command => command.tool_type === 'answer')
     .map(command => command.tool_name)
@@ -975,11 +976,6 @@ function renderUsedToolsLine(commands) {
     parts.push(`Использован инструмент: ${escapeHTML(typedNames[0])}`);
   } else if (typedNames.length > 1) {
     parts.push(`Использованы инструменты: ${escapeHTML(typedNames.join(', '))}`);
-  }
-  if (fallback.length === 1) {
-    parts.push(`Использован fallback: ${escapeHTML(fallback[0])}`);
-  } else if (fallback.length > 1) {
-    parts.push(`Использованы fallback: ${escapeHTML(fallback.join(', '))}`);
   }
   if (!typedNames.length && !fallback.length && answerNames.length) parts.push('Ответ');
   return parts.length ? `<div class="tool-usage-line">${parts.join(' · ')}</div>` : '';

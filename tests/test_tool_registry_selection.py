@@ -80,15 +80,17 @@ def test_system_list_tools_returns_compact_grouped_tools():
     assert "python" in registry
     assert "window" in registry
     assert "app" in registry
-    assert "fallback" in registry
+    assert "control" in registry
     assert any(tool["name"] == "device.refresh_state" for tool in registry["device"])
     assert any(tool["name"] == "memory.list_facts" for tool in registry["memory"])
     assert any(tool["name"] == "device.prepare_runtime" for tool in registry["python"])
     assert any(tool["name"] == "window.verify" for tool in registry["window"])
     assert any(tool["name"] == "app.launch" for tool in registry["app"])
-    execute = next(tool for tool in registry["fallback"] if tool["name"] == "execute_cmd")
-    assert execute["purpose"].lower().startswith("low-level shell fallback")
+    execute = next(tool for tool in registry["control"] if tool["name"] == "execute_cmd")
+    assert execute["purpose"].lower().startswith("first-class generic control surface")
     assert "stdout" not in json.dumps(registry).lower()
+    forbidden = {"fs.open_folder", "fs.copy", "fs.move", "fs.delete", "tool.propose"}
+    assert forbidden.isdisjoint({tool["name"] for tools in registry.values() for tool in tools})
 
 
 def test_device_get_passport_compact_and_has_context_handles():
@@ -335,7 +337,7 @@ def test_write_content_and_execute_cmd_tool_log_types():
     assert write["commands"][0]["tool_name"] == "write_content"
     assert write["commands"][0]["tool_type"] == "typed"
     assert execute["commands"][0]["tool_name"] == "execute_cmd"
-    assert execute["commands"][0]["tool_type"] == "fallback"
+    assert execute["commands"][0]["tool_type"] == "control"
 
 
 def test_non_pipeline_execute_cmd_and_write_content_honor_device_id_override():
@@ -429,8 +431,9 @@ def test_recent_artifact_scope_blocks_broad_desktop_recursive_scan():
 
 def test_prompt_contains_tool_selection_policy():
     assert "Tool selection policy:" in SYSTEM_PROMPT_TEMPLATE
-    assert "Use typed tools first" in SYSTEM_PROMPT_TEMPLATE
-    assert "execute_cmd / PowerShell only as fallback" in SYSTEM_PROMPT_TEMPLATE
+    assert "Use typed tools for specialized structured operations" in SYSTEM_PROMPT_TEMPLATE
+    assert "execute_cmd / PowerShell as the first-class generic control surface" in SYSTEM_PROMPT_TEMPLATE
+    assert "print OK:, NO:, or ERROR:" in SYSTEM_PROMPT_TEMPLATE
     assert "Do not assume device state" in SYSTEM_PROMPT_TEMPLATE
     assert "prefer device_prepare_runtime or device_check_runtime" in SYSTEM_PROMPT_TEMPLATE
     assert "use its venv_python path" in SYSTEM_PROMPT_TEMPLATE

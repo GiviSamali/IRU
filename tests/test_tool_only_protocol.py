@@ -773,6 +773,79 @@ def test_repeat_guard_does_not_block_execute_write_or_window_find():
     assert [action for action, _ in sent].count("window.find") == 2
 
 
+def test_execute_cmd_ok_stdout_is_terminal_sufficient_without_window_find():
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append(action)
+        if action == "window.find":
+            raise AssertionError("window.find should not be required after execute_cmd OK evidence")
+        return {"returncode": 0, "stdout": "OK: open_requested Downloads", "stderr": ""}
+
+    result = _run_case([
+        _message(tool_calls=[_execute_call("call-exec", "open downloads")]),
+        _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "Downloads"})]),
+    ], user_message="Open Downloads", send_command_fn=_send)
+
+    assert sent == ["execute_cmd"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text"]
+    assert result["commands"][0]["summary"] == "OK: open_requested Downloads"
+    assert result["commands"][1]["result"]["basis"] == ["step_1"]
+    assert "OK: open_requested Downloads" in result["answer"]
+
+
+def test_execute_cmd_no_stdout_rejects_completed_action_claim():
+    sent = []
+    failure_payload = {
+        "message": "Command did not confirm the requested state.",
+        "reason": "execute_cmd returned NO.",
+        "recoverable": True,
+        "suggested_next_action": "Retry with corrected command or ask for clarification.",
+        "basis": ["step_1"],
+    }
+
+    async def _send(device_id, action, params):
+        sent.append(action)
+        return {"returncode": 0, "stdout": "NO: destination_missing B", "stderr": ""}
+
+    result = _run_case([
+        _message(tool_calls=[_execute_call("call-exec", "copy A B")]),
+        _message(tool_calls=[_answer_call("call-bad-answer", "Copied.", answer_type="grounded_report", basis=["step_1"])]),
+        _message(tool_calls=[_tool_call("call-failure", "answer_report_failure", failure_payload)]),
+    ], user_message="Copy A to B", send_command_fn=_send)
+
+    assert sent == ["execute_cmd"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.report_failure"]
+    assert result["commands"][0]["status"] == "failed"
+    assert result["answer"] == failure_payload["message"]
+
+
+def test_execute_cmd_error_stdout_rejects_completed_action_claim():
+    sent = []
+    failure_payload = {
+        "message": "Command reported an error.",
+        "reason": "execute_cmd returned ERROR.",
+        "recoverable": True,
+        "suggested_next_action": "Inspect the error and retry if appropriate.",
+        "basis": ["step_1"],
+    }
+
+    async def _send(device_id, action, params):
+        sent.append(action)
+        return {"returncode": 0, "stdout": "ERROR: access denied", "stderr": ""}
+
+    result = _run_case([
+        _message(tool_calls=[_execute_call("call-exec", "delete file")]),
+        _message(tool_calls=[_answer_call("call-bad-answer", "Deleted.", answer_type="grounded_report", basis=["step_1"])]),
+        _message(tool_calls=[_tool_call("call-failure", "answer_report_failure", failure_payload)]),
+    ], user_message="Delete file", send_command_fn=_send)
+
+    assert sent == ["execute_cmd"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.report_failure"]
+    assert result["commands"][0]["status"] == "failed"
+    assert result["answer"] == failure_payload["message"]
+
+
 def test_max_iterations_answer_only_repair_returns_grounded_answer():
     captured = []
     sent = []

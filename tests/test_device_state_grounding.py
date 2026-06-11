@@ -136,8 +136,8 @@ def test_non_pipeline_command_log_includes_target_device_id():
     assert entry["hostname"] == "alpha"
     assert entry["collected_at"]
     assert entry["tool_name"] == "execute_cmd"
-    assert entry["tool_type"] == "fallback"
-    assert entry["tool_label"] == "PowerShell / shell fallback"
+    assert entry["tool_type"] == "control"
+    assert entry["tool_label"] == "PowerShell / shell control"
 
 
 def test_pipeline_command_log_includes_target_device_id():

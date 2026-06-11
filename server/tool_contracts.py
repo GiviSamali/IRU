@@ -11,7 +11,7 @@ except ImportError:
 
 TOOL_CONTRACT_VERSION = "v1"
 
-TOOL_TYPES = {"system", "typed", "answer", "fallback", "proposal"}
+TOOL_TYPES = {"system", "typed", "answer", "fallback", "control", "proposal"}
 RISK_LEVELS = {
     "safe",
     "read_only",
@@ -273,7 +273,10 @@ def _idempotency_for(canonical_name: str, risk_level: str) -> str:
 
 def _when_not_to_use(canonical_name: str, meta: dict[str, Any]) -> list[str]:
     if canonical_name == "execute_cmd":
-        return ["a typed tool can perform the task", "action needs structured evidence and a typed tool exists"]
+        return [
+            "long or multiline generated file content should use write_content",
+            "visual/window verification is required and window/app tools are available",
+        ]
     if canonical_name == "write_content":
         return ["binary files", "Office documents", "when shell execution is specifically needed"]
     if canonical_name == "answer.text":
@@ -304,7 +307,7 @@ def _test_plan_for(canonical_name: str) -> list[str]:
     if canonical_name == "answer.text":
         plan.append("verify terminal answer validation")
     if canonical_name == "execute_cmd":
-        plan.append("verify fallback is not preferred over typed tools")
+        plan.append("verify action plus sufficient verification produces OK/NO/ERROR evidence")
     return plan
 
 

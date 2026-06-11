@@ -1,6 +1,11 @@
 import re
 from urllib.parse import urlparse
 
+try:
+    from .tool_completion import execute_cmd_result_is_negative
+except ImportError:
+    from tool_completion import execute_cmd_result_is_negative  # type: ignore
+
 
 SAFE_DOWNLOAD_LINK_ERROR = (
     "Ссылка не была сформирована системой. Повторите запрос или используйте проводник файлов."
@@ -76,10 +81,7 @@ def _is_failed_action(command_entry: dict) -> bool:
         return bool(result.get("error"))
 
     if action == "execute_cmd":
-        if result.get("error"):
-            return True
-        returncode = result.get("returncode")
-        return returncode not in (None, 0, "0")
+        return execute_cmd_result_is_negative(result)
 
     return False
 

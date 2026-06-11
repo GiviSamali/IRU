@@ -5,8 +5,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 try:
+    from .tool_completion import execute_cmd_result_is_negative
     from .tool_registry import canonical_tool_name, compact_tool_summary, tool_log_fields
 except ImportError:
+    from tool_completion import execute_cmd_result_is_negative  # type: ignore
     from tool_registry import canonical_tool_name, compact_tool_summary, tool_log_fields  # type: ignore
 
 
@@ -81,10 +83,12 @@ def _next_idx(journal: list[dict[str, Any]]) -> int:
     return (max(existing) + 1) if existing else 1
 
 
-def _status_for_result(result: Any, terminal: bool = False) -> str:
+def _status_for_result(result: Any, terminal: bool = False, tool_name: str | None = None) -> str:
     if terminal:
         return "terminal"
     if isinstance(result, dict):
+        if canonical_tool_name(tool_name or "") == "execute_cmd" and execute_cmd_result_is_negative(result):
+            return "failed"
         if result.get("error"):
             return "failed"
         if result.get("status") in {"failed", "error"}:
@@ -112,7 +116,7 @@ def make_run_step(
     idx = _next_idx(journal)
     canonical = canonical_tool_name(tool_name)
     terminal = is_terminal_answer_tool(tool_name)
-    final_status = status or _status_for_result(result, terminal=terminal)
+    final_status = status or _status_for_result(result, terminal=terminal, tool_name=tool_name)
     final_summary = summary or compact_step_summary(tool_name, result, command)
     fields = tool_log_fields(tool_name, result, command, target_device_id)
     entry = {
@@ -152,7 +156,7 @@ def append_tool_step(journal: list[dict[str, Any]], entry: dict[str, Any]) -> di
     canonical = canonical_tool_name(action)
     result = entry.get("result")
     command = entry.get("command") or f"[tool] {canonical}"
-    status = entry.get("status") or _status_for_result(result)
+    status = entry.get("status") or _status_for_result(result, tool_name=action)
     fields = tool_log_fields(action, result, command, entry.get("target_device_id") or entry.get("device_id"))
     entry["step_id"] = f"step_{idx}"
     entry["idx"] = idx
@@ -294,6 +298,16 @@ def _current_non_answer_step_ids(journal: list[dict[str, Any]]) -> set[str]:
     }
 
 
+def _negative_execute_cmd_step_ids(journal: list[dict[str, Any]]) -> set[str]:
+    return {
+        str(entry.get("step_id"))
+        for entry in journal
+        if entry.get("step_id")
+        and canonical_tool_name(entry.get("tool_name") or entry.get("action") or "") == "execute_cmd"
+        and execute_cmd_result_is_negative(entry.get("result"))
+    }
+
+
 def _has_failed_non_answer_step(journal: list[dict[str, Any]]) -> bool:
     return any(
         entry.get("step_id")
@@ -359,7 +373,15 @@ def validate_answer_text_payload(payload: Any, journal: list[dict[str, Any]]) ->
         or bool(self_check.get("depends_on_current_external_state"))
         or bool(self_check.get("claims_completed_action"))
     )
-    validate_basis_references(payload.get("basis"), journal, require_non_empty=requires_basis)
+    basis = validate_basis_references(payload.get("basis"), journal, require_non_empty=requires_basis)
+    if self_check.get("claims_completed_action"):
+        negative_execute_cmd = _negative_execute_cmd_step_ids(journal)
+        invalid = [step_id for step_id in basis if step_id in negative_execute_cmd]
+        if invalid:
+            raise ProtocolValidationError(
+                f"completed-action answer uses execute_cmd NO/ERROR evidence: {invalid}",
+                GROUNDED_CORRECTION,
+            )
     return payload
 
 
