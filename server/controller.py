@@ -120,13 +120,13 @@ async def classify_task_complexity(message: str, usage_context: dict | None = No
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "deepseek-chat",
+                    "model": cfg.get("model", "deepseek-v4-flash"),
                     "messages": [
                         {"role": "system", "content": _CLASSIFY_SYSTEM},
                         {"role": "user", "content": message},
                     ],
-                    "temperature": 0.0,
                     "max_tokens": 100,
+                    "thinking": {"type": "disabled"},
                 },
             )
             resp.raise_for_status()
@@ -138,7 +138,7 @@ async def classify_task_complexity(message: str, usage_context: dict | None = No
             }
             record_llm_usage_event(
                 usage_context=usage_ctx,
-                model="deepseek-chat",
+                model=cfg.get("model", "deepseek-v4-flash"),
                 usage=extract_usage(data),
                 cfg=cfg,
                 request_ok=True,
@@ -153,7 +153,7 @@ async def classify_task_complexity(message: str, usage_context: dict | None = No
         }
         record_llm_usage_event(
             usage_context=usage_ctx,
-            model="deepseek-chat",
+            model=cfg.get("model", "deepseek-v4-flash"),
             cfg=cfg if "cfg" in locals() else None,
             request_ok=False,
             error_type=type(exc).__name__,
@@ -204,11 +204,32 @@ class LLMRouteSpec:
 
 
 def _pick_model(cfg: dict, modes: dict | None) -> str:
-    """Выбрать модель LLM: deepseek-reasoner для сложных режимов, deepseek-chat иначе."""
-    base = cfg.get("model", "deepseek-chat")
-    reasoner = cfg.get("model_reasoner", "deepseek-reasoner")
+    """Выбрать модель LLM: V4 Pro для сложных режимов, V4 Flash иначе."""
+    base = cfg.get("model", "deepseek-v4-flash")
+    reasoner = cfg.get("model_reasoner", "deepseek-v4-pro")
     is_complex = bool(modes) and (modes.get("pipeline") or modes.get("autonomous"))
     return reasoner if is_complex else base
+
+
+def _thinking_request_fields(
+    cfg: dict,
+    model: str,
+    *,
+    usage_context: dict | None = None,
+    phase: str | None = None,
+) -> dict:
+    """Return provider thinking fields for the selected DeepSeek V4 model."""
+    base_model = cfg.get("model", "deepseek-v4-flash")
+    reasoner_model = cfg.get("model_reasoner", "deepseek-v4-pro")
+
+    if model == reasoner_model:
+        reasoning_effort = cfg.get("reasoning_effort", "high")
+        fields = {"thinking": {"type": "enabled"}}
+        if reasoning_effort:
+            fields["reasoning_effort"] = reasoning_effort
+        return fields
+
+    return {"thinking": {"type": "disabled"}}
 
 
 async def _chat_completion_request(
@@ -235,7 +256,16 @@ async def _chat_completion_request(
         else:
             request_json["tool_choice"] = "auto"
 
-    base_model = cfg.get("model", "deepseek-chat")
+    request_json.update(
+        _thinking_request_fields(
+            cfg,
+            model,
+            usage_context=usage_context,
+            phase=phase,
+        )
+    )
+
+    base_model = cfg.get("model", "deepseek-v4-flash")
     if model == base_model:
         request_json["temperature"] = cfg.get("temperature", 0.0)
 
