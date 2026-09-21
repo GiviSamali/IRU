@@ -363,7 +363,12 @@ def _is_packaged_agent() -> bool:
 def _looks_like_python_executable(path: str | Path | None) -> bool:
     if not path:
         return False
-    name = Path(path).name.lower()
+    raw_path = str(path)
+    # Tests and Windows-agent discovery can surface Windows paths even when the
+    # current process is running on another OS. Resolve both path syntaxes.
+    name = Path(raw_path).name.lower()
+    if "\\" in raw_path:
+        name = ntpath.basename(raw_path).lower()
     if name in {"python", "python.exe", "python3", "python3.exe"}:
         return True
     if not name.startswith("python"):
