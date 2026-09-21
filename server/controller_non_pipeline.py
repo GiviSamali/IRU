@@ -603,6 +603,7 @@ async def process_non_pipeline_command(
                     }
                 if terminal_sufficient_entry is not None and _allow_followup_after_terminal_sufficient(terminal_sufficient_entry, fn_name):
                     terminal_sufficient_entry = None
+                    terminal_sufficient_extra_turn_used = False
 
                 clean_args, arg_warnings, arg_error = validate_and_sanitize_tool_args(
                     fn_name,
