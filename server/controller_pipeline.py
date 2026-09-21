@@ -571,6 +571,7 @@ Tool-only protocol:
 4. Если py_compile успешен и нужные файлы созданы, этого достаточно для базовой проверки созданного GUI-проекта.
 5. Не используй screenshot, SendKeys, PrintScreen или GetForegroundWindow без явного запроса пользователя.
 6. Для GUI/app/file open requests не выполняй visual/window verification по умолчанию. Command-level acceptance или process launch evidence достаточно, если пользователь явно не просит visibility/focus, следующий шаг не требует window interaction, command output не ambiguous/noisy, и задача не про window/app state.
+Для запуска GUI-приложения используй typed tool `app_launch`, а не ручную проверку окна или screenshot.
 7. Для подготовки Python используй device_prepare_runtime/device_check_runtime, а не ручной venv через execute_cmd.
 8. Временные helper scripts для Word/Excel/PowerPoint/PDF/docx/xlsx/pptx создавай только в `%LOCALAPPDATA%\\IRU\\scripts\\helpers` или `~/.iru/scripts/helpers` и удаляй после выполнения. Итоговые пользовательские документы сохраняй там, где просил пользователь.
 
