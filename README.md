@@ -36,6 +36,8 @@ DEEPSEEK_API_KEY
 
 ## Архитектура
 
+Голосовой режим внутри чата: настройка и проверки описаны в [docs/VOICE.md](docs/VOICE.md).
+
 ```text
 User
   |

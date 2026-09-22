@@ -1077,3 +1077,9 @@ img[src*="iru_logo"] {
   }
   .mobile-plus-popover.show { display: block; }
 }
+.voice-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 12px 6px; font-size: 12px; color: var(--text-secondary, #94a3b8); }
+.voice-controls:not(:has(:not([hidden]))) { display: none; }
+.voice-btn.recording.hidden-mobile { display: inline-flex; }
+.voice-controls #voiceStatus { padding-top: 6px; }
+.voice-stop-speech { margin-top: 6px; padding: 4px 8px; border: 1px solid #334155; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+.voice-stop-speech[hidden] { display: none; }

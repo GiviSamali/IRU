@@ -19,6 +19,7 @@ async function loadChats() {
 }
 
 async function createNewChat() {
+  if (typeof stopVoice === 'function') stopVoice();
   try {
     const r = await apiFetch(`${API}/api/chats`, {
       method: 'POST', headers: authHeaders(),
@@ -33,6 +34,7 @@ async function createNewChat() {
 }
 
 async function openChat(chatId) {
+  if (typeof stopVoice === 'function') stopVoice();
   state.currentChatId = chatId;
   if (window.innerWidth <= 768) closeMobileSidebar();
   renderChatList();
@@ -59,6 +61,7 @@ async function deleteChat(chatId, event) {
   try {
     await apiFetch(`${API}/api/chats/${chatId}`, { method: 'DELETE', headers: authHeaders() });
     if (state.currentChatId === chatId) {
+      if (typeof stopVoice === 'function') stopVoice();
       state.currentChatId = null;
       state.messages = [];
       renderMessages();
@@ -670,9 +673,10 @@ function bindChatMessageActions() {
 
 const MAX_INPUT_LENGTH = 500;
 
-async function sendMessage() {
+async function sendMessage(options = {}) {
   const input = document.getElementById('chatInput');
-  const text = input.value.trim();
+  const fromVoice = typeof options.voiceText === 'string';
+  const text = (fromVoice ? options.voiceText : input.value).trim();
   if (!text) return;
   if (text.length > MAX_INPUT_LENGTH) {
     showToast(`Максимум ${MAX_INPUT_LENGTH} символов`, true);
@@ -681,11 +685,15 @@ async function sendMessage() {
   const ids = Object.keys(state.devices);
   const isOnboarding = ids.length === 0;
 
-  const messageToSend = buildMessageWithAttachments(text);
+  const messageToSend = fromVoice ? text : buildMessageWithAttachments(text);
+  const voiceTicket = window.iruVoice?.beginRequest();
+  let voiceTaskId = null;
 
-  input.value = '';
-  autoGrow(input);
-  clearAttachments();
+  if (!fromVoice) {
+    input.value = '';
+    autoGrow(input);
+    clearAttachments();
+  }
 
   // Добавить сообщение пользователя в UI сразу
   state.messages.push({ role: 'user', content: text });
@@ -716,11 +724,12 @@ async function sendMessage() {
     }
 
     if (data.status === 'ok' && data.task_id) {
+      voiceTaskId = data.task_id;
       // Задача запущена в фоне — начинаем polling
       state.messages[msgIndex]._taskId = data.task_id;
       state.pendingTasks.push({ task_id: data.task_id, msgIndex });
       updateStopButton();
-      pollTask(data.task_id, msgIndex);
+      pollTask(data.task_id, msgIndex, voiceTicket);
     } else {
       // Ошибка до запуска задачи
       state.messages[msgIndex] = {
@@ -734,11 +743,15 @@ async function sendMessage() {
       role: 'assistant',
       content: `Ошибка сети: ${e.message}`,
     };
+    window.iruVoice?.requestLost(voiceTicket);
     renderMessages();
+  } finally {
+    window.iruVoice?.endRequest(voiceTicket, voiceTaskId);
   }
 }
 
-async function pollTask(taskId, msgIndex) {
+async function pollTask(taskId, msgIndex, voiceTicket) {
+  window.iruVoice?.watchTask(taskId, voiceTicket);
   const startTime = Date.now();
   const MAX_POLL_MS = 600000; // 10 минут макс (для длинных конвейеров)
   let stopped = false;
@@ -748,6 +761,7 @@ async function pollTask(taskId, msgIndex) {
   const poll = async () => {
     if (stopped) return;
     if (Date.now() - startTime > MAX_POLL_MS) {
+      window.iruVoice?.taskLost(taskId);
       state.messages[msgIndex] = { role: 'assistant', content: 'Истекло время ожидания ответа.' };
       state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
       forgetActiveTask(taskId);
@@ -757,6 +771,7 @@ async function pollTask(taskId, msgIndex) {
     try {
       const r = await apiFetch(`${API}/api/tasks/${taskId}`, { headers: authHeaders() });
       if (!r.ok) {
+        window.iruVoice?.taskLost(taskId);
         stopped = true;
         state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена.' };
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
@@ -772,6 +787,7 @@ async function pollTask(taskId, msgIndex) {
       }
 
       if (task.status === 'confirm') {
+        window.iruVoice?.taskPaused(taskId);
         stopped = true;
         const cd = task.confirm_data || {};
         const cmdText = cd.command || '';
@@ -787,6 +803,7 @@ async function pollTask(taskId, msgIndex) {
         return;
       }
       if (isTaskTerminalStatus(task.status)) {
+        window.iruVoice?.taskFinished(taskId, task);
         stopped = true;
         const isCancelled = String(task.status || '').trim().toLowerCase() === 'cancelled';
         const fallbackAnswer = isCancelled ? 'Остановлено пользователем.' : (task.plan_suggestion ? '' : 'ИРУ завершила задачу без текстового ответа.');
@@ -839,6 +856,7 @@ async function pollTask(taskId, msgIndex) {
       if (!poll._retries) poll._retries = 0;
       poll._retries++;
       if (poll._retries > 30) {
+        window.iruVoice?.taskLost(taskId);
         stopped = true;
         state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена или истекла.' };
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
@@ -1316,9 +1334,11 @@ async function confirmTask(taskId, msgIndex) {
 
 async function denyTask(taskId, msgIndex) {
   try {
-    await apiFetch(`${API}/api/tasks/${taskId}/deny`, {
+    const response = await apiFetch(`${API}/api/tasks/${taskId}/deny`, {
       method: 'POST', headers: authHeaders(),
     });
+    if (!response.ok) throw new Error('Не удалось отклонить действие');
+    window.iruVoice?.taskFinished(taskId, {});
     state.messages[msgIndex].confirmTaskId = null;
     state.messages[msgIndex].content = 'Команда отменена.';
     state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);

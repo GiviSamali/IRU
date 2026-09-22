@@ -153,6 +153,7 @@ async function doAuth() {
 }
 
 function doLogout() {
+  if (typeof stopVoice === 'function') stopVoice();
   // Отзыв refresh token на сервере
   if (_refreshToken) {
     fetch(`${API}/api/logout`, {

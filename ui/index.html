@@ -196,7 +196,7 @@
             </button>
             <input type="file" id="fileInput" multiple hidden
                    accept=".txt,.md,.csv,.json,.xml,.yml,.yaml,.py,.js,.ts,.html,.css,.sql,.log,.ini,.conf,.sh,.ps1,.bat,.go,.rs,.java,.cpp,.c,.h">
-            <button id="voiceBtn" class="voice-btn" type="button" title="Голосовой ввод (Ctrl+Shift+M)" aria-label="Включить микрофон">
+            <button id="voiceBtn" class="voice-btn" type="button" title="Голосовой режим (Ctrl+Shift+M)" aria-label="Включить голосовой режим" aria-pressed="false">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
                 <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
@@ -211,6 +211,10 @@
             <button class="btn-send" id="btnSend" title="Отправить">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
             </button>
+          </div>
+          <div class="voice-controls">
+            <span id="voiceStatus" role="status" aria-live="polite" hidden></span>
+            <button id="voiceStopSpeech" class="voice-stop-speech" type="button" hidden>Остановить озвучку</button>
           </div>
         </div>
       </div>
@@ -398,6 +402,7 @@
 <script src="js/shell.js" defer></script>
 <script src="js/admin.js" defer></script>
 <script src="js/devmode.js" defer></script>
+<script src="js/voice-session.js" defer></script>
 <script src="js/voice.js" defer></script>
 <script src="js/attachments.js" defer></script>
 <script src="js/extras.js" defer></script>

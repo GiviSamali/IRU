@@ -332,6 +332,8 @@ async function declineSuggestedFact(taskId, el, msgIndex = null) {
 
 // ── PLAN SUGGESTION ───────────────────────────────────────
 async function runPlan(chatId, originalRequest) {
+  const voiceTicket = window.iruVoice?.beginRequest();
+  let voiceTaskId = null;
   try {
     const resp = await apiFetch(`${API}/api/run_plan/${chatId}`, {
       method: 'POST', headers: authHeaders(),
@@ -343,14 +345,18 @@ async function runPlan(chatId, originalRequest) {
       return;
     }
     if (data.task_id) {
+      voiceTaskId = data.task_id;
       const msgIndex = state.messages.length;
       state.messages.push({ role: 'assistant', loading: true, currentStatus: 'thinking' });
       state.pendingTasks.push({ task_id: data.task_id, msgIndex });
       renderMessages();
       updateStopButton();
-      pollTask(data.task_id, msgIndex);
+      pollTask(data.task_id, msgIndex, voiceTicket);
     }
-  } catch (e) { showToast('Ошибка запуска плана', true); }
+  } catch (e) {
+    window.iruVoice?.requestLost(voiceTicket);
+    showToast('Ошибка запуска плана', true);
+  } finally { window.iruVoice?.endRequest(voiceTicket, voiceTaskId); }
 }
 
 function acceptPlanSuggestion(el) {
@@ -400,6 +406,8 @@ async function declinePlanAndContinue(taskId, originalRequest) {
 
 async function sendMessageDirect(text, extraModes = {}) {
   if (!text || !state.currentChatId) return;
+  const voiceTicket = window.iruVoice?.beginRequest();
+  let voiceTaskId = null;
   const msgIndex = state.messages.length;
   state.messages.push({ role: 'assistant', loading: true, currentStatus: 'thinking' });
   renderMessages();
@@ -417,14 +425,16 @@ async function sendMessageDirect(text, extraModes = {}) {
     });
     const data = await resp.json();
     if (data.task_id) {
+      voiceTaskId = data.task_id;
       state.pendingTasks.push({ task_id: data.task_id, msgIndex });
       updateStopButton();
-      pollTask(data.task_id, msgIndex);
+      pollTask(data.task_id, msgIndex, voiceTicket);
     }
   } catch (e) {
     state.messages[msgIndex] = { role: 'assistant', content: 'Ошибка: ' + (e.message || e) };
+    window.iruVoice?.requestLost(voiceTicket);
     renderMessages();
-  }
+  } finally { window.iruVoice?.endRequest(voiceTicket, voiceTaskId); }
 }
 
 // ── INIT ───────────────────────────────────────────────────
