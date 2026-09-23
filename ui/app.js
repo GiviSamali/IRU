@@ -106,6 +106,21 @@ function bindProductV2ExecutionCards() {
       if (!card.hasAttribute('aria-expanded')) card.setAttribute('aria-expanded', 'false');
       if (!card.hasAttribute('title')) card.setAttribute('title', 'Показать ход выполнения');
     });
+
+    container.querySelectorAll('.task-block').forEach((card) => {
+      const isComplete = card.classList.contains('task-completed')
+        || card.classList.contains('task-done')
+        || card.classList.contains('task-completed_with_recovery')
+        || card.classList.contains('task-recovered');
+      const stepCount = card.querySelectorAll('.task-steps > .task-step').length;
+      if (!isComplete || stepCount < 2) return;
+
+      card.classList.add('product-v2-plan-complete');
+      if (!card.hasAttribute('tabindex')) card.tabIndex = 0;
+      if (!card.hasAttribute('role')) card.setAttribute('role', 'button');
+      if (!card.hasAttribute('aria-expanded')) card.setAttribute('aria-expanded', 'false');
+      if (!card.hasAttribute('title')) card.setAttribute('title', 'Показать выполненный план');
+    });
   };
 
   const toggleCard = (card) => {
@@ -115,19 +130,43 @@ function bindProductV2ExecutionCards() {
     card.setAttribute('title', expanded ? 'Скрыть ход выполнения' : 'Показать ход выполнения');
   };
 
+  const togglePlanCard = (card) => {
+    const expanded = !card.classList.contains('expanded');
+    card.classList.toggle('expanded', expanded);
+    card.setAttribute('aria-expanded', String(expanded));
+    card.setAttribute('title', expanded ? 'Свернуть выполненный план' : 'Показать выполненный план');
+  };
+
   container.addEventListener('click', (event) => {
-    const card = event.target.closest('.cmd-log');
-    if (!card || !container.contains(card)) return;
-    if (event.target.closest('[data-action]')) return;
-    toggleCard(card);
+    const commandCard = event.target.closest('.cmd-log');
+    if (commandCard && container.contains(commandCard)) {
+      if (event.target.closest('[data-action]')) return;
+      toggleCard(commandCard);
+      return;
+    }
+
+    const planCard = event.target.closest('.task-block.product-v2-plan-complete');
+    if (!planCard || !container.contains(planCard)) return;
+    if (event.target.closest('button, a, [data-action], .step-details, .task-step')) return;
+    if (!planCard.classList.contains('expanded') || event.target === planCard) {
+      togglePlanCard(planCard);
+    }
   });
 
   container.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
-    const card = event.target.closest('.cmd-log');
-    if (!card || event.target !== card) return;
+
+    const commandCard = event.target.closest('.cmd-log');
+    if (commandCard && event.target === commandCard) {
+      event.preventDefault();
+      toggleCard(commandCard);
+      return;
+    }
+
+    const planCard = event.target.closest('.task-block.product-v2-plan-complete');
+    if (!planCard || event.target !== planCard) return;
     event.preventDefault();
-    toggleCard(card);
+    togglePlanCard(planCard);
   });
 
   prepareCards();
