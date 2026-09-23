@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import httpx
 
 try:
-    from .api_support import is_command_safe, needs_confirmation
+    from .api_support import _is_admin, is_command_safe, needs_confirmation
     from .controller import (
         ConfirmationRequired,
         classify_task_complexity,
@@ -57,7 +57,7 @@ try:
     )
     from .tool_registry import compact_device_passport
 except ImportError:
-    from api_support import is_command_safe, needs_confirmation
+    from api_support import _is_admin, is_command_safe, needs_confirmation
     from controller import (
         ConfirmationRequired,
         classify_task_complexity,
@@ -1072,7 +1072,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 user_plan = get_user_plan(user_id)
                 trial_used = get_plan_trial_used(user_id)
 
-                if user_plan in ("pro", "business"):
+                if _is_admin({"id": user_id}) or user_plan in ("pro", "business"):
                     task["auto_plan"] = True
                 elif trial_used:
                     logger.info("[classify] FREE TRIAL EXHAUSTED – показываем upsell, user_id=%s", user_id)

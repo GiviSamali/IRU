@@ -112,6 +112,7 @@ class RunPlanBody(BaseModel):
     original_request: str
     device_id: Optional[str] = None
     confirmed: bool = False
+    voice_source_task_id: str | None = None
 
 
 class MemoryFactDeleteBody(BaseModel):
@@ -451,7 +452,7 @@ async def api_get_task(task_id: str, request: Request):
         response_task["plan_suggestion"] = task["plan_suggestion"]
         response_task["plan_original_request"] = task.get("plan_original_request", "")
         user_plan = get_user_plan(user["id"])
-        if user_plan == "free":
+        if user_plan == "free" and not _is_admin(user):
             response_task["plan_trial_used"] = bool(get_plan_trial_used(user["id"]))
     if task.get("auto_plan"):
         response_task["auto_plan"] = True
@@ -629,8 +630,20 @@ async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
         logger.warning("[run_plan] REJECT 404: чат не найден. chat_id=%s user_id=%s", chat_id, user.get("id"))
         raise HTTPException(status_code=404, detail="Чат не найден")
 
+    source_task = None
+    if body.voice_source_task_id is not None:
+        source_task = tasks.get(body.voice_source_task_id)
+        if (not source_task or source_task.get("user_id") != user["id"]
+                or source_task.get("chat_id") != chat_id):
+            raise HTTPException(404, detail="Предложение плана не найдено")
+        if (not body.confirmed or not source_task.get("plan_suggestion")
+                or source_task.get("status") != "done" or source_task.get("plan_declined")
+                or source_task.get("voice_plan_started")
+                or source_task.get("plan_original_request") != body.original_request):
+            raise HTTPException(409, detail="Предложение плана уже закрыто или изменилось")
+
     plan = get_user_plan(user["id"])
-    if plan not in ("pro", "business"):
+    if not _is_admin(user) and plan not in ("pro", "business"):
         if not body.confirmed:
             logger.warning("[run_plan] REJECT 403: free без confirmed. chat_id=%s user_id=%s plan=%s", chat_id, user.get("id"), plan)
             raise HTTPException(status_code=403, detail="Free: требуется подтверждение")
@@ -661,9 +674,11 @@ async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
         "results": {},
         "answer": None,
         "commands": None,
-        "modes": {"pipeline": True, "autonomous": True},
+        "modes": {"pipeline": True, "autonomous": source_task is None},
         "created_at": time.time(),
     }
+    if source_task is not None:
+        source_task["voice_plan_started"] = task_id
     asyncio.create_task(run_nl_task(task_id, user["id"], body.original_request, target_ids, chat_id))
     return {"status": "ok", "task_id": task_id, "chat_id": chat_id}
 

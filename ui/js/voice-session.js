@@ -4,7 +4,7 @@
     let enabled = false, epoch = 0, phase = 'off', activeUntil = 0;
     let utterance = '', silenceTimer = null, wakeTimer = null, playback = null;
     const requests = new Set(), tasks = new Set(), finished = new Set();
-    let queue = [];
+    let queue = [], planOffer = null;
     const now = io.now || Date.now, later = io.setTimeout || setTimeout, clear = io.clearTimeout || clearTimeout;
     function setPhase(next) { phase = next; io.state(next); }
     function clearUtterance() { utterance = ''; clear(silenceTimer); silenceTimer = null; }
@@ -13,6 +13,11 @@
     function pause() { clearUtterance(); clear(wakeTimer); stopPlayback(); io.listen(false); setPhase('working'); }
     function resume(fresh = false) {
       if (!enabled || busy()) return;
+      if (planOffer) {
+        setPhase('awaiting_plan'); io.listen(true); clear(wakeTimer);
+        wakeTimer = later(() => { planOffer = null; resume(true); }, 30000);
+        return;
+      }
       if (fresh) activeUntil = now() + 10000;
       setPhase(now() < activeUntil ? 'listening' : 'idle'); io.listen(true); clear(wakeTimer);
       if (phase === 'listening') wakeTimer = later(() => {
@@ -22,13 +27,15 @@
     async function drain() {
       if (!enabled || busy() || playback) return;
       if (!queue.length) { resume(true); return; }
-      const taskId = queue.shift(), savedEpoch = epoch;
+      const item = queue.shift(), taskId = item.id, savedEpoch = epoch;
       const controller = new AbortController(); playback = controller;
+      let heard = false;
       setPhase('synthesizing'); io.listen(false);
       try {
         await io.speak(taskId, controller.signal, () => {
-          if (!controller.signal.aborted && enabled && epoch === savedEpoch) { setPhase('speaking'); io.listen(true); }
+          if (!controller.signal.aborted && enabled && epoch === savedEpoch) { heard = true; setPhase('speaking'); io.listen(true); }
         });
+        if (!controller.signal.aborted && enabled && epoch === savedEpoch) planOffer = heard ? item.plan : null;
       } catch (error) {
         if (!controller.signal.aborted && enabled && epoch === savedEpoch) io.error(error);
       } finally {
@@ -37,10 +44,10 @@
     }
     function stopSpeech() {
       if (!enabled || !['speaking', 'synthesizing'].includes(phase)) return;
-      queue = []; stopPlayback(); io.listen(false); resume(true);
+      queue = []; planOffer = null; stopPlayback(); io.listen(false); resume(true);
     }
     function disable() {
-      enabled = false; epoch++; requests.clear(); tasks.clear(); finished.clear(); queue = [];
+      enabled = false; epoch++; requests.clear(); tasks.clear(); finished.clear(); queue = []; planOffer = null;
       clearUtterance(); clear(wakeTimer); stopPlayback(); io.listen(false); setPhase('off');
     }
     function enable(pending = []) {
@@ -49,6 +56,7 @@
     }
     function beginRequest() {
       if (!enabled) return null;
+      planOffer = null; queue = [];
       const ticket = { epoch }; requests.add(ticket); pause(); return ticket;
     }
     function endRequest(ticket, taskId) {
@@ -65,7 +73,10 @@
     function taskFinished(taskId, task) {
       if (!enabled || !tasks.delete(taskId)) return;
       finished.add(taskId);
-      if (typeof task?.answer === 'string' && task.answer.trim()) queue.push(taskId);
+      if (task?.plan_suggestion || (typeof task?.answer === 'string' && task.answer.trim())) {
+        queue.push({ id: taskId, plan: task.plan_suggestion && !task.plan_trial_used
+          ? { taskId, chatId: task.chat_id, originalRequest: task.plan_original_request } : null });
+      }
       drain();
     }
     function taskLost(taskId) {
@@ -75,6 +86,19 @@
     function transcript(text, final) {
       if (!enabled || busy()) return;
       const clean = text.trim();
+      if (phase === 'awaiting_plan') {
+        if (!final) return;
+        const words = clean.toLocaleLowerCase('ru').replace(/^иру[\s,]*/u, '').replace(/[.!?,]+$/u, '').trim();
+        const accepted = /^(да|запускай|запустить|да запускай|да, запускай)$/u.test(words);
+        if (!accepted && !/^(нет|не надо|без плана|отмена)$/u.test(words)) return;
+        const offer = planOffer, savedEpoch = epoch;
+        planOffer = null; pause();
+        Promise.resolve().then(() => {
+          if (enabled && epoch === savedEpoch) return io.choosePlan(offer, accepted);
+        }).catch(error => { if (enabled && epoch === savedEpoch) io.error(error); })
+          .finally(() => { if (enabled && epoch === savedEpoch && !busy()) resume(true); });
+        return;
+      }
       if (phase === 'speaking') {
         if (/^(?:иру[\s,]*)?стоп[.!?,]*$/iu.test(clean)) stopSpeech();
         return;
@@ -99,7 +123,7 @@
         Promise.resolve(io.submit(textToSend)).then(() => {
           if (enabled && epoch === savedEpoch && !busy() && phase === 'working') resume(true);
         }).catch(error => { if (enabled && epoch === savedEpoch) { io.error(error); resume(true); } });
-      }, 1500);
+      }, 1000);
     }
     return { enable, disable, beginRequest, endRequest, requestLost, watchTask, taskFinished, taskLost,
       taskPaused, transcript, stopSpeech, get enabled() { return enabled; }, get phase() { return phase; } };

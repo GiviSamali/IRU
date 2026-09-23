@@ -849,8 +849,8 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
         }
         if (needRender) renderMessages();
       }
-      // Повторить через 800мс пока задача running
-      if (!stopped) setTimeout(poll, 800);
+      // Голос чаще проверяет готовность ответа; текстовый режим сохраняет интервал.
+      if (!stopped) setTimeout(poll, voiceTicket ? 400 : 800);
     } catch (e) {
       if (stopped) return;
       if (!poll._retries) poll._retries = 0;
@@ -867,7 +867,7 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       setTimeout(poll, 2000);
     }
   };
-  setTimeout(poll, 800);
+  setTimeout(poll, voiceTicket ? 400 : 800);
 }
 
 // ── LIVE PROGRESS ─────────────────────────────────────

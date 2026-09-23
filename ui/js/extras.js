@@ -331,17 +331,18 @@ async function declineSuggestedFact(taskId, el, msgIndex = null) {
 }
 
 // ── PLAN SUGGESTION ───────────────────────────────────────
-async function runPlan(chatId, originalRequest) {
+async function runPlan(chatId, originalRequest, voiceSourceTaskId = null) {
   const voiceTicket = window.iruVoice?.beginRequest();
   let voiceTaskId = null;
   try {
     const resp = await apiFetch(`${API}/api/run_plan/${chatId}`, {
       method: 'POST', headers: authHeaders(),
-      body: JSON.stringify({ original_request: originalRequest, confirmed: true }),
+      body: JSON.stringify({ original_request: originalRequest, confirmed: true,
+        ...(voiceSourceTaskId ? { voice_source_task_id: voiceSourceTaskId } : {}) }),
     });
     const data = await resp.json();
-    if (!resp.ok) {
-      showToast(data.detail || 'Ошибка запуска плана', true);
+    if (!resp.ok || !data.task_id) {
+      showToast(data.detail || data.error || 'Ошибка запуска плана', true);
       return;
     }
     if (data.task_id) {
@@ -359,9 +360,22 @@ async function runPlan(chatId, originalRequest) {
   } finally { window.iruVoice?.endRequest(voiceTicket, voiceTaskId); }
 }
 
+async function chooseVoicePlan(offer, accepted) {
+  if (!offer || state.currentChatId !== offer.chatId) return;
+  const msg = state.messages.find(message => message._taskId === offer.taskId);
+  if (!msg || msg.planDismissed || msg.planDeclined || msg.hideAfterPlanChoice) return;
+  msg.hideAfterPlanChoice = true;
+  if (accepted) msg.planDismissed = true;
+  else msg.planDeclined = true;
+  renderMessages();
+  if (accepted) await runPlan(offer.chatId, offer.originalRequest, offer.taskId);
+  else await declinePlanAndContinue(offer.taskId, offer.originalRequest);
+}
+
 function acceptPlanSuggestion(el) {
   const chatId = parseInt(el.dataset.chatId, 10);
   const mi = parseInt(el.dataset.index || el.id.replace('ps-', ''), 10);
+  if (state.messages[mi]?.hideAfterPlanChoice) return;
   const originalRequest = state.messages[mi]?.planOriginalRequest || el.dataset.origReq || '';
   if (state.messages[mi]) {
     state.messages[mi].planDismissed = true;
@@ -373,6 +387,7 @@ function acceptPlanSuggestion(el) {
 
 function declinePlanSuggestion(el) {
   const mi = parseInt(el.dataset.index || el.id.replace('ps-', ''), 10);
+  if (state.messages[mi]?.hideAfterPlanChoice) return;
   const originalRequest = state.messages[mi]?.planOriginalRequest || el.dataset.origReq || '';
   if (state.messages[mi]) {
     state.messages[mi].planDeclined = true;
@@ -384,24 +399,27 @@ function declinePlanSuggestion(el) {
 }
 
 async function declinePlanAndContinue(taskId, originalRequest) {
-  if (!taskId) {
-    await sendMessageDirect(originalRequest, { plan_declined: true });
-    return;
-  }
+  const voiceTicket = window.iruVoice?.beginRequest();
   try {
-    const resp = await apiFetch(`${API}/api/tasks/${taskId}/decline_plan`, {
-      method: 'POST',
-      headers: authHeaders(),
-    });
-    const data = await resp.json();
-    if (!resp.ok || data.status !== 'ok') {
-      throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
+    if (!taskId) {
+      await sendMessageDirect(originalRequest, { plan_declined: true });
+      return;
     }
-  } catch (e) {
-    showToast(e.message || 'Ошибка отказа от плана', true);
-    return;
-  }
-  await sendMessageDirect(originalRequest, { plan_declined: true });
+    try {
+      const resp = await apiFetch(`${API}/api/tasks/${taskId}/decline_plan`, {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.status !== 'ok') {
+        throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
+      }
+    } catch (e) {
+      showToast(e.message || 'Ошибка отказа от плана', true);
+      return;
+    }
+    await sendMessageDirect(originalRequest, { plan_declined: true });
+  } finally { window.iruVoice?.endRequest(voiceTicket, null); }
 }
 
 async function sendMessageDirect(text, extraModes = {}) {

@@ -3,11 +3,13 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 try:
     from .. import voice
-    from ..api_support import check_rate_limit, get_current_user
+    from ..api_support import _is_admin, check_rate_limit, get_current_user
+    from ..database import get_user_plan, get_plan_trial_used
     from ..runtime_state import tasks
 except ImportError:
     import voice
-    from api_support import check_rate_limit, get_current_user
+    from api_support import _is_admin, check_rate_limit, get_current_user
+    from database import get_user_plan, get_plan_trial_used
     from runtime_state import tasks
 
 router = APIRouter(prefix="/api/voice")
@@ -30,7 +32,11 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
         raise HTTPException(404, "Задача не найдена")
     if task.get("status") not in TERMINAL_STATUSES:
         raise HTTPException(409, "Задача ещё не завершена")
-    parts = voice.answer_parts(task.get("answer") or "", keep_inline=True)
+    plan_offer = bool(task.get("plan_suggestion") and not task.get("plan_declined") and not task.get("voice_plan_started"))
+    offer_text = "Задача требует нескольких шагов. Предлагаю режим План: составлю план, выполню его и доложу результат. Запустить?"
+    if plan_offer and not _is_admin(user) and get_user_plan(user["id"]) == "free" and get_plan_trial_used(user["id"]):
+        offer_text = "Пробный запуск режима План уже использован. Для этого режима нужен тариф Про."
+    parts = voice.answer_parts(offer_text if plan_offer else task.get("answer") or "", keep_inline=True)
     if not parts:
         return Response(status_code=204)
     if not voice.speech_configured():
@@ -40,7 +46,8 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
         raise HTTPException(429, "Озвучка занята. Попробуйте позже")
     _active_users.add(user_id)
     try:
-        parts = await voice.spoken_parts(task)
+        if not plan_offer:
+            parts = await voice.spoken_parts(task)
         if part >= len(parts):
             raise HTTPException(404, "Часть ответа не найдена")
         audio = await voice.synthesize(parts[part])
