@@ -36,6 +36,17 @@ PLAN never implicitly enables autonomous command execution. A confirmation
 waits in the existing worker; approval resumes exactly that call and the rest of
 the task, while deny/cancel stops it. No new plan is generated. This continuation
 is in memory and is not resumable across a server restart.
+An orphaned PLAN confirmation returns HTTP 409 instead of falling back to the
+single-command handler that says "Выполнено.". Approval must keep the same task,
+all pending steps, and prior context alive until the actual pipeline completes.
+
+Invalid, empty or truncated planner responses fail before execution. Individual
+invalid steps cannot be silently discarded. Workers and the final summarizer
+receive the original request, not just the planner's shortened goal. The planner
+is instructed to cover each requested deliverable, usually giving separate
+documents separate steps and verifying them within those steps. This is prompt
+guidance, not a deterministic semantic proof of full goal coverage; final content
+grounding still uses the existing answer/evidence protocol and auditor.
 
 The existing pipeline policy for continuing recoverable failed steps and final
 artifact recovery is retained. A global wall-clock deadline, persistent execution

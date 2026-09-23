@@ -508,6 +508,10 @@ async def api_confirm_task(task_id: str, request: Request):
         decision.set_result(True)
         return {"status": "ok"}
 
+    if (task.get("modes") or {}).get("pipeline"):
+        # Never use the single-command completion path for an orphaned PLAN.
+        raise HTTPException(409, detail="Продолжение PLAN недоступно. Запустите исходную задачу заново.")
+
     confirm_data = task.get("confirm_data", {})
     short_did = confirm_data.get("device_id", "")
     params = confirm_data.get("params", {})

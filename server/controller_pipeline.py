@@ -247,9 +247,11 @@ def normalize_pipeline_plan(raw_plan, fallback_goal: str, default_device_id: str
         steps_raw = raw_plan.get("steps") or []
     elif isinstance(raw_plan, list):
         steps_raw = raw_plan
+    else:
+        raise ValueError("PLAN must contain a complete JSON plan")
 
-    if not isinstance(steps_raw, list):
-        raise ValueError("PLAN steps must be a list")
+    if not isinstance(steps_raw, list) or not steps_raw:
+        raise ValueError("PLAN steps must be a non-empty list")
     if len(steps_raw) > PIPELINE_MAX_STEPS:
         raise ValueError("PLAN exceeds maximum of 8 steps; simplify the decomposition")
     steps = []
@@ -282,10 +284,10 @@ def normalize_pipeline_plan(raw_plan, fallback_goal: str, default_device_id: str
             ).strip()
             step_device_id = str(item.get("device_id") or default_device_id).strip() or default_device_id
         else:
-            continue
+            raise ValueError(f"PLAN step {idx + 1} is invalid; refusing to discard it")
 
         if not title:
-            continue
+            raise ValueError(f"PLAN step {idx + 1} is empty; refusing to discard it")
         if not instruction:
             instruction = title
 
@@ -296,14 +298,6 @@ def normalize_pipeline_plan(raw_plan, fallback_goal: str, default_device_id: str
             "device_id": step_device_id,
             **({"completion_check": item["completion_check"]} if isinstance(item, dict) and isinstance(item.get("completion_check"), dict) else {}),
         })
-
-    if not steps:
-        steps = [{
-            "title": goal[:160],
-            "instruction": fallback_goal.strip() or goal,
-            "success_criteria": "",
-            "device_id": default_device_id,
-        }]
 
     return {
         "goal": goal[:200],
@@ -326,10 +320,16 @@ def pipeline_plan_prompt(shared: dict, user_message: str) -> str:
    только ради количества. Дешёвую проверку включай в задачу создания результата.
 6. Для research → pptx → docx → xlsx → website исследуй источник один раз, затем используй его материал
    во всех артефактах. Не повторяй исследование в каждом шаге.
+7. Несколько независимых итоговых документов обычно требуют отдельных шагов: исследование,
+   презентация, Word, Excel. Не объединяй всю содержательную работу в один шаг «создать ВСЕ файлы»
+   между двумя шагами подготовки/проверки. Каждый документ проверяй в его собственном шаге.
+8. Перед возвратом JSON сверь steps с ПОЛНЫМ исходным запросом: каждый запрошенный результат,
+   источник данных и место сохранения должны быть покрыты. Проверка среды не заменяет создание.
+   Один шаг допустим, если он действительно выполняет весь запрос в пределах обычной задачи ИРУ.
 
-СНАЧАЛА уясни обстановку: что именно просит пользователь, на каких устройствах это лучше делать,
+При составлении плана учти уже известную обстановку: что просит пользователь, на каких устройствах это лучше делать,
 какие ограничения видны из профиля устройства и памяти, и какие промежуточные результаты вообще нужны.
-Только после этого строй план шагов.
+Не выделяй отдельный шаг диагностики среды без конкретной необходимости.
 
 Верни ТОЛЬКО JSON без Markdown и без пояснений в таком формате:
 {{
@@ -510,6 +510,9 @@ def pipeline_summary_prompt() -> str:
 1. Кратко скажи, что сделано.
 2. Если выполнение остановилось — честно укажи на каком шаге и почему.
 3. Если есть полезный итоговый артефакт или ссылка на скачивание — упомяни это явно.
+   Сверь результат с original_request, а не только с кратким goal и названиями шагов.
+   Проверка среды/библиотек не доказывает создание документов. По каждому запрошенному результату
+   нужны относящиеся к нему tool evidence; если их нет, явно перечисли, что не выполнено.
 4. Пиши только чистым текстом без Markdown.
 5. Если стоит запомнить важный факт о конфигурации или предпочтении пользователя — можешь в САМОМ КОНЦЕ добавить маркер:
 [[SUGGEST_REMEMBER: текст факта | категория]]
@@ -1822,11 +1825,23 @@ async def process_pipeline_subagents(
             phase="pipeline.plan",
         )
         planner_text = (planner_data["choices"][0]["message"].get("content") or "").strip()
-        normalized_plan = normalize_pipeline_plan(
-            extract_json_payload(planner_text),
-            fallback_goal=user_message,
-            default_device_id=device_id,
-        )
+        try:
+            if planner_data["choices"][0].get("finish_reason") == "length":
+                raise ValueError("PLAN response was truncated")
+            normalized_plan = normalize_pipeline_plan(
+                extract_json_payload(planner_text),
+                fallback_goal=user_message,
+                default_device_id=device_id,
+            )
+        except ValueError as exc:
+            # No task or worker may be created from a partially accepted plan.
+            return {
+                "answer": f"Не удалось получить полный корректный план. Выполнение не начато: {exc}",
+                "commands": [],
+                "tasks": [],
+                "task_receipt": {"task_status": "failed", "terminal_reason": "invalid_plan",
+                                 "failure_reason": str(exc)},
+            }
         db_task_id = db.create_task(
             user_id=user_id,
             chat_id=chat_id,
@@ -1874,7 +1889,7 @@ async def process_pipeline_subagents(
                     cfg=cfg,
                     model=model,
                     shared=worker_shared,
-                    overall_goal=normalized_plan["goal"],
+                    overall_goal=user_message,
                     step=step,
                     completed_steps=step_results,
                     chat_history=chat_history,
@@ -1988,6 +2003,12 @@ async def process_pipeline_subagents(
             if not pipeline_failed:
                 failure_reason = ""
 
+        if not pipeline_cancelled and len(step_results) != len(normalized_plan["steps"]):
+            pipeline_failed = True
+            failure_reason = failure_reason or "План выполнен не полностью: остались невыполненные шаги."
+            for pending_idx in range(len(step_results), len(normalized_plan["steps"])):
+                db.update_step(db_task_id, pending_idx, "blocked", summary="Предыдущий шаг не завершён.")
+
         task_status = "cancelled" if pipeline_cancelled else ("failed" if pipeline_failed else (
             "completed_with_recovery"
             if any(step.get("status") == "recovered" for step in step_results)
@@ -2016,6 +2037,7 @@ async def process_pipeline_subagents(
             }
 
         summary_payload = {
+            "original_request": user_message,
             "goal": normalized_plan["goal"],
             "pipeline_status": task_status,
             "failure_reason": failure_reason,
