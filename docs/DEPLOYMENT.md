@@ -34,7 +34,7 @@ journalctl -u iru -n 100 --no-pager
 
 ## Web search configuration
 
-`web_search` uses Yandex Cloud Search API v2 in both pipeline and non-pipeline.
+`web_search` uses Yandex Cloud Search API v2 in pipeline, non-pipeline, and chat without a connected device.
 Set `YANDEX_SEARCH_API_KEY` and `YANDEX_FOLDER_ID` in the environment of the
 server process. The search key is separate from the SpeechKit `YANDEX_API_KEY`.
 The legacy `tavily_api_key` setting in `llm_config.json` is no longer used;

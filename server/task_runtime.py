@@ -1262,8 +1262,8 @@ async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id:
         answer = result.get("answer", "")
         task["status"] = "done"
         task["answer"] = answer
-        task["commands"] = []
-        add_message(chat_id, "assistant", answer)
+        task["commands"] = result.get("commands", [])
+        add_message(chat_id, "assistant", answer, task["commands"])
     except Exception as exc:
         task["status"] = "error"
         task["answer"] = f"Ошибка: {str(exc)}"
