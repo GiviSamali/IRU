@@ -217,7 +217,7 @@ def _notes_for(name: str) -> str:
     if name == "get_file_link":
         return "internal download link tool; callable by controller loop but hidden from system.list_tools"
     if name == "web_search":
-        return "implemented through configured Tavily integration"
+        return "implemented through configured Yandex Search API integration"
     if name in {"remember_fact", "forget_fact"}:
         return "internal memory mutation tool guarded by trust checks"
     return ""

@@ -26,6 +26,7 @@ try:
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
+    from .web_search import run_web_search
     from .memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from .memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
@@ -81,6 +82,7 @@ except ImportError:
         rewrite_python_command,
         validate_toolchain_fact_against_receipt,
     )
+    from web_search import run_web_search
     from memory_tools import MEMORY_TOOL_NAMES, run_memory_tool  # type: ignore
     from memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
@@ -1758,63 +1760,15 @@ async def run_pipeline_worker(
 
             elif fn_name == "web_search":
                 set_current_step(poll_task_id, f"Ищу данные для шага: {step.get('title', '')[:50]}")
-                tavily_key = cfg.get("tavily_api_key")
-                if not tavily_key:
-                    tool_result = {"error": "tavily_api_key не настроен в llm_config.json на сервере"}
-                else:
-                    query = fn_args.get("query", "").strip()
-                    max_results = min(int(fn_args.get("max_results", 5) or 5), 10)
-                    if not query:
-                        tool_result = {"error": "Пустой запрос"}
-                    else:
-                        try:
-                            tavily_data = None
-                            async with httpx.AsyncClient(timeout=20.0) as tavily_client:
-                                for tavily_attempt in range(2):
-                                    try:
-                                        tavily_resp = await tavily_client.post(
-                                            "https://api.tavily.com/search",
-                                            json={
-                                                "api_key": tavily_key,
-                                                "query": query,
-                                                "max_results": max_results,
-                                                "search_depth": "basic",
-                                                "include_answer": True,
-                                            },
-                                        )
-                                        tavily_resp.raise_for_status()
-                                        tavily_data = tavily_resp.json()
-                                        break
-                                    except (httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as tavily_exc:
-                                        is_5xx = isinstance(tavily_exc, httpx.HTTPStatusError) and tavily_exc.response.status_code >= 500
-                                        is_net = isinstance(tavily_exc, (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout))
-                                        if (is_5xx or is_net) and tavily_attempt == 0:
-                                            print(f"[pipeline/worker] tavily retry: {type(tavily_exc).__name__}")
-                                            await asyncio.sleep(2)
-                                            continue
-                                        raise
-                            if tavily_data is None:
-                                tool_result = {"error": "Поиск временно недоступен. Попробуйте позже."}
-                            else:
-                                tool_result = {
-                                    "answer": tavily_data.get("answer"),
-                                    "results": [
-                                        {
-                                            "title": result.get("title"),
-                                            "url": result.get("url"),
-                                            "content": (result.get("content") or "")[:800],
-                                        }
-                                        for result in (tavily_data.get("results") or [])[:max_results]
-                                    ],
-                                }
-                        except Exception as exc:
-                            tool_result = {"error": f"Поиск временно недоступен: {exc}"}
+                query = fn_args.get('query', '').strip()
+                max_results = min(int(fn_args.get('max_results', 5) or 5), 10)
+                tool_result = await run_web_search(query, max_results)
 
                 append_step_command(
                     fn_name,
                     f"[web_search] {fn_args.get('query', '')[:80]}",
                     target_device,
-                    tool_result if not isinstance(tool_result, dict) or "error" in tool_result else {"ok": True},
+                    tool_result,
                 )
 
             elif fn_name == "remember_fact":

@@ -32,6 +32,45 @@ systemctl restart iru
 journalctl -u iru -n 100 --no-pager
 ```
 
+## Web search configuration
+
+`web_search` uses Yandex Cloud Search API v2 in both pipeline and non-pipeline.
+Set `YANDEX_SEARCH_API_KEY` and `YANDEX_FOLDER_ID` in the environment of the
+server process. The search key is separate from the SpeechKit `YANDEX_API_KEY`.
+The legacy `tavily_api_key` setting in `llm_config.json` is no longer used;
+this section supersedes the older search-key note in CONTRIBUTING.
+The folder variable is shared; it must identify the folder enabled for Search API.
+Do not commit keys or put them in client JavaScript.
+
+For the systemd service, run `sudo systemctl edit iru` and add placeholders
+replaced with the actual values on the server:
+
+```ini
+[Service]
+Environment="YANDEX_SEARCH_API_KEY=<search-api-key>"
+Environment="YANDEX_FOLDER_ID=<folder-id>"
+```
+
+Then run `sudo systemctl daemon-reload` and `sudo systemctl restart iru`.
+Existing unrelated environment entries must be preserved.
+
+The adapter calls the synchronous
+[Yandex Search API v2 endpoint](https://aistudio.yandex.ru/ru/docs/search-api/api-ref/WebSearch/search)
+with `SEARCH_TYPE_RU` and `FORMAT_XML`. It decodes Base64 `rawData` and extracts
+up to 10 results, preserving `answer: null` and `results: [{title, url, content}]`.
+Snippets are limited to 800 characters. XML error 15 is an empty result set;
+other provider errors return the existing `error` contract. HTTP 401/403/429
+are not retried; network failures and 5xx are retried once after two seconds.
+Provider error bodies and credentials are not returned to the agent.
+
+After deployment, ask for a web search in normal mode and in a plan. Verify
+that the `web_search` tool succeeds and that the answer cites returned URLs.
+Unit/integration tests use mocked HTTP responses, not production credentials:
+
+```bash
+python -m pytest -q tests/test_web_search.py tests/test_tool_contracts.py
+```
+
 ## Local server smoke check
 
 Bash:

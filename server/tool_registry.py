@@ -284,7 +284,7 @@ TOOL_METADATA = {
         "category": "web",
         "tool_type": "typed",
         "tool_label": "Web search",
-        "purpose": "Search the web through the configured Tavily integration when fresh external facts are required",
+        "purpose": "Search the web through the configured Yandex Search API integration when fresh external facts are required",
         "when_to_use": ["fresh current information is required", "news or current documentation is required"],
         "returns": "compact web search results",
         "danger": "network",
