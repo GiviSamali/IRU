@@ -94,8 +94,50 @@ function bindStaticEvents() {
   });
 }
 
+function bindProductV2ExecutionCards() {
+  const container = document.getElementById('chatMessages');
+  if (!container || container.dataset.productV2ExecutionBound === '1') return;
+  container.dataset.productV2ExecutionBound = '1';
+
+  const prepareCards = () => {
+    container.querySelectorAll('.cmd-log').forEach((card) => {
+      if (!card.hasAttribute('tabindex')) card.tabIndex = 0;
+      if (!card.hasAttribute('role')) card.setAttribute('role', 'button');
+      if (!card.hasAttribute('aria-expanded')) card.setAttribute('aria-expanded', 'false');
+      if (!card.hasAttribute('title')) card.setAttribute('title', 'Показать ход выполнения');
+    });
+  };
+
+  const toggleCard = (card) => {
+    const expanded = !card.classList.contains('expanded');
+    card.classList.toggle('expanded', expanded);
+    card.setAttribute('aria-expanded', String(expanded));
+    card.setAttribute('title', expanded ? 'Скрыть ход выполнения' : 'Показать ход выполнения');
+  };
+
+  container.addEventListener('click', (event) => {
+    const card = event.target.closest('.cmd-log');
+    if (!card || !container.contains(card)) return;
+    if (event.target.closest('[data-action]')) return;
+    toggleCard(card);
+  });
+
+  container.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const card = event.target.closest('.cmd-log');
+    if (!card || event.target !== card) return;
+    event.preventDefault();
+    toggleCard(card);
+  });
+
+  prepareCards();
+  const observer = new MutationObserver(prepareCards);
+  observer.observe(container, { childList: true, subtree: true });
+}
+
 function bootstrapCombatUI() {
   bindStaticEvents();
+  bindProductV2ExecutionCards();
   renderInputModeBtn();
   updateCharCount();
   tryAutoLogin();
