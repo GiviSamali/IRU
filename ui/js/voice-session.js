@@ -86,6 +86,12 @@
     function transcript(text, final) {
       if (!enabled || busy()) return;
       const clean = text.trim();
+      if (final && ['idle', 'listening', 'speaking', 'awaiting_plan'].includes(phase)
+          && /^(?:иру[\s,]*)?усни[.!?,]*$/iu.test(clean)) {
+        clearUtterance(); clear(wakeTimer); queue = []; planOffer = null;
+        activeUntil = 0; stopPlayback(); io.listen(false); resume();
+        return;
+      }
       if (phase === 'awaiting_plan') {
         if (!final) return;
         const words = clean.toLocaleLowerCase('ru').replace(/^иру[\s,]*/u, '').replace(/[.!?,]+$/u, '').trim();
