@@ -1,0 +1,131 @@
+/* IRU Product UI v2 — final live tuning.
+   Wider chat content and compact completed PLAN cards. */
+
+/* ── Wider conversation surface ───────────────────────────── */
+.chat-messages > .msg,
+.chat-welcome,
+.msg {
+  width: calc(100% - 24px) !important;
+  max-width: none !important;
+}
+
+.msg.assistant {
+  align-items: center;
+}
+
+.msg.assistant .msg-role,
+.msg.assistant:not(.msg-thinking) .msg-body,
+.msg-thinking .msg-body {
+  width: calc(100% - 48px) !important;
+  max-width: none !important;
+}
+
+.msg.assistant .msg-role {
+  align-self: center;
+}
+
+.msg.user {
+  align-items: flex-end;
+}
+
+/* Keep short user messages compact, but allow long requests to use more space. */
+.msg.user .msg-body {
+  max-width: min(86%, 1180px) !important;
+}
+
+/* Composer follows the same wider working area. */
+.chat-input-wrap,
+.attachments-bar {
+  width: calc(100% - 24px) !important;
+  max-width: none !important;
+}
+
+/* ── Completed PLAN: compact green check row by default ───── */
+.task-block.product-v2-plan-complete:not(.expanded) {
+  min-height: 50px;
+  margin-top: 12px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-top: 1px solid rgba(157, 174, 192, 0.14);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.task-block.product-v2-plan-complete:not(.expanded):hover {
+  background: rgba(255,255,255,.012);
+}
+
+.task-block.product-v2-plan-complete:not(.expanded)::before {
+  content: '✓';
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  flex: 0 0 22px;
+  border: 1px solid rgba(84, 207, 149, 0.24);
+  border-radius: 50%;
+  background: rgba(84, 207, 149, 0.09);
+  color: #72dca8;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.task-block.product-v2-plan-complete:not(.expanded)::after {
+  content: 'План выполнен  ›';
+  color: #cbd5dd;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.task-block.product-v2-plan-complete:not(.expanded) > * {
+  display: none !important;
+}
+
+.task-block.product-v2-plan-complete.expanded {
+  cursor: default;
+}
+
+.task-block.product-v2-plan-complete.expanded::before {
+  content: 'Режим ПЛАН · завершено';
+  color: #75cfa2;
+}
+
+.task-block.product-v2-plan-complete:focus-visible {
+  outline: 2px solid rgba(73, 191, 215, 0.34);
+  outline-offset: 2px;
+}
+
+@media (max-width: 768px) {
+  .chat-messages > .msg,
+  .chat-welcome,
+  .msg {
+    width: calc(100% - 12px) !important;
+  }
+
+  .msg.assistant .msg-role,
+  .msg.assistant:not(.msg-thinking) .msg-body,
+  .msg-thinking .msg-body {
+    width: calc(100% - 8px) !important;
+  }
+
+  .msg.user .msg-body {
+    max-width: 92% !important;
+  }
+
+  .chat-input-wrap,
+  .attachments-bar {
+    width: 100% !important;
+  }
+}

@@ -1,0 +1,205 @@
+/* IRU Product UI v2 — tuning pass after first live review.
+   This layer keeps all existing controls/functionality, but reduces header noise,
+   widens the conversation surface and collapses technical logs by default. */
+
+/* ── Header: keep functionality, reduce visual noise ─────────────── */
+@media (min-width: 981px) {
+  .btn-header-link {
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .btn-header-link span {
+    display: none;
+  }
+
+  .memory-badge {
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  #memoryBadgeText {
+    display: none;
+  }
+
+  .usage-badge {
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+    justify-content: center;
+    overflow: visible;
+  }
+
+  #usageBadgeText {
+    font-size: 0;
+  }
+
+  #usageBadgeText::before {
+    content: '∑';
+    font-size: 13px;
+    font-weight: 700;
+    color: #aebac5;
+  }
+
+  /* Detailed activation/runtime badges belong in Passport, not the primary nav. */
+  .device-compact-status {
+    display: none !important;
+  }
+}
+
+/* ── Conversation width: remove the oversized left/right gutters ─── */
+.chat-messages > .msg,
+.chat-welcome,
+.msg {
+  width: min(1280px, calc(100% - 40px));
+}
+
+.msg.assistant:not(.msg-thinking) .msg-body,
+.msg-thinking .msg-body {
+  width: min(920px, 94%);
+}
+
+.chat-input-wrap,
+.attachments-bar {
+  width: min(1280px, 100%);
+}
+
+/* ── Technical execution: compact summary, expand on demand ──────── */
+.cmd-log {
+  position: relative;
+  min-height: 48px;
+  margin-top: 14px;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-top: 1px solid rgba(157, 174, 192, 0.14);
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s ease, border-color .15s ease;
+}
+
+.cmd-log:hover {
+  background: rgba(255,255,255,.012);
+}
+
+.cmd-log::before {
+  content: '›  Ход выполнения';
+  display: block;
+  margin: 0;
+  color: #c9d4dd;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.cmd-log::after {
+  content: '●  Завершено';
+  margin-left: auto;
+  color: #67d8a1;
+  font-family: var(--font);
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.cmd-log:has(.cmd-status.err)::after {
+  content: '●  Ошибка';
+  color: #f39a9a;
+}
+
+.cmd-log:has(.cmd-status.stopped)::after {
+  content: '●  Остановлено';
+  color: #eab76d;
+}
+
+.cmd-log:not(.expanded) > * {
+  display: none !important;
+}
+
+.cmd-log.expanded {
+  display: block;
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid rgba(157, 174, 192, 0.10);
+  border-radius: 13px;
+  background: #0b1116;
+  user-select: text;
+}
+
+.cmd-log.expanded::before {
+  content: '⌄  Ход выполнения';
+  margin-bottom: 10px;
+}
+
+.cmd-log.expanded::after {
+  position: absolute;
+  top: 13px;
+  right: 12px;
+}
+
+.cmd-log.expanded > * {
+  display: initial;
+}
+
+.cmd-log.expanded > .cmd-entry,
+.cmd-log.expanded > .cmd-group {
+  display: block;
+}
+
+.cmd-log:focus-visible {
+  outline: 2px solid rgba(73, 191, 215, 0.34);
+  outline-offset: 2px;
+}
+
+/* One-answer tool logs should not create a giant empty panel. */
+.cmd-log .cmd-entry,
+.cmd-log .cmd-group {
+  margin: 0;
+}
+
+/* Keep secondary metadata quiet. */
+.tool-usage-line {
+  margin-top: 10px;
+  color: #657484;
+  font-size: 10px;
+}
+
+/* ── Responsive adjustments ──────────────────────────────────────── */
+@media (max-width: 1280px) {
+  .chat-messages > .msg,
+  .chat-welcome,
+  .msg {
+    width: calc(100% - 32px);
+  }
+
+  .msg.assistant:not(.msg-thinking) .msg-body,
+  .msg-thinking .msg-body {
+    width: min(900px, 96%);
+  }
+}
+
+@media (max-width: 768px) {
+  .chat-messages > .msg,
+  .chat-welcome,
+  .msg {
+    width: calc(100% - 20px);
+  }
+
+  .cmd-log {
+    min-height: 46px;
+  }
+
+  .cmd-log.expanded {
+    padding: 10px;
+  }
+}
