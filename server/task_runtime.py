@@ -811,7 +811,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         }
         chat_history = get_messages(chat_id, limit=50)
         device_profile = get_device_profile(_short_did(device_id))
-        autonomous_flag = bool(task_modes.get("autonomous"))
+        autonomous_flag = bool(task_modes.get("autonomous")) and not task_modes.get("pipeline")
         all_devices_info.setdefault(_short_did(device_id), {
             "info": device_info,
             "ws": dev.get("ws"),
@@ -833,13 +833,28 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             target_dev = devices.get(target_dk)
             if not target_dev or target_dev.get("user_id") != user_id:
                 raise RuntimeError(f"Нет доступа к устройству '{target_device_id}'")
-            return await send_command_to_agent(
-                target_dk,
-                action,
-                params,
-                user_id=user_id,
-                skip_confirm=autonomous_flag,
-            )
+            try:
+                return await send_command_to_agent(target_dk, action, params, user_id=user_id,
+                                                   skip_confirm=autonomous_flag)
+            except RuntimeError as exc:
+                if not task_modes.get("pipeline") or "CONFIRM_REQUIRED" not in str(exc):
+                    raise
+                # Keep this bounded worker alive; confirmation resumes the pending call.
+                decision = asyncio.get_running_loop().create_future()
+                task["_pipeline_confirm_future"] = decision
+                task["confirm_data"] = {"command": params.get("command", ""), "device_id": target_device_id,
+                                        "params": params, "chat_id": chat_id, "user_id": user_id}
+                task["status"] = "confirm"
+                try:
+                    accepted = await decision
+                finally:
+                    task.pop("_pipeline_confirm_future", None)
+                    task.pop("confirm_data", None)
+                if not accepted or is_task_cancel_requested(task_id):
+                    raise RuntimeError("Task cancellation requested during confirmation")
+                task["status"] = "running"
+                return await send_command_to_agent(target_dk, action, params, user_id=user_id, skip_confirm=True)
+
 
         def file_link(dev_id: str, path: str) -> str:
             return get_file_link_fn(dev_id, path, user_id=user_id)

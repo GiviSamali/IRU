@@ -470,6 +470,9 @@ async def api_cancel_task(task_id: str, request: Request):
     if previous_status in {"done", "error", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}:
         return {"status": "ok", "task_status": previous_status, "cancel_requested": bool(task.get("cancel_requested"))}
     if previous_status == "confirm":
+        decision = task.get("_pipeline_confirm_future")
+        if decision is not None and not decision.done():
+            decision.set_result(False)
         updated = mark_task_cancelled(task_id, answer="Остановлено пользователем.", commands=task.get("commands", []))
         return {
             "status": "ok",
@@ -496,6 +499,14 @@ async def api_confirm_task(task_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Задача не найдена")
     if task["status"] != "confirm":
         raise HTTPException(status_code=400, detail="Задача не ожидает подтверждения")
+
+    decision = task.get("_pipeline_confirm_future")
+    if decision is not None:
+        if decision.done():
+            raise HTTPException(409, detail="Подтверждение уже обработано")
+        task["status"] = "running"
+        decision.set_result(True)
+        return {"status": "ok"}
 
     confirm_data = task.get("confirm_data", {})
     short_did = confirm_data.get("device_id", "")
@@ -600,6 +611,13 @@ async def api_deny_task(task_id: str, request: Request):
     if task["status"] != "confirm":
         raise HTTPException(status_code=400, detail="Задача не ожидает подтверждения")
 
+    decision = task.get("_pipeline_confirm_future")
+    if decision is not None:
+        request_task_cancel(task_id, user["id"])
+        if not decision.done():
+            decision.set_result(False)
+        return {"status": "ok"}
+
     chat_id = task.get("confirm_data", {}).get("chat_id", task.get("chat_id"))
     task["status"] = "done"
     task["answer"] = "Команда отменена пользователем."
@@ -674,7 +692,7 @@ async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
         "results": {},
         "answer": None,
         "commands": None,
-        "modes": {"pipeline": True, "autonomous": source_task is None},
+        "modes": {"pipeline": True, "autonomous": False},
         "created_at": time.time(),
     }
     if source_task is not None:

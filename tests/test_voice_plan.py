@@ -26,7 +26,7 @@ def test_admin_plan_bypasses_exhausted_trial(client, monkeypatch):
     response = client.post(f"/api/run_plan/{chat}", headers=headers,
                            json={"original_request": "Отчёт", "confirmed": True})
     assert response.status_code == 200
-    assert tasks[response.json()["task_id"]]["modes"]["autonomous"] is True
+    assert tasks[response.json()["task_id"]]["modes"]["autonomous"] is False
 
 
 def test_name_admin_does_not_grant_admin_plan_access(client, monkeypatch):

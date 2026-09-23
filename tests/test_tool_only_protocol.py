@@ -214,7 +214,8 @@ def test_pipeline_worker_write_then_execute_ok_fast_exits_before_window_find():
             "current_datetime_msk": "2026-06-11 12:00:00 MSK",
         },
         overall_goal="create and open html",
-        step={"id": "s1", "title": "Create and open", "instruction": "Create HTML and open it"},
+        step={"id": "s1", "title": "Create and open", "instruction": "Create HTML and open it",
+              "completion_check": {"tool": "execute_cmd", "stdout_contains": "OK: open_requested C:/Temp/page.html"}},
         completed_steps=[],
         chat_history=[],
         send_command_fn=_send,
@@ -1257,7 +1258,7 @@ def test_pipeline_final_raw_summary_rejected_then_answer_text(monkeypatch):
 
 
 def test_pipeline_worker_max_iterations_runs_answer_only_repair(monkeypatch):
-    monkeypatch.setattr(controller_pipeline, "PIPELINE_WORKER_MAX_ITERATIONS", 1)
+    monkeypatch.setattr(controller_pipeline, "PIPELINE_WORKER_MAX_ITERATIONS", 2)
     final_text = "pipeline final ok"
     responses = [
         _message(json.dumps({

@@ -114,7 +114,7 @@ def _run_worker_case(responses, send_command_fn=None, step=None):
     return asyncio.run(_run())
 
 
-def test_pipeline_worker_does_not_stop_on_many_execute_commands():
+def test_pipeline_worker_stops_many_commands_without_new_evidence():
     n = 20
     calls = [_execute_call(f"call-{idx}", f"whoami {idx}") for idx in range(n + 1)]
     executed = []
@@ -141,8 +141,9 @@ def test_pipeline_worker_does_not_stop_on_many_execute_commands():
         send_command_fn=_send_command_fn,
     )
 
-    assert result["status"] == "ok"
-    assert len(executed) == n + 1
+    assert result["status"] == "error"
+    assert result["terminal_reason"] == "no_progress"
+    assert len(executed) < 12
     assert "budget_guard" not in [c.get("action") for c in result.get("commands", [])]
 
 

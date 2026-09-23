@@ -490,7 +490,7 @@ def test_pipeline_env_discovery_sequence_not_blocked():
 
     async def _send(device_id, action, params):
         executed.append(params["command"])
-        return {"returncode": 0, "stdout": "ok", "stderr": ""}
+        return {"returncode": 0, "stdout": "observation: " + params["command"], "stderr": ""}
 
     result = _run_worker(
         responses=[

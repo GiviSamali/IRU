@@ -553,7 +553,7 @@ function renderMessages() {
             <button class="plan-suggest-accept" data-action="accept-plan-suggestion" data-index="${mi}">Запустить план</button>
             <button class="plan-suggest-decline" data-action="decline-plan-suggestion" data-index="${mi}">Без плана</button>
           </div>
-          <div class="plan-suggest-warning" style="font-size:11px;color:#888;margin-top:6px;">Команды плана будут выполнены без отдельного подтверждения. Нажимайте, только если доверяете задаче.</div>
+          <div class="plan-suggest-warning" style="font-size:11px;color:#888;margin-top:6px;">План выполнит задачу по шагам. Команды, требующие разрешения, нужно подтвердить отдельно.</div>
         </div>`;
       }
     }
