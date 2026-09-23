@@ -39,13 +39,17 @@ def test_only_main_answer_reaches_provider(client, monkeypatch):
     headers = setup_task(answer="Готово. ```powershell\nRemove-Item secret\n``` [Файл](/api/download/secret)")
     monkeypatch.setenv("YANDEX_API_KEY", "test-key")
     spoken = []
+    async def shorten(task):
+        assert task["answer"].startswith("Готово.")
+        return "Готово. Файл создан."
+    monkeypatch.setattr(voice, "shorten_answer", shorten)
     async def synthesize(text):
         spoken.append(text)
         return b"ogg-test"
     monkeypatch.setattr(voice, "synthesize", synthesize)
     response = client.post("/api/voice/tasks/voice-task/speech", headers=headers, json={"text": "INJECTED"})
     assert response.status_code == 200
-    assert spoken == ["Готово. Файл"]
+    assert spoken == ["Готово. Файл создан."]
     assert response.content == b"ogg-test"
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-voice-parts"] == "1"
@@ -86,6 +90,7 @@ def test_long_answer_parts_preserve_text_and_fit_form_limit():
 
 def test_part_index_and_rate_limit(client, monkeypatch):
     headers = setup_task(answer="Ответ. " * 200)
+    tasks["voice-task"]["message"] = "Расскажи подробно"
     monkeypatch.setenv("YANDEX_API_KEY", "test-key")
     spoken = []
     async def synthesize(text):

@@ -30,11 +30,9 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
         raise HTTPException(404, "Задача не найдена")
     if task.get("status") not in TERMINAL_STATUSES:
         raise HTTPException(409, "Задача ещё не завершена")
-    parts = voice.answer_parts(task.get("answer") or "")
+    parts = voice.answer_parts(task.get("answer") or "", keep_inline=True)
     if not parts:
         return Response(status_code=204)
-    if part >= len(parts):
-        raise HTTPException(404, "Часть ответа не найдена")
     if not voice.speech_configured():
         raise HTTPException(503, "Озвучка не настроена на сервере")
     user_id = user["id"]
@@ -42,7 +40,12 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
         raise HTTPException(429, "Озвучка занята. Попробуйте позже")
     _active_users.add(user_id)
     try:
+        parts = await voice.spoken_parts(task)
+        if part >= len(parts):
+            raise HTTPException(404, "Часть ответа не найдена")
         audio = await voice.synthesize(parts[part])
+    except HTTPException:
+        raise
     except Exception:
         # Provider responses can contain request text or credentials. Do not expose them.
         raise HTTPException(502, "Озвучка временно недоступна") from None
