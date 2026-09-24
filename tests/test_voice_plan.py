@@ -73,3 +73,21 @@ def test_plan_offer_speech_without_summary_llm(client, monkeypatch, admin, expec
     response = client.post("/api/voice/tasks/offer/speech", headers=headers)
     assert response.status_code == 200
     assert expected in spoken[0]
+
+
+def test_draft_plan_speech_is_short_revision_bound_and_keeps_question(client, monkeypatch):
+    from server import voice
+    headers, chat, uid = prepare(client, monkeypatch, admin=True)
+    tasks["offer"].update(status="confirm", plan_suggestion=None, plan_review={
+        "revision": "v2", "speech": "Предлагаю план. 1. Презентация. 2. Word. 3. Excel. Хотите что-то изменить?"})
+    monkeypatch.setenv("YANDEX_API_KEY", "test-only")
+    spoken = []
+    async def synthesize(text): spoken.append(text); return b"ogg"
+    async def forbidden(*args): pytest.fail("draft plan must not use final-answer summarization")
+    monkeypatch.setattr(voice, "synthesize", synthesize)
+    monkeypatch.setattr(voice, "spoken_parts", forbidden)
+    assert client.post("/api/voice/tasks/offer/speech?revision=v1", headers=headers).status_code == 409
+    response = client.post("/api/voice/tasks/offer/speech?revision=v2", headers=headers)
+    assert response.status_code == 200
+    assert spoken == [tasks["offer"]["plan_review"]["speech"]]
+    assert spoken[0].endswith("Хотите что-то изменить?")

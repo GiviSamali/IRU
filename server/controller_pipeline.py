@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import httpx
 
 try:
+    from .pipeline_plan_review import review_pipeline_plan
     from .pipeline_step_control import StepProgress, completion_matches, step_handoff
     from . import database as db  # type: ignore
     from .answer_auditor import audit_answer_payload  # type: ignore
@@ -64,6 +65,7 @@ try:
         wrap_tool_result_for_llm,
     )
 except ImportError:
+    from pipeline_plan_review import review_pipeline_plan
     from pipeline_step_control import StepProgress, completion_matches, step_handoff
     import database as db  # type: ignore
     from answer_auditor import audit_answer_payload  # type: ignore
@@ -157,6 +159,8 @@ except ImportError:
 
 PIPELINE_WORKER_MAX_ITERATIONS = 12
 PIPELINE_MAX_STEPS = 8
+PIPELINE_PLANNER_MAX_TOKENS = 4096
+PIPELINE_PLANNER_MAX_ATTEMPTS = 2
 logger = logging.getLogger(__name__)
 
 STEP_STATES = {"pending", "running", "done", "failed", "recovered", "skipped", "blocked", "cancelled"}
@@ -345,6 +349,9 @@ def pipeline_plan_prompt(shared: dict, user_message: str) -> str:
 }}
 
 Поле device_id можно опускать, если подходит текущее устройство.
+Пиши компактно: instruction обычно до 300 символов, success_criteria до 150 символов.
+Не включай в план тексты документов, код, команды или повтор общего контекста в каждом шаге.
+Общий запрос и результаты предыдущих шагов будут переданы исполнителям отдельно.
 Необязательное completion_check описывает ТОЛЬКО достаточное доказательство ВСЕГО шага:
 для записи единственного итогового файла: {{"tool":"write_content","path":"точный путь"}};
 для финальной команды: {{"tool":"execute_cmd","stdout_contains":"OK: точный финальный результат"}}.
@@ -1814,34 +1821,80 @@ async def process_pipeline_subagents(
     all_commands = []
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
-        planner_data = await chat_completion_request_fn(
-            client=client,
-            cfg=cfg,
-            model=model,
-            messages=plan_messages,
-            tools=None,
-            max_tokens=min(cfg.get("max_tokens", 4096), 2500),
-            usage_context={**(usage_context or {}), "phase": "pipeline.plan"},
-            phase="pipeline.plan",
-        )
-        planner_text = (planner_data["choices"][0]["message"].get("content") or "").strip()
-        try:
-            if planner_data["choices"][0].get("finish_reason") == "length":
-                raise ValueError("PLAN response was truncated")
-            normalized_plan = normalize_pipeline_plan(
-                extract_json_payload(planner_text),
-                fallback_goal=user_message,
-                default_device_id=device_id,
-            )
-        except ValueError as exc:
-            # No task or worker may be created from a partially accepted plan.
-            return {
-                "answer": f"Не удалось получить полный корректный план. Выполнение не начато: {exc}",
-                "commands": [],
-                "tasks": [],
-                "task_receipt": {"task_status": "failed", "terminal_reason": "invalid_plan",
-                                 "failure_reason": str(exc)},
-            }
+        review_messages = list(plan_messages)
+        revised = False
+        while True:
+            plan_messages = list(review_messages)
+            try:
+                for plan_attempt in range(PIPELINE_PLANNER_MAX_ATTEMPTS):
+                    if is_task_cancel_requested(poll_task_id):
+                        return {"answer": "Остановлено пользователем.", "commands": [], "tasks": [],
+                                "task_receipt": {"task_status": "cancelled"}}
+                    phase = "pipeline.plan" if plan_attempt == 0 else "pipeline.plan.retry"
+                    planner_data = await chat_completion_request_fn(
+                        client=client,
+                        cfg=cfg,
+                        model=model,
+                        messages=plan_messages,
+                        tools=None,
+                        max_tokens=PIPELINE_PLANNER_MAX_TOKENS,
+                        usage_context={**(usage_context or {}), "phase": phase},
+                        phase=phase,
+                    )
+                    choice = planner_data["choices"][0]
+                    message = choice["message"]
+                    logging.getLogger(__name__).info(
+                        "PLAN generation attempt=%s finish_reason=%s content_chars=%s reasoning_chars=%s completion_tokens=%s",
+                        plan_attempt + 1, choice.get("finish_reason"), len(message.get("content") or ""),
+                        len(message.get("reasoning_content") or ""), (planner_data.get("usage") or {}).get("completion_tokens"),
+                    )
+                    if choice.get("finish_reason") != "length":
+                        break
+                    if plan_attempt + 1 < PIPELINE_PLANNER_MAX_ATTEMPTS:
+                        set_current_step(poll_task_id, "Ответ планировщика обрезан. Повторяю компактно...")
+                        # Regenerate the full plan; never feed the truncated JSON back as a plan/history.
+                        plan_messages = [*plan_messages, {"role": "user", "content":
+                            "Предыдущий ответ обрезан лимитом. Верни заново ПОЛНЫЙ компактный JSON-план "
+                            "для исходного запроса: instruction до 300 символов, success_criteria до 150. "
+                            "Сохрани все запрошенные результаты и место сохранения. Не продолжай обрывок, "
+                            "не добавляй код или содержимое документов."}]
+                if planner_data["choices"][0].get("finish_reason") == "length":
+                    raise ValueError("Планировщик дважды превысил лимит ответа; полный план не получен.")
+                planner_text = (planner_data["choices"][0]["message"].get("content") or "").strip()
+                normalized_plan = normalize_pipeline_plan(
+                    extract_json_payload(planner_text),
+                    fallback_goal=user_message,
+                    default_device_id=device_id,
+                )
+            except ValueError as exc:
+                # No task or worker may be created from a partially accepted plan.
+                return {
+                    "answer": f"Не удалось получить полный корректный план. Выполнение не начато: {exc}",
+                    "commands": [],
+                    "tasks": [],
+                    "task_receipt": {"task_status": "failed", "terminal_reason": "invalid_plan",
+                                     "failure_reason": str(exc)},
+                }
+            review_decision = await review_pipeline_plan(poll_task_id, normalized_plan)
+            if review_decision["action"] == "cancel":
+                return {"answer": "Остановлено пользователем.", "commands": [], "tasks": [],
+                        "task_receipt": {"task_status": "cancelled"}}
+            if review_decision["action"] == "approve":
+                break
+            # Every new draft is explicitly requested by the user, never by a worker.
+            revised = True
+            review_messages = [*review_messages[:len(history_msgs) + 2], {
+                "role": "user", "content": json.dumps({
+                    "current_unexecuted_plan": normalized_plan,
+                    "requested_changes": review_decision["changes"],
+                    "instruction": "Измени текущий план по замечаниям пользователя. Сохрани остальные требования "
+                                   "исходного запроса и уже внесённые изменения текущего плана. Верни полный JSON.",
+                }, ensure_ascii=False)}]
+            set_current_step(poll_task_id, "Изменяю план по вашим замечаниям...")
+        execution_goal = user_message
+        if revised:
+            execution_goal += "\nУточнение: пользователь изменил план. Утверждённый план имеет приоритет " \
+                              "над противоречащими ему частями исходного запроса:\n" + json.dumps(normalized_plan, ensure_ascii=False)
         db_task_id = db.create_task(
             user_id=user_id,
             chat_id=chat_id,
@@ -1889,7 +1942,7 @@ async def process_pipeline_subagents(
                     cfg=cfg,
                     model=model,
                     shared=worker_shared,
-                    overall_goal=user_message,
+                    overall_goal=execution_goal,
                     step=step,
                     completed_steps=step_results,
                     chat_history=chat_history,
@@ -2038,6 +2091,8 @@ async def process_pipeline_subagents(
 
         summary_payload = {
             "original_request": user_message,
+            "approved_plan": normalized_plan,
+            "effective_request": execution_goal,
             "goal": normalized_plan["goal"],
             "pipeline_status": task_status,
             "failure_reason": failure_reason,
@@ -2086,7 +2141,7 @@ async def process_pipeline_subagents(
                             client=client,
                             cfg=cfg,
                             chat_completion_request_fn=chat_completion_request_fn,
-                            user_request=user_message,
+                            user_request=execution_goal,
                             current_run_journal=all_commands,
                             answer_payload=payload,
                             usage_context={**(usage_context or {}), "phase": "pipeline.final.answer_auditor"},

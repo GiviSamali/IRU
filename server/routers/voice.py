@@ -25,18 +25,21 @@ async def config(request: Request):
 
 
 @router.post("/tasks/{task_id}/speech")
-async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)):
+async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0), revision: str | None = None):
     user = get_current_user(request)
     task = tasks.get(task_id)
     if not task or task.get("user_id") != user["id"]:
         raise HTTPException(404, "Задача не найдена")
-    if task.get("status") not in TERMINAL_STATUSES:
+    review = task.get("plan_review") if task.get("status") == "confirm" else None
+    if revision is not None and (not review or review.get("revision") != revision):
+        raise HTTPException(409, "Вариант плана изменился")
+    if task.get("status") not in TERMINAL_STATUSES and not review:
         raise HTTPException(409, "Задача ещё не завершена")
     plan_offer = bool(task.get("plan_suggestion") and not task.get("plan_declined") and not task.get("voice_plan_started"))
     offer_text = "Задача требует нескольких шагов. Предлагаю режим План: составлю план, выполню его и доложу результат. Запустить?"
     if plan_offer and not _is_admin(user) and get_user_plan(user["id"]) == "free" and get_plan_trial_used(user["id"]):
         offer_text = "Пробный запуск режима План уже использован. Для этого режима нужен тариф Про."
-    parts = voice.answer_parts(offer_text if plan_offer else task.get("answer") or "", keep_inline=True)
+    parts = voice.answer_parts(review["speech"] if review else offer_text if plan_offer else task.get("answer") or "", keep_inline=True)
     if not parts:
         return Response(status_code=204)
     if not voice.speech_configured():
@@ -46,7 +49,7 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
         raise HTTPException(429, "Озвучка занята. Попробуйте позже")
     _active_users.add(user_id)
     try:
-        if not plan_offer:
+        if not plan_offer and not review:
             parts = await voice.spoken_parts(task)
         if part >= len(parts):
             raise HTTPException(404, "Часть ответа не найдена")

@@ -8,6 +8,8 @@
   let audioContext = null, source = null, activation = 0, starting = false;
   const labels = { off: '', idle: 'Голос включён · скажите «Иру»', listening: 'Слушаю…',
     awaiting_plan: 'Запустить План? Скажите «да», «запускай» или «нет»',
+    awaiting_plan_review: 'Изменить план? «Нет» — выполнить, «да» — продиктовать изменения',
+    editing_plan: 'Слушаю изменения плана…',
     working: 'Выполняю · микрофон выключен', confirming: 'Нужно подтверждение в чате · микрофон выключен',
     synthesizing: 'Готовлю озвучку…', speaking: 'Отвечаю · «стоп» остановит озвучку' };
   function stopAudio() {
@@ -43,10 +45,10 @@
     };
     try { rec.start(); } catch (_) { recognition = null; reset(); showToast('Не удалось включить микрофон.', true); }
   }
-  async function speak(taskId, signal, onSpeaking) {
+  async function speak(taskId, signal, onSpeaking, review) {
     let count = 1;
     for (let part = 0; part < count; part++) {
-      const response = await apiFetch(`${API}/api/voice/tasks/${encodeURIComponent(taskId)}/speech?part=${part}`, {
+      const response = await apiFetch(`${API}/api/voice/tasks/${encodeURIComponent(taskId)}/speech?part=${part}${review ? `&revision=${encodeURIComponent(review.revision)}` : ''}`, {
         method: 'POST', headers: authHeaders(), signal,
       });
       if (response.status === 204) return;
@@ -76,6 +78,7 @@
   }
   const session = createVoiceSession({ listen, speak, stopAudio,
     choosePlan: (offer, accepted) => chooseVoicePlan(offer, accepted),
+    reviewPlan: (review, changes) => submitPlanReview(review, changes),
     submit: text => sendMessage({ voiceText: text }),
     error: error => showToast(error.message, true),
     state: phase => {
@@ -100,6 +103,8 @@
       if (id !== activation) return;
       if (!config.available) throw new Error('Озвучка не настроена на сервере.');
       session.enable(state.pendingTasks.map(task => task.task_id));
+      const reviewMessage = state.messages.find(message => message.planReview);
+      if (reviewMessage) session.taskPlanReview(reviewMessage._taskId, reviewMessage.planReview);
     } catch (error) { if (id === activation) { reset(); showToast(error.message, true); } }
     finally { if (id === activation) starting = false; }
   }

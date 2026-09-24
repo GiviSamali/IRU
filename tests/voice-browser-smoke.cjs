@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
     const errors = [], requests = [];
     page.on('pageerror', error => errors.push(error.message));
     let completed = false, counter = 0, planScenario = false, planStarted = false;
+    let reviewScenario = false, revision = 1, reviewApproved = false;
     await page.addInitScript(() => {
       window.testRecognition = null;
       class Recognition {
@@ -30,13 +31,24 @@ const assert = require('node:assert/strict');
       requests.push({ path: url.pathname, body: route.request().postDataJSON() });
       let data = { status: 'ok' };
       if (url.pathname === '/api/voice/config') data.available = true;
+      else if (url.pathname.endsWith('/review-plan')) {
+        const body = route.request().postDataJSON();
+        assert.equal(body.revision, `v${revision}`);
+        if (body.action === 'revise') revision++; else reviewApproved = true;
+      }
       else if (url.pathname === '/api/run_plan/1') {
         planStarted = true; data = { status: 'ok', task_id: `task-${++counter}`, chat_id: 1 };
       }
       else if (url.pathname === '/nl_command') data = { status: 'ok', task_id: `task-${++counter}`, chat_id: 1 };
       else if (url.pathname.endsWith('/speech')) {
         await route.fulfill({ body: 'mock-ogg', contentType: 'audio/ogg', headers: { 'X-Voice-Parts': '1' } }); return;
-      } else if (/^\/api\/tasks\/task-\d+$/.test(url.pathname)) data.task = {
+      } else if (reviewScenario && url.pathname === '/api/tasks/task-review') data.task = {
+        status: reviewApproved ? 'running' : 'confirm', chat_id: 1, tasks: [], commands: [],
+        ...(!reviewApproved ? { plan_review: { revision: `v${revision}`, steps: [
+          { title: `План версия ${revision}`, instruction: 'Создать документы в папке' }],
+          speech: 'План. Хотите что-то изменить?' } } : {}),
+      };
+      else if (/^\/api\/tasks\/task-\d+$/.test(url.pathname)) data.task = {
         status: completed ? 'done' : 'running', answer: completed && !(planScenario && !planStarted) ? 'Готово, сэр.' : '',
         chat_id: 1, ...(planScenario && !planStarted ? { plan_suggestion: 'Несколько шагов', plan_original_request: 'Создай отчёт' } : {}),
         commands: [{ tool_name: 'execute_cmd', command: 'PRIVATE COMMAND', result: { stdout: 'PRIVATE OUTPUT' } }], tasks: [],
@@ -117,6 +129,42 @@ const assert = require('node:assert/strict');
     assert.ok(requests.some(r => r.path.endsWith('/decline_plan')));
     assert.equal(requests.filter(r => r.path === '/nl_command').at(-1).body.modes.plan_declined, true);
     await page.waitForLoadState('networkidle');
+    // Review the actual draft before any work: voice edit, text edit, voice approval.
+    reviewScenario = true;
+    await page.evaluate(() => {
+      iruVoice.disable(); iruVoice.enable();
+      const index = state.messages.length;
+      state.messages.push({ role: 'assistant', loading: true, content: '' });
+      state.pendingTasks.push({ task_id: 'task-review', msgIndex: index });
+      pollTask('task-review', index);
+    });
+    await page.waitForFunction(() => iruVoice.phase === 'speaking');
+    await page.evaluate(() => testAudio.onended());
+    await page.waitForFunction(() => iruVoice.phase === 'awaiting_plan_review');
+    await page.evaluate(() => testRecognition.emit('да'));
+    await page.waitForFunction(() => iruVoice.phase === 'editing_plan');
+    await page.evaluate(() => testRecognition.emit('Добавь сравнение стоимости'));
+    await page.waitForFunction(() => iruVoice.phase === 'speaking');
+    await page.evaluate(() => testAudio.onended());
+    await page.waitForFunction(() => iruVoice.phase === 'awaiting_plan_review');
+    assert.equal(revision, 2); assert.equal(reviewApproved, false);
+    await page.locator('[data-action="edit-plan"]').click();
+    await page.locator('textarea[id^="plan-changes-"]').fill('Добавь источники');
+    await page.locator('[data-action="revise-plan"]').click();
+    await page.waitForFunction(() => iruVoice.phase === 'speaking');
+    await page.evaluate(() => testAudio.onended());
+    await page.waitForFunction(() => iruVoice.phase === 'awaiting_plan_review');
+    assert.equal(revision, 3);
+    await page.evaluate(() => testRecognition.emit('нет'));
+    await page.waitForFunction(() => iruVoice.phase === 'working');
+    await page.waitForTimeout(150);
+    assert.equal(reviewApproved, true);
+    assert.equal(await page.evaluate(() => testRecognition.active), false);
+    assert.deepEqual(requests.filter(r => r.path.endsWith('/review-plan')).map(r => r.body), [
+      { revision: 'v1', action: 'revise', changes: 'Добавь сравнение стоимости' },
+      { revision: 'v2', action: 'revise', changes: 'Добавь источники' },
+      { revision: 'v3', action: 'approve', changes: '' },
+    ]);
     // Updated product UI keeps completed plans expandable by keyboard.
     await page.evaluate(() => {
       const card = document.createElement('div'); card.id = 'test-completed-plan';

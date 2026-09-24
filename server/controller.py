@@ -219,6 +219,11 @@ def _thinking_request_fields(
     phase: str | None = None,
 ) -> dict:
     """Return provider thinking fields for the selected DeepSeek V4 model."""
+    request_phase = phase or (usage_context or {}).get("phase")
+    if request_phase in {"pipeline.plan", "pipeline.plan.retry"}:
+        # Planning emits bounded JSON; reserve its output budget for the plan.
+        return {"thinking": {"type": "disabled"}}
+
     base_model = cfg.get("model", "deepseek-v4-flash")
     reasoner_model = cfg.get("model_reasoner", "deepseek-v4-pro")
 

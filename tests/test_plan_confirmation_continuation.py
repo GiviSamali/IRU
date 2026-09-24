@@ -54,7 +54,7 @@ def test_invalid_or_truncated_plan_fails_before_any_worker(monkeypatch, content,
         send_command_fn=unexpected, get_file_link_fn=lambda *a: "", chat_history=[],
         load_llm_config_fn=lambda: {"model": "mock-model"}, pick_model_fn=lambda *a: "mock-model",
         chat_completion_request_fn=completion, worker_tools=[], windows_rules="", linux_rules=""))
-    assert calls == ["pipeline.plan"]
+    assert calls == (["pipeline.plan", "pipeline.plan.retry"] if finish == "length" else ["pipeline.plan"])
     assert result["task_receipt"]["task_status"] == "failed"
     assert result["task_receipt"]["terminal_reason"] == "invalid_plan"
     assert not result["commands"] and not result["tasks"]
@@ -143,6 +143,13 @@ def test_three_step_plan_survives_confirmation_with_same_task_and_context(monkey
                 if runtime.tasks[tid]["status"] == "confirm": break
                 await asyncio.sleep(0)
             assert runtime.tasks[tid]["status"] == "confirm"
+            review = runtime.tasks[tid]["plan_review"]
+            assert not stored and not dispatched
+            await routes.api_review_plan(tid, routes.PlanReviewBody(revision=review["revision"], action="approve"), None)
+            for _ in range(100):
+                if runtime.tasks[tid]["status"] == "confirm": break
+                await asyncio.sleep(0)
+            assert "plan_review" not in runtime.tasks[tid]
             assert updates == {0: "running", 1: "pending", 2: "pending"}
             assert not finishes and not dispatched
             if choice == "confirm":

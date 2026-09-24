@@ -5,6 +5,17 @@ The planner targets 2–6 steps. A valid single step stays single. More than 8
 steps is rejected explicitly, never silently truncated. There is no refinement
 loop or synthetic prepare/execute/verify expansion.
 
+The planner keeps the selected PLAN model but disables thinking for the
+`pipeline.plan` and `pipeline.plan.retry` phases. Its dedicated 4096-token
+output budget is independent of the general worker `max_tokens` setting.
+Instructions are compact; document contents and scripts belong in workers.
+Only `finish_reason=length` permits one full-plan retry before execution, using
+the original request and a compactness correction, never the truncated output.
+Repeated truncation fails explicitly. Cancel is checked before both attempts.
+Provider transport retries remain separate. Worker reasoning is unchanged.
+Logs record attempt, finish reason, content/reasoning lengths and completion
+token count; they do not log the generated content or reasoning.
+
 Each worker has 12 primary LLM turns total: up to 11 action/answer turns and
 one reserved answer-only repair turn. Auditor requests have a separate ceiling
 of 2 per worker (including auditor JSON retries). Existing transport retries
@@ -47,6 +58,26 @@ is instructed to cover each requested deliverable, usually giving separate
 documents separate steps and verifying them within those steps. This is prompt
 guidance, not a deterministic semantic proof of full goal coverage; final content
 grounding still uses the existing answer/evidence protocol and auditor.
+
+Before the first worker, interactive PLAN runs expose a draft through
+`plan_review` while the task has status `confirm`. No preliminary device probe
+is sent before approval. The review is separate from command confirmation:
+`POST /api/tasks/{id}/review-plan` accepts an owned current `revision` and either
+`approve` or `revise` with non-empty changes (up to 4000 characters). Duplicate
+or stale decisions return 409. Approval creates the execution cards once;
+revision generates a new draft from the original request, current draft and
+the user's edits. Only the user's request for changes starts this cycle.
+Workers and the final auditor receive the accepted changes as well as the
+original request. Cancel, deny and expiry release the waiting coroutine.
+
+Voice reads short step titles followed by "Хотите что-то изменить?" without an
+extra summarization LLM call. After playback, "нет" approves, "да" enters edit
+dictation; the edited draft is read again. No silence timeout approves a plan.
+While building/executing, recognition is off. A failed/interrupted draft
+playback leaves the text controls available; an uncertain approval network
+response disables voice and refreshes task state. Text controls support
+approval, edits and cancellation. Waiting drafts share the existing in-memory
+task lifetime (one hour) and do not survive server restart.
 
 The existing pipeline policy for continuing recoverable failed steps and final
 artifact recovery is retained. A global wall-clock deadline, persistent execution

@@ -2,9 +2,9 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createVoiceSession } = require('../ui/js/voice-session.js');
 
-function setup() {
+function setup(overrides = {}) {
   let time = 100, nextId = 0, listening = false;
-  const timers = new Map(), submitted = [], spoken = [], errors = [], choices = [];
+  const timers = new Map(), submitted = [], spoken = [], errors = [], choices = [], reviews = [];
   const session = createVoiceSession({
     now: () => time,
     setTimeout: (fn, delay) => { const id = ++nextId; timers.set(id, { fn, at: time + delay }); return id; },
@@ -12,15 +12,17 @@ function setup() {
     state() {}, stopAudio() {}, listen: value => { listening = value; },
     error: error => errors.push(error),
     choosePlan: (offer, accepted) => choices.push({ offer, accepted }),
+    reviewPlan: (review, changes) => { reviews.push({ review, changes }); session.planReviewResolved(review.taskId); },
     submit: text => { submitted.push(text); session.beginRequest(); },
     speak: (id, signal, onSpeaking) => new Promise(resolve => { spoken.push({ id, signal, onSpeaking, resolve }); }),
+    ...overrides,
   });
   function advance(ms) {
     time += ms;
     for (const [id, timer] of [...timers]) if (timer.at <= time && timers.delete(id)) timer.fn();
   }
   session.enable();
-  return { session, submitted, spoken, errors, choices, advance, get listening() { return listening; } };
+  return { session, submitted, spoken, errors, choices, reviews, advance, get listening() { return listening; } };
 }
 
 test('wake word sends only final text after silence, ignoring background speech', () => {
@@ -162,4 +164,65 @@ test('empty speech response cannot arm plan consent', async () => {
   h.session.taskFinished('plan', { plan_suggestion: 'Plan', chat_id: 1, plan_original_request: 'Request' });
   h.spoken[0].resolve(); await Promise.resolve();
   assert.equal(h.session.phase, 'listening'); assert.equal(h.choices.length, 0);
+});
+
+test('draft review says yes to edit and no to execute after repeated revisions', async () => {
+  const h = setup(); h.session.watchTask('plan');
+  h.session.taskPlanReview('plan', { revision: 'v1' });
+  h.spoken[0].onSpeaking();
+  h.session.transcript('нет', true); // Echo during TTS must not approve.
+  assert.equal(h.reviews.length, 0);
+  h.spoken[0].resolve(); await Promise.resolve();
+  assert.equal(h.session.phase, 'awaiting_plan_review');
+  h.advance(60000); assert.equal(h.session.phase, 'awaiting_plan_review');
+  h.session.transcript('да', false); assert.equal(h.session.phase, 'awaiting_plan_review');
+  h.session.transcript('да', true);
+  assert.equal(h.session.phase, 'editing_plan'); assert.equal(h.listening, true);
+  assert.equal(h.reviews.length, 0);
+  h.session.transcript('Добавь сравнение стоимости', true); h.advance(1200);
+  await Promise.resolve();
+  assert.equal(h.reviews[0].changes, 'Добавь сравнение стоимости');
+  assert.equal(h.reviews[0].review.revision, 'v1');
+  assert.equal(h.listening, false);
+  h.session.taskPlanReview('plan', { revision: 'v2' });
+  h.session.taskPlanReview('plan', { revision: 'v2' });
+  assert.equal(h.spoken.length, 2);
+  h.spoken[1].onSpeaking(); h.spoken[1].resolve(); await Promise.resolve();
+  h.session.transcript('да', true);
+  h.session.transcript('Убери Excel', true); h.advance(1200); await Promise.resolve();
+  h.session.taskPlanReview('plan', { revision: 'v3' });
+  h.spoken[2].onSpeaking(); h.spoken[2].resolve(); await Promise.resolve();
+  h.session.transcript('нет', true); h.session.transcript('нет', true); await Promise.resolve();
+  assert.equal(h.reviews.length, 3);
+  assert.equal(h.reviews[2].review.revision, 'v3'); assert.equal(h.reviews[2].changes, '');
+  assert.equal(h.listening, false);
+  h.session.transcript('другая команда', true); h.advance(2000);
+  assert.deepEqual(h.submitted, []);
+});
+
+test('missing review audio keeps confirmation in chat and cannot arm voice approval', async () => {
+  const h = setup(); h.session.watchTask('plan'); h.session.taskPlanReview('plan', { revision: 'v1' });
+  h.spoken[0].resolve(); await Promise.resolve();
+  assert.equal(h.session.phase, 'confirming'); assert.equal(h.listening, false);
+  h.session.transcript('нет', true); await Promise.resolve();
+  assert.deepEqual(h.reviews, []);
+});
+
+test('stop review speech does not execute and chat reset drops edit dictation', async () => {
+  const h = setup(); h.session.watchTask('plan'); h.session.taskPlanReview('plan', { revision: 'v1' });
+  h.spoken[0].onSpeaking(); h.session.transcript('стоп', true);
+  assert.equal(h.spoken[0].signal.aborted, true); assert.deepEqual(h.reviews, []);
+  h.session.editPlan('plan'); h.session.transcript('Изменение', true);
+  h.session.disable(); h.advance(2000); await Promise.resolve();
+  assert.deepEqual(h.reviews, []); assert.equal(h.listening, false);
+});
+
+test('uncertain approval response disables voice rather than listening during possible work', async () => {
+  const h = setup({ reviewPlan: () => Promise.reject(new Error('network lost')) });
+  h.session.watchTask('plan'); h.session.taskPlanReview('plan', { revision: 'v1' });
+  h.spoken[0].onSpeaking(); h.spoken[0].resolve(); await Promise.resolve();
+  h.session.transcript('нет', true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.session.enabled, false); assert.equal(h.listening, false);
+  assert.equal(h.errors.length, 1);
 });

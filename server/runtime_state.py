@@ -121,6 +121,9 @@ def cleanup_old_tasks() -> None:
     now = time.time()
     expired = [tid for tid, task in tasks.items() if now - task["created_at"] > TASK_TTL]
     for task_id in expired:
+        plan_decision = tasks[task_id].get("_pipeline_plan_future")
+        if plan_decision is not None and not plan_decision.done():
+            plan_decision.set_result({"action": "cancel"})
         tasks.pop(task_id, None)
     expired_declines = [key for key, created_at in declined_plan_requests.items() if now - created_at > TASK_TTL]
     for key in expired_declines:

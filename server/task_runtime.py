@@ -948,14 +948,15 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             return {"status": "failed", "device_id": target_short, "error": f"unknown device tool: {tool_name}"}
 
         try:
-            await _probe_python_toolchain_if_needed(
-                message=message,
-                device_id=device_id,
-                device_info=device_info,
-                dev=dev,
-                user_id=user_id,
-                send_fn=send_fn,
-            )
+            if not task_modes.get("pipeline"):
+                await _probe_python_toolchain_if_needed(
+                    message=message,
+                    device_id=device_id,
+                    device_info=device_info,
+                    dev=dev,
+                    user_id=user_id,
+                    send_fn=send_fn,
+                )
             result = await process_nl_command(
                 user_message=message,
                 device_id=_short_did(device_id),

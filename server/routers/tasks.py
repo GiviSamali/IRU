@@ -4,12 +4,12 @@ import logging
 import time
 import uuid
 from io import BytesIO
-from typing import Optional
+from typing import Optional, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from ..api_support import _is_admin, check_ip_rate_limit, check_rate_limit, get_current_user
@@ -444,6 +444,7 @@ async def api_get_task(task_id: str, request: Request):
         "current_step": task.get("current_step"),
         "results": task.get("results", {}),
         "confirm_data": task.get("confirm_data"),
+        "plan_review": task.get("plan_review"),
         "created_at": task["created_at"],
         "memory_stats": memory_stats,
         "suggested_fact": task.get("suggested_fact"),
@@ -470,6 +471,9 @@ async def api_cancel_task(task_id: str, request: Request):
     if previous_status in {"done", "error", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}:
         return {"status": "ok", "task_status": previous_status, "cancel_requested": bool(task.get("cancel_requested"))}
     if previous_status == "confirm":
+        plan_decision = task.get("_pipeline_plan_future")
+        if plan_decision is not None and not plan_decision.done():
+            plan_decision.set_result({"action": "cancel"})
         decision = task.get("_pipeline_confirm_future")
         if decision is not None and not decision.done():
             decision.set_result(False)
@@ -491,6 +495,31 @@ async def api_cancel_task(task_id: str, request: Request):
     }
 
 
+class PlanReviewBody(BaseModel):
+    revision: str = Field(min_length=1, max_length=64)
+    action: Literal["approve", "revise"]
+    changes: str = Field(default="", max_length=4000)
+
+
+@router.post("/api/tasks/{task_id}/review-plan")
+async def api_review_plan(task_id: str, body: PlanReviewBody, request: Request):
+    user = get_current_user(request)
+    task = tasks.get(task_id)
+    if not task or task.get("user_id") != user["id"]:
+        raise HTTPException(404, "Задача не найдена")
+    review = task.get("plan_review") or {}
+    decision = task.get("_pipeline_plan_future")
+    if (task.get("status") != "confirm" or decision is None or decision.done()
+            or review.get("revision") != body.revision):
+        raise HTTPException(409, "Этот вариант плана уже не ожидает ответа. Обновите состояние задачи.")
+    changes = body.changes.strip()
+    if body.action == "revise" and not changes:
+        raise HTTPException(400, "Опишите, что нужно изменить в плане.")
+    task["status"] = "running"
+    decision.set_result({"action": body.action, "changes": changes})
+    return {"status": "ok"}
+
+
 @router.post("/api/tasks/{task_id}/confirm")
 async def api_confirm_task(task_id: str, request: Request):
     user = get_current_user(request)
@@ -499,6 +528,9 @@ async def api_confirm_task(task_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Задача не найдена")
     if task["status"] != "confirm":
         raise HTTPException(status_code=400, detail="Задача не ожидает подтверждения")
+
+    if task.get("plan_review"):
+        raise HTTPException(409, "Подтвердите текущий вариант плана через карточку плана.")
 
     decision = task.get("_pipeline_confirm_future")
     if decision is not None:
@@ -614,6 +646,13 @@ async def api_deny_task(task_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Задача не найдена")
     if task["status"] != "confirm":
         raise HTTPException(status_code=400, detail="Задача не ожидает подтверждения")
+
+    plan_decision = task.get("_pipeline_plan_future")
+    if plan_decision is not None:
+        request_task_cancel(task_id, user["id"])
+        if not plan_decision.done():
+            plan_decision.set_result({"action": "cancel"})
+        return {"status": "ok"}
 
     decision = task.get("_pipeline_confirm_future")
     if decision is not None:
