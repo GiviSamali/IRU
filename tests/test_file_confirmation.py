@@ -91,20 +91,36 @@ def test_decision_binds_user_and_command_and_is_one_shot(monkeypatch, pipeline, 
     asyncio.run(scenario())
 
 
-def test_deletion_speech_uses_pending_command_not_answer_or_summary(client, monkeypatch):
+@pytest.mark.parametrize("command,allowed", [("Remove-Item secret-name.txt", False), ("Stop-Process -Name editor", False), ("New-Item report.txt", True)])
+def test_only_ordinary_confirmation_can_be_spoken(client, monkeypatch, command, allowed):
     from server import voice
     from test_voice_plan import prepare
     headers, _, _ = prepare(client, monkeypatch, admin=True)
-    data = command_confirmation({"command": "Remove-Item secret-name.txt", "params": {"command": "Remove-Item secret-name.txt"}})
+    data = command_confirmation({"command": command, "params": {"command": command}})
     runtime.tasks["offer"].update(status="confirm", plan_suggestion=None, confirm_data=data, answer="OLD ANSWER")
     monkeypatch.setenv("YANDEX_API_KEY", "test-only")
     spoken = []
     async def synthesize(text): spoken.append(text); return b"ogg"
-    async def forbidden(*args): pytest.fail("must not summarize command approval using LLM")
+    async def forbidden(*args): pytest.fail("must not summarize approval using LLM")
     monkeypatch.setattr(voice, "synthesize", synthesize)
     monkeypatch.setattr(voice, "spoken_parts", forbidden)
-    assert client.post("/api/voice/tasks/offer/speech?confirmation=old", headers=headers).status_code == 409
-    assert client.post(f"/api/voice/tasks/offer/speech?confirmation={data['confirmation_id']}", headers=headers).status_code == 200
-    assert spoken == [data["speech"]]
-    assert "удаление" in spoken[0] and "да или нет" in spoken[0]
-    assert "secret-name" not in spoken[0] and "OLD ANSWER" not in spoken[0]
+    response = client.post(f"/api/voice/tasks/offer/speech?confirmation={data['confirmation_id']}", headers=headers)
+    assert response.status_code == (200 if allowed else 409)
+    assert spoken == ([data["speech"]] if allowed else [])
+    assert data["voice_allowed"] == allowed
+
+
+@pytest.mark.parametrize("command", ["Remove-Item report.txt", "Stop-Process -Name editor", "shutdown /s /t 0"])
+def test_risky_command_rejects_voice_but_accepts_button(monkeypatch, command):
+    monkeypatch.setattr(routes, "get_current_user", lambda request: {"id": 1})
+    async def scenario():
+        decision = asyncio.get_running_loop().create_future()
+        data = command_confirmation({"command": command})
+        monkeypatch.setitem(runtime.tasks, "danger", {"user_id": 1, "status": "confirm", "confirm_data": data,
+            "modes": {"pipeline": True}, "_pipeline_confirm_future": decision})
+        with pytest.raises(HTTPException) as error:
+            await routes.api_command_decision("danger", routes.CommandDecisionBody(confirmation_id=data["confirmation_id"], accepted=True, via_voice=True), None)
+        assert error.value.status_code == 403 and not decision.done()
+        await routes.api_command_decision("danger", routes.CommandDecisionBody(confirmation_id=data["confirmation_id"], accepted=True), None)
+        assert decision.result() is True
+    asyncio.run(scenario())

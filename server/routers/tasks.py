@@ -523,6 +523,7 @@ async def api_review_plan(task_id: str, body: PlanReviewBody, request: Request):
 class CommandDecisionBody(BaseModel):
     confirmation_id: str = Field(min_length=1, max_length=64)
     accepted: bool
+    via_voice: bool = False
 
 
 @router.post("/api/tasks/{task_id}/command-decision")
@@ -535,6 +536,8 @@ async def api_command_decision(task_id: str, body: CommandDecisionBody, request:
     if (task.get("status") != "confirm" or task.get("plan_review")
             or data.get("confirmation_id") != body.confirmation_id):
         raise HTTPException(409, "Это подтверждение команды уже не актуально.")
+    if body.via_voice and (not data.get("voice_allowed") or data.get("kind") != "command"):
+        raise HTTPException(403, "Удаление и опасные команды подтверждаются только кнопкой в чате.")
     if body.accepted:
         return await api_confirm_task(task_id, request)
     return await api_deny_task(task_id, request)

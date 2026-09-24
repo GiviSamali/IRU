@@ -1387,14 +1387,14 @@ async function cancelReviewedPlan(taskId, index) {
   } catch (error) { showToast(error.message, true); }
 }
 
-async function chooseVoiceCommand(offer, accepted) {
+async function chooseVoiceCommand(offer, accepted, viaVoice = false) {
   const index = state.messages.findIndex(message => message.confirmTaskId === offer.taskId
     && message.commandConfirmation?.confirmation_id === offer.confirmationId);
   if (index < 0) throw new Error('Подтверждение команды устарело. Обновите чат.');
   try {
     const response = await apiFetch(`${API}/api/tasks/${offer.taskId}/command-decision`, {
       method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confirmation_id: offer.confirmationId, accepted }),
+      body: JSON.stringify({ confirmation_id: offer.confirmationId, accepted, via_voice: viaVoice }),
     });
     if (!response.ok) throw new Error('Подтверждение команды отклонено. Обновляю её состояние.');
     window.iruVoice?.commandDecisionResolved(offer.taskId);

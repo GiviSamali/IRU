@@ -9,10 +9,26 @@
   const labels = { off: '', idle: 'Голос включён · скажите «Иру»', listening: 'Слушаю…',
     awaiting_plan: 'Запустить План? Скажите «да», «запускай» или «нет»',
     awaiting_plan_review: 'Изменить план? «Нет» — выполнить, «да» — продиктовать изменения',
-    awaiting_deletion: 'Разрешить удаление? «Да» — выполнить, «нет» — отменить',
+    awaiting_command: 'Выполнить действие? «Да» — выполнить, «нет» — отменить',
     editing_plan: 'Слушаю изменения плана…',
     working: 'Выполняю · микрофон выключен', confirming: 'Нужно подтверждение в чате · микрофон выключен',
     synthesizing: 'Готовлю озвучку…', speaking: 'Отвечаю · «стоп» остановит озвучку' };
+  function playMicCue(kind) {
+    if (!audioContext || audioContext.state !== 'running') return;
+    try {
+      const oscillator = audioContext.createOscillator(), gain = audioContext.createGain();
+      const start = audioContext.currentTime, duration = 0.12;
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(kind === 'on' ? 520 : 880, start);
+      oscillator.frequency.exponentialRampToValueAtTime(kind === 'on' ? 880 : 440, start + duration);
+      gain.gain.setValueAtTime(0.001, start);
+      gain.gain.exponentialRampToValueAtTime(0.045, start + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+      oscillator.connect(gain); gain.connect(audioContext.destination);
+      oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
+      oscillator.start(start); oscillator.stop(start + duration);
+    } catch (_) { /* Cue failure must not interrupt voice/task control. */ }
+  }
   function stopAudio() {
     if (source) { try { source.stop(); } catch (_) {} source = null; }
   }
@@ -78,10 +94,10 @@
       if (signal.aborted) return;
     }
   }
-  const session = createVoiceSession({ listen, speak, stopAudio,
+  const session = createVoiceSession({ listen, speak, stopAudio, cue: playMicCue,
     choosePlan: (offer, accepted) => chooseVoicePlan(offer, accepted),
     reviewPlan: (review, changes) => submitPlanReview(review, changes),
-    chooseCommand: (offer, accepted) => chooseVoiceCommand(offer, accepted),
+    chooseCommand: (offer, accepted) => chooseVoiceCommand(offer, accepted, true),
     submit: text => sendMessage({ voiceText: text }),
     error: error => showToast(error.message, true),
     state: phase => {
@@ -108,7 +124,7 @@
       session.enable(state.pendingTasks.map(task => task.task_id));
       const reviewMessage = state.messages.find(message => message.planReview);
       if (reviewMessage) session.taskPlanReview(reviewMessage._taskId, reviewMessage.planReview);
-      const confirmationMessage = state.messages.find(message => message.confirmTaskId && message.commandConfirmation?.kind === 'deletion');
+      const confirmationMessage = state.messages.find(message => message.confirmTaskId && message.commandConfirmation?.voice_allowed === true);
       if (confirmationMessage) session.taskPaused(confirmationMessage._taskId, confirmationMessage.commandConfirmation);
     } catch (error) { if (id === activation) { reset(); showToast(error.message, true); } }
     finally { if (id === activation) starting = false; }

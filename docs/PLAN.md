@@ -86,13 +86,17 @@ so words like Word, model and platform do not trigger deletion confirmation.
 The command-text guard also recognizes explicit Python/pathlib/.NET deletion;
 it is not a sandbox or a parser of arbitrary external script contents.
 
-Pending deletion commands have a unique `confirmation_id`. Voice reads a short
-deletion warning and asks for yes/no, without reading code or invoking an LLM.
-`POST /api/tasks/{id}/command-decision` binds the response to the current owned
-command: yes approves, no denies/cancels under the existing execution policy.
-This is distinct from PLAN review, where no means no changes. Repeated/stale
-responses fail; unfinished/missing audio never arms spoken consent. The same
-command continues after approval; recognition is off while executing.
+Pending commands have a unique `confirmation_id`. Ordinary confirmations can
+be spoken and answered yes/no. Deletion and potentially dangerous commands
+(process termination, shutdown, uninstall, explicit elevated risk) require
+buttons in the chat. `via_voice=true` is rejected by the server for these
+commands; the client does not listen for an answer to them. PLAN review remains
+separate: no means no changes, yes means dictate edits.
+
+The sleep word "усни" returns voice to wake-word standby without submitting a
+request or approving a pending action. "Иру" wakes it; a pending review is read
+again. Rising/falling tones signal speech readiness and its end. Background
+recognizer restarts and TTS stop-only recognition do not emit readiness cues.
 
 The existing pipeline policy for continuing recoverable failed steps and final
 artifact recovery is retained. A global wall-clock deadline, persistent execution

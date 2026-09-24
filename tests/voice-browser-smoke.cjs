@@ -19,7 +19,9 @@ const assert = require('node:assert/strict');
       }
       window.SpeechRecognition = Recognition;
       window.AudioContext = class {
-        constructor() { this.state = 'running'; this.destination = {}; }
+        constructor() { this.state = 'running'; this.destination = {}; this.currentTime = 0; window.testCues = []; }
+        createOscillator() { const cue = {}; return { frequency: { setValueAtTime(value) { cue.start = value; }, exponentialRampToValueAtTime(value) { cue.end = value; } }, connect() {}, disconnect() {}, start() { window.testCues.push(cue); }, stop() {} }; }
+        createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, disconnect() {} }; }
         async resume() {}
         async decodeAudioData() { return {}; }
         createBufferSource() { return { connect() {}, disconnect() {}, start() { window.testAudio = this; }, stop() { this.onended?.(); } }; }
@@ -46,7 +48,7 @@ const assert = require('node:assert/strict');
         await route.fulfill({ body: 'mock-ogg', contentType: 'audio/ogg', headers: { 'X-Voice-Parts': '1' } }); return;
       } else if (deletionScenario && url.pathname === '/api/tasks/task-delete') data.task = {
         status: deletionChoice ? 'running' : 'confirm', chat_id: 1, tasks: [], commands: [],
-        confirm_data: { kind: 'deletion', confirmation_id: 'delete-v1', command: 'Remove-Item helper.py' },
+        confirm_data: { kind: 'deletion', confirmation_id: 'delete-v1', command: 'Remove-Item helper.py', voice_allowed: false },
       };
       else if (reviewScenario && url.pathname === '/api/tasks/task-review') data.task = {
         status: reviewApproved ? 'running' : 'confirm', chat_id: 1, tasks: [], commands: [],
@@ -179,13 +181,14 @@ const assert = require('node:assert/strict');
       state.pendingTasks.push({ task_id: 'task-delete', msgIndex: index });
       pollTask('task-delete', index);
     });
-    await page.waitForFunction(() => iruVoice.phase === 'speaking');
-    await page.evaluate(() => testAudio.onended());
-    await page.waitForFunction(() => iruVoice.phase === 'awaiting_deletion');
-    await page.evaluate(() => testRecognition.emit('да'));
+    await page.waitForFunction(() => iruVoice.phase === 'confirming');
+    assert.equal(await page.evaluate(() => testRecognition.active), false);
+    await page.evaluate(() => iruVoice.transcript('да', true));
+    assert.equal(deletionChoice, null);
+    await page.locator('[data-action="confirm-task"][data-task-id="task-delete"]').click();
     await page.waitForFunction(() => iruVoice.phase === 'working');
     await page.waitForTimeout(150);
-    assert.deepEqual(deletionChoice, { confirmation_id: 'delete-v1', accepted: true });
+    assert.deepEqual(deletionChoice, { confirmation_id: 'delete-v1', accepted: true, via_voice: false });
     assert.equal(await page.evaluate(() => testRecognition.active), false);
     // Updated product UI keeps completed plans expandable by keyboard.
     await page.evaluate(() => {
@@ -198,6 +201,8 @@ const assert = require('node:assert/strict');
     await card.focus(); await card.press('Enter');
     assert.equal(await card.getAttribute('aria-expanded'), 'true');
     await card.press('Enter'); assert.equal(await card.getAttribute('aria-expanded'), 'false');
+    assert.ok(await page.evaluate(() => testCues.some(cue => cue.start < cue.end)));
+    assert.ok(await page.evaluate(() => testCues.some(cue => cue.start > cue.end)));
     assert.deepEqual(errors, []);
     console.log('PASS: browser voice cycle, primary-answer endpoint, stop-only audio, draft preservation, mobile controls, chat reset, typed chat, voice Plan accept/refuse, updated expandable plan cards');
   } finally { await browser.close(); }

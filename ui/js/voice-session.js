@@ -5,17 +5,24 @@
     let utterance = '', silenceTimer = null, wakeTimer = null, playback = null;
     const requests = new Set(), tasks = new Set(), finished = new Set();
     let queue = [], planOffer = null, planReview = null, editingPlan = false, reviewHeard = false;
-    let commandConfirmation = null, commandHeard = false;
+    let commandConfirmation = null, commandHeard = false, standby = false;
     const now = io.now || Date.now, later = io.setTimeout || setTimeout, clear = io.clearTimeout || clearTimeout;
-    function setPhase(next) { phase = next; io.state(next); }
+    const readyPhases = new Set(['listening', 'awaiting_plan', 'awaiting_plan_review', 'editing_plan', 'awaiting_command']);
+    function setPhase(next) {
+      const previous = phase; phase = next; io.state(next);
+      if (previous === next) return;
+      if (readyPhases.has(next) && !readyPhases.has(previous) || previous === 'off' && next === 'idle') io.cue?.('on');
+      else if (readyPhases.has(previous) && !readyPhases.has(next) || next === 'off' && previous !== 'off') io.cue?.('off');
+    }
     function clearUtterance() { utterance = ''; clear(silenceTimer); silenceTimer = null; }
     function stopPlayback() { if (playback) playback.abort(); playback = null; io.stopAudio(); }
     function busy() { return tasks.size > 0 || requests.size > 0; }
     function pause() { clearUtterance(); clear(wakeTimer); stopPlayback(); io.listen(false); setPhase('working'); }
     function resume(fresh = false) {
       if (!enabled || busy()) return;
+      if (standby) { setPhase('idle'); io.listen(true); clear(wakeTimer); return; }
       if (commandConfirmation) {
-        setPhase(commandHeard ? 'awaiting_deletion' : 'confirming');
+        setPhase(commandHeard ? 'awaiting_command' : 'confirming');
         io.listen(commandHeard); clear(wakeTimer); return;
       }
       if (planReview) {
@@ -36,6 +43,7 @@
     }
     async function drain() {
       if (!enabled || busy() || playback) return;
+      if (standby) { resume(); return; }
       if (!queue.length) { resume(true); return; }
       const item = queue.shift(), taskId = item.id, savedEpoch = epoch;
       const controller = new AbortController(); playback = controller;
@@ -60,7 +68,7 @@
     }
     function disable() {
       enabled = false; epoch++; requests.clear(); tasks.clear(); finished.clear(); queue = []; planOffer = null; planReview = null; editingPlan = false;
-      commandConfirmation = null; commandHeard = false;
+      commandConfirmation = null; commandHeard = false; standby = false;
       clearUtterance(); clear(wakeTimer); stopPlayback(); io.listen(false); setPhase('off');
     }
     function enable(pending = []) {
@@ -70,7 +78,7 @@
     function beginRequest() {
       if (!enabled) return null;
       planOffer = null; planReview = null; editingPlan = false; queue = [];
-      commandConfirmation = null; commandHeard = false;
+      commandConfirmation = null; commandHeard = false; standby = false;
       const ticket = { epoch }; requests.add(ticket); pause(); return ticket;
     }
     function endRequest(ticket, taskId) {
@@ -99,7 +107,7 @@
     }
     function taskPaused(taskId, confirmation) {
       if (!enabled) return;
-      if (confirmation?.kind === 'deletion' && confirmation.confirmation_id) {
+      if (confirmation?.kind === 'command' && confirmation.voice_allowed === true && confirmation.confirmation_id) {
         if (commandConfirmation?.taskId === taskId && commandConfirmation.confirmationId === confirmation.confirmation_id) return;
         tasks.delete(taskId); clearUtterance(); clear(wakeTimer); stopPlayback();
         planOffer = null; planReview = null; editingPlan = false; commandHeard = false;
@@ -145,11 +153,24 @@
     function transcript(text, final) {
       if (!enabled || busy()) return;
       const clean = text.trim();
-      if (phase === 'awaiting_deletion') {
+      if (final && /^(?:иру[\s,]*)?усни[.!?,]*$/iu.test(clean)) {
+        clearUtterance(); clear(wakeTimer); queue = []; planOffer = null;
+        standby = true; activeUntil = 0; stopPlayback(); io.listen(false); resume(); return;
+      }
+      if (standby) {
+        if (!final || !/(^|[^\p{L}\p{N}])иру(?=$|[^\p{L}\p{N}])/iu.test(clean)) return;
+        standby = false;
+        if (planReview || commandConfirmation) {
+          const item = planReview ? { id: planReview.taskId, review: planReview } : { id: commandConfirmation.taskId, confirmation: commandConfirmation };
+          editingPlan = false; reviewHeard = false; commandHeard = false; queue = [item]; drain(); return;
+        }
+        resume(true);
+      }
+      if (phase === 'awaiting_command') {
         if (!final) return;
         const words = clean.toLocaleLowerCase('ru').replace(/^иру[\s,]*/u, '').replace(/[.!?,]+$/u, '').trim();
-        const accepted = /^(да|подтверждаю|да удаляй|да, удаляй|удаляй)$/u.test(words);
-        if (!accepted && !/^(нет|не удаляй|отмена)$/u.test(words)) return;
+        const accepted = /^(да|подтверждаю|да выполни|да, выполни|выполняй)$/u.test(words);
+        if (!accepted && !/^(нет|не выполняй|отмена)$/u.test(words)) return;
         const offer = commandConfirmation, savedEpoch = epoch;
         tasks.add(offer.taskId); pause();
         Promise.resolve().then(() => {
