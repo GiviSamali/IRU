@@ -69,24 +69,37 @@ DANGEROUS_PATTERNS = [
 ]
 
 
-CONFIRM_PATTERNS = [
-    r"remove-item",
-    r"del\s+",
-    r"rd\s+",
-    r"rmdir\s+",
-    r"rm\s+",
+DELETE_PATTERNS = [
+    r"\bremove-item\b",
+    r"\bdel\s+",
+    r"\brd\s+",
+    r"\brmdir\s+",
+    r"\brm\s+",
+    r"\bclear-content\b",
+    r"\b(?:os\.(?:remove|unlink|rmdir)|shutil\.rmtree)\s*\(",
+    r"\.(?:unlink|rmdir)\s*\(",
+    r"\bIO\.(?:File|Directory)\]::Delete\s*\(",
+]
+
+
+CONFIRM_PATTERNS = DELETE_PATTERNS + [
     r"stop-process",
-    r"kill\s+",
+    r"\bkill\s+",
     r"taskkill",
     r"shutdown",
     r"restart-computer",
-    r"clear-content",
     r"uninstall",
 ]
 
 
 _dangerous_re = [re.compile(pattern, re.IGNORECASE) for pattern in DANGEROUS_PATTERNS]
 _confirm_re = [re.compile(pattern, re.IGNORECASE) for pattern in CONFIRM_PATTERNS]
+_delete_re = [re.compile(pattern, re.IGNORECASE) for pattern in DELETE_PATTERNS]
+
+
+def is_deletion_command(command: str) -> bool:
+    """Recognize explicit deletion in command text, not arbitrary script contents."""
+    return any(pattern.search(command) for pattern in _delete_re)
 
 
 def is_command_safe(command: str) -> bool:

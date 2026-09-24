@@ -4,7 +4,7 @@ const { createVoiceSession } = require('../ui/js/voice-session.js');
 
 function setup(overrides = {}) {
   let time = 100, nextId = 0, listening = false;
-  const timers = new Map(), submitted = [], spoken = [], errors = [], choices = [], reviews = [];
+  const timers = new Map(), submitted = [], spoken = [], errors = [], choices = [], reviews = [], commandChoices = [];
   const session = createVoiceSession({
     now: () => time,
     setTimeout: (fn, delay) => { const id = ++nextId; timers.set(id, { fn, at: time + delay }); return id; },
@@ -13,6 +13,7 @@ function setup(overrides = {}) {
     error: error => errors.push(error),
     choosePlan: (offer, accepted) => choices.push({ offer, accepted }),
     reviewPlan: (review, changes) => { reviews.push({ review, changes }); session.planReviewResolved(review.taskId); },
+    chooseCommand: (offer, accepted) => { commandChoices.push({ offer, accepted }); session.commandDecisionResolved(offer.taskId); },
     submit: text => { submitted.push(text); session.beginRequest(); },
     speak: (id, signal, onSpeaking) => new Promise(resolve => { spoken.push({ id, signal, onSpeaking, resolve }); }),
     ...overrides,
@@ -22,7 +23,7 @@ function setup(overrides = {}) {
     for (const [id, timer] of [...timers]) if (timer.at <= time && timers.delete(id)) timer.fn();
   }
   session.enable();
-  return { session, submitted, spoken, errors, choices, reviews, advance, get listening() { return listening; } };
+  return { session, submitted, spoken, errors, choices, reviews, commandChoices, advance, get listening() { return listening; } };
 }
 
 test('wake word sends only final text after silence, ignoring background speech', () => {
@@ -225,4 +226,40 @@ test('uncertain approval response disables voice rather than listening during po
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(h.session.enabled, false); assert.equal(h.listening, false);
   assert.equal(h.errors.length, 1);
+});
+
+for (const [answer, accepted] of [['да', true], ['нет', false]]) {
+  test(`deletion confirmation handles ${answer} once, independently of PLAN answers`, async () => {
+    const h = setup(); h.session.watchTask('task');
+    h.session.taskPaused('task', { kind: 'deletion', confirmation_id: 'delete-1' });
+    h.session.taskPaused('task', { kind: 'deletion', confirmation_id: 'delete-1' });
+    assert.equal(h.spoken.length, 1);
+    h.spoken[0].onSpeaking(); h.session.transcript(answer, true);
+    assert.deepEqual(h.commandChoices, []);
+    h.spoken[0].resolve(); await Promise.resolve();
+    assert.equal(h.session.phase, 'awaiting_deletion'); assert.equal(h.listening, true);
+    h.session.transcript(answer, false); assert.deepEqual(h.commandChoices, []);
+    h.session.transcript(answer, true); h.session.transcript(answer, true); await Promise.resolve();
+    assert.deepEqual(h.commandChoices, [{ offer: { taskId: 'task', confirmationId: 'delete-1' }, accepted }]);
+    assert.deepEqual(h.reviews, []); assert.deepEqual(h.choices, []); assert.deepEqual(h.submitted, []);
+    assert.equal(h.listening, false);
+    h.session.taskPaused('task', { kind: 'deletion', confirmation_id: 'delete-2' });
+    assert.equal(h.spoken.length, 2);
+    h.spoken[1].onSpeaking(); h.spoken[1].resolve(); await Promise.resolve();
+    assert.equal(h.session.phase, 'awaiting_deletion');
+    h.advance(60000); assert.equal(h.commandChoices.length, 1);
+  });
+}
+
+test('silent or stopped deletion question never arms approval; reset discards consent', async () => {
+  const h = setup(); h.session.watchTask('task');
+  h.session.taskPaused('task', { kind: 'deletion', confirmation_id: 'd1' });
+  h.spoken[0].resolve(); await Promise.resolve();
+  h.session.transcript('да', true); assert.deepEqual(h.commandChoices, []);
+  assert.equal(h.session.phase, 'confirming'); assert.equal(h.listening, false);
+  h.session.taskPaused('task', { kind: 'deletion', confirmation_id: 'd2' });
+  h.spoken[1].onSpeaking(); h.session.stopSpeech();
+  h.session.transcript('да', true); assert.deepEqual(h.commandChoices, []);
+  h.session.disable(); h.spoken[1].resolve(); await Promise.resolve();
+  assert.equal(h.session.phase, 'off');
 });

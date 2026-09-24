@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
     page.on('pageerror', error => errors.push(error.message));
     let completed = false, counter = 0, planScenario = false, planStarted = false;
     let reviewScenario = false, revision = 1, reviewApproved = false;
+    let deletionScenario = false, deletionChoice = null;
     await page.addInitScript(() => {
       window.testRecognition = null;
       class Recognition {
@@ -31,6 +32,7 @@ const assert = require('node:assert/strict');
       requests.push({ path: url.pathname, body: route.request().postDataJSON() });
       let data = { status: 'ok' };
       if (url.pathname === '/api/voice/config') data.available = true;
+      else if (url.pathname.endsWith('/command-decision')) deletionChoice = route.request().postDataJSON();
       else if (url.pathname.endsWith('/review-plan')) {
         const body = route.request().postDataJSON();
         assert.equal(body.revision, `v${revision}`);
@@ -42,7 +44,11 @@ const assert = require('node:assert/strict');
       else if (url.pathname === '/nl_command') data = { status: 'ok', task_id: `task-${++counter}`, chat_id: 1 };
       else if (url.pathname.endsWith('/speech')) {
         await route.fulfill({ body: 'mock-ogg', contentType: 'audio/ogg', headers: { 'X-Voice-Parts': '1' } }); return;
-      } else if (reviewScenario && url.pathname === '/api/tasks/task-review') data.task = {
+      } else if (deletionScenario && url.pathname === '/api/tasks/task-delete') data.task = {
+        status: deletionChoice ? 'running' : 'confirm', chat_id: 1, tasks: [], commands: [],
+        confirm_data: { kind: 'deletion', confirmation_id: 'delete-v1', command: 'Remove-Item helper.py' },
+      };
+      else if (reviewScenario && url.pathname === '/api/tasks/task-review') data.task = {
         status: reviewApproved ? 'running' : 'confirm', chat_id: 1, tasks: [], commands: [],
         ...(!reviewApproved ? { plan_review: { revision: `v${revision}`, steps: [
           { title: `План версия ${revision}`, instruction: 'Создать документы в папке' }],
@@ -165,6 +171,22 @@ const assert = require('node:assert/strict');
       { revision: 'v2', action: 'revise', changes: 'Добавь источники' },
       { revision: 'v3', action: 'approve', changes: '' },
     ]);
+    deletionScenario = true;
+    await page.evaluate(() => {
+      iruVoice.disable(); iruVoice.enable();
+      const index = state.messages.length;
+      state.messages.push({ role: 'assistant', loading: true, content: '' });
+      state.pendingTasks.push({ task_id: 'task-delete', msgIndex: index });
+      pollTask('task-delete', index);
+    });
+    await page.waitForFunction(() => iruVoice.phase === 'speaking');
+    await page.evaluate(() => testAudio.onended());
+    await page.waitForFunction(() => iruVoice.phase === 'awaiting_deletion');
+    await page.evaluate(() => testRecognition.emit('да'));
+    await page.waitForFunction(() => iruVoice.phase === 'working');
+    await page.waitForTimeout(150);
+    assert.deepEqual(deletionChoice, { confirmation_id: 'delete-v1', accepted: true });
+    assert.equal(await page.evaluate(() => testRecognition.active), false);
     // Updated product UI keeps completed plans expandable by keyboard.
     await page.evaluate(() => {
       const card = document.createElement('div'); card.id = 'test-completed-plan';

@@ -79,6 +79,21 @@ response disables voice and refreshes task state. Text controls support
 approval, edits and cancellation. Waiting drafts share the existing in-memory
 task lifetime (one hour) and do not survive server restart.
 
+Ordinary file/directory creation does not require a separate command approval.
+Deletion and cleanup remain separate confirmed commands; creation/probes must
+not include cleanup. Short deletion aliases are matched at word boundaries,
+so words like Word, model and platform do not trigger deletion confirmation.
+The command-text guard also recognizes explicit Python/pathlib/.NET deletion;
+it is not a sandbox or a parser of arbitrary external script contents.
+
+Pending deletion commands have a unique `confirmation_id`. Voice reads a short
+deletion warning and asks for yes/no, without reading code or invoking an LLM.
+`POST /api/tasks/{id}/command-decision` binds the response to the current owned
+command: yes approves, no denies/cancels under the existing execution policy.
+This is distinct from PLAN review, where no means no changes. Repeated/stale
+responses fail; unfinished/missing audio never arms spoken consent. The same
+command continues after approval; recognition is off while executing.
+
 The existing pipeline policy for continuing recoverable failed steps and final
 artifact recovery is retained. A global wall-clock deadline, persistent execution
 checkpoints, and precise dependency-linked recovery remain separate work.

@@ -520,6 +520,26 @@ async def api_review_plan(task_id: str, body: PlanReviewBody, request: Request):
     return {"status": "ok"}
 
 
+class CommandDecisionBody(BaseModel):
+    confirmation_id: str = Field(min_length=1, max_length=64)
+    accepted: bool
+
+
+@router.post("/api/tasks/{task_id}/command-decision")
+async def api_command_decision(task_id: str, body: CommandDecisionBody, request: Request):
+    user = get_current_user(request)
+    task = tasks.get(task_id)
+    if not task or task.get("user_id") != user["id"]:
+        raise HTTPException(404, "Задача не найдена")
+    data = task.get("confirm_data") or {}
+    if (task.get("status") != "confirm" or task.get("plan_review")
+            or data.get("confirmation_id") != body.confirmation_id):
+        raise HTTPException(409, "Это подтверждение команды уже не актуально.")
+    if body.accepted:
+        return await api_confirm_task(task_id, request)
+    return await api_deny_task(task_id, request)
+
+
 @router.post("/api/tasks/{task_id}/confirm")
 async def api_confirm_task(task_id: str, request: Request):
     user = get_current_user(request)

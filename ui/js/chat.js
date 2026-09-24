@@ -824,7 +824,6 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
           window.iruVoice?.taskPlanReview(taskId, task.plan_review);
           return;
         }
-        window.iruVoice?.taskPaused(taskId);
         stopped = true;
         const cd = task.confirm_data || {};
         const cmdText = cd.command || '';
@@ -834,9 +833,11 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
           commands: task.commands,
           tasks: task.tasks || [],
           confirmTaskId: taskId,
+          commandConfirmation: cd,
           _taskId: taskId,
         };
         renderMessages();
+        window.iruVoice?.taskPaused(taskId, cd);
         return;
       }
       if (isTaskTerminalStatus(task.status)) {
@@ -1386,11 +1387,33 @@ async function cancelReviewedPlan(taskId, index) {
   } catch (error) { showToast(error.message, true); }
 }
 
-async function confirmTask(taskId, msgIndex) {
+async function chooseVoiceCommand(offer, accepted) {
+  const index = state.messages.findIndex(message => message.confirmTaskId === offer.taskId
+    && message.commandConfirmation?.confirmation_id === offer.confirmationId);
+  if (index < 0) throw new Error('Подтверждение команды устарело. Обновите чат.');
   try {
-    await apiFetch(`${API}/api/tasks/${taskId}/confirm`, {
+    const response = await apiFetch(`${API}/api/tasks/${offer.taskId}/command-decision`, {
+      method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmation_id: offer.confirmationId, accepted }),
+    });
+    if (!response.ok) throw new Error('Подтверждение команды отклонено. Обновляю её состояние.');
+    window.iruVoice?.commandDecisionResolved(offer.taskId);
+  } catch (error) {
+    window.iruVoice?.disable();
+    showToast(error.message, true);
+  }
+  state.messages[index] = { role: 'assistant', _taskId: offer.taskId, loading: true, content: '' };
+  renderMessages(); pollTask(offer.taskId, index);
+}
+
+async function confirmTask(taskId, msgIndex) {
+  const confirmationId = state.messages[msgIndex]?.commandConfirmation?.confirmation_id;
+  if (confirmationId) return chooseVoiceCommand({ taskId, confirmationId }, true).catch(error => showToast(error.message, true));
+  try {
+    const response = await apiFetch(`${API}/api/tasks/${taskId}/confirm`, {
       method: 'POST', headers: authHeaders(),
     });
+    if (!response.ok) throw new Error('Подтверждение отклонено');
     // Убираем кнопки, показываем лоадер
     state.messages[msgIndex].confirmTaskId = null;
     state.messages[msgIndex].loading = true;
@@ -1402,6 +1425,8 @@ async function confirmTask(taskId, msgIndex) {
 }
 
 async function denyTask(taskId, msgIndex) {
+  const confirmationId = state.messages[msgIndex]?.commandConfirmation?.confirmation_id;
+  if (confirmationId) return chooseVoiceCommand({ taskId, confirmationId }, false).catch(error => showToast(error.message, true));
   try {
     const response = await apiFetch(`${API}/api/tasks/${taskId}/deny`, {
       method: 'POST', headers: authHeaders(),

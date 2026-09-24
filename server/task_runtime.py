@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import httpx
 
 try:
+    from .command_confirmation import command_confirmation
     from .api_support import _is_admin, is_command_safe, needs_confirmation
     from .controller import (
         ConfirmationRequired,
@@ -57,6 +58,7 @@ try:
     )
     from .tool_registry import compact_device_passport
 except ImportError:
+    from command_confirmation import command_confirmation
     from api_support import _is_admin, is_command_safe, needs_confirmation
     from controller import (
         ConfirmationRequired,
@@ -842,8 +844,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 # Keep this bounded worker alive; confirmation resumes the pending call.
                 decision = asyncio.get_running_loop().create_future()
                 task["_pipeline_confirm_future"] = decision
-                task["confirm_data"] = {"command": params.get("command", ""), "device_id": target_device_id,
-                                        "params": params, "chat_id": chat_id, "user_id": user_id}
+                task["confirm_data"] = command_confirmation({"command": params.get("command", ""), "device_id": target_device_id,
+                                        "params": params, "chat_id": chat_id, "user_id": user_id})
                 task["status"] = "confirm"
                 try:
                     accepted = await decision
@@ -1146,7 +1148,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 task["status"] = "confirm"
                 task["answer"] = result.get("answer", "")
                 task["commands"] = result.get("commands", [])
-                task["confirm_data"] = result.get("confirm_data", {})
+                task["confirm_data"] = command_confirmation(result.get("confirm_data", {}))
                 task["confirm_data"]["chat_id"] = chat_id
                 task["confirm_data"]["user_id"] = user_id
                 return
