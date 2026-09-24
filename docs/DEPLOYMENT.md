@@ -4,18 +4,17 @@
 
 ## Server deployment
 
-Типовой Linux/VPS flow:
+Обновление существующего Linux/VPS-сервера (скрипт уже получен вместе с этой версией):
 
 ```bash
 cd /opt/iru/app
-git pull origin main
-python3 -m venv /opt/iru/venv
-source /opt/iru/venv/bin/activate
-pip install -r requirements.txt
-python -m py_compile server/main.py
-systemctl restart iru
+python3 tools/update_server.py --branch codex/deeptalk-integration --restart
 systemctl status iru --no-pager
 ```
+
+При первом развёртывании создайте `/opt/iru/venv` и установите `requirements.txt`.
+Если зависимости менялись, установите их в окружение сервиса до рестарта.
+Порядок получения скрипта и правила веток описаны в [BRANCHES.md](BRANCHES.md).
 
 Если systemd unit еще не установлен, используйте файлы из `deploy/` как основу:
 
@@ -34,7 +33,7 @@ journalctl -u iru -n 100 --no-pager
 
 ## Web search configuration
 
-`web_search` uses Yandex Cloud Search API v2 in both pipeline and non-pipeline.
+`web_search` uses Yandex Cloud Search API v2 in pipeline, non-pipeline, and chat without a connected device.
 Set `YANDEX_SEARCH_API_KEY` and `YANDEX_FOLDER_ID` in the environment of the
 server process. The search key is separate from the SpeechKit `YANDEX_API_KEY`.
 The legacy `tavily_api_key` setting in `llm_config.json` is no longer used;
@@ -173,6 +172,13 @@ Rebuild required when меняется:
 - agent-side dependencies или packaging.
 
 Server-only изменения не требуют пересборки агента, если agent protocol/actions не изменились.
+
+## Проверка ветки сервера
+
+Текущая ветка интеграции — `codex/deeptalk-integration`. Перед обновлением
+используйте [проверяемое обновление и порядок работы с ветками](BRANCHES.md).
+Скрипт `tools/update_server.py` проверяет включение актуального main, текущую
+ветку и возможность fast-forward до перезапуска сервиса.
 
 ## Update checklist
 

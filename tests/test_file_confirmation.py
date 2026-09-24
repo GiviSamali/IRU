@@ -124,3 +124,17 @@ def test_risky_command_rejects_voice_but_accepts_button(monkeypatch, command):
         await routes.api_command_decision("danger", routes.CommandDecisionBody(confirmation_id=data["confirmation_id"], accepted=True), None)
         assert decision.result() is True
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_ordinary_command_accepts_voice_decision(monkeypatch, accepted):
+    monkeypatch.setattr(routes, "get_current_user", lambda request: {"id": 1})
+    async def scenario():
+        decision = asyncio.get_running_loop().create_future()
+        data = command_confirmation({"command": "New-Item report.txt"})
+        monkeypatch.setitem(runtime.tasks, "ordinary", {"user_id": 1, "status": "confirm", "confirm_data": data,
+            "modes": {"pipeline": True}, "_pipeline_confirm_future": decision})
+        await routes.api_command_decision("ordinary", routes.CommandDecisionBody(
+            confirmation_id=data["confirmation_id"], accepted=accepted, via_voice=True), None)
+        assert decision.done() and decision.result() is accepted
+    asyncio.run(scenario())

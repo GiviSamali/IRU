@@ -25,7 +25,21 @@
 
 ## Проверяемое обновление
 
-После получения этого скрипта на сервере вместо обычного pull использовать:
+Для первого получения скрипта из этой версии (сервер должен уже находиться
+в `codex/deeptalk-integration`) выполните всю цепочку:
+
+```bash
+cd /opt/iru/app &&
+test "$(git branch --show-current)" = "codex/deeptalk-integration" &&
+test -z "$(git status --porcelain --untracked-files=no)" &&
+git fetch origin &&
+git merge-base --is-ancestor origin/main origin/codex/deeptalk-integration &&
+git merge --ff-only origin/codex/deeptalk-integration &&
+python3 tools/update_server.py --branch codex/deeptalk-integration --restart
+```
+
+Если проверка не прошла, остановиться и разобрать причину; не применять reset
+или принудительное переключение ветки. Для дальнейших обновлений использовать:
 
 ```bash
 cd /opt/iru/app

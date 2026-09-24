@@ -308,3 +308,37 @@ test('microphone cues track readiness, silence and sleep, not repeated phases or
   h.advance(10001); assert.equal(h.cues.at(-1), 'off');
   h.session.disable(); assert.equal(h.cues.at(-1), 'off');
 });
+
+test('sleep word clears pending speech and requires wake word again', () => {
+  const h = setup();
+  h.session.transcript('Иру открой блокнот', true); h.advance(300);
+  h.session.transcript('усни', true); h.advance(2000);
+  assert.equal(h.session.enabled, true); assert.equal(h.session.phase, 'idle');
+  assert.deepEqual(h.submitted, []); assert.equal(h.listening, true);
+  h.session.transcript('открой браузер', true); h.advance(2000);
+  assert.deepEqual(h.submitted, []);
+  h.session.transcript('ИРУ привет', true); h.advance(1000);
+  assert.deepEqual(h.submitted, ['привет']);
+});
+
+test('sleep interrupts audio without late completion waking session', async () => {
+  const h = setup(); h.session.watchTask('task'); h.session.taskFinished('task', { answer: 'Ответ' });
+  h.spoken[0].onSpeaking(); h.session.transcript('Иру, усни!', true);
+  assert.equal(h.spoken[0].signal.aborted, true);
+  h.spoken[0].resolve(); await Promise.resolve();
+  assert.equal(h.session.phase, 'idle'); assert.deepEqual(h.submitted, []);
+});
+
+test('sleep dismisses voice plan consent without accepting or declining plan', async () => {
+  const h = setup(); await offerPlan(h); h.session.transcript('усни', true);
+  h.session.transcript('да', true); h.advance(31000); await Promise.resolve();
+  assert.equal(h.session.phase, 'idle'); assert.deepEqual(h.choices, []);
+});
+
+test('sleep requires a complete standalone phrase and is ignored during work', () => {
+  const h = setup(); h.session.transcript('Иру', true);
+  h.session.transcript('усни', false); assert.equal(h.session.phase, 'listening');
+  h.session.transcript('напиши слово усни', true); h.advance(1000);
+  assert.deepEqual(h.submitted, ['напиши слово усни']);
+  h.session.transcript('усни', true); assert.equal(h.session.phase, 'working');
+});

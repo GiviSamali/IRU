@@ -6,7 +6,7 @@
   const stopButton = document.getElementById('voiceStopSpeech');
   let recognition = null, wantListening = false, restartTimer = null;
   let audioContext = null, source = null, activation = 0, starting = false;
-  const labels = { off: '', idle: 'Голос включён · скажите «Иру»', listening: 'Слушаю…',
+  const labels = { off: '', idle: 'Голос включён · скажите «Иру»', listening: 'Слушаю… · «усни» — ожидание «Иру»',
     awaiting_plan: 'Запустить План? Скажите «да», «запускай» или «нет»',
     awaiting_plan_review: 'Изменить план? «Нет» — выполнить, «да» — продиктовать изменения',
     awaiting_command: 'Выполнить действие? «Да» — выполнить, «нет» — отменить',
