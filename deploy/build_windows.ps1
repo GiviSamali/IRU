@@ -8,6 +8,7 @@
 #   -Version      Строка версии (например "3.7"). ОБЯЗАТЕЛЬНО.
 #   -Server       URL сервера (по умолчанию https://irumode.ru).
 #   -Token        Admin-токен. Если не передан, берётся из env:IRU_ADMIN_TOKEN.
+#   -UploadResolveIp IP нового сервера для curl --resolve, если DNS ещё не переключён.
 #   -SkipUpload   Только собрать, не загружать на сервер.
 #   -DebugBuild   Собрать с --console (видимый stdout/stderr для отладки).
 #                 ZIP будет называться IruAgent-debug.zip.
@@ -29,6 +30,8 @@ param(
     [string]$Server = "https://irumode.ru",
 
     [string]$Token = $env:IRU_ADMIN_TOKEN,
+
+    [string]$UploadResolveIp = "",
 
     [switch]$SkipUpload,
 
@@ -570,13 +573,32 @@ Write-Host "Загрузка в $uri ..."
 
 $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
 if ($curl) {
-    & curl.exe -sS -X POST $uri `
-        -H "X-Token: $Token" `
-        -H "Content-Type: application/octet-stream" `
-        --data-binary "@$zipPath" `
-        --fail-with-body
+    $curlArgs = @(
+        "-sS",
+        "-X", "POST",
+        $uri,
+        "-H", "X-Token: $Token",
+        "-H", "Content-Type: application/octet-stream",
+        "--data-binary", "@$zipPath",
+        "--fail-with-body"
+    )
+    if ($UploadResolveIp) {
+        $uploadUri = [Uri]$uri
+        $port = if ($uploadUri.IsDefaultPort) {
+            if ($uploadUri.Scheme -eq "https") { 443 } else { 80 }
+        } else {
+            $uploadUri.Port
+        }
+        $resolveTarget = "{0}:{1}:{2}" -f $uploadUri.Host, $port, $UploadResolveIp
+        Write-Host "curl --resolve: $resolveTarget" -ForegroundColor DarkGray
+        $curlArgs = @("--resolve", $resolveTarget) + $curlArgs
+    }
+    & curl.exe @curlArgs
     if ($LASTEXITCODE -ne 0) { throw "curl вернул код $LASTEXITCODE" }
 } else {
+    if ($UploadResolveIp) {
+        throw "-UploadResolveIp требует curl.exe, потому что Invoke-WebRequest не поддерживает curl --resolve."
+    }
     $bytes = [System.IO.File]::ReadAllBytes($zipPath)
     $resp = Invoke-WebRequest -Uri $uri -Method Post `
         -Headers @{ "X-Token" = $Token; "Content-Type" = "application/octet-stream" } `
