@@ -73,7 +73,7 @@ def create_app() -> FastAPI:
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-    app.include_router(create_public_router(UI_DIR, AGENT_DOWNLOAD_DIR))
+    app.include_router(create_public_router(UI_DIR, AGENT_DOWNLOAD_DIR, UPDATES_DIR))
     app.include_router(auth_router)
     app.include_router(admin_router)
     app.include_router(devices_router)

@@ -88,6 +88,13 @@ Set-Location server
 python main.py
 ```
 
+## Релиз агента
+
+Обязательная процедура: [AGENT_RELEASES.md](AGENT_RELEASES.md). Версия внутри ZIP,
+метаданные API и SHA-256 должны совпадать. Номер релиза нельзя назначать ручной
+правкой version.json; после первой проверенной загрузки сервер использует
+игнорируемый Git файл release.json и архив с версией и хэшем в имени.
+
 ## Agent build
 
 Windows build script:

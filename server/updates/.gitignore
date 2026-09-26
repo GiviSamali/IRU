@@ -1,1 +1,4 @@
 *.exe
+*.zip
+release.json
+.release-*

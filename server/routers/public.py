@@ -1,20 +1,23 @@
-import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 try:
+    from .agent_update import download_release
+    from ..agent_release import read_release
     from ..database import PLAN_LIMITS
     from ..api_support import get_current_user
 except ImportError:
+    from routers.agent_update import download_release
+    from agent_release import read_release
     from database import PLAN_LIMITS
     from api_support import get_current_user
 
 
-def create_router(ui_dir: Path, agent_download_dir: Path) -> APIRouter:
+def create_router(ui_dir: Path, agent_download_dir: Path, updates_dir: Path | None = None) -> APIRouter:
     router = APIRouter()
-    updates_dir = Path(__file__).resolve().parent.parent / "updates"
+    updates_dir = updates_dir or Path(__file__).resolve().parent.parent / "updates"
 
     @router.get("/api/info")
     async def api_info():
@@ -23,9 +26,9 @@ def create_router(ui_dir: Path, agent_download_dir: Path) -> APIRouter:
             "server": "fastapi",
         }
         version_file = updates_dir / "version.json"
-        if version_file.exists():
+        if version_file.exists() or (updates_dir / "release.json").exists():
             try:
-                version_data = json.loads(version_file.read_text(encoding="utf-8-sig"))
+                version_data = read_release(updates_dir)
                 version = version_data.get("version")
                 if version:
                     info["version"] = version
@@ -61,23 +64,6 @@ def create_router(ui_dir: Path, agent_download_dir: Path) -> APIRouter:
     @router.get("/api/download_agent")
     async def download_agent(request: Request):
         get_current_user(request)
-        if not agent_download_dir.exists():
-            raise HTTPException(status_code=404, detail="Файл агента не найден")
-
-        archive = None
-        for ext in ("*.zip", "*.exe"):
-            files = sorted(agent_download_dir.glob(ext), key=lambda file: file.stat().st_mtime, reverse=True)
-            if files:
-                archive = files[0]
-                break
-
-        if not archive:
-            raise HTTPException(status_code=404, detail="Файл агента не найден")
-
-        return FileResponse(
-            path=str(archive),
-            filename=archive.name,
-            media_type="application/octet-stream",
-        )
+        return download_release(updates_dir)
 
     return router

@@ -568,6 +568,18 @@ if (-not $Token) {
     throw "Не задан admin-токен. Передайте -Token или установите env:IRU_ADMIN_TOKEN."
 }
 
+# Verify the archive itself, not an unrelated dist directory.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$releaseZip = [IO.Compression.ZipFile]::OpenRead($zipPath)
+try {
+    $entry = $releaseZip.GetEntry("IruAgent/VERSION.txt")
+    if (-not $entry) { throw "ZIP does not contain IruAgent/VERSION.txt" }
+    $reader = [IO.StreamReader]::new($entry.Open())
+    try { $archiveVersion = $reader.ReadToEnd().Trim() } finally { $reader.Dispose() }
+    if ($archiveVersion -ne $Version) { throw "ZIP version $archiveVersion differs from requested $Version" }
+} finally { $releaseZip.Dispose() }
+$releaseHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
 $uri = "$Server/api/agent/upload?version=$Version"
 Write-Host "Загрузка в $uri ..."
 
@@ -593,7 +605,7 @@ if ($curl) {
         Write-Host "curl --resolve: $resolveTarget" -ForegroundColor DarkGray
         $curlArgs = @("--resolve", $resolveTarget) + $curlArgs
     }
-    & curl.exe @curlArgs
+    $uploadResponse = & curl.exe @curlArgs
     if ($LASTEXITCODE -ne 0) { throw "curl вернул код $LASTEXITCODE" }
 } else {
     if ($UploadResolveIp) {
@@ -603,8 +615,28 @@ if ($curl) {
     $resp = Invoke-WebRequest -Uri $uri -Method Post `
         -Headers @{ "X-Token" = $Token; "Content-Type" = "application/octet-stream" } `
         -Body $bytes -UseBasicParsing
-    Write-Host $resp.Content
+    $uploadResponse = $resp.Content
 }
 
 Write-Host ""
-Write-Host "OK: agent v$Version (ZIP) загружен. Агенты подтянут обновление автоматически." -ForegroundColor Green
+$published = ($uploadResponse -join "`n") | ConvertFrom-Json
+if ($published.version -ne $Version -or $published.sha256 -ne $releaseHash) {
+    throw "Server did not confirm the ZIP version and SHA-256. Update server release validation before publishing."
+}
+$verifyUri = "$Server/api/agent/version"
+if ($curl) {
+    $verifyArgs = @("-fsS", $verifyUri)
+    if ($UploadResolveIp) { $verifyArgs = @("--resolve", $resolveTarget) + $verifyArgs }
+    $verifyResponse = & curl.exe @verifyArgs
+    if ($LASTEXITCODE -ne 0) { throw "Cannot verify published release" }
+    $verified = ($verifyResponse -join "`n") | ConvertFrom-Json
+} else {
+    $verified = (Invoke-WebRequest -Uri $verifyUri -UseBasicParsing).Content | ConvertFrom-Json
+}
+if ($verified.version -ne $Version -or $verified.sha256 -ne $releaseHash) {
+    throw "Version endpoint does not match the uploaded ZIP"
+}
+Write-Host "OK: agent v$Version verified on upload target; SHA-256 $releaseHash" -ForegroundColor Green
+if ($UploadResolveIp) {
+    Write-Warning "UploadResolveIp changes ONLY this upload target, not DNS or agent connections. Verify public domain version and SHA-256 after switching DNS."
+}

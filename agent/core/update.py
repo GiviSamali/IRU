@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 import logging
 import os
 import shutil
@@ -61,6 +63,9 @@ def check_for_update(
         return False
 
     server_version = str(data.get("version", "0.0"))
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", server_version) or len(server_version) > 32:
+        logger.error("[update] invalid release version; installation refused")
+        return False
     download_url = str(data.get("download_url", ""))
     kind = str(data.get("kind", "exe"))
 
@@ -109,8 +114,9 @@ def check_for_update(
             logger=logger,
             state=state,
         )
+        _validate_download(download_path, server_version, kind, data)
     except Exception as exc:
-        message = f"Ошибка скачивания обновления: {exc}"
+        message = f"Ошибка проверки или скачивания обновления: {exc}"
         logger.error("[update] %s", message)
         state.set_update_status(message, state="update_available", progress=-1, detail="")
         try:
@@ -138,6 +144,35 @@ def check_for_update(
     if kind == "zip":
         return _update_zip(download_path, server_version, paths, logger)
     return _update_exe(download_path, server_version, paths, logger)
+
+
+def _validate_download(path: Path, version: str, kind: str, metadata: dict) -> None:
+    """Reject stale/wrong artifacts before stopping the running agent."""
+    if metadata.get("size") is not None and path.stat().st_size != metadata["size"]:
+        raise ValueError("Размер архива не совпадает с объявленным релизом")
+    if metadata.get("sha256"):
+        with path.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        if digest != metadata["sha256"]:
+            raise ValueError("SHA-256 архива не совпадает с объявленным релизом")
+    if kind != "zip":
+        return  # compatibility with old servers distributing single EXE files
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        if len(names) != len({name.casefold() for name in names}):
+            raise ValueError("Повторяющиеся пути в ZIP")
+        for name in names:
+            if "\\" in name or ":" in name or name.startswith("/") or any(part in ("", ".", "..") or part.endswith((".", " ")) for part in name.rstrip("/").split("/")):
+                raise ValueError("Недопустимый путь внутри ZIP")
+        roots = [root for root in ("", "IruAgent/") if root + "IruAgent.exe" in names]
+        if len(roots) != 1:
+            raise ValueError("Не найден однозначный IruAgent.exe в ZIP")
+        entry = archive.getinfo(roots[0] + "VERSION.txt")
+        if entry.file_size > 128:
+            raise ValueError("Некорректный VERSION.txt")
+        actual = archive.read(entry).decode("utf-8-sig").strip()
+        if actual != version:
+            raise ValueError(f"Версия ZIP {actual!r} не совпадает с релизом {version!r}; установка отменена")
 
 
 def _download_update(
