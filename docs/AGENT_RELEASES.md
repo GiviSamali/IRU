@@ -128,3 +128,22 @@ python -m pytest -q tests/test_agent_release.py tests/test_windows_build_script.
 Тесты используют синтетические ZIP и не запускают Windows-установщик.
 Реальный smoke выпуска: сборка → upload → GET версии → скачивание/хэш →
 установка на тестовом устройстве → повторная проверка без повторной установки.
+
+## ZIP does not contain IruAgent/VERSION.txt
+
+Windows PowerShell Compress-Archive может записывать обратные слеши в именах
+ZIP: `IruAgent\VERSION.txt`. .NET GetEntry ищет точное имя со слешем `/`, а
+Linux также не нормализует эти пути. Python на Windows может показывать уже
+нормализованное имя: для диагностики смотреть ZipInfo.orig_filename.
+
+Штатная сборка использует `deploy/package_agent.py`, который задаёт пути `/`
+явно. Проверка версии не отключается. Если EXE уже собран и ошибка возникла
+только при упаковке, перепаковать готовую папку без пересборки:
+
+```powershell
+python deploy/package_agent.py --source dist/IruAgent --output dist/IruAgent.zip --version 3.13.5
+if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
+```
+
+Указать фактическую версию сборки; скрипт проверит VERSION.txt и BUILD_INFO.json.
+Предыдущий ZIP заменяется только после успешного создания и проверки нового.

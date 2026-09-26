@@ -158,7 +158,7 @@ def _validate_download(path: Path, version: str, kind: str, metadata: dict) -> N
     if kind != "zip":
         return  # compatibility with old servers distributing single EXE files
     with zipfile.ZipFile(path) as archive:
-        names = archive.namelist()
+        names = [item.orig_filename for item in archive.infolist()]
         if len(names) != len({name.casefold() for name in names}):
             raise ValueError("Повторяющиеся пути в ZIP")
         for name in names:

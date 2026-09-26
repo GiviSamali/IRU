@@ -432,10 +432,10 @@ $publishedAgentDir = Publish-AgentBuild -SourceDir (Join-Path $stagingDistDir "I
 # -- Упаковка в ZIP (папка IruAgent/ на верхнем уровне) ---------------------
 $zipName = if ($DebugBuild) { "IruAgent-debug.zip" } else { "IruAgent.zip" }
 $zipPath = Join-Path $distDir $zipName
-if (Test-Path $zipPath) {
-    Remove-Item -Force $zipPath
-}
-Compress-Archive -Path (Join-Path $stagingDistDir "IruAgent") -DestinationPath $zipPath -Force
+# Compress-Archive on Windows PowerShell can write backslash entry names.
+# Explicit POSIX paths are required by .NET GetEntry and Linux validation.
+& $py.Source (Join-Path $PSScriptRoot "package_agent.py") --source (Join-Path $stagingDistDir "IruAgent") --output $zipPath --version $Version
+if ($LASTEXITCODE -ne 0) { throw "Agent ZIP packaging failed with code $LASTEXITCODE" }
 
 $zipSize = (Get-Item $zipPath).Length
 Write-Host ("Готово: {0} ({1:N0} байт)" -f $zipPath, $zipSize) -ForegroundColor Green

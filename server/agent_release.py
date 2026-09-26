@@ -21,7 +21,7 @@ def validate_zip(source, expected):
     validate_version(expected)
     with zipfile.ZipFile(source) as archive:
         entries = archive.infolist()
-        names = [item.filename for item in entries]
+        names = [item.orig_filename for item in entries]
         if len(names) != len({name.casefold() for name in names}) or len(names) > 20000:
             raise ValueError("Duplicate ZIP entries or too many files")
         if sum(item.file_size for item in entries) > 1_000_000_000:

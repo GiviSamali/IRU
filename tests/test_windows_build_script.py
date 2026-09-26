@@ -69,15 +69,20 @@ def test_upload_verification_executes_without_building(tmp_path):
     import os
     import shutil
     import subprocess
-    import zipfile
+    import json
+    from deploy.package_agent import package_agent
     import pytest
 
     powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
     if not powershell:
         pytest.skip("PowerShell is required for the Windows publisher smoke")
     archive = tmp_path / "agent.zip"
-    with zipfile.ZipFile(archive, "w") as output:
-        output.writestr("IruAgent/VERSION.txt", "3.13.5")
+    source = tmp_path / "build"
+    source.mkdir()
+    (source / "VERSION.txt").write_text("3.13.5")
+    (source / "BUILD_INFO.json").write_text(json.dumps({"version": "3.13.5", "artifact": "IruAgent"}))
+    (source / "IruAgent.exe").write_bytes(b"MZ" + b"x" * 1500)
+    package_agent(source, archive, "3.13.5")
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     tail = "# Verify the archive itself" + _source().split("# Verify the archive itself", 1)[1]
     for failure in ("none", "upload", "verify"):
