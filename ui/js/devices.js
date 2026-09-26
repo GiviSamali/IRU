@@ -417,8 +417,8 @@ function closeInputDeviceDropdown() {
   document.getElementById('inputDeviceDropdown').classList.remove('show');
 }
 document.addEventListener('click', e => {
-  if (!e.target.closest('.input-device-select')) closeInputDeviceDropdown();
-  if (!e.target.closest('.input-mode-select')) closeInputModeDropdown();
+  if (!e.target.closest('.input-device-select, #mobilePlusDeviceAction')) closeInputDeviceDropdown();
+  if (!e.target.closest('.input-mode-select, #mobilePlusModeAction')) closeInputModeDropdown();
 });
 
 // Кнопка режимов (конвейер / автономный)

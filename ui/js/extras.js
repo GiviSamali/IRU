@@ -460,7 +460,7 @@ async function sendMessageDirect(text, extraModes = {}) {
 if (window.visualViewport) {
   const resizeApp = () => {
     const app = document.querySelector('.app');
-    if (!app) return;
+    if (!app || window.visualViewport.scale !== 1) return;
     const vh = window.visualViewport.height;
     app.style.height = vh + 'px';
     // Прокрутить страницу вверх, чтобы клавиатура не сдвигала viewport
