@@ -15,7 +15,18 @@ const assert = require('node:assert/strict');
       class Recognition {
         start() { this.active = true; window.testRecognition = this; }
         abort() { this.active = false; }
-        emit(text) { const result = [{ transcript: text }]; result.isFinal = true; this.onresult?.({ resultIndex: 0, results: [result] }); }
+        emit(text) {
+          this.results ||= [];
+          const result = [{ transcript: text }]; result.isFinal = true;
+          const index = this.results.length; this.results.push(result);
+          this.onresult?.({ resultIndex: index, results: this.results });
+        }
+        replay() { this.onresult?.({ resultIndex: 0, results: this.results }); }
+        interim(text) {
+          this.results ||= [];
+          const result = [{ transcript: text }]; result.isFinal = false;
+          this.onresult?.({ resultIndex: this.results.length, results: [...this.results, result] });
+        }
       }
       window.SpeechRecognition = Recognition;
       window.AudioContext = class {
@@ -75,7 +86,7 @@ const assert = require('node:assert/strict');
     await page.locator('#chatInput').fill('Черновик не отправлять');
     await page.locator('#voiceBtn').click();
     await page.waitForFunction(() => iruVoice.phase === 'idle');
-    await page.evaluate(() => testRecognition.emit('Иру открой блокнот'));
+    await page.evaluate(() => { testRecognition.interim('Иру открой'); testRecognition.emit('Иру открой блокнот'); testRecognition.replay(); testRecognition.replay(); });
     await page.waitForFunction(() => iruVoice.phase === 'working');
     await page.waitForFunction(() => state.pendingTasks.length === 1);
     assert.equal(await page.evaluate(() => testRecognition.active), false);
@@ -151,7 +162,7 @@ const assert = require('node:assert/strict');
     await page.waitForFunction(() => iruVoice.phase === 'awaiting_plan_review');
     await page.evaluate(() => testRecognition.emit('да'));
     await page.waitForFunction(() => iruVoice.phase === 'editing_plan');
-    await page.evaluate(() => testRecognition.emit('Добавь сравнение стоимости'));
+    await page.evaluate(() => { testRecognition.emit('Добавь сравнение стоимости'); testRecognition.replay(); testRecognition.replay(); });
     await page.waitForFunction(() => iruVoice.phase === 'speaking');
     await page.evaluate(() => testAudio.onended());
     await page.waitForFunction(() => iruVoice.phase === 'awaiting_plan_review');
@@ -190,6 +201,18 @@ const assert = require('node:assert/strict');
     await page.waitForTimeout(150);
     assert.deepEqual(deletionChoice, { confirmation_id: 'delete-v1', accepted: true, via_voice: false });
     assert.equal(await page.evaluate(() => testRecognition.active), false);
+    // A new recognizer starts again at index zero. Identical words at distinct
+    // indices are intentional speech, not repeated delivery of an old result.
+    await page.setViewportSize({ width: 390, height: 844 });
+    const repeatedWordsRequest = page.waitForRequest(request =>
+      new URL(request.url()).pathname === '/nl_command' && request.method() === 'POST');
+    await page.evaluate(() => {
+      iruVoice.disable(); iruVoice.enable();
+      testRecognition.emit('Иру повтори');
+      testRecognition.emit('да'); testRecognition.emit('да');
+      testRecognition.replay(); testRecognition.replay();
+    });
+    assert.equal((await repeatedWordsRequest).postDataJSON().message, 'повтори да да');
     // Updated product UI keeps completed plans expandable by keyboard.
     await page.evaluate(() => {
       const card = document.createElement('div'); card.id = 'test-completed-plan';

@@ -42,11 +42,17 @@
     if (recognition || !SR) return;
     const rec = new SR(); recognition = rec;
     rec.lang = 'ru-RU'; rec.continuous = true; rec.interimResults = true;
+    // Result indices belong to this recognition run. A repeated final snapshot
+    // must not append the same fragment again; equal text at a NEW index is valid.
+    const deliveredFinals = new Set();
     rec.onresult = event => {
       if (recognition !== rec || !wantListening) return;
       for (let i = event.resultIndex; i < event.results.length; i++) {
         if (recognition !== rec) break;
-        session.transcript(event.results[i][0].transcript, event.results[i].isFinal);
+        if (deliveredFinals.has(i)) continue;
+        const result = event.results[i];
+        if (result.isFinal) deliveredFinals.add(i);
+        session.transcript(result[0].transcript, result.isFinal);
       }
     };
     rec.onerror = event => {
