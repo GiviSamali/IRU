@@ -122,6 +122,21 @@
   color: #eab76d;
 }
 
+.cmd-log[data-plan-outcome="completed"]::after {
+  content: '●  Выполнено';
+  color: #67d8a1;
+}
+
+.cmd-log[data-plan-outcome="failed"]::after {
+  content: '●  Ошибка';
+  color: #f39a9a;
+}
+
+.cmd-log[data-plan-outcome="cancelled"]::after {
+  content: '●  Остановлено';
+  color: #eab76d;
+}
+
 .cmd-log:not(.expanded) > * {
   display: none !important;
 }

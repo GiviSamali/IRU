@@ -437,7 +437,7 @@ function renderMessages() {
     }
     bodyHTML += renderCommandDownloadButtons(commands, linkified.usedDownloads);
     if (commands && commands.length > 0) {
-      bodyHTML += '<div class="cmd-log">';
+      bodyHTML += `<div class="cmd-log" data-plan-outcome="${getPlanLogOutcome(m.tasks)}">`;
       if (commands.length === 1) {
         // Одна команда — обычная плашка, но с stripUtfPrefix
         const c = commands[0];
@@ -1156,6 +1156,15 @@ function getStepDetailText(value) {
   } catch {
     return String(value);
   }
+}
+
+function getPlanLogOutcome(tasks) {
+  if (!Array.isArray(tasks) || tasks.length === 0) return '';
+  const statuses = tasks.map(task => String(task?.status || '').trim().toLowerCase());
+  if (statuses.some(status => ['failed', 'error', 'blocked', 'partial', 'partial_failure'].includes(status))) return 'failed';
+  if (statuses.some(status => status === 'cancelled')) return 'cancelled';
+  if (statuses.every(status => ['done', 'completed', 'completed_with_recovery'].includes(status))) return 'completed';
+  return '';
 }
 
 function renderStepDetailSection(label, value) {
