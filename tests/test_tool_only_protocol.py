@@ -1193,7 +1193,7 @@ def test_auditor_rejects_invalid_answer_and_retry_succeeds():
     assert any(kwargs.get("tools") is None for kwargs in captured)
 
 
-def test_pipeline_final_raw_summary_rejected_then_answer_text(monkeypatch):
+def test_pipeline_validated_steps_need_no_final_llm_summary(monkeypatch):
     def _legacy_trust_should_not_run(answer, commands):
         raise AssertionError("legacy enforce_trusted_answer must not run for pipeline answer_text")
 
@@ -1251,10 +1251,11 @@ def test_pipeline_final_raw_summary_rejected_then_answer_text(monkeypatch):
         linux_rules="linux rules",
     ))
 
-    assert result["answer"] == final_text
+    assert result["answer"].startswith("План выполнен.")
+    assert result["task_receipt"]["answer_source"] == "pipeline_step_report"
     assert finished == ["completed"]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text", "answer.text"]
-    assert any("Raw assistant content is not allowed" in msg.get("content", "") for msg in captured[-1]["messages"])
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text"]
+    assert not any(item.get("phase") == "pipeline.final" for item in captured)
 
 
 def test_pipeline_worker_max_iterations_runs_answer_only_repair(monkeypatch):
@@ -1313,8 +1314,9 @@ def test_pipeline_worker_max_iterations_runs_answer_only_repair(monkeypatch):
         linux_rules="linux rules",
     ))
 
-    assert result["answer"] == final_text
+    assert result["answer"].startswith("План выполнен.")
+    assert "step repaired" in result["answer"]
     assert sent == ["execute_cmd"]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text", "answer.text"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text"]
     repair_calls = [kwargs for kwargs in captured if [tool["function"]["name"] for tool in (kwargs.get("tools") or [])] == ["answer_text"]]
     assert repair_calls

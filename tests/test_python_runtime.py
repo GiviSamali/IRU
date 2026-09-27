@@ -290,3 +290,14 @@ def test_runtime_endpoint_disconnect_during_prepare_is_recoverable_detail(monkey
     assert "runtime_prepare_interrupted" in exc.value.detail
     assert "агент отключился" in exc.value.detail
     assert "Повторите check после переподключения" in exc.value.detail
+
+
+def test_packaged_agent_discovers_per_user_python_outside_path(monkeypatch, tmp_path):
+    actions, _ = _runtime_home(monkeypatch, tmp_path)
+    python = tmp_path / "Programs" / "Python" / "Python312" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.touch()
+    monkeypatch.setattr(actions, "_is_packaged_agent", lambda: True)
+    monkeypatch.setattr(actions.shutil, "which", lambda *a: None)
+    monkeypatch.setattr(actions, "_run_python", lambda argv, **kw: (0, str(python), ""))
+    assert actions._find_base_python() == str(python)

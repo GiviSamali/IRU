@@ -94,7 +94,9 @@ def synthesize_terminal_answer_payload(entry: dict[str, Any]) -> dict[str, Any]:
             text = str(entry.get("summary") or "Command completed.")
     elif tool_name == "write_content":
         text = str(result.get("summary") or entry.get("summary") or "OK: file_written")
-    elif tool_name == "app.open_url":
+    elif tool_name in {"app_launch", "app.launch"}:
+        text = "Приложение открыто, окно подтверждено." if status == "launched_verified" else "Запуск приложения не подтверждён."
+    elif tool_name in {"app.open_url", "app_open_url"}:
         url = str(result.get("url") or "").strip()
         if status == "opened_visible_focus_failed":
             text = "Ссылка открыта, окно найдено, но сфокусировать окно не удалось."
@@ -115,7 +117,9 @@ def synthesize_terminal_answer_payload(entry: dict[str, Any]) -> dict[str, Any]:
         completion_state = "success" if execute_cmd_result_is_ok(result) else None
     elif tool_name == "write_content" and not completion_state:
         completion_state = "success" if write_content_result_is_ok(result) else None
-    elif tool_name == "app.open_url" and not completion_state:
+    elif tool_name in {"app_launch", "app.launch"} and not completion_state:
+        completion_state = "success" if status == "launched_verified" else "partial_success"
+    elif tool_name in {"app.open_url", "app_open_url"} and not completion_state:
         completion_state = "success" if status == "opened_verified" else "partial_success"
     answer_type = "grounded_report" if completion_state == "success" else "partial_report"
     return {
@@ -129,3 +133,27 @@ def synthesize_terminal_answer_payload(entry: dict[str, Any]) -> dict[str, Any]:
             "missing_evidence_question": "" if step_id else "No current run step_id was available.",
         },
     }
+
+
+def synthesize_device_terminal_report(journal: list[dict], terminal_entry: dict) -> dict:
+    """Keep confirmed results from all devices in an ordinary multi-device task."""
+    latest = {}
+    for entry in journal:
+        target = entry.get("target_device_id") or entry.get("device_id")
+        if not target or entry.get("tool_type") == "answer":
+            continue
+        result = entry.get("result") or {}
+        if tool_result_terminal_sufficient(entry):
+            latest[target] = entry
+        elif isinstance(result, dict) and (result.get("error") or entry.get("status") in {"failed", "error", "blocked"}):
+            latest.pop(target, None)
+    if len(latest) < 2:
+        return synthesize_terminal_answer_payload(terminal_entry)
+    payloads = [(target, synthesize_terminal_answer_payload(entry)) for target, entry in latest.items()]
+    result = synthesize_terminal_answer_payload(terminal_entry)
+    result["text"] = "\n".join(f"{target}: {payload['text']}" for target, payload in payloads)
+    result["basis"] = list(dict.fromkeys(step for _, payload in payloads for step in payload["basis"]))
+    if any(payload["answer_type"] != "grounded_report" for _, payload in payloads):
+        result["answer_type"] = "partial_report"
+        result["self_check"]["claims_completed_action"] = False
+    return result

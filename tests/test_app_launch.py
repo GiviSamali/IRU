@@ -204,3 +204,21 @@ def test_non_pipeline_window_verify_logs_tool():
     assert sent == [("givi", "window.verify", {"pid": 4321})]
     assert result["commands"][0]["tool_name"] == "window.verify"
     assert result["commands"][0]["summary"].startswith("status=verified")
+
+
+def test_launcher_exit_does_not_hide_verified_application_window(monkeypatch):
+    from core import actions
+    captured = []
+    class Proc: pid = 100
+    monkeypatch.setattr(actions.os, "name", "nt")
+    monkeypatch.setattr(actions.subprocess, "Popen", lambda *a, **kw: Proc())
+    monkeypatch.setattr(actions, "_process_alive", lambda pid: False)
+    def find(**kw):
+        captured.append(kw)
+        return {"match": {"pid": 200, "process_name": "steam.exe", "visible": True, "title": "Steam"}}
+    monkeypatch.setattr(actions, "window_find", find)
+    result = actions.app_launch(executable="steam.exe", expected_process="steam.exe")
+    assert "pid" not in captured[0]
+    assert captured[0]["process_name"] == "steam.exe"
+    assert result["status"] == "launched_verified"
+    assert result["window"]["pid"] == 200

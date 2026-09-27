@@ -406,6 +406,13 @@ def _find_base_python() -> str | None:
     if not _is_packaged_agent() and _looks_like_python_executable(sys.executable):
         candidates.append(sys.executable)
     candidates.extend([shutil.which("py"), shutil.which("python"), shutil.which("python3")])
+    if platform.system() == "Windows":
+        # Frozen agents and long-running sessions often have no Python on PATH.
+        roots = [Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python",
+                 Path(os.environ.get("ProgramFiles", r"C:\Program Files"))]
+        for root in roots:
+            if root.is_dir():
+                candidates.extend(str(path) for path in sorted(root.glob("Python*/python.exe"), reverse=True))
     seen: set[str] = set()
     for candidate in candidates:
         if not candidate:
@@ -1057,7 +1064,9 @@ def app_launch(
         return {"status": "failed", "error": str(exc), "pid": None, "command": display_command, "cwd": cwd, "process_alive": False, "window": None, "next_actions": []}
 
     timeout = max(0.0, min(float(timeout_sec or 0), 30.0))
-    criteria = {"pid": proc.pid}
+    # Launchers can exit after handing off to an existing process (Steam/UWP).
+    # An explicit expected process identifies its window without the launcher PID.
+    criteria = {} if expected_process else {"pid": proc.pid}
     if expected_title:
         criteria["title_contains"] = expected_title
     if expected_process:

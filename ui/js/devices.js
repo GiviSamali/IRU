@@ -355,12 +355,13 @@ async function runDevicePassportAction(action, mode) {
       showToast('Использован инструмент: device.repair_activation');
     } else if (action === 'activate') {
       showToast('Использован инструмент: device.activate');
-    } else if (action === 'runtime' && (mode || 'check') === 'prepare') {
-      showToast('Использован инструмент: device.prepare_runtime');
-    } else if (action === 'runtime' && (mode || 'check') === 'repair') {
-      showToast('Использован инструмент: device.repair_runtime');
     } else if (action === 'runtime') {
-      showToast('Использован инструмент: device.check_runtime');
+      const runtimeStatus = data.summary?.runtime_status || data.receipt?.status || data.status;
+      const warning = (data.receipt?.warnings || data.summary?.warnings || []).join('; ');
+      if (runtimeStatus === 'ok') showToast('Окружение Python ИРУ готово.');
+      else if (runtimeStatus === 'install_required') showToast('Python не найден на этом ПК. Установите Python, затем нажмите «Подготовить окружение» снова.', true);
+      else if (runtimeStatus === 'missing') showToast('Окружение ещё не создано. Нажмите «Подготовить окружение».', true);
+      else showToast(`Окружение Python не готово (${runtimeStatus || 'unknown'}). ${warning || 'Откройте сведения об устройстве.'}`, true);
     } else {
       showToast('Команда отправлена');
     }

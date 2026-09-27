@@ -106,7 +106,9 @@ def test_device_passport_buttons_show_used_typed_tools():
     assert "Использован инструмент: device.refresh_state" in source
     assert "Использован инструмент: device.activate" in source
     assert "Использован инструмент: device.repair_activation" in source
-    assert "device.prepare_runtime" in source
+    assert "Окружение Python ИРУ готово" in source
+    assert "Python не найден на этом ПК" in source
+    assert "runtimeStatus" in source
 
 
 def test_device_passport_runtime_prepare_disconnect_message():

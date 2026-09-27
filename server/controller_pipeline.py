@@ -216,6 +216,20 @@ def _extend_pipeline_run_journal(all_commands: list[dict], worker_commands: list
 def _result_has_validated_answer_text(commands: list[dict] | None) -> bool:
     return any(command.get("tool_name") == "answer.text" for command in commands or [])
 
+def format_pipeline_step_report(steps: list[dict], task_status: str) -> str:
+    completed = task_status in {"completed", "completed_with_recovery"}
+    lines = ["План выполнен." if completed else "План выполнен не полностью."]
+    labels = {"done": "выполнено", "recovered": "выполнено после исправления",
+              "failed": "не выполнено", "blocked": "не выполнялось", "cancelled": "отменено"}
+    for step in steps:
+        device = step.get("hostname") or step.get("device_id") or "устройство"
+        label = labels.get(step.get("status"), "результат не подтверждён")
+        lines.append(f"{device}: {step.get('title') or 'Шаг'} — {label}.")
+        if step.get("summary"):
+            lines.append(str(step["summary"])[:1000])
+    return "\n".join(lines)
+
+
 def extract_json_payload(text: str):
     """Достать JSON-объект или массив из ответа модели."""
     if not text:
@@ -337,6 +351,11 @@ def pipeline_plan_prompt(shared: dict, user_message: str) -> str:
 При составлении плана учти уже известную обстановку: что просит пользователь, на каких устройствах это лучше делать,
 какие ограничения видны из профиля устройства и памяти, и какие промежуточные результаты вообще нужны.
 Не выделяй отдельный шаг диагностики среды без конкретной необходимости.
+Для шага, состоящего ТОЛЬКО из открытия одного приложения или URL, укажи completion_check:
+для URL {{"tool":"app_open_url","url":"точный URL"}}, для приложения
+{{"tool":"app_launch","process_name":"точное имя процесса.exe"}}.
+Это завершает шаг сразу после подтверждения окна. Не ставь такой check, если после открытия
+нужны дополнительные действия, вход в аккаунт или проверка содержимого. Не угадывай имя процесса.
 
 Верни ТОЛЬКО JSON без Markdown и без пояснений в таком формате:
 {{
@@ -2058,6 +2077,7 @@ async def process_pipeline_subagents(
                 "hostname": worker_shared.get("current_hostname", "unknown"),
                 "status": step_status,
                 "summary": step_summary,
+                "validated_answer": _result_has_validated_answer_text(step_commands),
             }
             step_record["handoff"] = step_handoff(step_summary, step_commands, step_status)
             if step_status == "recovered":
@@ -2128,6 +2148,13 @@ async def process_pipeline_subagents(
                 "task_receipt": receipt,
             }
 
+        if task_status in {"completed", "completed_with_recovery"} and step_results and all(
+            item.get("validated_answer") and item.get("status") in {"done", "recovered"} for item in step_results
+        ):
+            receipt["answer_source"] = "pipeline_step_report"
+            return {"answer": format_pipeline_step_report(step_results, task_status),
+                    "commands": all_commands, "tasks": collect_tasks(created_task_ids), "task_receipt": receipt}
+
         summary_payload = {
             "original_request": user_message,
             "approved_plan": normalized_plan,
@@ -2186,18 +2213,8 @@ async def process_pipeline_subagents(
                             usage_context={**(usage_context or {}), "phase": "pipeline.final.answer_auditor"},
                         )
                         if audit_infra_error:
-                            append_tool_step(all_commands, {
-                                "action": "answer_auditor",
-                                "command": "[system] answer_auditor",
-                                "device_id": device_id,
-                                "target_device_id": device_id,
-                                "hostname": device_info.get("hostname") or device_id,
-                                "result": {"error": audit_reason},
-                                "status": "failed",
-                                "tool_type": "system",
-                                "summary": "auditor_error",
-                            })
-                            final_answer = "Не удалось безопасно проверить корректность финального ответа. Повтори запрос."
+                            receipt["summary_warning"] = "auditor_unavailable"
+                            logger.warning("Pipeline summary auditor unavailable: %s", audit_reason)
                             break
                         if not audit_ok:
                             summary_messages.append({"role": "user", "content": GROUNDED_CORRECTION})
@@ -2227,37 +2244,16 @@ async def process_pipeline_subagents(
                 except ProtocolValidationError as exc:
                     summary_messages.append({"role": "user", "content": exc.correction})
             if not final_answer:
-                append_tool_step(all_commands, {
-                    "action": "tool_only_protocol",
-                    "command": "[system] pipeline_final_answer",
-                    "device_id": device_id,
-                    "target_device_id": device_id,
-                    "hostname": device_info.get("hostname") or device_id,
-                    "result": {"error": "pipeline final summary did not use answer_text"},
-                    "status": "failed",
-                    "tool_type": "system",
-                    "summary": "pipeline final answer missing",
-                })
-                final_answer = "Не удалось завершить pipeline: модель не выбрала инструмент ответа."
+                receipt["summary_warning"] = "model_did_not_select_answer_tool"
         except Exception as exc:
-            print(f"[pipeline] summary error: {exc}")
-            append_tool_step(all_commands, {
-                "action": "tool_only_protocol",
-                "command": "[system] pipeline_summary_error",
-                "device_id": device_id,
-                "target_device_id": device_id,
-                "hostname": device_info.get("hostname") or device_id,
-                "result": {"error": str(exc)},
-                "status": "failed",
-                "tool_type": "system",
-                "summary": "pipeline summary error",
-            })
-            final_answer = "План выполнен не полностью." if pipeline_failed else "План выполнен."
-            if step_results:
-                final_answer += " " + " ".join(
-                    f"{step_result['title']}: {step_result['summary']}"
-                    for step_result in step_results[-3:]
-                )
+            logger.warning("Pipeline summary unavailable: %s", exc)
+            receipt["summary_warning"] = "summary_unavailable"
+            final_answer = ""
+        if not final_answer or receipt.get("summary_warning") or final_answer.startswith("Не удалось безопасно проверить"):
+            # Step execution has already finished. Summary failure cannot undo it.
+            final_answer = format_pipeline_step_report(step_results, receipt["task_status"])
+            receipt["answer_source"] = "pipeline_step_report"
+            final_answer_from_answer_text = True
 
     if not final_answer_from_answer_text:
         final_answer = strip_markdown(final_answer)

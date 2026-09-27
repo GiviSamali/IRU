@@ -21,7 +21,7 @@ try:
         process_onboarding_message,
         strip_markdown,
     )
-    from .controller_trust import enforce_trusted_answer
+    from .controller_trust import enforce_trusted_answer, has_grounded_terminal_answer
     from .database import (
         add_message,
         add_training_record,
@@ -67,7 +67,7 @@ except ImportError:
         process_onboarding_message,
         strip_markdown,
     )
-    from controller_trust import enforce_trusted_answer
+    from controller_trust import enforce_trusted_answer, has_grounded_terminal_answer
     from database import (
         add_message,
         add_training_record,
@@ -754,6 +754,8 @@ def _device_execution_status(result: dict) -> str:
         return "cancelled"
     if status in {"completed", "completed_with_recovery"}:
         return "ok"
+    if has_grounded_terminal_answer(result.get("answer", ""), result.get("commands", [])):
+        return "ok"
     for command in result.get("commands", []):
         payload = command.get("result") or {}
         if command.get("status") in {"failed", "error", "blocked"} or command.get("tool_status") in {"failed", "error", "blocked"}:
@@ -1011,10 +1013,13 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if activation_markers:
                 task_receipt = dict(task_receipt or {})
                 task_receipt["warnings"] = sorted(set((task_receipt.get("warnings") or []) + activation_markers))
+            device_answer = result.get("answer", "")
+            if is_broadcast and (task_receipt or {}).get("answer_source") != "pipeline_step_report":
+                device_answer = enforce_trusted_answer(device_answer, result.get("commands", []))
             return {
                 "device_id": device_id,
                 "status": _device_execution_status(result) if is_broadcast else "ok",
-                "answer": result.get("answer", ""),
+                "answer": device_answer,
                 "commands": result.get("commands", []),
                 "tasks": result.get("tasks", []),
                 "task_receipt": task_receipt,
@@ -1123,7 +1128,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             task["overall_status"] = "success" if all(status == "ok" for status in statuses) else (
                 "partial_failure" if any(status == "ok" for status in statuses) else "failed"
             )
-            combined_task_receipt = {"task_status": "completed" if task["overall_status"] == "success" else "failed"}
+            combined_task_receipt = {"task_status": "completed" if task["overall_status"] == "success" else "failed",
+                                     "answer_source": "per_device_report"}
             combined_answer = "\n\n".join(answers)
         else:
             result = await run_on_device(device_ids[0])
@@ -1188,11 +1194,12 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if plan_match or normalized_answer in {"", "готово"}:
                 combined_answer = "План отключён для этого запроса. Продолжите без режима плана или уточните команду."
 
-        combined_answer = strip_markdown(combined_answer)
         if is_task_cancel_requested(task_id):
             finish_cancelled(combined_commands)
             return
-        combined_answer = enforce_trusted_answer(combined_answer, combined_commands)
+        if not ("combined_task_receipt" in locals() and (combined_task_receipt or {}).get("answer_source") in {"pipeline_step_report", "per_device_report"}):
+            combined_answer = enforce_trusted_answer(combined_answer, combined_commands)
+        combined_answer = strip_markdown(combined_answer)
         add_message(chat_id, "assistant", combined_answer, combined_commands)
 
         try:

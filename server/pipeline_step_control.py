@@ -77,6 +77,14 @@ def completion_matches(step, entry):
     tool = entry.get("action") or entry.get("tool_name")
     if check.get("tool") != tool:
         return False
+    if tool in {"app_open_url", "app.open_url"}:
+        return (result.get("status") == "opened_verified" and result.get("window_found") is True
+                and bool(check.get("url")) and result.get("url") == check["url"])
+    if tool in {"app_launch", "app.launch"}:
+        window = result.get("window") or {}
+        return (result.get("status") == "launched_verified" and bool(window)
+                and bool(check.get("process_name"))
+                and str(window.get("process_name", "")).casefold() == str(check["process_name"]).casefold())
     path = check.get("path")
     if tool == "write_content":
         return (isinstance(path, str) and bool(path) and result.get("path") == path

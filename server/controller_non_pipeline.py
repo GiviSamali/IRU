@@ -36,7 +36,7 @@ try:
     from .tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from .tool_completion import (  # type: ignore
         TERMINAL_CORRECTION,
-        synthesize_terminal_answer_payload,
+        synthesize_device_terminal_report,
         tool_result_terminal_sufficient,
     )
     from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
@@ -98,7 +98,7 @@ except ImportError:
     from tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from tool_completion import (  # type: ignore
         TERMINAL_CORRECTION,
-        synthesize_terminal_answer_payload,
+        synthesize_device_terminal_report,
         tool_result_terminal_sufficient,
     )
     from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
@@ -365,7 +365,7 @@ async def process_non_pipeline_command(
             if not tool_calls:
                 if terminal_sufficient_entry is not None:
                     payload = validate_answer_text_payload(
-                        synthesize_terminal_answer_payload(terminal_sufficient_entry),
+                        synthesize_device_terminal_report(commands_log, terminal_sufficient_entry),
                         commands_log,
                     )
                     append_answer_step(
@@ -533,13 +533,20 @@ async def process_non_pipeline_command(
                     })
                     continue
 
+                # Success on one PC is not completion of an explicit action on another.
+                if terminal_sufficient_entry is not None and fn_args.get("device_id"):
+                    previous_target = terminal_sufficient_entry.get("target_device_id") or terminal_sufficient_entry.get("device_id") or device_id
+                    if fn_args["device_id"] != previous_target and not is_terminal_answer_tool(fn_name):
+                        terminal_sufficient_entry = None
+                        terminal_sufficient_extra_turn_used = False
+
                 if (
                     terminal_sufficient_entry is not None
                     and not is_terminal_answer_tool(fn_name)
                     and not _allow_followup_after_terminal_sufficient(terminal_sufficient_entry, fn_name)
                 ):
                     payload = validate_answer_text_payload(
-                        synthesize_terminal_answer_payload(terminal_sufficient_entry),
+                        synthesize_device_terminal_report(commands_log, terminal_sufficient_entry),
                         commands_log,
                     )
                     append_answer_step(
@@ -987,7 +994,7 @@ async def process_non_pipeline_command(
                     terminal_sufficient_entry = commands_log[-1]
                     if terminal_sufficient_extra_turn_used:
                         payload = validate_answer_text_payload(
-                            synthesize_terminal_answer_payload(commands_log[-1]),
+                            synthesize_device_terminal_report(commands_log, commands_log[-1]),
                             commands_log,
                         )
                         append_answer_step(

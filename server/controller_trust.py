@@ -185,6 +185,41 @@ def _sanitize_device_inventory_wording(answer: str) -> str:
     return answer
 
 
+def has_grounded_terminal_answer(answer: str, commands_log: list[dict]) -> bool:
+    """Respect validated terminal evidence without masking later/other-device failures."""
+    for index in range(len(commands_log) - 1, -1, -1):
+        entry = commands_log[index]
+        if entry.get("tool_name") != "answer.text" or entry.get("status") != "terminal":
+            continue
+        payload = entry.get("result") or {}
+        if payload.get("answer_type") != "grounded_report" or payload.get("text") != answer:
+            return False
+        if any(_is_failed_action(item) for item in commands_log[index + 1:]):
+            return False
+        try:
+            try:
+                from .run_journal import validate_answer_text_payload
+            except ImportError:
+                from run_journal import validate_answer_text_payload
+            validate_answer_text_payload(payload, commands_log[:index])
+        except (ValueError, TypeError):
+            return False
+        basis = set(payload.get("basis") or [])
+        for failed_index, failed in enumerate(commands_log[:index]):
+            if not _is_failed_action(failed):
+                continue
+            target = failed.get("target_device_id") or failed.get("device_id")
+            if not target or not any(
+                item.get("step_id") in basis and not _is_failed_action(item)
+                and (item.get("target_device_id") or item.get("device_id")) == target
+                and item.get("status") in {"success", "ok"}
+                for item in commands_log[failed_index + 1:index]
+            ):
+                return False
+        return True
+    return False
+
+
 def enforce_trusted_answer(answer: str, commands_log: list[dict] | None) -> str:
     commands_log = commands_log or []
     safe_answer = _sanitize_download_urls(answer or "", commands_log)
@@ -192,6 +227,9 @@ def enforce_trusted_answer(answer: str, commands_log: list[dict] | None) -> str:
         return safe_answer
     safe_answer = _sanitize_memory_claims(safe_answer, commands_log)
     safe_answer = _sanitize_device_inventory_wording(safe_answer)
+
+    if has_grounded_terminal_answer(answer, commands_log):
+        return safe_answer
 
     failed_actions = [entry for entry in commands_log if _is_failed_action(entry)]
     if not failed_actions:
