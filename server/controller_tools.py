@@ -240,6 +240,7 @@ NON_PIPELINE_TOOLS = [
 ]
 
 WORKER_TOOL_NAMES = {
+    "transfer_file",
     "memory_get_stats",
     "memory_list_facts",
     "device_refresh_state",

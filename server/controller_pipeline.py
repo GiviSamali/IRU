@@ -169,6 +169,7 @@ PIPELINE_TERMINAL_TOOL_NAMES = {"answer_text", "answer_report_failure"}
 PIPELINE_DEVICE_TOOL_NAMES = {"device_refresh_state", "device_check_runtime", "device_prepare_runtime"}
 PIPELINE_MEMORY_TOOL_NAMES = MEMORY_TOOL_NAMES
 PIPELINE_APP_WINDOW_ACTIONS = {
+    "transfer_file": "transfer_file",
     "window_list": "window.list",
     "window_find": "window.find",
     "window_verify": "window.verify",
@@ -351,6 +352,9 @@ def pipeline_plan_prompt(shared: dict, user_message: str) -> str:
 При составлении плана учти уже известную обстановку: что просит пользователь, на каких устройствах это лучше делать,
 какие ограничения видны из профиля устройства и памяти, и какие промежуточные результаты вообще нужны.
 Не выделяй отдельный шаг диагностики среды без конкретной необходимости.
+Для передачи файла выдели отдельный шаг transfer_file (source_device_id -> target_device_id),
+затем используй возвращённый target_path в следующих шагах. Для шага только передачи:
+{{"tool":"transfer_file","target_device_id":"точный target"}}.
 Для шага, состоящего ТОЛЬКО из открытия одного приложения или URL, укажи completion_check:
 для URL {{"tool":"app_open_url","url":"точный URL"}}, для приложения
 {{"tool":"app_launch","process_name":"точное имя процесса.exe"}}.
@@ -1716,6 +1720,8 @@ async def run_pipeline_worker(
             })
             if isinstance(commands_log[-1].get("result"), dict) and commands_log[-1]["result"].get("error") == "memory_write_requires_explicit_user_intent":
                 messages.append({"role": "user", "content": MEMORY_WRITE_CORRECTION})
+            if fn_name == "transfer_file" and tool_result.get("status") != "success":
+                return {"status": "error", "answer": "Передача файла не выполнена: " + str(tool_result.get("error", "transfer_failed")), "commands": commands_log}
             if completion_matches(step, commands_log[-1]):
                 payload = validate_answer_text_payload(synthesize_terminal_answer_payload(commands_log[-1]), commands_log)
                 append_answer_step(commands_log, "answer_text", payload, target_device_id=target_device,
@@ -2054,6 +2060,10 @@ async def process_pipeline_subagents(
                 step_summary = f"{step_summary} Ссылки: {'; '.join(urls)}"
 
             step_commands = worker_result.get("commands", [])
+            transfer_failed = any(cmd.get("tool_name") == "transfer_file" and
+                                  (cmd.get("result") or {}).get("status") != "success" for cmd in step_commands)
+            if transfer_failed:
+                worker_result["status"] = "failed"
             if worker_result.get("status") == "ok":
                 step_status = "recovered" if (
                     _step_has_failed_command(step_commands, idx)
@@ -2087,10 +2097,12 @@ async def process_pipeline_subagents(
             if step_status not in {"done", "recovered"}:
                 pipeline_failed = True
                 failure_reason = step_summary
-                if not _step_has_recoverable_failure(step_commands, idx):
+                if transfer_failed or not _step_has_recoverable_failure(step_commands, idx):
                     break
 
-        final_verification_ok = any(_verification_command_succeeded(command) for command in all_commands)
+        transfer_failed = any(cmd.get("tool_name") == "transfer_file" and
+                              (cmd.get("result") or {}).get("status") != "success" for cmd in all_commands)
+        final_verification_ok = not transfer_failed and any(_verification_command_succeeded(command) for command in all_commands)
         if final_verification_ok:
             unrecovered_failure = False
             for step_record in step_results:

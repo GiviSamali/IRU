@@ -159,10 +159,14 @@ def _allow_followup_after_terminal_sufficient(entry: dict | None, next_tool_name
     """Allow a created file to be run/opened, while blocking verification loops."""
     if not entry:
         return False
+    if next_tool_name == "transfer_file":
+        return True
+
     return (entry.get("tool_name") or entry.get("action")) == "write_content" and next_tool_name == "execute_cmd"
 
 
 APP_WINDOW_ACTIONS = {
+    "transfer_file": "transfer_file",
     "window_list": "window.list",
     "window_find": "window.find",
     "window_verify": "window.verify",
@@ -764,6 +768,10 @@ async def process_non_pipeline_command(
                         hostname=device_info.get("hostname") or target_device,
                         iteration=iteration + 1,
                     ))
+
+                    if fn_name == "transfer_file" and tool_result.get("status") != "success":
+                        return {"answer": "Передача файла не выполнена: " + str(tool_result.get("error", "transfer_failed")),
+                                "commands": commands_log, "tasks": [], "training_context": _training_context(device_info)}
 
                 elif fn_name == "execute_cmd":
                     is_long_running = fn_args.pop("long_running", False)

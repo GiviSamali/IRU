@@ -134,6 +134,9 @@ class AgentRuntime:
         if action_name == "list_dir":
             return f"path='{params.get('path', '') or '<desktop>'}'"
 
+        if action_name.startswith("file.transfer_"):
+            return "[private transfer parameters]"
+
         raw = json.dumps(params, ensure_ascii=False, default=str)
         return self._preview_text(raw)
 
@@ -225,6 +228,10 @@ class AgentRuntime:
             if action_name == "agent.shutdown":
                 self._stop_event.set()
                 return {"id": cmd_id, "status": "ok", "result": {"ack": True, "action": "agent.shutdown"}}
+            if action_name.startswith("file.transfer_"):
+                from .file_transfer import dispatch
+                result = await asyncio.to_thread(dispatch, action_name, params, self._config)
+                return {"id": cmd_id, "status": "ok", "result": result}
             func = ACTIONS.get(action_name)
             if func is None:
                 raise ValueError(f"Неизвестное действие: {action_name}")

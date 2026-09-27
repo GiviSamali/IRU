@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 try:
+    from .file_transfer import router as transfer_router, init_transfers, cleanup_transfers, cleanup_loop
     from .database import cleanup_expired_refresh_tokens, init_db
     from .routers.admin import router as admin_router
     from .routers.agent_update import create_router as create_agent_update_router
@@ -25,6 +26,7 @@ try:
     from .routers.voice import router as voice_router
     from .routers.ws import router as ws_router
 except ImportError:
+    from file_transfer import router as transfer_router, init_transfers, cleanup_transfers, cleanup_loop
     from database import cleanup_expired_refresh_tokens, init_db
     from routers.admin import router as admin_router
     from routers.agent_update import create_router as create_agent_update_router
@@ -57,12 +59,16 @@ async def _cleanup_tokens_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    init_transfers()
+    await asyncio.to_thread(cleanup_transfers, True)
+    transfer_cleanup = asyncio.create_task(cleanup_loop())
     cleanup_expired_refresh_tokens()
     task = asyncio.create_task(_cleanup_tokens_loop())
     print("[server] ИРУ v3.5 запущен")
     try:
         yield
     finally:
+        transfer_cleanup.cancel()
         task.cancel()
         print("[server] ИРУ v3.5 остановлен")
 
@@ -83,6 +89,7 @@ def create_app() -> FastAPI:
     app.include_router(voice_router)
     app.include_router(create_agent_update_router(UPDATES_DIR))
     app.include_router(ws_router)
+    app.include_router(transfer_router)
 
     if STATIC_DIR.exists():
         app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="ui_root")

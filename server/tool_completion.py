@@ -67,6 +67,8 @@ def tool_result_terminal_sufficient(entry: dict[str, Any] | None) -> bool:
     if result.get("terminal_sufficient"):
         return True
     tool_name = (entry or {}).get("tool_name") or (entry or {}).get("action")
+    if tool_name == "transfer_file":
+        return result.get("status") == "success" and result.get("sha256_verified") is True
     if tool_name == "execute_cmd":
         return execute_cmd_result_is_ok(result)
     if tool_name == "write_content":
@@ -112,7 +114,12 @@ def synthesize_terminal_answer_payload(entry: dict[str, Any]) -> dict[str, Any]:
     else:
         text = str(result.get("summary") or entry.get("summary") or "Действие выполнено.")
 
+    if tool_name == "transfer_file":
+        text = (f"Файл {result.get('filename', '')} передан с {result.get('source_device', '')} на {result.get('target_device', '')}. "
+                f"Целевая копия проверена. Путь: {result.get('target_path', '')}")
     completion_state = result.get("completion_state")
+    if tool_name == "transfer_file":
+        completion_state = "success" if status == "success" and result.get("sha256_verified") is True else None
     if tool_name == "execute_cmd" and not completion_state:
         completion_state = "success" if execute_cmd_result_is_ok(result) else None
     elif tool_name == "write_content" and not completion_state:

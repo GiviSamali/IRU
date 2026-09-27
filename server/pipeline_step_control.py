@@ -85,6 +85,9 @@ def completion_matches(step, entry):
         return (result.get("status") == "launched_verified" and bool(window)
                 and bool(check.get("process_name"))
                 and str(window.get("process_name", "")).casefold() == str(check["process_name"]).casefold())
+    if tool == "transfer_file":
+        return (result.get("status") == "success" and result.get("sha256_verified") is True
+                and bool(check.get("target_device_id")) and result.get("target_device") == check["target_device_id"])
     path = check.get("path")
     if tool == "write_content":
         return (isinstance(path, str) and bool(path) and result.get("path") == path
@@ -114,7 +117,7 @@ def step_handoff(summary, commands, status):
         if command.get("action", "").startswith("answer") or command.get("tool_name", "").startswith("answer."):
             continue
         # Explicit content fields, no opaque stdout histories or private command bodies.
-        compact = {key: result[key] for key in ("title", "url", "path", "content", "text", "data", "facts", "results", "summary", "error") if key in result}
+        compact = {key: result[key] for key in ("source_device", "target_device", "target_path", "sha256_verified", "title", "url", "path", "content", "text", "data", "facts", "results", "summary", "error") if key in result}
         if result.get("stdout"):
             compact["stdout"] = str(result["stdout"])[:2500]
         if compact:

@@ -45,6 +45,13 @@ CANONICAL_TOOL_NAMES = {
 
 
 TOOL_METADATA = {
+    "transfer_file": {
+        "category": "files", "tool_type": "typed", "tool_label": "Передача файла",
+        "purpose": "Transfer one file between two devices owned by the current user via IRU relay",
+        "when_to_use": ["send a file to another device"],
+        "returns": "verified target path, devices, size, sha256_verified or failure",
+        "danger": "write",
+    },
     "system.list_tools": {
         "category": "system",
         "tool_type": "system",
@@ -351,6 +358,14 @@ TOOL_METADATA = {
 
 
 DEVICE_TOOL_SCHEMAS = [
+    {"type": "function", "function": {
+        "name": "transfer_file",
+        "description": "Передать один файл через сервер ИРУ между устройствами одного пользователя (до 500 MiB). Не передавай содержимое файла. Укажи оба точных device_id. source_path относится только к source. target_path ИЛИ target_directory относится только к target; target_directory=desktop означает реальный рабочий стол target. По умолчанию desktop. Без перезаписи. Успех только после проверки SHA-256 целевой копии; при ошибке не открывай несуществующую копию.",
+        "parameters": {"type": "object", "properties": {
+            "source_device_id": {"type": "string"}, "source_path": {"type": "string"},
+            "target_device_id": {"type": "string"}, "target_path": {"type": "string"},
+            "target_directory": {"type": "string"}},
+            "required": ["source_device_id", "source_path", "target_device_id"]}}},
     {
         "type": "function",
         "function": {

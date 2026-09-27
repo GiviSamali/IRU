@@ -341,6 +341,8 @@ async def send_command_to_agent(
     await dev["ws"].send_text(msg)
 
     wait_timeout = 60.0
+    if action.startswith("file.transfer_"):
+        wait_timeout = 1560.0
     if action == "execute_cmd":
         try:
             cmd_timeout = int(params.get("timeout", 30) or 30)
@@ -354,6 +356,9 @@ async def send_command_to_agent(
 
     try:
         result = await asyncio.wait_for(future, timeout=wait_timeout)
+    except asyncio.CancelledError:
+        dev["pending"].pop(cmd_id, None)
+        raise
     except asyncio.TimeoutError:
         dev["pending"].pop(cmd_id, None)
         raise RuntimeError("Таймаут ожидания ответа от агента")
@@ -855,6 +860,13 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         all_devices_info[_short_did(device_id)]["activation_context_markers"] = activation_markers
 
         async def send_fn(target_device_id, action, params):
+            if action == "transfer_file":
+                try:
+                    from .file_transfer import transfer_file
+                except ImportError:
+                    from file_transfer import transfer_file
+                return await transfer_file(user_id, task_id, params, send_command_to_agent,
+                                           lambda: is_task_cancel_requested(task_id))
             if is_task_cancel_requested(task_id):
                 raise RuntimeError("Task cancellation requested before starting next device command")
             target_dk = _dk(user_id, target_device_id) if ":" not in target_device_id else target_device_id
