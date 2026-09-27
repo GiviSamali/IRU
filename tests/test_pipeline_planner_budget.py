@@ -53,7 +53,7 @@ def test_truncated_plan_retried_once_with_actual_non_thinking_http_payload(monke
     monkeypatch.setattr(pipeline.db, "create_task", lambda **kw: created.append(kw) or 1)
     monkeypatch.setattr(pipeline.db, "update_step", lambda *a, **kw: None)
     monkeypatch.setattr(pipeline.db, "finish_task", lambda *a: finished.append(a[-1]))
-    monkeypatch.setattr(pipeline.db, "get_device_profile", lambda *a: None)
+    monkeypatch.setattr(pipeline.db, "get_device_profile", lambda *a, **kw: None)
     monkeypatch.setattr(pipeline, "build_memory_block", lambda *a: "")
     monkeypatch.setattr(pipeline, "push_tasks_view", lambda *a: None)
     monkeypatch.setattr(pipeline, "collect_tasks", lambda *a: [])
@@ -67,7 +67,7 @@ def test_truncated_plan_retried_once_with_actual_non_thinking_http_payload(monke
     cfg = {"model": "deepseek-v4-flash", "model_reasoner": "deepseek-v4-pro", "max_tokens": 64,
            "api_key": "test-key", "base_url": "https://llm.invalid", "answer_auditor_enabled": False}
     result = asyncio.run(pipeline.process_pipeline_subagents(
-        user_message=original, device_id="pc", device_info={"os": "Windows"}, all_devices={},
+        user_message=original, device_id="pc", device_info={"os": "Windows"}, all_devices={"pc": {"info": {"os": "Windows"}}},
         send_command_fn=send, get_file_link_fn=lambda *a: "", chat_history=[],
         load_llm_config_fn=lambda: cfg, pick_model_fn=controller._pick_model,
         chat_completion_request_fn=controller._chat_completion_request, worker_tools=[], windows_rules="", linux_rules=""))
@@ -86,7 +86,7 @@ def test_cancel_after_truncation_prevents_retry_and_execution(monkeypatch):
     monkeypatch.setattr(pipeline.db, "create_task", lambda **kw: pytest.fail("cancel must not create a task"))
     async def send(*a): pytest.fail("cancel must not execute")
     result = asyncio.run(pipeline.process_pipeline_subagents(
-        user_message="create documents", device_id="pc", device_info={"os": "Windows"}, all_devices={},
+        user_message="create documents", device_id="pc", device_info={"os": "Windows"}, all_devices={"pc": {"info": {"os": "Windows"}}},
         send_command_fn=send, get_file_link_fn=lambda *a: "", chat_history=[],
         load_llm_config_fn=lambda: {"model": "mock-model"}, pick_model_fn=lambda *a: "mock-model",
         chat_completion_request_fn=completion, worker_tools=[], windows_rules="", linux_rules=""))

@@ -116,7 +116,7 @@ def test_plan_no_refine_and_shared_article_material(monkeypatch, names):
     monkeypatch.setattr(pipeline.db, "finish_task", lambda *a: None)
     monkeypatch.setattr(pipeline, "collect_tasks", lambda *a: [])
     monkeypatch.setattr(pipeline, "push_tasks_view", lambda *a: None)
-    monkeypatch.setattr(pipeline.db, "get_device_profile", lambda *a: None)
+    monkeypatch.setattr(pipeline.db, "get_device_profile", lambda *a, **kw: None)
     monkeypatch.setattr(pipeline, "build_memory_block", lambda *a: "")
     async def completion(**kwargs):
         requests.append(kwargs["phase"])
@@ -133,7 +133,7 @@ def test_plan_no_refine_and_shared_article_material(monkeypatch, names):
     async def send(*a): raise AssertionError("no device expected")
     asyncio.run(pipeline.process_pipeline_subagents(
         user_message="Прочитай статью и создай документы", device_id="pc", device_info={"os": "Windows"},
-        all_devices={}, send_command_fn=send, get_file_link_fn=lambda *a: "", chat_history=[],
+        all_devices={"pc": {"info": {"os": "Windows"}}}, send_command_fn=send, get_file_link_fn=lambda *a: "", chat_history=[],
         load_llm_config_fn=lambda: {"model": "mock-model"}, pick_model_fn=lambda *a: "mock-model",
         chat_completion_request_fn=completion, worker_tools=[], windows_rules="", linux_rules=""))
     assert requests == ["pipeline.plan", "pipeline.final"]
@@ -181,7 +181,7 @@ def test_pipeline_confirmation_resumes_same_task_or_cancels(monkeypatch, choice)
     monkeypatch.setattr(rt, "_probe_python_toolchain_if_needed", probe)
     monkeypatch.setattr(rt, "get_user_devices", lambda uid: {did: rt.devices[did]})
     monkeypatch.setattr(rt, "get_messages", lambda *a, **kw: [])
-    monkeypatch.setattr(rt, "get_device_profile", lambda *a: None)
+    monkeypatch.setattr(rt, "get_device_profile", lambda *a, **kw: None)
     monkeypatch.setattr(rt, "add_message", lambda *a, **kw: None)
     monkeypatch.setattr(rt, "add_training_record", lambda *a, **kw: None)
     monkeypatch.setattr(rt, "enforce_trusted_answer", lambda answer, commands: answer)

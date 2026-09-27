@@ -115,7 +115,7 @@ def test_pipeline_recoverable_failure_later_verification_completes_with_recovery
         "steps": [{"idx": idx, "status": status} for idx, status in sorted(status_by_idx.items())],
     }])
     monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
-    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id: None)
+    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
     monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id: "")
     monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
 
@@ -219,7 +219,7 @@ def test_pipeline_dispatches_advertised_device_runtime_tool(monkeypatch):
         "steps": [{"idx": idx, "status": status} for idx, status in sorted(status_by_idx.items())],
     }])
     monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
-    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id: None)
+    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
     monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id: "")
     monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
 
@@ -297,7 +297,7 @@ def test_pipeline_worker_blocks_broad_desktop_scan_when_created_files_are_known(
     captured_messages = []
     sent = []
 
-    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id: None)
+    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
     monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
 
     async def _chat_completion_request_fn(**kwargs):

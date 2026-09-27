@@ -50,7 +50,7 @@ def test_invalid_or_truncated_plan_fails_before_any_worker(monkeypatch, content,
     monkeypatch.setattr(pipeline, "run_pipeline_worker", unexpected)
     monkeypatch.setattr(pipeline.db, "create_task", lambda **kwargs: pytest.fail("no partial UI plan"))
     result = asyncio.run(pipeline.process_pipeline_subagents(
-        user_message=REQUEST, device_id="pc", device_info={"os": "Windows"}, all_devices={},
+        user_message=REQUEST, device_id="pc", device_info={"os": "Windows"}, all_devices={"pc": {"info": {"os": "Windows"}}},
         send_command_fn=unexpected, get_file_link_fn=lambda *a: "", chat_history=[],
         load_llm_config_fn=lambda: {"model": "mock-model"}, pick_model_fn=lambda *a: "mock-model",
         chat_completion_request_fn=completion, worker_tools=[], windows_rules="", linux_rules=""))
@@ -86,7 +86,7 @@ def test_three_step_plan_survives_confirmation_with_same_task_and_context(monkey
     monkeypatch.setattr(pipeline, "collect_tasks", lambda *a: [{"id": 101, "steps": [
         {"idx": i, "status": s} for i, s in updates.items()]}])
     monkeypatch.setattr(pipeline, "push_tasks_view", lambda *a: None)
-    monkeypatch.setattr(pipeline.db, "get_device_profile", lambda *a: None)
+    monkeypatch.setattr(pipeline.db, "get_device_profile", lambda *a, **kw: None)
     monkeypatch.setattr(pipeline.db, "add_command_memory", lambda **kw: None)
     monkeypatch.setattr(pipeline, "build_memory_block", lambda *a: "")
     async def completion(**kwargs):
@@ -122,7 +122,7 @@ def test_three_step_plan_survives_confirmation_with_same_task_and_context(monkey
     async def process(**kwargs):
         return await pipeline.process_pipeline_subagents(
             user_message=REQUEST, device_id="pc", device_info={"os": "Windows"},
-            all_devices={}, send_command_fn=kwargs["send_command_fn"], get_file_link_fn=lambda *a: "",
+            all_devices={"pc": {"info": {"os": "Windows"}}}, send_command_fn=kwargs["send_command_fn"], get_file_link_fn=lambda *a: "",
             chat_history=[], user_id=1, chat_id=1, poll_task_id=tid,
             load_llm_config_fn=lambda: {"model": "mock-model"}, pick_model_fn=lambda *a: "mock-model",
             chat_completion_request_fn=completion, worker_tools=[], windows_rules="", linux_rules="")
@@ -132,7 +132,7 @@ def test_three_step_plan_survives_confirmation_with_same_task_and_context(monkey
     monkeypatch.setattr(runtime, "_probe_python_toolchain_if_needed", probe)
     monkeypatch.setattr(runtime, "get_user_devices", lambda uid: {did: runtime.devices[did]})
     monkeypatch.setattr(runtime, "get_messages", lambda *a, **kw: [])
-    monkeypatch.setattr(runtime, "get_device_profile", lambda *a: None)
+    monkeypatch.setattr(runtime, "get_device_profile", lambda *a, **kw: None)
     monkeypatch.setattr(runtime, "add_message", lambda *a, **kw: messages.append(a))
     monkeypatch.setattr(runtime, "add_training_record", lambda *a, **kw: None)
     monkeypatch.setattr(routes, "get_current_user", lambda request: {"id": 1})

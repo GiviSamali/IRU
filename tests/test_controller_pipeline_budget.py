@@ -271,7 +271,7 @@ def _build_device_a_worker_context(monkeypatch):
         },
     }
 
-    def _profile(device_id):
+    def _profile(device_id, **kw):
         if device_id == "device-a":
             return {
                 "device_id": "device-a",
@@ -390,7 +390,7 @@ def test_pipeline_completed_steps_mark_other_device_paths_as_informational():
     assert "do not reuse paths as target-device paths" in prompt
 
 
-def test_pipeline_invalid_planner_device_falls_back_to_current_device(monkeypatch, caplog):
+def test_pipeline_invalid_planner_device_fails_closed(monkeypatch, caplog):
     responses = [
         {
             "choices": [{
@@ -434,7 +434,7 @@ def test_pipeline_invalid_planner_device_falls_back_to_current_device(monkeypatc
     monkeypatch.setattr("server.controller_pipeline.db.finish_task", lambda *args, **kwargs: True)
     monkeypatch.setattr("server.controller_pipeline.collect_tasks", lambda task_ids: [])
     monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
-    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id: None)
+    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
     monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id: "")
     monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
 
@@ -467,11 +467,6 @@ def test_pipeline_invalid_planner_device_falls_back_to_current_device(monkeypatc
     caplog.set_level("WARNING")
     result = asyncio.run(_run())
 
-    assert result["answer"] == "summary ok"
-    assert seen_devices == ["device-a"]
-    assert result["commands"][0]["step_index"] == 0
-    assert result["commands"][0]["step_title"] == "step"
-    assert result["commands"][0]["status"] == "success"
-    assert "Invalid pipeline step.device_id=missing-device" in caplog.text
-    worker_messages = captured_messages[1]
-    assert any("target_device=device-a" in msg.get("content", "") for msg in worker_messages)
+    assert seen_devices == []
+    assert result["task_receipt"]["task_status"] == "failed"
+    assert "target_device_not_found" in result["answer"]

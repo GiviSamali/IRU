@@ -43,6 +43,37 @@ def get_db():
 
 # ── Инициализация ───────────────────────────────────────────────────────────────
 
+def _migrate_device_profile_ownership(conn):
+    schema = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='device_profiles'").fetchone()[0]
+    legacy = any(
+        [row[2] for row in conn.execute(f'PRAGMA index_info("{index[1]}")')] == ["device_id"]
+        for index in conn.execute("PRAGMA index_list(device_profiles)") if index[2]
+    )
+    if not legacy:
+        return
+    import re
+    replacement = re.sub(r"device_id\s+TEXT\s+UNIQUE\s+NOT NULL", "device_id TEXT NOT NULL", schema, flags=re.I)
+    if replacement == schema:
+        raise RuntimeError("Unsupported legacy device_profiles schema; migration aborted")
+    replacement = replacement.replace("device_profiles", "device_profiles_owner_migration", 1)
+    end = replacement.rfind(")")
+    replacement = replacement[:end] + ", UNIQUE(user_id, device_id)" + replacement[end:]
+    indexes = [row[0] for row in conn.execute("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='device_profiles' AND sql IS NOT NULL")]
+    conn.execute("SAVEPOINT device_owner_migration")
+    try:
+        conn.execute(replacement)
+        conn.execute("INSERT INTO device_profiles_owner_migration SELECT * FROM device_profiles")
+        conn.execute("DROP TABLE device_profiles")
+        conn.execute("ALTER TABLE device_profiles_owner_migration RENAME TO device_profiles")
+        for sql in indexes:
+            conn.execute(sql)
+        conn.execute("RELEASE device_owner_migration")
+    except Exception:
+        conn.execute("ROLLBACK TO device_owner_migration")
+        conn.execute("RELEASE device_owner_migration")
+        raise
+
+
 def init_db():
     """Create tables if not exist. Create admin user."""
     with get_db() as conn:
@@ -108,7 +139,7 @@ def init_db():
 
             CREATE TABLE IF NOT EXISTS device_profiles (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                device_id   TEXT    UNIQUE NOT NULL,
+                device_id   TEXT    NOT NULL,
                 user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 hostname    TEXT,
                 os          TEXT,
@@ -123,7 +154,8 @@ def init_db():
                 agent_version TEXT,
                 activation_summary TEXT,
                 python_runtime_summary TEXT,
-                updated_at  REAL    NOT NULL
+                updated_at  REAL    NOT NULL,
+                UNIQUE(user_id, device_id)
             );
 
             CREATE INDEX IF NOT EXISTS idx_device_profiles_device ON device_profiles(device_id);
@@ -238,6 +270,7 @@ def init_db():
             conn.execute("ALTER TABLE device_profiles ADD COLUMN python_runtime_summary TEXT")
         except Exception:
             pass
+        _migrate_device_profile_ownership(conn)
         conn.executescript("""
             CREATE INDEX IF NOT EXISTS idx_refresh_token     ON refresh_tokens(token);
             CREATE INDEX IF NOT EXISTS idx_refresh_user      ON refresh_tokens(user_id);
@@ -698,7 +731,7 @@ def upsert_device_profile(device_id: str, user_id: int, profile: dict) -> None:
     now = time.time()
     with get_db() as conn:
         existing = conn.execute(
-            "SELECT id, activation_summary, python_runtime_summary FROM device_profiles WHERE device_id = ?", (device_id,)
+            "SELECT id, activation_summary, python_runtime_summary FROM device_profiles WHERE device_id = ? AND user_id = ?", (device_id, user_id)
         ).fetchone()
         disks_json = json.dumps(profile.get("disks"), ensure_ascii=False) if profile.get("disks") else None
         activation_summary_json = (
@@ -738,8 +771,8 @@ def upsert_device_profile(device_id: str, user_id: int, profile: dict) -> None:
                     user_id = ?, hostname = ?, os = ?, os_version = ?,
                     username = ?, desktop_path = ?, cpu = ?, gpu = ?,
                     ram_gb = ?, disks = ?, machine_guid = ?, agent_version = ?, activation_summary = ?, python_runtime_summary = ?, updated_at = ?
-                   WHERE device_id = ?""",
-                vals + (device_id,)
+                   WHERE device_id = ? AND user_id = ?""",
+                vals + (device_id, user_id)
             )
         else:
             conn.execute(
@@ -751,11 +784,11 @@ def upsert_device_profile(device_id: str, user_id: int, profile: dict) -> None:
             )
 
 
-def get_device_profile(device_id: str) -> dict | None:
-    """Get device profile by device_id. Returns dict or None."""
+def get_device_profile(device_id: str, *, user_id: int) -> dict | None:
+    """Get a profile scoped to its authenticated owner. Returns dict or None."""
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM device_profiles WHERE device_id = ?", (device_id,)
+            "SELECT * FROM device_profiles WHERE device_id = ? AND user_id = ?", (device_id, user_id)
         ).fetchone()
         if not row:
             return None
@@ -807,31 +840,31 @@ def get_user_device_profiles(user_id: int) -> list[dict]:
         return result
 
 
-def update_device_activation_summary(device_id: str, summary: dict) -> bool:
+def update_device_activation_summary(device_id: str, summary: dict, *, user_id: int) -> bool:
     payload = json.dumps(summary, ensure_ascii=False)
     with get_db() as conn:
         cur = conn.execute(
-            "UPDATE device_profiles SET activation_summary = ?, updated_at = ? WHERE device_id = ?",
-            (payload, time.time(), device_id),
+            "UPDATE device_profiles SET activation_summary = ?, updated_at = ? WHERE device_id = ? AND user_id = ?",
+            (payload, time.time(), device_id, user_id),
         )
         return cur.rowcount > 0
 
 
-def update_device_python_runtime_summary(device_id: str, summary: dict) -> bool:
+def update_device_python_runtime_summary(device_id: str, summary: dict, *, user_id: int) -> bool:
     payload = json.dumps(summary, ensure_ascii=False)
     with get_db() as conn:
         cur = conn.execute(
-            "UPDATE device_profiles SET python_runtime_summary = ?, updated_at = ? WHERE device_id = ?",
-            (payload, time.time(), device_id),
+            "UPDATE device_profiles SET python_runtime_summary = ?, updated_at = ? WHERE device_id = ? AND user_id = ?",
+            (payload, time.time(), device_id, user_id),
         )
         return cur.rowcount > 0
 
 
-def delete_device_profile(device_id: str) -> bool:
+def delete_device_profile(device_id: str, *, user_id: int) -> bool:
     """Delete device profile."""
     with get_db() as conn:
         cursor = conn.execute(
-            "DELETE FROM device_profiles WHERE device_id = ?", (device_id,)
+            "DELETE FROM device_profiles WHERE device_id = ? AND user_id = ?", (device_id, user_id)
         )
         return cursor.rowcount > 0
 

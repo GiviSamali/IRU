@@ -16,11 +16,11 @@ def test_api_chat_uses_onboarding_mode_without_devices(client, monkeypatch):
 
     user, headers = _create_and_login_user(client)
 
-    runtime_state.devices = {
-        device_id: device
-        for device_id, device in runtime_state.devices.items()
-        if device.get("user_id") != user["id"]
-    }
+    # Preserve the shared registry object imported by routers and task_runtime.
+    for device_id, device in list(runtime_state.devices.items()):
+        if device.get("user_id") == user["id"]:
+            runtime_state.devices.pop(device_id)
+
 
     assert runtime_state.get_user_devices(user["id"]) == {}
 

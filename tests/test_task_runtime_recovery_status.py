@@ -41,7 +41,7 @@ def test_pipeline_receipt_completed_with_recovery_sets_top_level_task_status(mon
     monkeypatch.setattr(task_runtime, "process_nl_command", _process_nl_command)
     monkeypatch.setattr(task_runtime, "get_user_devices", lambda user_id: {full_device_id: task_runtime.devices[full_device_id]})
     monkeypatch.setattr(task_runtime, "get_messages", lambda chat_id, limit=50: [{"role": "user", "content": "create files"}])
-    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id: None)
+    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id, **kw: None)
     monkeypatch.setattr(task_runtime, "add_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(task_runtime, "add_training_record", lambda *args, **kwargs: None)
     monkeypatch.setattr(task_runtime, "enforce_trusted_answer", lambda answer, commands: answer)

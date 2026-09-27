@@ -42,7 +42,7 @@ def test_agent_dispatch_allows_creation_but_holds_deletion(monkeypatch):
             sent.append(payload)
             runtime.devices["1:pc"]["pending"].pop(payload["id"]).set_result({"returncode": 0})
     monkeypatch.setitem(runtime.devices, "1:pc", {"info": {"os": "Windows"}, "pending": {}, "ws": WS()})
-    monkeypatch.setattr(runtime, "get_device_profile", lambda *a: None)
+    monkeypatch.setattr(runtime, "get_device_profile", lambda *a, **kw: None)
     async def scenario():
         await runtime.send_command_to_agent("1:pc", "execute_cmd", {"command": "Set-Content report.txt 'Word document'"})
         await runtime.send_command_to_agent("1:pc", "write_content", {"path": "report.txt", "content": "Word document"})

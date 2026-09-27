@@ -160,7 +160,7 @@ def build_minimal_llm_context(current_device_id: str, all_devices: dict, current
     current_dev = (all_devices or {}).get(current_id) or (all_devices or {}).get(current_device_id)
     if current_profile is None:
         try:
-            current_profile = db.get_device_profile(current_id)
+            current_profile = db.get_device_profile(current_id, user_id=(current_dev or {}).get("user_id"))
         except Exception:
             current_profile = None
     other_devices = []
@@ -169,7 +169,7 @@ def build_minimal_llm_context(current_device_id: str, all_devices: dict, current
         if did == current_id:
             continue
         try:
-            profile = db.get_device_profile(did)
+            profile = db.get_device_profile(did, user_id=(dev or {}).get("user_id"))
         except Exception:
             profile = None
         other_devices.append(_device_manifest(did, dev, profile, include_handles=True))
@@ -191,7 +191,7 @@ def get_context_handle(handle: str, *, all_devices: dict | None = None) -> dict:
     dev = (all_devices or {}).get(device_id)
     live = bool(isinstance(dev, dict) and dev.get("ws") is not None)
     try:
-        profile = db.get_device_profile(device_id)
+        profile = db.get_device_profile(device_id, user_id=(dev or {}).get("user_id"))
     except Exception:
         profile = None
     receipt = dev.get("activation_receipt") if isinstance(dev, dict) else None

@@ -51,7 +51,7 @@ def test_full_activation_receipt_only_by_handle():
 
 def test_offline_handle_returns_stale_cache(monkeypatch):
     summary = compact_activation_summary(_receipt())
-    monkeypatch.setattr("server.device_context.db.get_device_profile", lambda device_id: {"activation_summary": summary})
+    monkeypatch.setattr("server.device_context.db.get_device_profile", lambda device_id, **kw: {"activation_summary": summary})
     response = get_context_handle("ctx://device/givi/activation", all_devices={})
 
     assert response["status"] == "stale"

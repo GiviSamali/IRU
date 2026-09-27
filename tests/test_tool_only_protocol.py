@@ -1223,7 +1223,7 @@ def test_pipeline_final_raw_summary_rejected_then_answer_text(monkeypatch):
         "steps": [{"idx": idx, "status": status} for idx, status in sorted(step_status.items())],
     }])
     monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
-    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id: None)
+    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
     monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id: "")
     monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
 
@@ -1284,7 +1284,7 @@ def test_pipeline_worker_max_iterations_runs_answer_only_repair(monkeypatch):
         "steps": [{"idx": idx, "status": status} for idx, status in sorted(step_status.items())],
     }])
     monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
-    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id: None)
+    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
     monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id: "")
     monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
 

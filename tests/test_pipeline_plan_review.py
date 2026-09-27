@@ -41,14 +41,14 @@ def test_review_revisions_wait_before_tools_and_preserve_request(monkeypatch):
     monkeypatch.setattr(pipeline.db, "create_task", lambda **kw: created.append(kw) or 1)
     monkeypatch.setattr(pipeline.db, "update_step", lambda *a, **kw: None)
     monkeypatch.setattr(pipeline.db, "finish_task", lambda *a: None)
-    monkeypatch.setattr(pipeline.db, "get_device_profile", lambda *a: None)
+    monkeypatch.setattr(pipeline.db, "get_device_profile", lambda *a, **kw: None)
     monkeypatch.setattr(pipeline, "build_memory_block", lambda *a: "")
     monkeypatch.setattr(pipeline, "collect_tasks", lambda *a: [])
     monkeypatch.setattr(pipeline, "push_tasks_view", lambda *a: None)
     async def send(*a): pytest.fail("no real device calls")
     async def scenario():
         execution = asyncio.create_task(pipeline.process_pipeline_subagents(
-            user_message=original, device_id="pc", device_info={"os": "Windows"}, all_devices={},
+            user_message=original, device_id="pc", device_info={"os": "Windows"}, all_devices={"pc": {"info": {"os": "Windows"}}},
             send_command_fn=send, get_file_link_fn=lambda *a: "", chat_history=[], poll_task_id=tid,
             load_llm_config_fn=lambda: {"model": "mock-model"}, pick_model_fn=lambda *a: "mock-model",
             chat_completion_request_fn=completion, worker_tools=[], windows_rules="", linux_rules=""))

@@ -411,7 +411,7 @@ def test_non_pipeline_broadcast_mode_honors_tool_device_override():
     assert seen_devices == ["device-2"]
 
 
-def test_chat_broadcast_replays_command_to_all_devices(client, monkeypatch):
+def test_chat_broadcast_executes_independently_on_all_devices(client, monkeypatch):
     import server.routers.tasks as tasks_router
     import server.runtime_state as runtime_state
     import server.task_runtime as task_runtime
@@ -442,13 +442,13 @@ def test_chat_broadcast_replays_command_to_all_devices(client, monkeypatch):
         return ("SIMPLE", "")
 
     async def fake_process_nl_command(**kwargs):
-        assert kwargs["device_id"] == "device-1"
+        await kwargs["send_command_fn"](kwargs["device_id"], "execute_cmd", {"command": "whoami"})
         return {
             "answer": "ok",
             "commands": [{
                 "action": "execute_cmd",
                 "command": "whoami",
-                "device_id": "device-1",
+                "device_id": kwargs["device_id"],
                 "result": {"returncode": 0, "stdout": "one", "stderr": ""},
             }],
             "tasks": [],
@@ -484,5 +484,5 @@ def test_chat_broadcast_replays_command_to_all_devices(client, monkeypatch):
 
     assert task is not None
     assert task["status"] == "done"
-    assert replayed == [(second_key, "execute_cmd", "whoami")]
-    assert {cmd["device_id"] for cmd in task["commands"]} == {"device-1", second_key}
+    assert replayed == [(first_key, "execute_cmd", "whoami"), (second_key, "execute_cmd", "whoami")]
+    assert {cmd["device_id"] for cmd in task["commands"]} == {"device-1", "device-2"}

@@ -46,7 +46,7 @@ def _runtime_device_key_for_user(user: dict, device_id: str) -> str | None:
 
 
 def _ensure_device_access(user: dict, device_id: str) -> None:
-    profile = get_device_profile(device_id)
+    profile = get_device_profile(device_id, user_id=user["id"])
     if profile:
         if not _is_admin(user) and profile.get("user_id") != user["id"]:
             raise HTTPException(status_code=403, detail="Нет доступа к устройству")
@@ -186,7 +186,7 @@ async def prepare_runtime_for_user(user: dict, device_id: str, mode: str = "chec
     summary = compact_python_runtime_summary(receipt)
     dev["python_runtime_receipt"] = receipt
     dev["python_runtime_summary"] = summary
-    update_device_python_runtime_summary(device_id, summary)
+    update_device_python_runtime_summary(device_id, summary, user_id=user["id"])
     tool_name = {
         "check": "device_check_runtime",
         "prepare": "device_prepare_runtime",
@@ -229,7 +229,7 @@ async def activate_device_for_user(user: dict, device_id: str, mode: str = "soft
     summary = compact_activation_summary(receipt)
     dev["activation_receipt"] = receipt
     dev["activation_summary"] = summary
-    update_device_activation_summary(device_id, summary)
+    update_device_activation_summary(device_id, summary, user_id=user["id"])
     return {
         "status": "ok",
         "receipt": receipt,
@@ -251,7 +251,7 @@ async def get_devices_api(request: Request):
     result = {}
     for composite_key, dev in user_devs.items():
         short_did = dev.get("short_device_id", _short_did(composite_key))
-        profile = get_device_profile(short_did)
+        profile = get_device_profile(short_did, user_id=user["id"])
         result[short_did] = _device_api_item(short_did, dev, profile)
     return {"devices": result}
 
@@ -400,7 +400,7 @@ async def api_device_profiles(request: Request):
 @router.get("/api/device_profiles/{device_id}")
 async def api_device_profile(device_id: str, request: Request):
     user = get_current_user(request)
-    profile = get_device_profile(device_id)
+    profile = get_device_profile(device_id, user_id=user["id"])
     if not profile:
         raise HTTPException(status_code=404, detail="Профиль устройства не найден")
     if not _is_admin(user) and profile.get("user_id") != user["id"]:

@@ -286,7 +286,10 @@ def normalize_pipeline_plan(raw_plan, fallback_goal: str, default_device_id: str
                 or item.get("done_when")
                 or ""
             ).strip()
-            step_device_id = str(item.get("device_id") or default_device_id).strip() or default_device_id
+            explicit_target = item.get("device_id")
+            if explicit_target is not None and (not isinstance(explicit_target, str) or not explicit_target.strip()):
+                raise ValueError("target_device_not_found: некорректный явный device_id; действие не выполнялось")
+            step_device_id = explicit_target.strip() if explicit_target is not None else default_device_id
         else:
             raise ValueError(f"PLAN step {idx + 1} is invalid; refusing to discard it")
 
@@ -545,8 +548,8 @@ def build_pipeline_shared_context(
     os_info = device_info.get("os", "Windows")
     os_lower = (os_info or "").lower()
     python_receipt = (
-        python_toolchain_from_runtime_summary((device_profile or {}).get("python_runtime_summary"), device_id=device_id)
-        or get_cached_python_toolchain({"device_id": device_id, "machine_guid": machine_guid})
+        python_toolchain_from_runtime_summary((device_profile or {}).get("python_runtime_summary"), device_id=device_id, user_id=mem_user_id)
+        or get_cached_python_toolchain({"user_id": mem_user_id, "device_id": device_id, "machine_guid": machine_guid})
     )
     manifest = build_minimal_llm_context(device_id, all_devices, device_profile)
     return {
@@ -585,19 +588,17 @@ def build_pipeline_other_devices_summary(all_devices: dict, target_device_id: st
 
 
 def validate_pipeline_step_device(step: dict, current_device_id: str, all_devices: dict) -> tuple[dict, str]:
-    """Validate planner-selected device id; fall back loudly when it is unknown."""
-    requested = str(step.get("device_id") or "").strip()
-    known_device_ids = set((all_devices or {}).keys())
-    if current_device_id:
-        known_device_ids.add(current_device_id)
+    """Reject unavailable explicit targets; never replace them with another device."""
+    explicit_target = step.get("device_id")
+    if explicit_target is not None and (not isinstance(explicit_target, str) or not explicit_target.strip()):
+        raise ValueError("target_device_not_found: некорректный явный device_id; действие не выполнялось")
+    requested = explicit_target.strip() if explicit_target is not None else ""
     target_device_id = requested or current_device_id
-    if target_device_id not in known_device_ids:
-        logger.warning(
-            "Invalid pipeline step.device_id=%s; falling back to current_device_id=%s",
-            target_device_id,
-            current_device_id,
-        )
-        target_device_id = current_device_id
+    if requested and target_device_id not in (all_devices or {}):
+        raise ValueError(f"target_device_not_found: {target_device_id}; действие не выполнялось")
+    dev = (all_devices or {}).get(target_device_id, {})
+    if "ws" in dev and dev["ws"] is None:
+        raise ValueError(f"target_device_not_found: {target_device_id}; устройство offline, действие не выполнялось")
     scoped_step = dict(step)
     scoped_step["device_id"] = target_device_id
     return scoped_step, target_device_id
@@ -620,14 +621,14 @@ def build_pipeline_worker_context(
         target_device_id,
         current_device_info if target_device_id == current_device_id else None,
     )
-    target_profile = current_device_profile if target_device_id == current_device_id else db.get_device_profile(target_device_id)
+    target_profile = current_device_profile if target_device_id == current_device_id else db.get_device_profile(target_device_id, user_id=mem_user_id)
     target_machine_guid = (target_profile or {}).get("machine_guid") or target_info.get("machine_guid") or None
     os_info = target_info.get("os", "Windows")
     os_lower = (os_info or "").lower()
     other_devices_summary = build_pipeline_other_devices_summary(all_devices, target_device_id)
     python_receipt = (
-        python_toolchain_from_runtime_summary((target_profile or {}).get("python_runtime_summary"), device_id=target_device_id)
-        or get_cached_python_toolchain({"device_id": target_device_id, "machine_guid": target_machine_guid})
+        python_toolchain_from_runtime_summary((target_profile or {}).get("python_runtime_summary"), device_id=target_device_id, user_id=mem_user_id)
+        or get_cached_python_toolchain({"user_id": mem_user_id, "device_id": target_device_id, "machine_guid": target_machine_guid})
     )
     manifest = build_minimal_llm_context(target_device_id, all_devices, target_profile)
     return {
@@ -1110,9 +1111,9 @@ async def run_pipeline_worker(
     step_title = step.get("title") or step.get("instruction") or f"Step {step_index + 1}"
     step_id = step.get("id") or step.get("step_id")
     python_receipt = (
-        python_toolchain_from_runtime_summary((db.get_device_profile(step_device_id) or {}).get("python_runtime_summary"), device_id=step_device_id)
+        python_toolchain_from_runtime_summary((db.get_device_profile(step_device_id, user_id=mem_user_id) or {}).get("python_runtime_summary"), device_id=step_device_id, user_id=mem_user_id)
         or resolve_python_toolchain(
-            {"device_id": step_device_id, "python_toolchain_receipt": shared.get("python_toolchain_receipt")},
+            {"user_id": mem_user_id, "device_id": step_device_id, "python_toolchain_receipt": shared.get("python_toolchain_receipt")},
             commands_log,
         )
     )
@@ -1490,8 +1491,8 @@ async def run_pipeline_worker(
 
                 append_step_command(fn_name, fn_args.get("command", ""), target_device, tool_result)
                 python_receipt = (
-                    python_toolchain_from_runtime_summary((db.get_device_profile(target_device) or {}).get("python_runtime_summary"), device_id=target_device)
-                    or resolve_python_toolchain({"device_id": target_device}, commands_log)
+                    python_toolchain_from_runtime_summary((db.get_device_profile(target_device, user_id=mem_user_id) or {}).get("python_runtime_summary"), device_id=target_device, user_id=mem_user_id)
+                    or resolve_python_toolchain({"user_id": mem_user_id, "device_id": target_device}, commands_log)
                 )
                 env_guard_error = command_budget.observe_execute_result(
                     fn_args.get("command", ""),
@@ -1542,7 +1543,7 @@ async def run_pipeline_worker(
                         tool_result = {"error": str(exc)}
                 if fn_name in {"device_check_runtime", "device_prepare_runtime"} and isinstance(tool_result, dict) and not tool_result.get("error"):
                     runtime_summary = tool_result.get("runtime_summary") or tool_result.get("summary")
-                    refreshed = python_toolchain_from_runtime_summary(runtime_summary, device_id=target_device)
+                    refreshed = python_toolchain_from_runtime_summary(runtime_summary, device_id=target_device, user_id=mem_user_id)
                     if refreshed:
                         python_receipt = refreshed
                 append_step_command(
@@ -1920,7 +1921,21 @@ async def process_pipeline_subagents(
                     db.update_step(db_task_id, pending_idx, "cancelled", summary="Остановлено пользователем.")
                 push_tasks_view(poll_task_id, created_task_ids)
                 break
-            step, step_device_id = validate_pipeline_step_device(step, device_id, all_devices)
+            try:
+                step, step_device_id = validate_pipeline_step_device(step, device_id, all_devices)
+                target_owner = (all_devices.get(step_device_id) or {}).get("user_id")
+                if target_owner is not None and str(target_owner) != str(user_id):
+                    raise ValueError(f"target_device_not_found: {step_device_id}; действие не выполнялось")
+            except ValueError as exc:
+                failure_reason = str(exc)
+                pipeline_failed = True
+                db.update_step(db_task_id, idx, "failed", summary=failure_reason)
+                step_results.append({"idx": idx, "title": step["title"], "instruction": step["instruction"],
+                                     "device_id": step.get("device_id"), "status": "failed", "summary": failure_reason})
+                for pending_idx in range(idx + 1, len(normalized_plan["steps"])):
+                    db.update_step(db_task_id, pending_idx, "blocked", summary="Целевое устройство недоступно.")
+                push_tasks_view(poll_task_id, created_task_ids)
+                break
             worker_shared, worker_machine_guid = build_pipeline_worker_context(
                 target_device_id=step_device_id,
                 current_device_id=device_id,
@@ -1939,6 +1954,21 @@ async def process_pipeline_subagents(
                 poll_task_id,
                 f"Шаг {idx + 1}/{len(normalized_plan['steps'])}: {step['title'][:80]}",
             )
+            async def scoped_send(target, action, params):
+                if target != step_device_id:
+                    raise RuntimeError(f"target_device_not_found: {target}; PLAN target is {step_device_id}")
+                return await send_command_fn(target, action, params)
+
+            def scoped_file_link(target, path):
+                if target != step_device_id:
+                    raise RuntimeError(f"target_device_not_found: {target}")
+                return get_file_link_fn(target, path)
+
+            async def scoped_device_tool(name, args):
+                if (args.get("device_id") or step_device_id) != step_device_id:
+                    return {"status": "failed", "error": "target_device_not_found"}
+                return await device_tool_fn(name, {**args, "device_id": step_device_id})
+
             try:
                 worker_result = await run_pipeline_worker(
                     client=client,
@@ -1949,15 +1979,15 @@ async def process_pipeline_subagents(
                     step=step,
                     completed_steps=step_results,
                     chat_history=chat_history,
-                    send_command_fn=send_command_fn,
-                    get_file_link_fn=get_file_link_fn,
+                    send_command_fn=scoped_send,
+                    get_file_link_fn=scoped_file_link,
                     machine_guid=worker_machine_guid,
                     mem_user_id=mem_user_id,
                     poll_task_id=poll_task_id,
                     step_index=idx,
                     chat_completion_request_fn=chat_completion_request_fn,
                     worker_tools=worker_tools,
-                    device_tool_fn=device_tool_fn,
+                    device_tool_fn=scoped_device_tool if device_tool_fn else None,
                     usage_context=usage_context,
                 )
             except ConfirmationRequired:
@@ -2082,6 +2112,12 @@ async def process_pipeline_subagents(
         db.finish_task(db_task_id, task_status)
         push_tasks_view(poll_task_id, created_task_ids)
         set_current_step(poll_task_id, "ИРУ подводит итоги...")
+
+        if failure_reason.startswith("target_device_not_found"):
+            receipt["terminal_reason"] = "target_device_not_found"
+            receipt["failure_reason"] = failure_reason
+            return {"answer": failure_reason, "commands": all_commands,
+                    "tasks": collect_tasks(created_task_ids), "task_receipt": receipt}
 
         if pipeline_cancelled:
             set_current_step(poll_task_id, "Остановлено пользователем.")

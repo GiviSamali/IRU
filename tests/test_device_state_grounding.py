@@ -273,7 +273,7 @@ def test_nl_state_phrase_uses_llm_tool_flow_not_hidden_shortcut(monkeypatch, mes
     monkeypatch.setattr(task_runtime, "send_command_to_agent", fail_send)
     monkeypatch.setattr(task_runtime, "add_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(task_runtime, "get_messages", lambda *args, **kwargs: [])
-    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id: {"device_id": device_id})
+    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id, **kw: {"device_id": device_id})
 
     asyncio.run(task_runtime.run_nl_task(task_id, user_id, message, device_ids, 1))
 
@@ -331,7 +331,7 @@ def test_run_nl_device_refresh_state_tool_collects_and_stores_snapshot(monkeypat
     monkeypatch.setattr(task_runtime, "classify_task_complexity", fake_classify)
     monkeypatch.setattr(task_runtime, "add_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(task_runtime, "get_messages", lambda *args, **kwargs: [])
-    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id: {"device_id": device_id})
+    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id, **kw: {"device_id": device_id})
 
     asyncio.run(task_runtime.run_nl_task(task_id, user_id, "Проверь состояние устройства", [device_key], 1))
 
@@ -366,7 +366,7 @@ def test_collect_live_snapshot_stores_last_state_snapshot(monkeypatch):
         return {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
 
     monkeypatch.setattr(task_runtime, "send_command_to_agent", fake_send)
-    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id: {"device_id": device_id, "machine_guid": "guid"})
+    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id, **kw: {"device_id": device_id, "machine_guid": "guid"})
 
     result = asyncio.run(task_runtime.collect_device_live_snapshot(device_key, user_id=user_id))
 
@@ -399,7 +399,7 @@ def test_devices_api_includes_state_summary_fields(monkeypatch):
     }
 
     monkeypatch.setattr(devices_router, "get_current_user", lambda request: {"id": 7, "name": "tester"})
-    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: None)
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id, **kw: None)
 
     result = asyncio.run(devices_router.get_devices_api(object()))
 
@@ -448,7 +448,7 @@ def test_devices_api_falls_back_to_agent_cached_passport(monkeypatch):
     }
 
     monkeypatch.setattr(devices_router, "get_current_user", lambda request: {"id": 7, "name": "tester"})
-    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: None)
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id, **kw: None)
 
     result = asyncio.run(devices_router.get_devices_api(object()))
     item = result["devices"]["givi"]
@@ -494,8 +494,8 @@ def test_device_state_endpoint_returns_structured_snapshot(monkeypatch):
         }
 
     monkeypatch.setattr(devices_router, "get_current_user", lambda request: {"id": user_id, "name": "tester"})
-    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
-    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id, **kw: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
+    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id, **kw: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
     monkeypatch.setattr(devices_router, "send_command_to_agent", fake_send)
 
     result = asyncio.run(devices_router.api_device_state("givi", Request()))
@@ -545,7 +545,7 @@ def test_device_state_endpoint_falls_back_for_old_agent(monkeypatch):
         }
 
     monkeypatch.setattr(devices_router, "get_current_user", lambda request: {"id": user_id, "name": "tester"})
-    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id, **kw: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
     monkeypatch.setattr(devices_router, "send_command_to_agent", fake_agent_send)
     monkeypatch.setattr(devices_router, "collect_device_live_snapshot", fake_collect)
 
@@ -609,7 +609,7 @@ def test_unavailable_refresh_does_not_wipe_previous_cached_state(monkeypatch):
         return {"status": "unavailable", "snapshot": None, "health_summary": {}, "identity_receipt": {}}
 
     monkeypatch.setattr(devices_router, "get_current_user", lambda request: {"id": user_id, "name": "tester"})
-    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id, **kw: {"device_id": device_id, "user_id": user_id, "machine_guid": "guid"})
     monkeypatch.setattr(devices_router, "send_command_to_agent", fake_send)
 
     result = asyncio.run(devices_router.api_device_state("givi", Request()))
@@ -653,7 +653,7 @@ def test_agent_control_endpoints_ack_or_explicit_501(monkeypatch):
     task_runtime.devices[device_key] = {"user_id": 7, "short_device_id": "givi", "info": {}, "pending": {}, "ws": object()}
 
     monkeypatch.setattr(devices_router, "get_current_user", lambda request: {"id": 7, "name": "tester"})
-    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id, **kw: {"device_id": device_id, "user_id": 7})
 
     async def fake_send(device_id, action, params, user_id=None):
         if action == "agent.shutdown":

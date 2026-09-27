@@ -62,7 +62,7 @@ def _cache_keys(device_context: dict[str, Any] | None) -> list[str]:
     for key in ("device_id", "machine_guid"):
         value = str(context.get(key) or "").strip()
         if value:
-            keys.append(value)
+            keys.append(f"{context.get('user_id')}:{key}:{value}")
     return keys
 
 
@@ -74,19 +74,20 @@ def get_cached_python_toolchain(device_context: dict[str, Any] | None) -> Python
     return None
 
 
-def remember_python_toolchain(receipt: PythonToolchainReceipt) -> None:
+def remember_python_toolchain(receipt: PythonToolchainReceipt, *, user_id=None) -> None:
     if receipt.status == "ok" and not is_verified_python_receipt(receipt):
         return
     if receipt.status not in {"ok", "broken_stub", "install_required"}:
         return
     if receipt.device_id:
-        _RECEIPT_CACHE[str(receipt.device_id)] = receipt
+        _RECEIPT_CACHE[f"{user_id}:device_id:{receipt.device_id}"] = receipt
 
 
 def python_toolchain_from_runtime_summary(
     summary: dict[str, Any] | None,
     *,
     device_id: str | None = None,
+    user_id=None,
 ) -> PythonToolchainReceipt | None:
     if not isinstance(summary, dict):
         return None
@@ -110,7 +111,7 @@ def python_toolchain_from_runtime_summary(
         confidence=0.99,
     )
     if is_verified_python_receipt(receipt):
-        remember_python_toolchain(receipt)
+        remember_python_toolchain(receipt, user_id=user_id)
         return receipt
     return None
 
@@ -390,7 +391,7 @@ def resolve_python_toolchain(
                 raw_evidence=[*winner.raw_evidence, *raw_evidence][-12:],
                 confidence=0.0,
             )
-        remember_python_toolchain(winner)
+        remember_python_toolchain(winner, user_id=context.get("user_id"))
         return winner
 
     if broken_aliases:
@@ -405,7 +406,7 @@ def resolve_python_toolchain(
             raw_evidence=raw_evidence[-12:],
             confidence=0.86,
         )
-        remember_python_toolchain(receipt)
+        remember_python_toolchain(receipt, user_id=context.get("user_id"))
         return receipt
 
     return PythonToolchainReceipt(

@@ -177,7 +177,7 @@ def _attach_identity_receipt(result: dict, *, device_id: str, dev: dict | None) 
     if not isinstance(result, dict):
         return result
     if "identity_receipt" not in result:
-        profile = get_device_profile(_short_did(device_id))
+        profile = get_device_profile(_short_did(device_id), user_id=(dev or {}).get("user_id"))
         observed = result.get("observed_identity") or result.get("identity") or {}
         if not observed:
             observed = {key: result.get(key) for key in (
@@ -211,7 +211,7 @@ async def _probe_python_toolchain_if_needed(
 ) -> None:
     if not _should_probe_python_toolchain(message, device_info):
         return
-    profile = get_device_profile(_short_did(device_id))
+    profile = get_device_profile(_short_did(device_id), user_id=user_id)
     runtime_summary = dev.get("python_runtime_summary") if isinstance(dev, dict) else None
     runtime_summary = runtime_summary or parse_python_runtime_summary((profile or {}).get("python_runtime_summary"))
     if python_runtime_status_from_summary(runtime_summary) == "ok":
@@ -235,9 +235,9 @@ async def _probe_python_toolchain_if_needed(
     )
     try:
         result = await send_fn(_short_did(device_id), "execute_cmd", {"command": command, "timeout": 20})
-        profile = get_device_profile(_short_did(device_id))
+        profile = get_device_profile(_short_did(device_id), user_id=user_id)
         resolve_python_toolchain(
-            {"device_id": _short_did(device_id), "machine_guid": (profile or {}).get("machine_guid")},
+            {"user_id": user_id, "device_id": _short_did(device_id), "machine_guid": (profile or {}).get("machine_guid")},
             [{"command": command, "result": result}],
         )
     except Exception as exc:
@@ -253,9 +253,12 @@ async def send_command_to_agent(
 ) -> dict:
     """Send a command to a конкретный agent and wait for the response."""
     dev = devices.get(device_id)
+    if not dev or (user_id is not None and dev.get("user_id") != user_id):
+        raise RuntimeError(f"target_device_not_found: {device_id}")
+    user_id = dev.get("user_id")
     if action == "execute_cmd":
         cmd_text = params.get("command", "")
-        profile = get_device_profile(_short_did(device_id))
+        profile = get_device_profile(_short_did(device_id), user_id=user_id)
         try:
             validate_execute_command_paths_for_device(cmd_text, (dev or {}).get("info", {}), profile)
         except ValueError:
@@ -318,7 +321,7 @@ async def send_command_to_agent(
             raise RuntimeError(
                 f"BLOCKED: Запись в системные каталоги запрещена на этапе бета-тестирования: {path}"
             )
-        profile = get_device_profile(_short_did(device_id))
+        profile = get_device_profile(_short_did(device_id), user_id=user_id)
         try:
             validate_write_path_for_device(path, (dev or {}).get("info", {}), profile)
         except ValueError:
@@ -362,14 +365,14 @@ async def send_command_to_agent(
         summary = compact_activation_summary(result)
         dev["activation_receipt"] = result
         dev["activation_summary"] = summary
-        update_device_activation_summary(_short_did(device_id), summary)
+        update_device_activation_summary(_short_did(device_id), summary, user_id=user_id)
     elif action == "device.prepare_runtime" and isinstance(result, dict) and not result.get("error"):
         valid, _ = validate_python_runtime_receipt(result)
         if valid:
             summary = compact_python_runtime_summary(result)
             dev["python_runtime_receipt"] = result
             dev["python_runtime_summary"] = summary
-            update_device_python_runtime_summary(_short_did(device_id), summary)
+            update_device_python_runtime_summary(_short_did(device_id), summary, user_id=user_id)
     elif action == "device.refresh_state" and isinstance(result, dict) and not result.get("error"):
         snapshot = result.get("snapshot") if isinstance(result.get("snapshot"), dict) else None
         identity = result.get("identity_receipt") if isinstance(result.get("identity_receipt"), dict) else {}
@@ -623,7 +626,7 @@ async def collect_device_live_snapshot(device_id: str, user_id: int | None = Non
             device_id=device_id,
             dev=dev,
             observed=observed,
-            profile=get_device_profile(target_device_id),
+            profile=get_device_profile(target_device_id, user_id=user_id),
         )
         result = dict(result)
         result["identity_receipt"] = receipt
@@ -742,11 +745,29 @@ def _format_live_snapshot_summary(results: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _device_execution_status(result: dict) -> str:
+    """Conservative aggregation: a returned answer alone cannot hide a tool failure."""
+    status = (result.get("task_receipt") or {}).get("task_status") or result.get("status")
+    if status in {"failed", "blocked", "error", "partial", "partial_failure"}:
+        return "error"
+    if result.get("cancelled") or status == "cancelled":
+        return "cancelled"
+    if status in {"completed", "completed_with_recovery"}:
+        return "ok"
+    for command in result.get("commands", []):
+        payload = command.get("result") or {}
+        if command.get("status") in {"failed", "error", "blocked"} or command.get("tool_status") in {"failed", "error", "blocked"}:
+            return "error"
+        if isinstance(payload, dict) and (payload.get("error") or payload.get("returncode", 0) not in (0, None) or payload.get("status") in {"failed", "error", "blocked"}):
+            return "error"
+    return "ok"
+
+
 async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list[str], chat_id: int):
     """
     Execute an NL task in the background.
     Single device => standard LLM cycle.
-    Multiple devices => plan on first device, replay commands on the rest.
+    Multiple devices => independent sequential execution in each device context.
     """
     task = tasks[task_id]
     task["current_step"] = "ИРУ думает..."
@@ -798,9 +819,10 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             }
 
         device_info = dev.get("info", {})
-        user_devs = get_user_devices(user_id)
+        user_devs = {device_id: dev} if is_broadcast else get_user_devices(user_id)
         all_devices_info = {
             _short_did(did): {
+                "user_id": user_id,
                 "info": value.get("info", {}),
                 "ws": value.get("ws"),
                 "activation_receipt": value.get("activation_receipt"),
@@ -811,10 +833,12 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             }
             for did, value in user_devs.items()
         }
-        chat_history = get_messages(chat_id, limit=50)
-        device_profile = get_device_profile(_short_did(device_id))
+        # Broadcast starts each ordinary task afresh: no paths/results from another device.
+        chat_history = [] if is_broadcast else get_messages(chat_id, limit=50)
+        device_profile = get_device_profile(_short_did(device_id), user_id=user_id)
         autonomous_flag = bool(task_modes.get("autonomous")) and not task_modes.get("pipeline")
         all_devices_info.setdefault(_short_did(device_id), {
+            "user_id": user_id,
             "info": device_info,
             "ws": dev.get("ws"),
             "activation_receipt": dev.get("activation_receipt"),
@@ -832,6 +856,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if is_task_cancel_requested(task_id):
                 raise RuntimeError("Task cancellation requested before starting next device command")
             target_dk = _dk(user_id, target_device_id) if ":" not in target_device_id else target_device_id
+            if is_broadcast and target_dk != device_id:
+                raise RuntimeError(f"target_device_not_found: {target_device_id}")
             target_dev = devices.get(target_dk)
             if not target_dev or target_dev.get("user_id") != user_id:
                 raise RuntimeError(f"Нет доступа к устройству '{target_device_id}'")
@@ -839,7 +865,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 return await send_command_to_agent(target_dk, action, params, user_id=user_id,
                                                    skip_confirm=autonomous_flag)
             except RuntimeError as exc:
-                if not task_modes.get("pipeline") or "CONFIRM_REQUIRED" not in str(exc):
+                if not (task_modes.get("pipeline") or is_broadcast) or "CONFIRM_REQUIRED" not in str(exc):
                     raise
                 # Keep this bounded worker alive; confirmation resumes the pending call.
                 decision = asyncio.get_running_loop().create_future()
@@ -859,19 +885,24 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
 
 
         def file_link(dev_id: str, path: str) -> str:
+            target_key = dev_id if ":" in dev_id else _dk(user_id, dev_id)
+            if is_broadcast and target_key != device_id:
+                raise RuntimeError(f"target_device_not_found: {dev_id}")
             return get_file_link_fn(dev_id, path, user_id=user_id)
 
         async def device_tool_fn(tool_name: str, args: dict) -> dict:
             if is_task_cancel_requested(task_id):
                 return {"status": "cancelled", "error": "Task cancellation requested before starting next device tool"}
-            requested = _short_did(str(args.get("device_id") or device_id))
+            requested = str(args.get("device_id") or device_id)
             target_key = _dk(user_id, requested) if ":" not in requested else requested
             target_dev = devices.get(target_key)
+            if is_broadcast and target_key != device_id:
+                return {"status": "unavailable", "error": "target_device_not_found"}
             if not target_dev or target_dev.get("user_id") != user_id:
                 return {"status": "unavailable", "device_id": requested, "error": f"Нет доступа к устройству '{requested}'"}
             target_short = _short_did(target_key)
             if tool_name == "device_get_passport":
-                profile = get_device_profile(target_short)
+                profile = get_device_profile(target_short, user_id=user_id)
                 return compact_device_passport(target_short, target_dev, profile)
             if tool_name == "device_refresh_state":
                 snapshot_result = await collect_device_live_snapshot(target_key, user_id=user_id)
@@ -902,7 +933,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 summary = compact_activation_summary(receipt)
                 target_dev["activation_receipt"] = receipt
                 target_dev["activation_summary"] = summary
-                update_device_activation_summary(target_short, summary)
+                update_device_activation_summary(target_short, summary, user_id=user_id)
                 return {
                     "status": "ok",
                     "device_id": target_short,
@@ -939,7 +970,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 summary = compact_python_runtime_summary(receipt)
                 target_dev["python_runtime_receipt"] = receipt
                 target_dev["python_runtime_summary"] = summary
-                update_device_python_runtime_summary(target_short, summary)
+                update_device_python_runtime_summary(target_short, summary, user_id=user_id)
                 return {
                     "status": summary.get("runtime_status"),
                     "device_id": target_short,
@@ -982,7 +1013,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 task_receipt["warnings"] = sorted(set((task_receipt.get("warnings") or []) + activation_markers))
             return {
                 "device_id": device_id,
-                "status": "ok",
+                "status": _device_execution_status(result) if is_broadcast else "ok",
                 "answer": result.get("answer", ""),
                 "commands": result.get("commands", []),
                 "tasks": result.get("tasks", []),
@@ -1020,42 +1051,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 "answer": f"Ошибка: {error_text}" if error_text else "Произошла внутренняя ошибка. Попробуйте ещё раз.",
                 "commands": [],
             }
-
-    async def replay_commands_on_device(device_id: str, commands: list):
-        dev = devices.get(device_id)
-        if not dev or dev.get("user_id") != user_id:
-            return {
-                "device_id": device_id,
-                "status": "error",
-                "answer": f"Устройство '{device_id}' не найдено",
-                "commands": [],
-            }
-
-        results = []
-        for cmd in commands:
-            if is_task_cancel_requested(task_id):
-                return cancellation_payload(results)
-            cmd_text = cmd.get("command", "")
-            if cmd_text.startswith("["):
-                continue
-            try:
-                result = await send_command_to_agent(
-                    device_id,
-                    "execute_cmd",
-                    {"command": cmd_text, "timeout": 30},
-                    user_id=user_id,
-                )
-                results.append({"command": cmd_text, "device_id": device_id, "result": result})
-            except Exception as exc:
-                results.append({"command": cmd_text, "device_id": device_id, "result": {"error": str(exc)}})
-
-        hostname = dev.get("info", {}).get("hostname", device_id)
-        return {
-            "device_id": device_id,
-            "status": "ok",
-            "answer": f"Команды выполнены на {hostname}",
-            "commands": results,
-        }
 
     is_pipeline = bool((task.get("modes") or {}).get("pipeline"))
     if is_task_cancel_requested(task_id):
@@ -1106,38 +1101,30 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             finish_cancelled()
             return
         if is_broadcast:
-            primary_result = await run_on_device(device_ids[0])
-            if primary_result.get("status") == "cancelled" or is_task_cancel_requested(task_id):
-                finish_cancelled(primary_result.get("commands", []))
-                return
-            task["results"][device_ids[0]] = primary_result
-
-            all_commands = primary_result.get("commands", [])
-            answers = []
-
-            dev0 = devices.get(device_ids[0])
-            hostname0 = dev0["info"].get("hostname", device_ids[0]) if dev0 else device_ids[0]
-            answers.append(f"[{hostname0}] {primary_result.get('answer', '')}")
-
-            if all_commands and len(device_ids) > 1:
-                replay_results = await asyncio.gather(
-                    *[replay_commands_on_device(did, all_commands) for did in device_ids[1:]],
-                    return_exceptions=True,
-                )
-                for item in replay_results:
-                    if isinstance(item, Exception):
-                        answers.append(f"Ошибка: {str(item)}")
-                    else:
-                        task["results"][item["device_id"]] = item
-                        if item.get("commands"):
-                            all_commands.extend(item["commands"])
-                        dev = devices.get(item["device_id"])
-                        hostname = dev["info"].get("hostname", item["device_id"]) if dev else item["device_id"]
-                        answers.append(f"[{hostname}] {item.get('answer', '')}")
-
-            combined_answer = "\n\n".join(answers) if answers else "ИРУ завершила задачу без текстового ответа."
-            combined_commands = all_commands
-            combined_tasks = primary_result.get("tasks", [])
+            combined_commands, combined_tasks, answers = [], [], []
+            for target in device_ids:
+                result = await run_on_device(target)
+                task["results"][target] = result
+                combined_commands.extend(result.get("commands", []))
+                combined_tasks.extend(result.get("tasks", []))
+                if result.get("status") == "cancelled" or is_task_cancel_requested(task_id):
+                    finish_cancelled(combined_commands)
+                    return
+                hostname = (devices.get(target) or {}).get("info", {}).get("hostname", target)
+                answers.append(f"[{hostname}] {result['status']}: {result.get('answer', '')}")
+                # An unexpected controller-level confirmation must never start other devices.
+                if result.get("status") == "confirm":
+                    task["status"] = "failed"
+                    task["overall_status"] = "partial_failure"
+                    task["answer"] = "Broadcast остановлен: подтверждение не было выполнено. Повторите задачу для выбранного устройства."
+                    task["commands"] = combined_commands
+                    return
+            statuses = [item["status"] for item in task["results"].values()]
+            task["overall_status"] = "success" if all(status == "ok" for status in statuses) else (
+                "partial_failure" if any(status == "ok" for status in statuses) else "failed"
+            )
+            combined_task_receipt = {"task_status": "completed" if task["overall_status"] == "success" else "failed"}
+            combined_answer = "\n\n".join(answers)
         else:
             result = await run_on_device(device_ids[0])
             if result.get("status") == "cancelled" or is_task_cancel_requested(task_id):
@@ -1163,12 +1150,13 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             fact_text = suggest_match.group(1).strip()
             fact_category = suggest_match.group(2).strip()
             first_dev_id = device_ids[0] if device_ids else None
-            first_profile = get_device_profile(_short_did(first_dev_id)) if first_dev_id else None
+            first_profile = get_device_profile(_short_did(first_dev_id), user_id=user_id) if first_dev_id else None
             first_short = _short_did(first_dev_id) if first_dev_id else None
             python_receipt = (
-                python_toolchain_from_runtime_summary((first_profile or {}).get("python_runtime_summary"), device_id=first_short)
+                python_toolchain_from_runtime_summary((first_profile or {}).get("python_runtime_summary"), device_id=first_short, user_id=user_id)
                 or resolve_python_toolchain(
                     {
+                        "user_id": user_id,
                         "device_id": first_short,
                         "machine_guid": (first_profile or {}).get("machine_guid"),
                     },

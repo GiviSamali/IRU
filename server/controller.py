@@ -417,7 +417,7 @@ def _build_runtime_context(
     os_version = device_info.get("os_version", "")
     machine_guid = (device_profile or {}).get("machine_guid") or None
     mem_user_id = _resolve_memory_user_id(user_id, machine_guid)
-    python_receipt = get_cached_python_toolchain({"device_id": device_id, "machine_guid": machine_guid})
+    python_receipt = get_cached_python_toolchain({"user_id": user_id, "device_id": device_id, "machine_guid": machine_guid})
     manifest = build_minimal_llm_context(device_id, all_devices, device_profile)
     recent_artifact_context = build_recent_artifact_context(chat_history)
 

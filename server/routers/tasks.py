@@ -161,7 +161,7 @@ def _memory_facts_for_profile(user: dict, profile: dict | None) -> list[dict]:
 
 def _owned_device_profile(user: dict, device_id: str | None = None, machine_guid: str | None = None) -> dict | None:
     if device_id:
-        profile = get_device_profile(_short_did(device_id))
+        profile = get_device_profile(_short_did(device_id), user_id=user["id"])
         if profile and (profile.get("user_id") == user["id"] or _is_admin(user)):
             return profile
         return None
@@ -425,7 +425,7 @@ async def api_get_task(task_id: str, request: Request):
     if task.get("device_ids"):
         try:
             first_did = _short_did(task["device_ids"][0])
-            profile = get_device_profile(first_did)
+            profile = get_device_profile(first_did, user_id=user["id"])
             if profile and profile.get("machine_guid"):
                 memory_stats = get_memory_stats(profile["machine_guid"], str(user["id"]) if user.get("id") else None)
         except Exception:
@@ -443,6 +443,7 @@ async def api_get_task(task_id: str, request: Request):
         "task_receipt": task.get("task_receipt"),
         "current_step": task.get("current_step"),
         "results": task.get("results", {}),
+        "overall_status": task.get("overall_status"),
         "confirm_data": task.get("confirm_data"),
         "plan_review": task.get("plan_review"),
         "created_at": task["created_at"],
@@ -868,4 +869,13 @@ async def api_raw_command(cmd: RawCommand, request: Request):
 
     await asyncio.gather(*[exec_on_device(device_id) for device_id in target_ids])
     add_audit_log(user["id"], user["name"], "raw_command", f"cmd={cmd.command[:120]} devices={target_ids}", request.client.host if request.client else None)
+    if cmd.broadcast:
+        for item in results.values():
+            payload = item.get("result") or {}
+            if isinstance(payload, dict) and (payload.get("error") or payload.get("returncode", 0) not in (0, None)):
+                item["status"] = "error"
+        successes = sum(item["status"] == "ok" for item in results.values())
+        overall = "success" if successes == len(results) else ("partial_failure" if successes else "failed")
+        return {"status": "ok" if overall == "success" else "error", "overall_status": overall,
+                "results": results, "broadcast": True, "device_count": len(target_ids)}
     return {"status": "ok", "results": results, "broadcast": cmd.broadcast, "device_count": len(target_ids)}

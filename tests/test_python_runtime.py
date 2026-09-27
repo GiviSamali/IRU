@@ -239,9 +239,9 @@ def test_runtime_endpoint_stores_summary(monkeypatch):
         assert params["mode"] == "check"
         return receipt
 
-    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id, **kw: {"device_id": device_id, "user_id": 7})
     monkeypatch.setattr(devices_router, "send_command_to_agent", fake_send)
-    monkeypatch.setattr(devices_router, "update_device_python_runtime_summary", lambda device_id, summary: stored.update({device_id: summary}))
+    monkeypatch.setattr(devices_router, "update_device_python_runtime_summary", lambda device_id, summary, **kw: stored.update({device_id: summary}))
 
     result = asyncio.run(devices_router.prepare_runtime_for_user({"id": 7, "name": "tester"}, "givi", "check", []))
 
@@ -261,7 +261,7 @@ def test_runtime_endpoint_old_agent_error_is_explicit(monkeypatch):
     async def fake_send(*args, **kwargs):
         return {"error": "Неизвестное действие: device.prepare_runtime"}
 
-    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id, **kw: {"device_id": device_id, "user_id": 7})
     monkeypatch.setattr(devices_router, "send_command_to_agent", fake_send)
 
     with pytest.raises(HTTPException) as exc:
@@ -280,7 +280,7 @@ def test_runtime_endpoint_disconnect_during_prepare_is_recoverable_detail(monkey
     async def fake_send(*args, **kwargs):
         return {"error": "AGENT_DISCONNECTED: устройство 'givi' отключилось во время выполнения команды"}
 
-    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id, **kw: {"device_id": device_id, "user_id": 7})
     monkeypatch.setattr(devices_router, "send_command_to_agent", fake_send)
 
     with pytest.raises(HTTPException) as exc:

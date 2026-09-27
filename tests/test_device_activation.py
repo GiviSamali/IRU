@@ -116,9 +116,9 @@ def test_activate_device_for_user_sends_action_and_stores_summary(monkeypatch):
         sent.update({"device_key": device_key, "action": action, "params": params, "user_id": user_id})
         return _server_receipt()
 
-    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id, **kw: {"device_id": device_id, "user_id": 7})
     monkeypatch.setattr(devices_router, "send_command_to_agent", fake_send)
-    monkeypatch.setattr(devices_router, "update_device_activation_summary", lambda device_id, summary: stored.update({device_id: summary}))
+    monkeypatch.setattr(devices_router, "update_device_activation_summary", lambda device_id, summary, **kw: stored.update({device_id: summary}))
 
     result = asyncio.run(devices_router.activate_device_for_user({"id": 7, "name": "tester"}, "givi", "soft"))
 
@@ -147,9 +147,9 @@ def test_activate_device_for_user_rejects_invalid_receipt(monkeypatch):
     async def fake_send(*args, **kwargs):
         return receipt
 
-    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id, **kw: {"device_id": device_id, "user_id": 7})
     monkeypatch.setattr(devices_router, "send_command_to_agent", fake_send)
-    monkeypatch.setattr(devices_router, "update_device_activation_summary", lambda device_id, summary: stored.update({device_id: summary}))
+    monkeypatch.setattr(devices_router, "update_device_activation_summary", lambda device_id, summary, **kw: stored.update({device_id: summary}))
 
     with pytest.raises(HTTPException) as exc:
         asyncio.run(devices_router.activate_device_for_user({"id": 7, "name": "tester"}, "givi", "soft"))
@@ -183,8 +183,8 @@ def test_send_command_to_agent_does_not_store_invalid_activation_receipt(monkeyp
         "activation_summary": existing_summary,
     }
 
-    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
-    monkeypatch.setattr(task_runtime, "update_device_activation_summary", lambda device_id, summary: stored.append((device_id, summary)))
+    monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id, **kw: {"device_id": device_id, "user_id": 7})
+    monkeypatch.setattr(task_runtime, "update_device_activation_summary", lambda device_id, summary, **kw: stored.append((device_id, summary)))
 
     result = asyncio.run(
         task_runtime.send_command_to_agent(
@@ -205,7 +205,7 @@ def test_activate_device_for_user_offline_returns_error(monkeypatch):
     from server.routers import devices as devices_router
 
     devices.clear()
-    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id: {"device_id": device_id, "user_id": 7})
+    monkeypatch.setattr(devices_router, "get_device_profile", lambda device_id, **kw: {"device_id": device_id, "user_id": 7})
 
     with pytest.raises(HTTPException) as exc:
         asyncio.run(devices_router.activate_device_for_user({"id": 7, "name": "tester"}, "givi", "soft"))
