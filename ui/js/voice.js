@@ -1,6 +1,7 @@
 /* DeepTalk voice interaction using IRU's chat/task/auth flow. */
 (() => {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const singleUtterance = /Android/i.test(navigator.userAgent);
   const button = document.getElementById('voiceBtn');
   const status = document.getElementById('voiceStatus');
   const stopButton = document.getElementById('voiceStopSpeech');
@@ -41,7 +42,7 @@
     }
     if (recognition || !SR) return;
     const rec = new SR(); recognition = rec;
-    rec.lang = 'ru-RU'; rec.continuous = true; rec.interimResults = true;
+    rec.lang = 'ru-RU'; rec.continuous = !singleUtterance; rec.interimResults = true;
     // Result indices belong to this recognition run. A repeated final snapshot
     // must not append the same fragment again; equal text at a NEW index is valid.
     const deliveredFinals = new Set();
@@ -52,7 +53,19 @@
         if (deliveredFinals.has(i)) continue;
         const result = event.results[i];
         if (result.isFinal) deliveredFinals.add(i);
+        // Android continuous mode can republish cumulative finals at new indices.
+        // Accept one final per cycle without filtering intentional repeated words.
+        if (singleUtterance && result.isFinal) rec.onresult = null;
         session.transcript(result[0].transcript, result.isFinal);
+        if (singleUtterance && result.isFinal) {
+          if (recognition === rec) {
+            recognition = null;
+            rec.onend = null;
+            try { rec.abort(); } catch (_) {}
+            if (wantListening) restartTimer = setTimeout(() => listen(true), 250);
+          }
+          break;
+        }
       }
     };
     rec.onerror = event => {
