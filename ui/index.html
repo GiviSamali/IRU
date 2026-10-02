@@ -82,7 +82,10 @@
         </button>
         <div class="header-title" id="headerTitle">Новый чат</div>
       </div>
-      <div class="header-right">
+      <button class="btn-icon mobile-header-toggle" id="mobileHeaderToggle" aria-label="Меню действий" aria-expanded="false" aria-controls="headerActions">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+      </button>
+      <div class="header-right" id="headerActions" aria-label="Действия">
         <a class="btn-header-link" href="#" data-download-agent title="Скачать агент (zip-архив — распакуйте и запустите IruAgent.exe)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           <span>Скачать агент</span>
@@ -406,6 +409,7 @@
 <script src="js/voice.js" defer></script>
 <script src="js/attachments.js" defer></script>
 <script src="js/extras.js" defer></script>
+<script src="js/mobile-header.js" defer></script>
 <script src="app.js" defer></script>
 </body>
 </html>

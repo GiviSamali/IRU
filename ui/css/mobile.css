@@ -108,3 +108,35 @@
 @media (prefers-reduced-motion: reduce) and (max-width: 768px) {
   .auth-screen, .auth-logo img, .chat-welcome img, .voice-btn { animation: none; }
 }
+
+/* A single compact header; existing controls live in a dismissible panel. */
+.mobile-header-toggle { display: none; }
+@media (max-width: 768px) {
+  .header { position: relative; flex-direction: row; align-items: center; gap: 8px; }
+  .header-left { flex: 1; min-width: 0; }
+  .mobile-header-toggle { display: inline-flex; }
+  .mobile-header-toggle[aria-expanded="true"] { background: #233642; color: #75d9e9; }
+  .header #headerActions { display: none; }
+  .header #headerActions.mobile-open {
+    display: flex; position: absolute; top: calc(100% + 8px); right: 10px;
+    width: min(360px, calc(100vw - 20px)); padding: 12px; box-sizing: border-box;
+    max-height: calc(100dvh - 88px - env(safe-area-inset-top)); overflow-y: auto;
+    flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 6px;
+    border: 1px solid #33434f; border-radius: 18px; background: #141e27;
+    box-shadow: 0 16px 48px #0009; z-index: 200;
+  }
+  #headerActions .btn-header-link { width: 100%; box-sizing: border-box; justify-content: flex-start; display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; }
+  #headerActions .btn-header-link span { display: inline; }
+  #headerActions .btn-icon, #headerActions .memory-badge, #headerActions .usage-badge,
+  #headerActions .device-passport-toggle { width: 100%; min-height: 44px; height: auto; justify-content: flex-start; padding: 12px; gap: 12px; }
+  #headerActions .btn-icon::after { content: attr(title); font-size: 14px; }
+  #headerActions #memoryBadgeText { display: inline; }
+  #headerActions #usageBadgeText { font-size: 13px; }
+  #headerActions #usageBadgeText::before { content: none; }
+  #headerActions .device-select { flex: none; width: 100%; }
+  #headerActions .memory-badge, #headerActions .usage-badge { flex-wrap: wrap; max-width: none; box-sizing: border-box; }
+  #headerActions .memory-popover, #headerActions .usage-popover, #headerActions .device-dropdown {
+    position: static; width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box;
+    max-height: 240px; overflow: auto; margin-top: 6px; box-shadow: none; flex-basis: 100%;
+  }
+}

@@ -35,6 +35,22 @@ const path = require('node:path');
       }
       if (width <= 768) {
         for (const selector of ['#mobilePlusBtn', '#voiceBtn', '#btnMenuMobile']) await within(selector, 44);
+        await within('#mobileHeaderToggle', 44);
+        assert.equal(await page.locator('#headerActions').isVisible(), false);
+        assert.ok((await page.locator('.header').boundingBox()).height < 80);
+        await page.locator('#mobileHeaderToggle').click();
+        await within('#headerActions');
+        await page.locator('#headerActions').evaluate(el => { el.scrollTop = el.scrollHeight; });
+        await page.locator('#deviceBtn').click();
+        assert.equal(await page.locator('#deviceDropdown').isVisible(), true);
+        await page.keyboard.press('Escape');
+        assert.equal(await page.locator('#headerActions').isVisible(), false);
+        await page.locator('#mobileHeaderToggle').click();
+        await page.locator('#headerTitle').click();
+        assert.equal(await page.locator('#headerActions').isVisible(), false);
+        await page.locator('#mobileHeaderToggle').click();
+        if (width === 390) await page.screenshot({ path: path.join(process.env.TEMP, 'iru-mobile-header-menu.png') });
+        await page.keyboard.press('Escape');
         await page.locator('#mobilePlusBtn').click();
         await within('#mobilePlusPopover');
         await page.locator('#mobilePlusModeAction').click();
