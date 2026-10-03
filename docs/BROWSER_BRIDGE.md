@@ -40,6 +40,7 @@ LLM names используют underscore; UI/journal — канонически
 | LLM | Capability | Параметры и результат |
 |---|---|---|
 | web_tabs | web.tabs | device_id; до 100 HTTP/HTTPS вкладок: tab_id, title, URL/origin, active |
+| web_focus | web.focus | tab_id; выбрать наблюдённую вкладку и сфокусировать её окно; success только после проверки active/focused |
 | web_read | web.read | tab_id, scope main/page, position head/tail, max_chars ≤24000; default tail, 12000 символов; текст, headings, page identity, truncated |
 | web_elements | web.elements | tab_id, position head/tail, max_elements ≤200; default tail, 100 элементов; opaque IDs, role, accessible name, type, disabled/readonly |
 | web_fill | web.fill | tab_id, document_id, revision, element_id, text ≤20000; подтверждённый draft, без submit |
@@ -135,3 +136,20 @@ Browser Bridge не требует нового agent release; native окно �
 Изменённые файлы: `browser_extension/{manifest.json,background.js,content.js,options.html,options.css,options.js}`; `server/{browser_bridge.py,browser_policy.py,controller.py,controller_non_pipeline.py,controller_pipeline.py,controller_prompts.py,main.py,run_journal.py,task_runtime.py,tool_completion.py,tool_contracts.py,tool_inventory.py,tool_registry.py}`; `server/routers/{browser.py,voice.py}`; `tests/{test_browser_bridge.py,test_browser_policy.py,test_browser_integration.py,browser_bridge_fixture_server.py,browser-bridge.test.cjs}`; четыре страницы `tests/browser-fixtures/`; этот документ.
 
 Технические основания: [Chrome content scripts](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts), [WebSocket в Manifest V3](https://developer.chrome.com/docs/extensions/how-to/web-platform/websockets), [extension network requests](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests).
+
+
+## Исправления после smoke в Comet, 04.10.2026
+
+Вопрос «Сколько сейчас и каких вкладок открыто в браузере» распознаётся как явная браузерная задача. Исправлен русский stem «вкладок»; краткий список формируется непосредственно из текущего web.tabs без дополнительного LLM-turn. «Переключись на вкладку DeepSeek» использует отдельный web.focus: точный наблюдённый tab_id, tabs.update и windows.update, затем проверка active/focused. Это действие не активирует DOM-кнопки страницы. При неоднозначном названии модель должна запросить уточнение.
+
+После достаточного чтения простой задачи worker получает только terminal answer tools: максимум два основных terminal turns и один answer-only repair (семантический auditor сохраняется). Повторный идентичный read не допускает бесконечного цикла. Составные send→wait→read задачи не завершаются на первом чтении; focus→read не завершается на focus. Для неоднозначного/некорректного ответа остаётся честный partial report с ограниченным реально прочитанным фрагментом. Pipeline partial возвращает error, чтобы зависимые шаги не считали задачу полностью выполненной. Page text остаётся untrusted и не предоставляет новых полномочий.
+
+Исправлен закрытый HTTP client в существующем non-pipeline answer-only repair: repair использует открытый клиент и повторно проверяет cancel перед запросом. Regression test обращается через реальный completion transport с HTTP MockTransport, с включённым и выключенным auditor; это проверка HTTP wiring, а не живого провайдера.
+
+При обновлении сервера получить codex/browser-bridge-v1. На компьютере получить ту же ветку, затем нажать Reload для расширения на странице управления расширениями Comet и обновить целевые вкладки. Повторная привязка требуется только если статус соединения её запрашивает. Новый agent ZIP для этих исправлений не нужен.
+
+Ручной smoke после обновления: «Сколько сейчас и каких вкладок открыто в браузере» → список; «Переключись на вкладку DeepSeek» → нужная вкладка; «Прочитай последнее сообщение во вкладке ChatGPT» → ответ либо честный partial. Пользователь подтвердил живое чтение в Comet до исправления; новая focus/termination логика проверяется автоматически на controlled pages, но ещё требует production smoke в его профиле.
+
+Node suite: 74 passed (32 Browser Bridge, 42 voice/PLAN). В настоящем unpacked Edge проверен web.focus через production pairing/WebSocket вместе с полным chat flow. Единый pytest сохраняет прежние две collection errors agent.py/agent.shell; полный набор проверяется двумя отдельными запусками, как описано выше.
+
+Итог после исправлений: 888 Python tests passed в основном наборе и 11 Agent Shell tests passed отдельно (899 суммарно). py_compile 12 изменённых Python files, Node syntax checks и git diff --check прошли.

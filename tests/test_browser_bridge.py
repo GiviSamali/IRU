@@ -356,3 +356,14 @@ def test_stale_retry_cannot_bypass_unknown_effect_on_another_document(env):
     bridge._reserve_effect(1,"run","same","web.activate",{**ELEMENT,"document_id":"another"})
     outcome=execute(params={**ELEMENT,"revision":"r2","element_id":"fresh"})
     assert outcome["status"] == "unknown" and outcome["error"] == "prior_browser_action_needs_verification"
+
+
+
+def test_focus_transport_requires_exact_owned_device_and_verified_result(env):
+    socket,_=connection(env,result={"status":"success","tab_id":7,"focused":True})
+    assert execute("web.focus",{"tab_id":7})["status"] == "success"
+    assert execute("web.focus",{"tab_id":7},device="foreign")["status"] == "failed"
+    assert len(socket.calls) == 1
+    socket.result={"status":"success","tab_id":7,"focused":False}
+    assert execute("web.focus",{"tab_id":7})["status"] == "failed"
+    assert execute("web.focus",{"tab_id":7,"script":"evil"})["status"] == "failed"

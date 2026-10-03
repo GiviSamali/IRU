@@ -135,7 +135,7 @@ test('static implementation contains no model evaluator or synthetic keyboard/po
   const background=fs.readFileSync(path.join(extensionPath,'background.js'),'utf8'); assert.match(background,/files:\['content\.js'\]/); assert.doesNotMatch(background,/func:\s*|\beval\s*\(/);
   const manifest=JSON.parse(fs.readFileSync(path.join(extensionPath,'manifest.json'),'utf8')); assert.equal(manifest.manifest_version,3); assert.equal(manifest.minimum_chrome_version,'116'); assert.ok(!manifest.permissions.includes('debugger')); assert.ok(!manifest.permissions.includes('cookies')); assert.ok(!manifest.permissions.includes('history'));
 });
-function backgroundHarness({receiptState={},sendMessage}={}) {
+function backgroundHarness({receiptState={},sendMessage,focusVerified=true}={}) {
   const local={bridge_config:{server_url:'http://127.0.0.1',device_id:'givi',bridge_id:'bridge-123',token:'scoped-test-token'},activation_receipts:receiptState}, session={}, sockets=[];
   const event=()=>({addListener(){}});
   class FakeWebSocket {
@@ -145,7 +145,7 @@ function backgroundHarness({receiptState={},sendMessage}={}) {
     close(code){this.readyState=3;this.onclose?.({code:code||1000});}
   }
   const storage = data => ({async get(key){return Object.fromEntries((Array.isArray(key)?key:[key]).map(item=>[item,data[item]]));},async set(values){Object.assign(data,values);}});
-  const chrome={storage:{local:storage(local),session:storage(session),onChanged:event()},runtime:{onInstalled:event(),onStartup:event(),openOptionsPage(){}},alarms:{create(){},onAlarm:event()},action:{onClicked:event()},tabs:{async query(){return [{id:1,title:'Open chat',url:origin+'/chat.html',active:true},{id:2,title:'Internal',url:'chrome://settings',active:false}];},async get(id){if(id!==1)throw new Error('unknown tab');return{id:1,url:origin+'/chat.html'};},sendMessage:sendMessage||(async(_id,message)=>message.operation==='bridge.ping'?{status:'success'}:{status:'success',effect:'activation_dispatched',page:{document_id:'document',revision:'2'}})},scripting:{async executeScript(){}}};
+  const chrome={storage:{local:storage(local),session:storage(session),onChanged:event()},runtime:{onInstalled:event(),onStartup:event(),openOptionsPage(){}},alarms:{create(){},onAlarm:event()},action:{onClicked:event()},tabs:{async query(){return [{id:1,title:'Open chat',url:origin+'/chat.html',active:true},{id:2,title:'Internal',url:'chrome://settings',active:false}];},async get(id){if(id!==1)throw new Error('unknown tab');return{id:1,url:origin+'/chat.html',windowId:10,active:focusVerified};},async update(id,options){if(id!==1)throw new Error('unknown tab');return{id};},sendMessage:sendMessage||(async(_id,message)=>message.operation==='bridge.ping'?{status:'success'}:{status:'success',effect:'activation_dispatched',page:{document_id:'document',revision:'2'}})},windows:{async update(){},async get(){return{focused:focusVerified};}},scripting:{async executeScript(){}}};
   const context={chrome,WebSocket:FakeWebSocket,URL,TextEncoder,setTimeout(){return 1;},clearTimeout(){},setInterval(){return 1;},clearInterval(){},console};
   vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(extensionPath,'background.js'),'utf8'),context);
   return {context,sockets,receipts:local,local,async ready(){await new Promise(resolve=>setImmediate(resolve));const socket=sockets[0];socket.readyState=1;socket.onopen();return socket;},async command(socket,message){const before=socket.messages.length;await socket.onmessage({data:JSON.stringify({type:'command',...message})});return socket.messages.slice(before).find(msg=>msg.type==='result'&&msg.request_id===message.request_id)?.result;}};
@@ -249,6 +249,9 @@ test('real production pairing and WebSocket router drive the actual extension th
     const run=async(operation,params={},authorization={},task_id)=>{const response=await fetch(fixtureOrigin+'/fixture/action',{method:'POST',headers:{'Content-Type':'application/json','X-Token':'browser-fixture-account-token'},body:JSON.stringify({operation,params,authorization,task_id})});assert.equal(response.status,200);return response.json();};
     let tabs;for(let i=0;i<30;i++){tabs=await run('web.tabs');if(tabs.status==='success')break;await new Promise(r=>setTimeout(r,50));}assert.equal(tabs.status,'success');
     const tab=tabs.tabs.find(item=>item.url===fixtureOrigin+'/fixture/pages/chat.html');assert.ok(tab);
+    const other=await context.newPage();await other.goto(fixtureOrigin+'/fixture/pages/form.html');
+    const focused=await run('web.focus',{tab_id:tab.tab_id});assert.equal(focused.status,'success');assert.equal(focused.focused,true);
+    assert.equal(await worker.evaluate(id=>chrome.tabs.get(id).then(tab=>tab.active),tab.tab_id),true);
     const read=await run('web.read',{tab_id:tab.tab_id});assert.equal(read.trust,'untrusted_page_data');assert.match(read.text,/Welcome to the conversation/);
     const observed=await run('web.elements',{tab_id:tab.tab_id}),composer=observed.elements.find(item=>item.name==='Message');
     const filled=await run('web.fill',{tab_id:tab.tab_id,document_id:observed.document_id,revision:observed.revision,element_id:composer.element_id,text:'real IRU protocol connection'});assert.equal(filled.status,'success');assert.equal(await page.evaluate(()=>window.sends),0);
@@ -300,4 +303,13 @@ test('generic activation refuses forms with credentials or a preselected local a
 test('oversized associated form fails closed within the bounded control scan',async()=>{
   const page=await fixture();await page.evaluate(()=>{const form=document.createElement('form');for(let i=0;i<256;i++){const input=document.createElement('input');input.type='hidden';form.append(input);}const button=document.createElement('button');button.textContent='Continue large form';form.append(button);form.onsubmit=event=>{event.preventDefault();window.largeFormSubmitted=true;};document.querySelector('main').append(form);});
   const button=await observed(page,'Continue large form');const result=await command(page,'web.activate',button.params,{external_action:true});assert.equal(result.error,'unsupported_form_size');assert.equal(await page.evaluate(()=>!!window.largeFormSubmitted),false);await page.close();
+});
+
+for(const verified of [true,false]) test('focus checks actual tab and window state: '+verified,async()=>{
+  const harness=backgroundHarness({focusVerified:verified}),socket=await harness.ready();
+  const result=await harness.command(socket,{request_id:'focus-check',operation:'web.focus',params:{tab_id:1}});
+  assert.equal(result.status,verified?'success':'failed');
+  if(verified)assert.equal(result.focused,true);else assert.equal(result.error,'action_not_verified');
+  const missing=await harness.command(socket,{request_id:'focus-missing',operation:'web.focus',params:{tab_id:999}});
+  assert.equal(missing.status,'failed');
 });

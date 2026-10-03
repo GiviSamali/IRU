@@ -173,6 +173,7 @@ PIPELINE_TERMINAL_TOOL_NAMES = {"answer_text", "answer_report_failure"}
 PIPELINE_DEVICE_TOOL_NAMES = {"device_refresh_state", "device_check_runtime", "device_prepare_runtime"}
 PIPELINE_MEMORY_TOOL_NAMES = MEMORY_TOOL_NAMES
 PIPELINE_APP_WINDOW_ACTIONS = {
+    "web_focus": "web.focus",
     "web_tabs": "web.tabs",
     "web_read": "web.read",
     "web_elements": "web.elements",
@@ -1096,9 +1097,9 @@ async def run_pipeline_worker(
 
     chat_completion_request_fn = bounded_completion
     try:
-        from .browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments
+        from .browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_partial_read
     except ImportError:
-        from browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments
+        from browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_partial_read
     browser_policy = BrowserTaskPolicy(shared.get("browser_original_request") or overall_goal,
                                        step.get("device_id") or shared["current_device_id"], chat_history)
     worker_prompt = pipeline_worker_prompt(shared, overall_goal, step, completed_steps)
@@ -1158,6 +1159,9 @@ async def run_pipeline_worker(
     memory_write_allowed = has_explicit_memory_write_intent(
         f"{overall_goal}\n{step.get('title', '')}\n{step.get('instruction', '')}"
     )
+    browser_answer_phase = False
+    browser_answer_start = None
+    browser_last_observation = None
     command_budget = CommandBudget()
     progress_guard = StepProgress()
     stop_reason = "iteration_limit"
@@ -1206,7 +1210,9 @@ async def run_pipeline_worker(
                 "answer": "Остановлено пользователем.",
                 "commands": commands_log,
             }
-        if iteration:
+        if browser_answer_start is not None and iteration >= browser_answer_start + 2:
+            break
+        if iteration and not browser_answer_phase:
             decision, reason = progress_guard.observe(commands_log)
             if decision == "stop":
                 stop_reason = reason
@@ -1250,6 +1256,8 @@ async def run_pipeline_worker(
                 continue
 
         if not tool_calls:
+            if browser_answer_phase:
+                break
             messages.append({"role": "user", "content": RAW_CONTENT_CORRECTION})
             continue
 
@@ -1266,6 +1274,10 @@ async def run_pipeline_worker(
             messages.append({"role": "user", "content": f"Tool arguments must be valid JSON. {ONE_TOOL_CORRECTION}"})
             continue
 
+        if browser_answer_phase and not is_terminal_answer_tool(fn_name):
+            messages.append({"role":"user","content":"The page was read. Only a grounded terminal answer is allowed now."})
+            break
+
         if is_terminal_answer_tool(fn_name):
             try:
                 if is_answer_text_tool(fn_name):
@@ -1278,7 +1290,7 @@ async def run_pipeline_worker(
                         user_request=f"{overall_goal}\n{step_title}\n{step.get('instruction', '')}\nSuccess criteria: {step.get('success_criteria', '')}",
                         current_run_journal=commands_log,
                         answer_payload=payload,
-                        usage_context={**(usage_context or {}), "phase": f"pipeline.worker.step_{step_index + 1}.answer_auditor"},
+                        usage_context={**(usage_context or {}), "phase": f"browser_bridge.step_{step_index + 1}.answer_auditor" if browser_policy.browser_only else f"pipeline.worker.step_{step_index + 1}.answer_auditor"},
                     )
                     if audit_infra_error:
                         append_tool_step(commands_log, {
@@ -1782,6 +1794,20 @@ async def run_pipeline_worker(
             if isinstance(commands_log[-1].get("result"), dict) and commands_log[-1]["result"].get("error") == "memory_write_requires_explicit_user_intent":
                 messages.append({"role": "user", "content": MEMORY_WRITE_CORRECTION})
             if fn_name in BROWSER_TOOL_NAMES:
+                if fn_name == "web_focus" and tool_result.get("status") == "success" and tool_result.get("focused") is True and not re.search(r"прочитай|читай|дождись|read|wait", step.get("instruction") or step_title, re.I):
+                    payload=validate_answer_text_payload(synthesize_terminal_answer_payload(commands_log[-1]),commands_log)
+                    append_answer_step(commands_log,"answer_text",payload,target_device_id=target_device,iteration=iteration+1)
+                    return {"status":"ok","answer":payload["text"],"commands":commands_log}
+                if fn_name == "web_read" and tool_result.get("status") == "success":
+                    observation=(target_device,json.dumps(fn_args,sort_keys=True),json.dumps(tool_result,sort_keys=True))
+                    if browser_policy.browser_only and (browser_answer_ready(step.get("instruction") or step_title, commands_log) or observation == browser_last_observation):
+                        browser_answer_phase=True
+                        browser_answer_start=iteration+1
+                        worker_tools=[tool for tool in worker_tools if tool["function"]["name"] in {"answer_text","answer_ask_clarification","answer_report_failure"}]
+                        messages.append({"role":"user","content":"Reading succeeded. Give the grounded step answer now; do not repeat tools. Report partial results if other work remains."})
+                    browser_last_observation=observation
+                elif fn_name in {"web_fill","web_activate","web_wait","web_focus"}:
+                    browser_last_observation=None
                 if fn_name in {"web_read", "web_elements", "web_tabs"} and tool_result.get("status") == "success":
                     shared["browser_page_seen"] = True
                 if tool_result.get("status") in {"failed", "unknown"} and tool_result.get("error") != "stale_element":
@@ -1796,7 +1822,7 @@ async def run_pipeline_worker(
 
     if is_task_cancel_requested(poll_task_id):
         return {"status": "cancelled", "answer": "Остановлено пользователем.", "commands": commands_log}
-    if stop_reason == "iteration_limit":
+    if stop_reason == "iteration_limit" and not browser_answer_phase:
         decision, reason = progress_guard.observe(commands_log)
         if decision == "stop":
             stop_reason = reason
@@ -1807,7 +1833,7 @@ async def run_pipeline_worker(
                        else "После попытки восстановления новых результатов не получено.")
         return {"status": "error", "answer": "Шаг остановлен. " + explanation + " Выполненные действия сохранены.",
                 "commands": commands_log, "terminal_reason": stop_reason}
-    print("[pipeline/worker] iteration limit; final reserved answer-only turn")
+    print("[pipeline/worker] browser terminal answer repair" if browser_answer_phase else "[pipeline/worker] iteration limit; final reserved answer-only turn")
     repair_result = await run_answer_only_repair_turn(
         client=client,
         cfg=cfg,
@@ -1819,7 +1845,7 @@ async def run_pipeline_worker(
         target_device_id=step_device_id,
         hostname=shared.get("current_hostname") or step_device_id,
         iteration=PIPELINE_WORKER_MAX_ITERATIONS,
-        usage_context={**(usage_context or {}), "phase": f"pipeline.worker.step_{step_index + 1}.answer_repair"},
+        usage_context={**(usage_context or {}), "phase": f"browser_bridge.step_{step_index + 1}.answer_repair" if browser_answer_phase else f"pipeline.worker.step_{step_index + 1}.answer_repair"},
     )
     if repair_result.get("ok"):
         return {
@@ -1827,6 +1853,11 @@ async def run_pipeline_worker(
             "answer": repair_result["answer"],
             "commands": commands_log,
         }
+
+    if browser_answer_phase:
+        payload=validate_answer_text_payload(browser_partial_read(commands_log),commands_log)
+        append_answer_step(commands_log,"answer_text",payload,target_device_id=step_device_id)
+        return {"status":"error","answer":payload["text"],"commands":commands_log,"terminal_reason":"browser_answer_unavailable"}
 
     append_tool_step(commands_log, {
         "action": "tool_only_protocol",

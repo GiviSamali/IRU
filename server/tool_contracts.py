@@ -168,6 +168,8 @@ def _risk_from_danger(danger: str | None) -> str:
 
 def _permissions_for(meta: dict[str, Any], canonical_name: str, risk_level: str) -> list[str]:
     if canonical_name.startswith("web."):
+        if canonical_name == "web.focus":
+            return ["browser.observe", "browser.focus"]
         if canonical_name == "web.fill":
             return ["browser.observe", "browser.draft"]
         if canonical_name == "web.activate":
@@ -208,6 +210,8 @@ def _permissions_for(meta: dict[str, Any], canonical_name: str, risk_level: str)
 
 
 def _side_effects_for(canonical_name: str, risk_level: str) -> list[str]:
+    if canonical_name == "web.focus":
+        return ["changes_active_tab_and_browser_focus"]
     if canonical_name == "web.fill":
         return ["updates_page_draft_without_submission"]
     if canonical_name == "web.activate":
@@ -242,6 +246,8 @@ def _side_effects_for(canonical_name: str, risk_level: str) -> list[str]:
 def _evidence_for(canonical_name: str) -> EvidenceContract:
     if canonical_name.startswith("web."):
         produced = ["document_id", "revision", "untrusted_page_data"]
+        if canonical_name == "web.focus":
+            produced = ["tab_id", "verified_tab_and_window_focus"]
         if canonical_name == "web.tabs":
             produced = ["tab_id", "title", "origin", "untrusted_page_data"]
         if canonical_name == "web.activate":

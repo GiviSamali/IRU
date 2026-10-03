@@ -122,7 +122,11 @@ def synthesize_terminal_answer_payload(entry: dict[str, Any]) -> dict[str, Any]:
     if tool_name in {"web_fill", "web.fill", "web_activate", "web.activate"}:
         text = ("Черновик заполнен; отправка не выполнялась." if tool_name in {"web_fill", "web.fill"}
                 else "Элемент активирован; выполнение подтверждено браузером.")
+    if tool_name in {"web_focus", "web.focus"}:
+        text = "Вкладка выбрана, окно браузера в фокусе." if result.get("focused") is True else "Переключение вкладки не подтверждено."
     completion_state = result.get("completion_state")
+    if tool_name in {"web_focus", "web.focus"}:
+        completion_state = "success" if status == "success" and result.get("focused") is True else None
     if tool_name in {"web_fill", "web.fill", "web_activate", "web.activate"}:
         completion_state = "success" if status == "success" else None
     if tool_name == "transfer_file":

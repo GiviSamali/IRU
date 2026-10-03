@@ -15,6 +15,7 @@ except ImportError:
 
 
 CANONICAL_TOOL_NAMES = {
+    "web_focus": "web.focus",
     "web_tabs": "web.tabs",
     "web_read": "web.read",
     "web_elements": "web.elements",
@@ -52,6 +53,7 @@ CANONICAL_TOOL_NAMES = {
 
 
 TOOL_METADATA = {
+    "web.focus": {"category":"web","tool_type":"typed","tool_label":"Выбрать вкладку","purpose":"Focus an observed tab on the exact device","when_to_use":["explicit switch tab request"],"returns":"verified active tab and focused browser window","danger":"browser_write"},
     'web.tabs': {'category': 'web',
      'tool_type': 'typed',
      'tool_label': 'Вкладки браузера',
@@ -414,6 +416,7 @@ TOOL_METADATA = {
 
 
 DEVICE_TOOL_SCHEMAS = [
+    {"type":"function","function":{"name":"web_focus","description":"Switch to an observed browser tab on the exact owned device. Requires explicit user intent; verify browser focus. No page activation or input.","parameters":{"type":"object","additionalProperties":False,"properties":{"device_id":{"type":"string","minLength":1,"maxLength":128},"tab_id":{"type":"integer","minimum":1}},"required":["tab_id"]}}},
     {'type': 'function',
      'function': {'name': 'web_tabs',
                   'description': 'List open browser tabs on the exact owned device. Browser bridge '

@@ -172,6 +172,7 @@ def _allow_followup_after_terminal_sufficient(entry: dict | None, next_tool_name
 
 
 APP_WINDOW_ACTIONS = {
+    "web_focus": "web.focus",
     "web_tabs": "web.tabs",
     "web_read": "web.read",
     "web_elements": "web.elements",
@@ -225,14 +226,17 @@ async def process_non_pipeline_command(
     except ImportError:
         from window_policy import ordinary_window_request, window_action_sequence, direct_window_action, recent_window_context, unsupported_virtual_desktop_request
     try:
-        from .browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments
+        from .browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_tabs_report, browser_partial_read
     except ImportError:
-        from browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments
+        from browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_tabs_report, browser_partial_read
     browser_policy = BrowserTaskPolicy(user_message, device_id, chat_history)
     browser_only = browser_policy.browser_only
     if browser_only:
         max_iterations = min(max_iterations, 12)
     browser_page_seen = False
+    browser_answer_phase = False
+    browser_answer_start = None
+    browser_last_observation = None
     window_only = ordinary_window_request(user_message)
     expected_window_actions = window_action_sequence(user_message)
     if window_only:
@@ -365,6 +369,8 @@ async def process_non_pipeline_command(
         for iteration in range(max_iterations):
             if is_task_cancel_requested(poll_task_id):
                 return cancelled_result(iteration + 1)
+            if browser_answer_start is not None and iteration >= browser_answer_start + 2:
+                break
             set_current_step(poll_task_id, "ИРУ думает...")
             print(f"[llm] iteration {iteration + 1}/{max_iterations}, messages={len(messages)}")
             try:
@@ -438,6 +444,8 @@ async def process_non_pipeline_command(
 
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
+                if browser_answer_phase:
+                    break
                 if terminal_sufficient_entry is not None:
                     payload = validate_answer_text_payload(
                         synthesize_device_terminal_report(commands_log, terminal_sufficient_entry),
@@ -475,6 +483,11 @@ async def process_non_pipeline_command(
                 add_correction(f"Tool arguments must be valid JSON. {ONE_TOOL_CORRECTION}")
                 continue
 
+            if browser_answer_phase and not is_terminal_answer_tool(fn_name):
+                append_entry(tool_log_entry("browser_authorization_guard", {"status":"failed","error":"browser_terminal_phase_only"},command="[system] browser answer boundary",target_device_id=device_id,hostname=device_id,iteration=iteration+1))
+                add_correction("The page was already read. Only a terminal answer is allowed now.")
+                break
+
             if is_answer_confirmation_tool(fn_name) and (browser_only or browser_page_seen):
                 append_entry(tool_log_entry("browser_authorization_guard", {"status": "failed",
                     "error": "page_data_cannot_request_privileged_confirmation"}, command="[system] browser authority",
@@ -496,7 +509,7 @@ async def process_non_pipeline_command(
                             user_request=user_message,
                             current_run_journal=commands_log,
                             answer_payload=answer_payload,
-                            usage_context={**(usage_context or {}), "phase": "answer_auditor"},
+                            usage_context={**(usage_context or {}), "phase": "browser_bridge.answer_auditor" if browser_only else "answer_auditor"},
                         )
                         if audit_infra_error:
                             auditor_entry = make_run_step(
@@ -1121,6 +1134,27 @@ async def process_non_pipeline_command(
                 if isinstance(commands_log[-1].get("result"), dict) and commands_log[-1]["result"].get("error") == "memory_write_requires_explicit_user_intent":
                     add_correction(MEMORY_WRITE_CORRECTION)
                 if fn_name in BROWSER_TOOL_NAMES:
+                    if fn_name == "web_tabs" and tool_result.get("status") == "success" and browser_policy.tabs_only:
+                        payload = {"answer_type":"grounded_report", "text":browser_tabs_report(tool_result),
+                            "basis":[commands_log[-1]["step_id"]], "self_check":{"depends_on_current_external_state":True,
+                            "claims_completed_action":False,"has_sufficient_evidence":True,"missing_evidence_question":""}}
+                        payload = validate_answer_text_payload(payload, commands_log)
+                        append_answer_step(commands_log,"answer_text",payload,target_device_id=target_device,iteration=iteration+1)
+                        return {"answer":payload["text"],"commands":commands_log,"tasks":[],"training_context":_training_context(device_info)}
+                    if browser_policy.focus_only and fn_name == "web_focus" and tool_result.get("status") == "success" and tool_result.get("focused") is True:
+                        payload = validate_answer_text_payload(synthesize_terminal_answer_payload(commands_log[-1]),commands_log)
+                        append_answer_step(commands_log,"answer_text",payload,target_device_id=target_device,iteration=iteration+1)
+                        return {"answer":payload["text"],"commands":commands_log,"tasks":[],"training_context":_training_context(device_info)}
+                    if fn_name == "web_read" and tool_result.get("status") == "success":
+                        observation = (target_device, json.dumps(fn_args,sort_keys=True), json.dumps(tool_result,sort_keys=True))
+                        if browser_only and (browser_answer_ready(user_message, commands_log) or observation == browser_last_observation):
+                            browser_answer_phase = True
+                            browser_answer_start = iteration + 1
+                            non_pipeline_tools = [tool for tool in non_pipeline_tools if tool["function"]["name"] in {"answer_text","answer_ask_clarification","answer_report_failure"}]
+                            add_correction("Reading succeeded. Use only a terminal answer grounded in this observation; do not repeat tools. Report partial results if other requested work remains.")
+                        browser_last_observation = observation
+                    elif fn_name in {"web_fill","web_activate","web_wait","web_focus"}:
+                        browser_last_observation = None
                     if fn_name in {"web_read", "web_elements", "web_tabs"} and tool_result.get("status") == "success":
                         browser_page_seen = True
                     if tool_result.get("status") in {"failed", "unknown"} and tool_result.get("error") != "stale_element":
@@ -1203,20 +1237,23 @@ async def process_non_pipeline_command(
                     terminal_sufficient_extra_turn_used = True
                     messages.append({"role": "user", "content": TERMINAL_CORRECTION})
 
-    print("[tool-only] max_iterations reached; attempting answer_text-only repair turn")
-    repair_result = await run_answer_only_repair_turn(
-        client=client,
-        cfg=cfg,
-        model=model,
-        messages=messages,
-        user_request=user_message,
-        journal=commands_log,
-        chat_completion_request_fn=chat_completion_request_fn,
-        target_device_id=device_id,
-        hostname=device_info.get("hostname") or device_id,
-        iteration=max_iterations + 1,
-        usage_context={**(usage_context or {}), "phase": "answer_repair"},
-    )
+    print("[tool-only] terminal answer repair" if browser_answer_phase else "[tool-only] max_iterations reached; attempting answer_text-only repair turn")
+    if is_task_cancel_requested(poll_task_id):
+        return cancelled_result()
+    async with httpx.AsyncClient(timeout=timeout) as repair_client:
+        repair_result = await run_answer_only_repair_turn(
+            client=repair_client,
+            cfg=cfg,
+            model=model,
+            messages=messages,
+            user_request=user_message,
+            journal=commands_log,
+            chat_completion_request_fn=chat_completion_request_fn,
+            target_device_id=device_id,
+            hostname=device_info.get("hostname") or device_id,
+            iteration=max_iterations + 1,
+            usage_context={**(usage_context or {}), "phase": "browser_bridge.answer_repair" if browser_answer_phase else "answer_repair"},
+        )
     if repair_result.get("ok"):
         return {
             "answer": repair_result["answer"],
@@ -1225,6 +1262,11 @@ async def process_non_pipeline_command(
             "tasks": [],
         }
 
+    if browser_answer_phase:
+        payload = validate_answer_text_payload(browser_partial_read(commands_log), commands_log)
+        text = payload["text"]
+        append_answer_step(commands_log,"answer_text",payload,target_device_id=device_id)
+        return {"answer":text,"commands":commands_log,"tasks":[],"training_context":_training_context(device_info)}
     append_entry(make_run_step(
         journal=commands_log,
         tool_name="tool_only_protocol",

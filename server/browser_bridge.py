@@ -17,7 +17,7 @@ except ImportError:
     import database as db
     from runtime_state import _dk, devices
 
-OPERATIONS = frozenset({"web.tabs", "web.read", "web.elements", "web.fill", "web.activate", "web.wait"})
+OPERATIONS = frozenset({"web.tabs", "web.read", "web.elements", "web.fill", "web.activate", "web.wait", "web.focus"})
 MAX_MESSAGE_BYTES = 128 * 1024
 MAX_TEXT_CHARS = 24000
 PAIR_TTL = 30 * 86400
@@ -105,6 +105,7 @@ def validate_params(operation: str, params: dict) -> dict:
         raise ValueError("unsupported_browser_operation")
     permitted = {
         "web.tabs": set(),
+        "web.focus": {"tab_id"},
         "web.read": {"tab_id", "document_id", "revision", "max_chars", "scope", "position"},
         "web.elements": {"tab_id", "document_id", "revision", "max_elements", "position"},
         "web.fill": {"tab_id", "document_id", "revision", "element_id", "text"},
@@ -128,6 +129,8 @@ def validate_params(operation: str, params: dict) -> dict:
         raise ValueError("invalid_browser_argument:position")
     if "text" in clean and (not isinstance(clean["text"], str) or len(clean["text"]) > MAX_TEXT_CHARS or "\x00" in clean["text"]):
         raise ValueError("invalid_browser_argument:text")
+    if operation == "web.focus" and "tab_id" not in clean:
+        raise ValueError("missing_browser_arguments")
     required = {"tab_id", "document_id", "revision", "element_id"} if operation in {"web.fill", "web.activate"} else set()
     if operation == "web.fill":
         required.add("text")
@@ -149,6 +152,8 @@ def _safe_result(result: Any, operation: str, params: dict) -> dict:
     if result.get("status") == "success":
         if params.get("tab_id") is not None and result.get("tab_id") != params["tab_id"]:
             raise ValueError("browser_tab_mismatch")
+        if operation == "web.focus" and result.get("focused") is not True:
+            raise ValueError("browser_focus_not_verified")
         if operation == "web.tabs":
             tabs = result.get("tabs")
             if not isinstance(tabs, list) or len(tabs) > 100 or any(not isinstance(t, dict) or type(t.get("tab_id")) is not int for t in tabs):
@@ -318,11 +323,11 @@ async def execute_browser_action(user_id: int, task_id: str, device_id: str, ope
     finally:
         connection.pending.pop(request_id, None)
         if "result" in locals():
-            result["response_policy"] = "silent_on_success" if operation in {"web.fill", "web.activate", "web.wait"} else "speak_result"
+            result["response_policy"] = "silent_on_success" if operation in {"web.fill", "web.activate", "web.wait", "web.focus"} else "speak_result"
         if effect_key:
             _finish_effect(effect_key, locals().get("result", failure("browser_action_unknown", unknown=sent)))
         logger.info("browser action owner=%s device=%s operation=%s request=%s status=%s", user_id, device_id, operation, request_id, locals().get("result", {}).get("status", "unknown"))
-    result["response_policy"] = "silent_on_success" if operation in {"web.fill", "web.activate", "web.wait"} else "speak_result"
+    result["response_policy"] = "silent_on_success" if operation in {"web.fill", "web.activate", "web.wait", "web.focus"} else "speak_result"
     return result
 
 

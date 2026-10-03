@@ -1,6 +1,6 @@
 /* Transport is bound to one paired device. Only static content.js is injected. */
 'use strict';
-const OPERATIONS = new Set(['web.tabs','web.read','web.elements','web.fill','web.activate','web.wait']);
+const OPERATIONS = new Set(['web.tabs','web.read','web.elements','web.fill','web.activate','web.wait','web.focus']);
 const RECEIPT_KEY = 'activation_receipts';
 const RECEIPT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 let socket = null, reconnectTimer = null, heartbeat = null, connecting = false;
@@ -61,6 +61,19 @@ async function execute(message) {
             if (bytes > 100000) break; tabs.push(item);
           }
           result = {status:'success',tabs,truncated:available.length > tabs.length,response_policy:'speak_result',trust:'untrusted_page_data'};
+        }
+      } else if (message.operation === 'web.focus') {
+        if (Object.keys(message.params).some(key => key !== 'tab_id') || !Number.isInteger(message.params.tab_id)) result = errorResult('invalid_parameters');
+        else {
+          const tab = await chrome.tabs.get(message.params.tab_id);
+          if (!/^https?:\/\//i.test(tab.url || '')) result = errorResult('unsupported_page');
+          else {
+            await chrome.tabs.update(tab.id,{active:true});
+            await chrome.windows.update(tab.windowId,{focused:true});
+            const verified = await chrome.tabs.get(tab.id);
+            const window = await chrome.windows.get(tab.windowId);
+            result = verified.active && window.focused ? {status:'success',tab_id:tab.id,focused:true,response_policy:'silent_on_success'} : errorResult('action_not_verified');
+          }
         }
       } else {
         const tabId = message.params.tab_id;

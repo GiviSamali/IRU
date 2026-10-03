@@ -8,16 +8,18 @@ from __future__ import annotations
 import re
 from typing import Any
 
-WEB_OPERATIONS = frozenset({"web.tabs", "web.read", "web.elements", "web.fill", "web.activate", "web.wait"})
-_BROWSER_NOUNS = re.compile(r"(?:браузер|вкладк|веб[- ]|web\b|browser\b|tab\b|страниц|\bчат(?:е|а|у|ы|ов|ом)?\b|поле сообщения|композер|ссылк)", re.I)
-_READ_START = re.compile(r"^(?:прочитай|читай|покажи|перечисли|найди|что|какие|read\b|list\b|show\b)", re.I)
+WEB_OPERATIONS = frozenset({"web.tabs", "web.read", "web.elements", "web.fill", "web.activate", "web.wait", "web.focus"})
+_BROWSER_NOUNS = re.compile(r"(?:браузер|вклад|веб[- ]|web\b|browser\b|tabs?\b|страниц|\bчат(?:е|а|у|ы|ов|ом)?\b|поле сообщения|композер|ссылк)", re.I)
+_READ_START = re.compile(r"^(?:прочитай|читай|покажи|перечисли|найди|что|какие|сколько|какой|какая|какое|посмотри|скажи|what\b|which\b|how many\b|read\b|list\b|show\b)", re.I)
 _DRAFT_START = re.compile(r"^(?:напиши|впиши|заполни|вставь|набери|подготовь(?: текст| сообщение)?|write\b|fill\b|draft\b)", re.I)
 _SEND_START = re.compile(r"^(?:отправь|отправляй|пошли|спроси(?! меня\b)|скажи (?:ему|ей|им)|нажми|активируй|send\b|submit\b|ask (?:him|her|them)\b|tell (?:him|her|them)\b|activate\b)", re.I)
 _WAIT_START = re.compile(r"^(?:дождись|подожди|жди|wait\b)", re.I)
+_FOCUS_START = re.compile(r"^(?:переключись|переключи|выбери|активируй вкладку|switch|focus)\b", re.I)
 _OPEN_START = re.compile(r"^(?:открой|перейди|open\b|navigate\b|follow\b)", re.I)
 _PRIVILEGED_CLAUSE = re.compile(r"(?:execute_cmd|transfer_file|передай.{0,40}файл|сохрани.{0,40}файл|создай.{0,40}файл|удали|скачай|загрузи|установи|python|powershell)", re.I)
 _ALLOWED_ARGUMENTS = {
     "web.tabs": {"device_id"},
+    "web.focus": {"device_id", "tab_id"},
     "web.read": {"device_id", "tab_id", "scope", "max_chars", "position"},
     "web.elements": {"device_id", "tab_id", "max_elements", "position"},
     "web.fill": {"device_id", "tab_id", "document_id", "revision", "element_id", "text"},
@@ -126,10 +128,10 @@ def browser_request(message: str, history: list[dict[str, Any]] | None = None) -
         return bool(page_reference or context)
     if _BROWSER_NOUNS.search(authority_text):
         return bool(_READ_START.match(text) or _DRAFT_START.match(text) or _SEND_START.match(text)
-                    or _WAIT_START.match(text) or _OPEN_START.match(text))
+                    or _WAIT_START.match(text) or _OPEN_START.match(text) or _FOCUS_START.match(text))
     # Follow-up draft/send/wait has meaning only after an observed Browser Bridge turn.
     return bool(context and (_READ_START.match(text) or _DRAFT_START.match(text)
-                             or _SEND_START.match(text) or _WAIT_START.match(text) or _OPEN_START.match(text)))
+                             or _SEND_START.match(text) or _WAIT_START.match(text) or _OPEN_START.match(text) or _FOCUS_START.match(text)))
 
 
 # Alias retained for callers that parallel the ordinary-window classifier.
@@ -171,6 +173,9 @@ class BrowserTaskPolicy:
         literal_draft = self.draft_action and re.match(r"^(?:напиши|впиши|вставь|набери|write|draft)\b", intent_prefix, re.I)
         self.literal_payload = (self.message.split(":", 1)[1].strip()
                                 if ":" in self.message and (literal_draft or self.external_action) else None)
+        self.tabs_only = bool(self.is_browser_task and not (self.draft_action or self.external_action) and _READ_START.match(text) and re.search(r"вклад|что.*открыт.*браузер|список.*страниц", text, re.I) and not re.search(r"прочитай|читай|сообщен|содерж|сравни|read|summari", text, re.I))
+        self.focus_action = bool(self.is_browser_task and _FOCUS_START.match(text))
+        self.focus_only = self.focus_action and not re.search(r"прочитай|читай|дождись|напиши|отправ|заполни|read|wait|write|send|\sи\s|;", text, re.I)
         self.navigation_action = bool(self.is_browser_task and _OPEN_START.match(text))
         self.browser_only = self.is_browser_task and (self.draft_action or not _PRIVILEGED_CLAUSE.search(intent_prefix))
         self.page_data_seen = False
@@ -185,9 +190,11 @@ class BrowserTaskPolicy:
             self.authorized_device_ids = set(authorized_device_ids or [])
         elif current_device:
             self.authorized_device_ids.add(current_device)
-        self.allowed_operations = set(WEB_OPERATIONS - {"web.fill", "web.activate"}) if self.is_browser_task else set()
+        self.allowed_operations = set(WEB_OPERATIONS - {"web.fill", "web.activate", "web.focus"}) if self.is_browser_task else set()
         if self.draft_action or self.external_action and not self.bare_send:
             self.allowed_operations.add("web.fill")
+        if self.focus_action:
+            self.allowed_operations.add("web.focus")
         if self.external_action or self.navigation_action:
             self.allowed_operations.add("web.activate")
 
@@ -211,6 +218,8 @@ class BrowserTaskPolicy:
             validate_browser_arguments(operation, params or {})
         except ValueError as exc:
             return False, str(exc)
+        if operation == "web.focus" and operation not in self.allowed_operations:
+            return False, "explicit_tab_focus_intent_required"
         if operation == "web.fill" and operation not in self.allowed_operations:
             return False, "explicit_draft_intent_required"
         if operation == "web.fill" and self.literal_payload is not None and params.get("text") != self.literal_payload:
@@ -278,7 +287,7 @@ def silent_browser_success(task: dict[str, Any]) -> bool:
         result = command.get("result") or {}
         if operation not in WEB_OPERATIONS or result.get("error") or result.get("status") not in {"success", "ok", "changed", "filled", "activated"}:
             return False
-        if operation in {"web.fill", "web.activate", "web.wait"}:
+        if operation in {"web.fill", "web.activate", "web.wait", "web.focus"}:
             if result.get("response_policy") not in {"silent", "silent_on_success"}:
                 return False
             last_action_index = index
@@ -288,3 +297,55 @@ def silent_browser_success(task: dict[str, Any]) -> bool:
     # after the action is the user's requested result and must remain audible.
     return all(_canonical(str(command.get("tool_name") or command.get("action") or "")) == "web.wait"
                for command in commands[last_action_index + 1:])
+
+
+
+def browser_answer_ready(message: str, journal: list[dict[str, Any]]) -> bool:
+    """Completion hint only. Never supplies authority or page-selected capabilities."""
+    text = _intent_text(message)
+    if (_DRAFT_START.match(text) or _SEND_START.match(text)) and ":" in text:
+        text = text.split(":", 1)[0]
+    if _DRAFT_START.match(text) or _FOCUS_START.match(text) or _OPEN_START.match(text):
+        return False
+    if re.search(r"сравни|кажд|всех вклад|все вклад|две вклад|двух вклад|нескольк|compare|each|all tabs|two tabs", text, re.I):
+        return False
+    if re.search(r"напиши|заполни|переключ|создай|сохрани|скачай|открой|fill|focus|create|save|download|open", text, re.I):
+        return False
+    required = {"web.read"}
+    if _SEND_START.match(text):
+        if not re.search(r"прочитай|читай|ответ|read|reply", text, re.I):
+            return False
+        required.add("web.activate")
+    elif not (_READ_START.match(text) or _WAIT_START.match(text)):
+        return False
+    if re.search(r"дождись|подожди|wait", text, re.I):
+        required.add("web.wait")
+    successful = {_canonical(str(entry.get("tool_name") or entry.get("action") or ""))
+                  for entry in journal if isinstance(entry.get("result"), dict)
+                  and entry["result"].get("status") == "success" and not entry["result"].get("error")}
+    return required <= successful
+
+
+def browser_tabs_report(result: dict[str, Any]) -> str:
+    tabs = result.get("tabs") or []
+    label = "Показаны первые" if result.get("truncated") else "Открыто вкладок:"
+    lines = [f"{label} {len(tabs)}."]
+    for index, tab in enumerate(tabs, 1):
+        title = re.sub(r"\s+", " ", str(tab.get("title") or "Без названия"))[:160]
+        origin = str(tab.get("origin") or "")[:250]
+        lines.append(f"{index}. {title}" + (f" — {origin}" if origin else "")
+                     + (" (активная)" if tab.get("active") else ""))
+    return "\n".join(lines)
+
+
+
+def browser_partial_read(journal: list[dict[str, Any]]) -> dict[str, Any]:
+    observed = next(entry for entry in reversed(journal) if _canonical(str(entry.get("tool_name") or entry.get("action") or "")) == "web.read" and entry.get("result", {}).get("status") == "success")
+    result = observed["result"]
+    content = result.get("text", result.get("content", ""))
+    if isinstance(content, list):
+        content = "\n".join(str(item.get("text", "")) if isinstance(item, dict) else str(item) for item in content)
+    text = "Страница прочитана, но выделить запрошенный ответ не удалось. Полученный фрагмент:\n" + str(content)[-1600:]
+    return {"answer_type":"partial_report","text":text,"basis":[observed["step_id"]],
+            "self_check":{"depends_on_current_external_state":True,"claims_completed_action":False,
+                          "has_sufficient_evidence":True,"missing_evidence_question":"Не удалось выделить запрошенное сообщение"}}

@@ -28,13 +28,15 @@ def result(operation):
             "element_id":"field","response_policy":"silent_on_success" if operation in {"web.fill","web.activate","web.wait"} else "speak_result"}
 
 
-def run_normal(monkeypatch,message,responses,send,history=None):
+def run_normal(monkeypatch,message,responses,send,history=None, *, real_completion=None, cfg_override=None):
     monkeypatch.setattr(database,"get_device_profile",lambda *a,**kw:None)
     queue=iter(responses)
-    async def completion(**kw): return next(queue)
+    async def completion(**kw):
+        if real_completion: return await real_completion(**kw)
+        return next(queue)
     return asyncio.run(normal.process_non_pipeline_command(user_message=message,device_id="givi",device_info={"os":"Windows"},
         send_command_fn=send,get_file_link_fn=lambda *a:"",chat_history=history or [],user_id=None,chat_id=None,modes={},poll_task_id=None,
-        cfg={"model":"mock"},system_msg="system",machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,
+        cfg=cfg_override or {"model":"mock"},system_msg="system",machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,
         max_iterations=12,pick_model_fn=lambda *a:"mock",chat_completion_request_fn=completion))
 
 
@@ -209,3 +211,109 @@ def test_full_browser_controller_flow_rereads_after_changes_and_refreshes_stale_
     assert sent == ["web.read","web.elements","web.fill","web.elements","web.activate","web.elements","web.activate","web.wait","web.read"]
     observations=[entry["result"]["text"] for entry in outcome["commands"] if entry["tool_name"] == "web.read"]
     assert observations == ["Old message", "New reply from the chat"]
+
+
+
+def grounded(text="Получен ответ: тест", basis=None):
+    return call("answer_text",{"answer_type":"grounded_report","text":text,"basis":basis or ["step_1"],
+        "self_check":{"depends_on_current_external_state":True,"claims_completed_action":False,"has_sufficient_evidence":True,"missing_evidence_question":""}})
+
+
+def test_tabs_question_is_one_call_and_reports_current_tabs(monkeypatch):
+    sent=[]
+    async def send(device,operation,params):
+        sent.append(operation)
+        return {"status":"success","tabs":[{"tab_id":7,"title":"ChatGPT","origin":"https://chatgpt.com","active":True},
+                                                {"tab_id":8,"title":"DeepSeek","origin":"https://chat.deepseek.com","active":False}]}
+    outcome=run_normal(monkeypatch,"Сколько сейчас и каких вкладок открыто в браузере",[call("web_tabs")],send)
+    assert sent == ["web.tabs"] and "Открыто вкладок: 2" in outcome["answer"]
+    assert "ChatGPT" in outcome["answer"] and "DeepSeek" in outcome["answer"]
+
+
+def test_focus_success_finishes_after_browser_verification(monkeypatch):
+    sent=[]
+    async def send(device,operation,params): sent.append(operation); return {"status":"success","tab_id":7,"focused":True}
+    outcome=run_normal(monkeypatch,"Переключись на вкладку dipsic",[call("web_focus",{"tab_id":7})],send)
+    assert sent == ["web.focus"] and "Вкладка выбрана" in outcome["answer"]
+
+
+def test_read_then_raw_content_uses_one_repair_not_twelve_turns(monkeypatch):
+    sent=[]
+    async def send(device,operation,params): sent.append(operation); return result(operation)
+    raw={"choices":[{"message":{"content":"Обычный ответ без tool call"}}]}
+    outcome=run_normal(monkeypatch,"Прочитай последнее сообщение во вкладке чат gpt",
+        [call("web_read",{"tab_id":7}),raw,grounded()],send)
+    assert sent == ["web.read"] and outcome["answer"] == "Получен ответ: тест"
+    assert all(entry["tool_name"] != "tool_only_protocol" for entry in outcome["commands"])
+
+
+def test_duplicate_read_is_not_dispatched_after_sufficient_evidence(monkeypatch):
+    sent=[]
+    async def send(device,operation,params): sent.append(operation); return result(operation)
+    outcome=run_normal(monkeypatch,"Прочитай последнее сообщение во вкладке чат gpt",
+        [call("web_read",{"tab_id":7}),call("web_read",{"tab_id":7}),grounded()],send)
+    assert sent == ["web.read"] and outcome["answer"] == "Получен ответ: тест"
+
+
+def test_malformed_terminal_response_returns_honest_partial_read(monkeypatch):
+    sent=[]
+    async def send(device,operation,params): sent.append(operation); return {**result(operation),"text":"Текст, реально полученный из браузера"}
+    raw={"choices":[{"message":{"content":"Не вызвал tool"}}]}
+    outcome=run_normal(monkeypatch,"Прочитай последнее сообщение во вкладке чат gpt",
+        [call("web_read",{"tab_id":7}),raw,raw],send)
+    assert sent == ["web.read"]
+    assert "Текст, реально полученный" in outcome["answer"] and "выделить запрошенный ответ не удалось" in outcome["answer"]
+    assert outcome["commands"][-1]["result"]["answer_type"] == "partial_report"
+    assert all(entry["tool_name"] != "tool_only_protocol" for entry in outcome["commands"])
+
+
+
+@pytest.mark.parametrize("auditor",[False,True])
+def test_browser_repair_uses_live_http_client_instead_of_closed_client(monkeypatch,auditor):
+    from server.controller import _chat_completion_request
+    answers=iter([call("web_read",{"tab_id":7}),{"choices":[{"message":{"content":"plain content"}}]},grounded(),{"choices":[{"message":{"content":json.dumps({"valid":True,"reason":"grounded"})}}]}])
+    requests=[]
+    def handle(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200,json=next(answers))
+    client_type=httpx.AsyncClient
+    monkeypatch.setattr(normal.httpx,"AsyncClient",lambda **kw:client_type(**kw,transport=httpx.MockTransport(handle)))
+    async def send(device,operation,params): return result(operation)
+    outcome=run_normal(monkeypatch,"Прочитай последнее сообщение во вкладке чат gpt",[],send,
+        real_completion=_chat_completion_request,cfg_override={"model":"mock","base_url":"https://llm.invalid","api_key":"test-no-live-api","answer_auditor_enabled":auditor})
+    assert outcome["answer"] == "Получен ответ: тест" and len(requests) == (4 if auditor else 3)
+    assert {tool["function"]["name"] for tool in requests[1]["tools"]} == {"answer_text","answer_ask_clarification","answer_report_failure"}
+    assert [tool["function"]["name"] for tool in requests[2]["tools"]] == ["answer_text"]
+
+
+@pytest.mark.parametrize("duplicate,valid_answer",[(False,True),(True,True),(False,False)])
+def test_pipeline_read_terminal_phase_is_bounded(monkeypatch,duplicate,valid_answer):
+    from test_controller_pipeline_budget import _shared_context
+    monkeypatch.setattr(database,"get_device_profile",lambda *a,**kw:None)
+    shared=_shared_context("givi");shared["browser_original_request"]="Прочитай последнее сообщение во вкладке чат gpt"
+    raw={"choices":[{"message":{"content":"plain text"}}]}
+    queue=iter([call("web_read",{"tab_id":7}),call("web_read",{"tab_id":7}) if duplicate else raw,grounded() if valid_answer else raw,{"choices":[{"message":{"content":json.dumps({"valid":True,"reason":"grounded in read evidence"})}}]}])
+    sent=[];phases=[]
+    async def completion(**kw):
+        phases.append((kw.get("usage_context") or {}).get("phase"));return next(queue)
+    async def send(device,operation,params):sent.append(operation);return result(operation)
+    async def run():
+        async with httpx.AsyncClient() as client:
+            return await pipeline.run_pipeline_worker(client=client,cfg={},model="mock",shared=shared,
+                overall_goal=shared["browser_original_request"],step={"title":"Прочитать сообщение","instruction":shared["browser_original_request"],"device_id":"givi"},
+                completed_steps=[],chat_history=[],send_command_fn=send,get_file_link_fn=lambda *a:"",machine_guid=None,mem_user_id=None,
+                poll_task_id=None,chat_completion_request_fn=completion,worker_tools=WORKER_TOOLS)
+    outcome=asyncio.run(run())
+    assert sent==["web.read"] and len(phases)==(4 if valid_answer else 3)
+    assert outcome["status"]==("ok" if valid_answer else "error")
+    assert all(entry["tool_name"]!="tool_only_protocol" for entry in outcome["commands"])
+    if not valid_answer:assert outcome["terminal_reason"]=="browser_answer_unavailable"
+
+
+def test_focus_and_read_does_not_finish_after_focus(monkeypatch):
+    sent=[]
+    async def send(device,operation,params):
+        sent.append(operation);return {**result(operation),"focused":True}
+    outcome=run_normal(monkeypatch,"Переключись на вкладку DeepSeek и прочитай последнее сообщение",
+        [call("web_focus",{"tab_id":7}),call("web_read",{"tab_id":7}),grounded(basis=["step_2"])],send)
+    assert sent==["web.focus","web.read"] and outcome["answer"]=="Получен ответ: тест"

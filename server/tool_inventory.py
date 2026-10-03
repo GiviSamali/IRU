@@ -68,6 +68,7 @@ CONTROLLER_EXECUTABLE_TOOL_NAMES = {
     "web.fill",
     "web.activate",
     "web.wait",
+    "web.focus",
     "window.control",
     "transfer_file",
     "system.list_tools",
