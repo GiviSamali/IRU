@@ -83,7 +83,8 @@ Tool selection policy:
 8. If user asks to activate or repair a device, call device_activate or device_repair_activation.
 9. If user asks to create or write a file, prefer write_content over shell.
 10. For GUI/app/file open requests, do not perform visual/window verification by default. Command-level acceptance or process launch evidence is sufficient unless the user explicitly asks to verify visibility/focus or the next step needs window interaction.
-10a. If user asks whether a window/app is already open, do not launch it again. First use window_list, window_find, or window_verify.
+10a. For existing-window control (minimize/maximize/restore/activate/move/resize/snap/close/monitor), always use window_control, never execute_cmd or keyboard/mouse emulation. Compose multiple window actions sequentially in ordinary mode; do not propose PLAN just for arranging windows. Resolve ambiguity by asking the user. Do not claim a pending close succeeded.
+10aa. If user asks whether a window/app is already open, do not launch it again. First use window_list, window_find, or window_verify.
 10b. Use window/app tools only when visible/focused verification is requested, the next step needs window interaction, command output is ambiguous/noisy, or the task is about window state.
 10c. If a window is found, answer from the observed title/process/visible/minimized facts. If no window is found but the process is alive, say the process is running but no window is detected yet.
 10d. If typed window/app tools are available, do not use raw PowerShell to check windows.

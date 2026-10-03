@@ -15,6 +15,7 @@ except ImportError:
 
 
 CANONICAL_TOOL_NAMES = {
+    "window_control": "window.control",
     "system_list_tools": "system.list_tools",
     "memory_get_stats": "memory.get_stats",
     "memory_list_facts": "memory.list_facts",
@@ -45,6 +46,12 @@ CANONICAL_TOOL_NAMES = {
 
 
 TOOL_METADATA = {
+    "window.control": {
+        "category": "window", "tool_type": "typed", "tool_label": "Управление окном",
+        "purpose": "Native bounded window actions without shell commands or synthetic input",
+        "when_to_use": ["manage existing windows", "inspect windows and monitors"],
+        "returns": "verified window state or structured ambiguity/failure", "danger": "window_control",
+    },
     "transfer_file": {
         "category": "files", "tool_type": "typed", "tool_label": "Передача файла",
         "purpose": "Transfer one file between two devices owned by the current user via IRU relay",
@@ -358,6 +365,50 @@ TOOL_METADATA = {
 
 
 DEVICE_TOOL_SCHEMAS = [
+    {'type': 'function',
+     'function': {'name': 'window_control',
+                  'description': 'Управляй существующими окнами через нативный API. Для сворачивания, '
+                                 'разворачивания, восстановления, активации, закрытия, геометрии и мониторов '
+                                 'используй этот tool, никогда execute_cmd или эмуляцию клавиатуры/мыши. '
+                                 'Несколько действий выполняй последовательными обычными вызовами, PLAN не '
+                                 'нужен. target=current — активное окно; last — последнее изменённое этим '
+                                 'capability окно на том же устройстве; имя приложения (Word, Excel, browser, VS '
+                                 'Code) или заголовок. window_id только из результата этого tool, не придумывай. '
+                                 'При ambiguous уточни пользователя по candidates, не выбирай случайно. '
+                                 'left/right — половина work area монитора. move_monitor требует номер monitor '
+                                 'из monitors (primary=1). close — только штатный запрос, pending требует '
+                                 'решения пользователя. success с response_policy=silent_on_success: короткий '
+                                 'результат в UI, не озвучивай.',
+                  'parameters': {'type': 'object',
+                                 'additionalProperties': False,
+                                 'properties': {'action': {'type': 'string',
+                                                           'enum': ['active',
+                                                                    'list',
+                                                                    'find',
+                                                                    'monitors',
+                                                                    'activate',
+                                                                    'minimize',
+                                                                    'maximize',
+                                                                    'restore',
+                                                                    'close',
+                                                                    'move',
+                                                                    'resize',
+                                                                    'left',
+                                                                    'right',
+                                                                    'move_monitor']},
+                                                'target': {'type': 'string', 'default': 'current'},
+                                                'title': {'type': 'string'},
+                                                'pid': {'type': 'integer', 'minimum': 1},
+                                                'window_id': {'type': 'string'},
+                                                'x': {'type': 'integer'},
+                                                'y': {'type': 'integer'},
+                                                'width': {'type': 'integer', 'minimum': 1, 'maximum': 32768},
+                                                'height': {'type': 'integer', 'minimum': 1, 'maximum': 32768},
+                                                'monitor': {'type': 'integer', 'minimum': 1},
+                                                'device_id': {'type': 'string',
+                                                              'description': 'Точный ID устройства текущего '
+                                                                             'пользователя; без fallback.'}},
+                                 'required': ['action']}}},
     {"type": "function", "function": {
         "name": "transfer_file",
         "description": "Передать один файл через сервер ИРУ между устройствами одного пользователя (до 500 MiB). Не передавай содержимое файла. Укажи оба точных device_id. source_path относится только к source. target_path ИЛИ target_directory относится только к target; target_directory=desktop означает реальный рабочий стол target. По умолчанию desktop. Без перезаписи. Успех только после проверки SHA-256 целевой копии; при ошибке не открывай несуществующую копию.",
@@ -821,6 +872,8 @@ def _result_status(result: Any, action: str | None = None) -> str:
     if isinstance(result, dict):
         if canonical_tool_name(action or "") == "execute_cmd" and execute_cmd_result_is_negative(result):
             return "failed"
+        if canonical_tool_name(action or "") == "window.control" and result.get("status") == "pending":
+            return "blocked"
         if result.get("error"):
             return "failed"
         if result.get("status") in {"failed", "error"}:

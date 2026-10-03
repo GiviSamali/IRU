@@ -67,6 +67,8 @@ def tool_result_terminal_sufficient(entry: dict[str, Any] | None) -> bool:
     if result.get("terminal_sufficient"):
         return True
     tool_name = (entry or {}).get("tool_name") or (entry or {}).get("action")
+    if tool_name in {"window_control", "window.control"}:
+        return result.get("status") == "success" and result.get("completion_state") == "success"
     if tool_name == "transfer_file":
         return result.get("status") == "success" and result.get("sha256_verified") is True
     if tool_name == "execute_cmd":
@@ -144,6 +146,13 @@ def synthesize_terminal_answer_payload(entry: dict[str, Any]) -> dict[str, Any]:
 
 def synthesize_device_terminal_report(journal: list[dict], terminal_entry: dict) -> dict:
     """Keep confirmed results from all devices in an ordinary multi-device task."""
+    window_steps = [entry for entry in journal if entry.get("tool_type") != "answer"]
+    if window_steps and all((entry.get("tool_name") or entry.get("action")) in {"window_control", "window.control"}
+                            and tool_result_terminal_sufficient(entry) for entry in window_steps):
+        payload = synthesize_terminal_answer_payload(terminal_entry)
+        payload["text"] = "\n".join(str(entry.get("result", {}).get("summary") or entry.get("summary") or "") for entry in window_steps)
+        payload["basis"] = [entry["step_id"] for entry in window_steps if entry.get("step_id")]
+        return payload
     latest = {}
     for entry in journal:
         target = entry.get("target_device_id") or entry.get("device_id")

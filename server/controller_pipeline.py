@@ -169,6 +169,7 @@ PIPELINE_TERMINAL_TOOL_NAMES = {"answer_text", "answer_report_failure"}
 PIPELINE_DEVICE_TOOL_NAMES = {"device_refresh_state", "device_check_runtime", "device_prepare_runtime"}
 PIPELINE_MEMORY_TOOL_NAMES = MEMORY_TOOL_NAMES
 PIPELINE_APP_WINDOW_ACTIONS = {
+    "window_control": "window.control",
     "transfer_file": "transfer_file",
     "window_list": "window.list",
     "window_find": "window.find",

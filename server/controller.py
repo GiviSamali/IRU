@@ -110,6 +110,12 @@ async def classify_task_complexity(message: str, usage_context: dict | None = No
             logger.info("[classify] fast-path keyword=%r → PLAN, message=%r", kw, message[:100])
             return ("PLAN", "Запрошен пошаговый план")
 
+    try:
+        from .window_policy import ordinary_window_request
+    except ImportError:
+        from window_policy import ordinary_window_request
+    if ordinary_window_request(message):
+        return ("SIMPLE", "")
     cfg = load_llm_config()
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:

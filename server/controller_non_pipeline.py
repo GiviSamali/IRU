@@ -37,6 +37,7 @@ try:
     from .tool_completion import (  # type: ignore
         TERMINAL_CORRECTION,
         synthesize_device_terminal_report,
+        synthesize_terminal_answer_payload,
         tool_result_terminal_sufficient,
     )
     from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
@@ -99,6 +100,7 @@ except ImportError:
     from tool_completion import (  # type: ignore
         TERMINAL_CORRECTION,
         synthesize_device_terminal_report,
+        synthesize_terminal_answer_payload,
         tool_result_terminal_sufficient,
     )
     from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
@@ -159,6 +161,8 @@ def _allow_followup_after_terminal_sufficient(entry: dict | None, next_tool_name
     """Allow a created file to be run/opened, while blocking verification loops."""
     if not entry:
         return False
+    if (entry.get("tool_name") or entry.get("action")) in {"window_control", "window.control"}:
+        return True
     if next_tool_name == "transfer_file":
         return True
 
@@ -166,6 +170,7 @@ def _allow_followup_after_terminal_sufficient(entry: dict | None, next_tool_name
 
 
 APP_WINDOW_ACTIONS = {
+    "window_control": "window.control",
     "transfer_file": "transfer_file",
     "window_list": "window.list",
     "window_find": "window.find",
@@ -213,6 +218,16 @@ async def process_non_pipeline_command(
 
     messages.append({"role": "user", "content": user_message})
 
+    try:
+        from .window_policy import ordinary_window_request, window_action_sequence
+    except ImportError:
+        from window_policy import ordinary_window_request, window_action_sequence
+    window_only = ordinary_window_request(user_message)
+    expected_window_actions = window_action_sequence(user_message)
+    if window_only:
+        allowed_window_tools = {"window_control", "answer_text", "answer_ask_clarification", "answer_report_failure"}
+        non_pipeline_tools = [tool for tool in DEFAULT_CONTROLLER_TOOLS
+                              if tool["function"]["name"] in allowed_window_tools]
     commands_log = []
     tool_schemas = {
         tool.get("function", {}).get("name"): tool
@@ -535,6 +550,14 @@ async def process_non_pipeline_command(
                         "tool_call_id": tool_call["id"],
                         "content": json.dumps({"error": f"Ошибка парсинга аргументов: {exc}"}, ensure_ascii=False),
                     })
+                    continue
+
+                if window_only and fn_name not in allowed_window_tools:
+                    append_tool_message(tool_call["id"], append_entry(tool_log_entry(
+                        fn_name, {"error": "window_capability_required"},
+                        command=f"[tool] {fn_name}", target_device_id=device_id,
+                        hostname=device_info.get("hostname") or device_id, iteration=iteration + 1)))
+                    add_correction("Use window_control only for window actions. Shell and synthetic input are forbidden.")
                     continue
 
                 # Success on one PC is not completion of an explicit action on another.
@@ -998,6 +1021,40 @@ async def process_non_pipeline_command(
                 append_tool_message(tool_call["id"], commands_log[-1])
                 if isinstance(commands_log[-1].get("result"), dict) and commands_log[-1]["result"].get("error") == "memory_write_requires_explicit_user_intent":
                     add_correction(MEMORY_WRITE_CORRECTION)
+                if fn_name == "window_control" and tool_result.get("status") in {"ambiguous", "pending"}:
+                    if tool_result["status"] == "ambiguous":
+                        titles = [str(candidate.get("title") or candidate.get("process_name") or "Окно")
+                                  for candidate in tool_result.get("candidates", [])]
+                        question = "Найдено несколько окон: " + "; ".join(titles) + ". Какое выбрать?"
+                        append_answer_step(commands_log, "answer_ask_clarification",
+                            {"question": question, "reason": "ambiguous_window", "basis": [commands_log[-1]["step_id"]]},
+                            target_device_id=target_device, hostname=device_info.get("hostname") or target_device,
+                            iteration=iteration + 1)
+                        answer = question
+                    else:
+                        answer = str(tool_result["summary"])
+                        payload = {"answer_type": "partial_report", "text": answer, "basis": [commands_log[-1]["step_id"]],
+                            "self_check": {"depends_on_current_external_state": True, "claims_completed_action": False,
+                                           "has_sufficient_evidence": True, "missing_evidence_question": ""}}
+                        append_answer_step(commands_log, "answer_text", validate_answer_text_payload(payload, commands_log),
+                            target_device_id=target_device, hostname=device_info.get("hostname") or target_device,
+                            iteration=iteration + 1)
+                    return {"answer": answer, "commands": commands_log, "tasks": [],
+                            "training_context": _training_context(device_info)}
+                if window_only and expected_window_actions and fn_name == "window_control":
+                    verified_actions = [entry for entry in commands_log
+                        if (entry.get("tool_name") or entry.get("action")) in {"window_control", "window.control"}
+                        and (entry.get("result") or {}).get("completion_state") == "success"
+                        and (entry.get("result") or {}).get("status") == "success"]
+                    if [entry["result"].get("action") for entry in verified_actions] == expected_window_actions:
+                        payload = synthesize_terminal_answer_payload(verified_actions[-1])
+                        payload["text"] = "\n".join(entry["result"]["summary"] for entry in verified_actions)
+                        payload["basis"] = [entry["step_id"] for entry in verified_actions]
+                        payload = validate_answer_text_payload(payload, commands_log)
+                        append_answer_step(commands_log, "answer_text", payload, target_device_id=target_device,
+                            hostname=device_info.get("hostname") or target_device, iteration=iteration + 1)
+                        return {"answer": payload["text"], "commands": commands_log, "tasks": [],
+                                "training_context": _training_context(device_info)}
                 if tool_result_terminal_sufficient(commands_log[-1]):
                     terminal_sufficient_entry = commands_log[-1]
                     if terminal_sufficient_extra_turn_used:

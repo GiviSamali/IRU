@@ -62,6 +62,7 @@ LEGACY_OR_INTERNAL_ACTIONS: dict[str, dict[str, Any]] = {
 }
 
 CONTROLLER_EXECUTABLE_TOOL_NAMES = {
+    "window.control",
     "transfer_file",
     "system.list_tools",
     "system.get_last_run_summary",
@@ -153,6 +154,7 @@ def _agent_action_names() -> set[str]:
             "device.prepare_runtime",
             "device.refresh_state",
             "device.get_cached_passport",
+            "window.control",
             "window.list",
             "window.find",
             "window.verify",

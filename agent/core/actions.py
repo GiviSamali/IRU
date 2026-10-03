@@ -1488,7 +1488,10 @@ def activate_device(mode: str = "soft", device_id: str = "") -> dict:
     return receipt
 
 
+from .window_control import window_control
+
 ACTIONS = {
+    "window.control": window_control,
     "execute_cmd": lambda **params: execute_cmd(**params),
     "list_dir": lambda **params: list_dir(**params),
     "get_file_content": lambda **params: get_file_content(**params),
