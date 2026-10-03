@@ -119,7 +119,12 @@ def synthesize_terminal_answer_payload(entry: dict[str, Any]) -> dict[str, Any]:
     if tool_name == "transfer_file":
         text = (f"Файл {result.get('filename', '')} передан с {result.get('source_device', '')} на {result.get('target_device', '')}. "
                 f"Целевая копия проверена. Путь: {result.get('target_path', '')}")
+    if tool_name in {"web_fill", "web.fill", "web_activate", "web.activate"}:
+        text = ("Черновик заполнен; отправка не выполнялась." if tool_name in {"web_fill", "web.fill"}
+                else "Элемент активирован; выполнение подтверждено браузером.")
     completion_state = result.get("completion_state")
+    if tool_name in {"web_fill", "web.fill", "web_activate", "web.activate"}:
+        completion_state = "success" if status == "success" else None
     if tool_name == "transfer_file":
         completion_state = "success" if status == "success" and result.get("sha256_verified") is True else None
     if tool_name == "execute_cmd" and not completion_state:

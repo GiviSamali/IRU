@@ -33,9 +33,11 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
         raise HTTPException(404, "Задача не найдена")
     try:
         from ..window_policy import silent_window_success
+        from ..browser_policy import silent_browser_success
     except ImportError:
         from window_policy import silent_window_success
-    if silent_window_success(task):
+        from browser_policy import silent_browser_success
+    if silent_window_success(task) or silent_browser_success(task):
         return Response(status_code=204)
     review = task.get("plan_review") if task.get("status") == "confirm" else None
     pending = task.get("confirm_data") or {}

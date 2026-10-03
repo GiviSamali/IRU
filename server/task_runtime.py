@@ -859,7 +859,32 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         dev["activation_context_markers"] = activation_markers
         all_devices_info[_short_did(device_id)]["activation_context_markers"] = activation_markers
 
+        try:
+            from .browser_policy import BrowserTaskPolicy
+            from .browser_bridge import execute_browser_action
+        except ImportError:
+            from browser_policy import BrowserTaskPolicy
+            from browser_bridge import execute_browser_action
+        browser_policy = BrowserTaskPolicy(message, _short_did(device_id), chat_history,
+                                           authorized_device_ids=[_short_did(did) for did in device_ids])
+        browser_page_seen = False
+
         async def send_fn(target_device_id, action, params):
+            nonlocal browser_page_seen
+            if action.startswith("web."):
+                if is_task_cancel_requested(task_id):
+                    return {"status": "cancelled", "error": "task_cancelled"}
+                allowed, reason = browser_policy.allows(action, _short_did(target_device_id), params)
+                if not allowed:
+                    return {"status": "failed", "error": reason or "browser_authorization_required"}
+                result = await execute_browser_action(user_id, task_id, target_device_id, action, params,
+                    external_action=browser_policy.external_action, cancelled=lambda: is_task_cancel_requested(task_id))
+                if action in {"web.read", "web.elements", "web.tabs"} and result.get("status") == "success":
+                    browser_page_seen = True
+                return result
+            if browser_page_seen:
+                # Page/planner text is data. This bounded web capability cannot mint local authority.
+                return {"status": "failed", "error": "untrusted_web_content_cannot_authorize_device_action"}
             if action == "transfer_file":
                 try:
                     from .file_transfer import transfer_file
@@ -899,12 +924,16 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
 
 
         def file_link(dev_id: str, path: str) -> str:
+            if browser_page_seen:
+                raise RuntimeError("untrusted_web_content_cannot_authorize_file_download")
             target_key = dev_id if ":" in dev_id else _dk(user_id, dev_id)
             if is_broadcast and target_key != device_id:
                 raise RuntimeError(f"target_device_not_found: {dev_id}")
             return get_file_link_fn(dev_id, path, user_id=user_id)
 
         async def device_tool_fn(tool_name: str, args: dict) -> dict:
+            if browser_page_seen:
+                return {"status": "failed", "error": "untrusted_web_content_cannot_authorize_device_action"}
             if is_task_cancel_requested(task_id):
                 return {"status": "cancelled", "error": "Task cancellation requested before starting next device tool"}
             requested = str(args.get("device_id") or device_id)
@@ -1078,17 +1107,24 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if is_task_cancel_requested(task_id):
                 finish_cancelled()
                 return
-            kind, plan_desc = await _call_with_optional_usage_context(
-                classify_task_complexity,
-                message,
-                usage_context={
-                    "user_id": user_id,
-                    "chat_id": chat_id,
-                    "poll_task_id": task_id,
-                    "route": "classification",
-                    "phase": "classify_task_complexity",
-                },
-            )
+            try:
+                from .browser_policy import browser_request
+            except ImportError:
+                from browser_policy import browser_request
+            if browser_request(message, get_messages(chat_id, limit=8)):
+                kind, plan_desc = "SIMPLE", ""
+            else:
+                kind, plan_desc = await _call_with_optional_usage_context(
+                    classify_task_complexity,
+                    message,
+                    usage_context={
+                        "user_id": user_id,
+                        "chat_id": chat_id,
+                        "poll_task_id": task_id,
+                        "route": "classification",
+                        "phase": "classify_task_complexity",
+                    },
+                )
             logger.info(
                 "[classify] kind=%s plan_desc=%r user_id=%s message=%r",
                 kind,
