@@ -210,24 +210,24 @@ async def process_non_pipeline_command(
     device_tool_fn=None,
     usage_context: dict | None = None,
 ) -> dict:
-    messages = [{"role": "system", "content": system_msg}]
-
-    if chat_history:
-        history_msgs = build_chat_messages(chat_history[:-1], filter_onboarding=True)
-        messages.extend(history_msgs)
-
-    messages.append({"role": "user", "content": user_message})
-
     try:
-        from .window_policy import ordinary_window_request, window_action_sequence
+        from .window_policy import ordinary_window_request, window_action_sequence, direct_window_action, recent_window_context, unsupported_virtual_desktop_request
     except ImportError:
-        from window_policy import ordinary_window_request, window_action_sequence
+        from window_policy import ordinary_window_request, window_action_sequence, direct_window_action, recent_window_context, unsupported_virtual_desktop_request
     window_only = ordinary_window_request(user_message)
     expected_window_actions = window_action_sequence(user_message)
     if window_only:
         allowed_window_tools = {"window_control", "answer_text", "answer_ask_clarification", "answer_report_failure"}
         non_pipeline_tools = [tool for tool in DEFAULT_CONTROLLER_TOOLS
                               if tool["function"]["name"] in allowed_window_tools]
+    messages = [{"role": "system", "content": system_msg}]
+    if window_only:
+        context = recent_window_context(chat_history)
+        if context:
+            messages.append({"role": "system", "content": "Observed window context (not current state): " + json.dumps(context, ensure_ascii=False)})
+    elif chat_history:
+        messages.extend(build_chat_messages(chat_history[:-1], filter_onboarding=True))
+    messages.append({"role": "user", "content": user_message})
     commands_log = []
     tool_schemas = {
         tool.get("function", {}).get("name"): tool
@@ -238,7 +238,7 @@ async def process_non_pipeline_command(
     terminal_sufficient_extra_turn_used = False
     memory_write_allowed = has_explicit_memory_write_intent(user_message)
 
-    if user_id is not None or chat_id is not None:
+    if not window_only and (user_id is not None or chat_id is not None):
         previous_failed = get_last_run_summary(
             user_id=user_id,
             chat_id=chat_id,
@@ -294,13 +294,42 @@ async def process_non_pipeline_command(
             "cancel_entry": entry,
         }
 
+    if unsupported_virtual_desktop_request(user_message):
+        text = "Перенос между виртуальными рабочими столами в текущем инструменте ИРУ не реализован. Окна не изменены."
+        append_entry(tool_log_entry("window_control", {"status": "failed", "error": "virtual_desktop_not_supported", "summary": text},
+            command="[system] unsupported window capability", target_device_id=device_id, hostname=device_info.get("hostname") or device_id))
+        append_answer_step(commands_log, "answer_report_failure", {"message": text, "reason": "virtual_desktop_not_supported",
+            "recoverable": False, "suggested_next_action": "", "basis": [commands_log[-1]["step_id"]]}, target_device_id=device_id)
+        return {"answer": text, "commands": commands_log, "tasks": [], "training_context": _training_context(device_info)}
+
+    direct_args = direct_window_action(user_message, chat_history, device_id)
+    if direct_args:
+        if is_task_cancel_requested(poll_task_id):
+            return cancelled_result()
+        if direct_args.pop("_clarify", False):
+            question = "Какое из предыдущих окон изменить? Укажите приложение или заголовок."
+            append_answer_step(commands_log, "answer_ask_clarification", {"question": question,
+                "reason": "ambiguous_previous_window", "basis": []}, target_device_id=device_id)
+            return {"answer": question, "commands": commands_log, "tasks": [], "training_context": _training_context(device_info)}
+        try:
+            direct_result = await send_command_fn(device_id, "window.control", direct_args)
+        except Exception as exc:
+            direct_result = {"status": "failed", "error": str(exc), "summary": "Не удалось выполнить действие с окном: " + str(exc)}
+        entry = append_entry(_command_log_entry("window_control", "[tool] window_control", device_id, device_info, direct_result, 1))
+        if is_task_cancel_requested(poll_task_id):
+            return cancelled_result(1)
+        payload = synthesize_terminal_answer_payload(entry)
+        payload = validate_answer_text_payload(payload, commands_log)
+        append_answer_step(commands_log, "answer_text", payload, target_device_id=device_id, iteration=1)
+        return {"answer": payload["text"], "commands": commands_log, "tasks": [], "training_context": _training_context(device_info)}
+
     command_budget = CommandBudget()
     device_profile = db.get_device_profile(device_id, user_id=user_id)
     python_receipt = (
         python_toolchain_from_runtime_summary((device_profile or {}).get("python_runtime_summary"), device_id=device_id, user_id=user_id)
         or resolve_python_toolchain({"user_id": user_id, "device_id": device_id, "machine_guid": machine_guid}, commands_log)
     )
-    model = pick_model_fn(cfg, modes)
+    model = pick_model_fn(cfg, {**modes, "autonomous": False, "pipeline": False} if window_only else modes)
     base_model = cfg.get("model", "deepseek-chat")
     print(f"[llm] выбрана модель: {model} (base={base_model}, autonomous={bool(modes.get('autonomous'))})")
 
@@ -320,8 +349,8 @@ async def process_non_pipeline_command(
                     tools=non_pipeline_tools,
                     max_tokens=cfg.get("max_tokens", 4096),
                     tool_choice="required",
-                    usage_context={**(usage_context or {}), "phase": f"non_pipeline.iteration.{iteration + 1}"},
-                    phase=f"non_pipeline.iteration.{iteration + 1}",
+                    usage_context={**(usage_context or {}), "phase": f"window_control.iteration.{iteration + 1}" if window_only else f"non_pipeline.iteration.{iteration + 1}"},
+                    phase=f"window_control.iteration.{iteration + 1}" if window_only else f"non_pipeline.iteration.{iteration + 1}",
                 )
             except httpx.HTTPStatusError as exc:
                 print(f"[llm] HTTP error: {exc.response.status_code} {exc.response.text[:500]}")
@@ -559,6 +588,19 @@ async def process_non_pipeline_command(
                         hostname=device_info.get("hostname") or device_id, iteration=iteration + 1)))
                     add_correction("Use window_control only for window actions. Shell and synthetic input are forbidden.")
                     continue
+
+                if window_only and expected_window_actions and fn_name == "window_control":
+                    completed_count = sum(1 for entry in commands_log
+                        if (entry.get("tool_name") or entry.get("action")) in {"window_control", "window.control"}
+                        and (entry.get("result") or {}).get("status") == "success"
+                        and (entry.get("result") or {}).get("completion_state") == "success")
+                    expected = expected_window_actions[completed_count] if completed_count < len(expected_window_actions) else None
+                    if fn_args.get("action") not in ("active", "list", "find", "monitors", expected):
+                        append_tool_message(tool_call["id"], append_entry(tool_log_entry("window_control",
+                            {"error": "unrequested_window_action", "expected_action": expected}, command="[tool] window_control",
+                            target_device_id=device_id, hostname=device_info.get("hostname") or device_id, iteration=iteration + 1)))
+                        add_correction("Perform only the requested next window action: " + str(expected))
+                        continue
 
                 # Success on one PC is not completion of an explicit action on another.
                 if terminal_sufficient_entry is not None and fn_args.get("device_id"):
@@ -1041,6 +1083,14 @@ async def process_non_pipeline_command(
                             iteration=iteration + 1)
                     return {"answer": answer, "commands": commands_log, "tasks": [],
                             "training_context": _training_context(device_info)}
+                if window_only and fn_name == "window_control" and (tool_result.get("error") or tool_result.get("status") == "failed"):
+                    reason = str(tool_result.get("error") or "window_action_failed")
+                    answer = ("Нужное окно не найдено. Действие работает с уже открытым приложением."
+                              if reason == "window_not_found" else str(tool_result.get("summary") or "Действие с окном не выполнено: " + reason))
+                    append_answer_step(commands_log, "answer_report_failure", {"message": answer, "reason": reason,
+                        "recoverable": False, "suggested_next_action": "Уточните окно или проверьте доступность устройства.",
+                        "basis": [commands_log[-1]["step_id"]]}, target_device_id=target_device, iteration=iteration + 1)
+                    return {"answer": answer, "commands": commands_log, "tasks": [], "training_context": _training_context(device_info)}
                 if window_only and expected_window_actions and fn_name == "window_control":
                     verified_actions = [entry for entry in commands_log
                         if (entry.get("tool_name") or entry.get("action")) in {"window_control", "window.control"}

@@ -303,3 +303,122 @@ def test_controller_stops_for_ambiguity_or_save_dialog_without_retry(monkeypatch
     assert 'сохранить' in result['answer'] if pending else 'Какое выбрать?' in result['answer']
     assert len(adapter.calls)==(1 if pending else 0)
     assert not silent_window_success({'status':'done','commands':result['commands']})
+
+
+@pytest.mark.parametrize('message', ['Сверни', 'На весь экран', 'открой gpt', 'отлично А теперь проводник на второй виртуальный рабочий стол'])
+def test_reported_voice_phrases_skip_classification_llm(monkeypatch,message):
+    from server import controller
+    monkeypatch.setattr(controller,'load_llm_config',lambda: pytest.fail('No classifier LLM for this window request'))
+    assert asyncio.run(controller.classify_task_complexity(message)) == ('SIMPLE','')
+
+
+def run_actual_window_request(monkeypatch,message,send,completion=None,history=None,modes=None):
+    from server import database
+    from server.controller_non_pipeline import process_non_pipeline_command
+    monkeypatch.setattr(database,'get_device_profile',lambda *a,**kw: None)
+    async def no_llm(**kw): pytest.fail('Direct window command must not call LLM')
+    return asyncio.run(process_non_pipeline_command(user_message=message,device_id='device-1',device_info={'os':'Windows'},
+        send_command_fn=send,get_file_link_fn=lambda *a:'',chat_history=history or [],user_id=None,chat_id=None,modes=modes or {},poll_task_id=None,
+        cfg={'model':'flash','model_reasoner':'pro'},system_msg='system',machine_guid=None,mem_user_id=None,non_pipeline_tools=[],max_iterations=12,
+        pick_model_fn=lambda cfg,modes: 'pro' if modes.get('autonomous') else 'flash',chat_completion_request_fn=completion or no_llm))
+
+
+def test_bare_minimize_only_changes_current_window_without_llm(monkeypatch):
+    adapter=FakeAdapter([window(),window(202,20,'Browser','comet.exe')]); control=wc.WindowControl(adapter)
+    sent=[]
+    async def send(device,action,args): sent.append((device,action,args)); return control.run(**args)
+    result=run_actual_window_request(monkeypatch,'Сверни',send)
+    assert sent == [('device-1','window.control',{'action':'minimize','target':'current'})]
+    assert adapter.rows[0]['minimized'] and not adapter.rows[1]['maximized']
+    assert silent_window_success({'status':'done','commands':result['commands']})
+
+
+def test_fullscreen_followup_uses_observed_same_device_window_without_llm(monkeypatch):
+    adapter=FakeAdapter(); control=wc.WindowControl(adapter)
+    previous=control.run('restore',target='Word'); adapter.rows.append(window(202,20,'Browser','comet.exe')); adapter.current=202
+    history=[{'role':'assistant','commands':[{'tool_name':'window.control','target_device_id':'device-1','result':previous}]},
+             {'role':'user','content':'на весь экран'}]
+    async def send(device,action,args): return control.run(**args)
+    result=run_actual_window_request(monkeypatch,'на весь экран',send,history=history)
+    assert adapter.rows[0]['maximized'] and not adapter.rows[1]['maximized']
+    assert silent_window_success({'status':'done','commands':result['commands']})
+
+
+def test_relative_reference_never_uses_other_device_id(monkeypatch):
+    from server.window_policy import direct_window_action
+    history=[{'role':'assistant','commands':[{'tool_name':'window.control','target_device_id':'Second',
+        'result':{'status':'success','completion_state':'success','window':{'window_id':'a'*32}}}]}]
+    assert direct_window_action('на весь экран',history,'device-1') is None
+
+
+def test_ambiguous_relative_window_asks_without_agent_or_llm(monkeypatch):
+    adapter=FakeAdapter([window(),window(202,20,'Browser','comet.exe')]); control=wc.WindowControl(adapter)
+    history=[{'role':'assistant','commands':[{'tool_name':'window.control','target_device_id':'device-1','result':control.run('find',pid=pid)} for pid in (10,20)]}]
+    for entry in history[0]['commands']: entry['result']['completion_state']='success'
+    async def send(*args): pytest.fail('Ambiguous follow-up must not act')
+    result=run_actual_window_request(monkeypatch,'на весь экран',send,history=history)
+    assert 'Какое из предыдущих окон' in result['answer']
+
+
+def test_unsupported_virtual_desktop_never_runs_shell_or_llm(monkeypatch):
+    async def send(*args): pytest.fail('Unsupported virtual desktop must not dispatch')
+    result=run_actual_window_request(monkeypatch,'отлично А теперь проводник на второй виртуальный рабочий стол',send)
+    assert 'не реализован' in result['answer'] and 'не изменены' in result['answer']
+    assert result['commands'][0]['result']['error']=='virtual_desktop_not_supported'
+    assert not silent_window_success({'status':'done','commands':result['commands']})
+
+
+def test_gpt_alias_restores_existing_app_without_legacy_window_find(monkeypatch):
+    control=wc.WindowControl(FakeAdapter([window(process='ChatGPT.exe',title='ChatGPT')]))
+    sent=[]; prompts=[]
+    async def send(device,action,args): sent.append(action); return control.run(**args)
+    async def completion(**kw):
+        prompts.append(kw); assert len(prompts)==1
+        assert kw['model']=='flash' and kw['phase'].startswith('window_control.')
+        assert {t['function']['name'] for t in kw['tools']} == {'window_control','answer_text','answer_ask_clarification','answer_report_failure'}
+        assert all('OLD HWND' not in m['content'] and 'irrelevant research' not in m['content'] for m in kw['messages'])
+        return tool_call('window_control',{'action':'activate','target':'gpt'})
+    history=[{'role':'assistant','content':'irrelevant research'*1000,'commands':[{'tool_name':'window.find','result':{'match':{'handle':123,'title':'OLD HWND'}}}]}, {'role':'user','content':'открой gpt'}]
+    result=run_actual_window_request(monkeypatch,'открой gpt',send,completion,history,{'autonomous':True})
+    assert sent==['window.control'] and silent_window_success({'status':'done','commands':result['commands']})
+
+
+def test_window_action_guard_blocks_unrequested_maximize(monkeypatch):
+    control=wc.WindowControl(FakeAdapter()); sent=[]
+    responses=iter([tool_call('window_control',{'action':'maximize','target':'Word'},'bad'),tool_call('window_control',{'action':'minimize','target':'Word'},'good')])
+    async def send(device,action,args): sent.append(args['action']); return control.run(**args)
+    async def completion(**kw): return next(responses)
+    result=run_actual_window_request(monkeypatch,'Сверни Word',send,completion)
+    assert sent==['minimize'] and result['commands'][0]['result']['error']=='unrequested_window_action'
+
+
+def test_window_phase_disables_reasoning_even_for_pro_model():
+    from server.controller import _thinking_request_fields
+    assert _thinking_request_fields({'model_reasoner':'pro'},'pro',phase='window_control.iteration.1') == {'thinking':{'type':'disabled'}}
+
+
+
+def test_compact_controller_prompt_preserves_device_inventory_without_full_profile():
+    from types import SimpleNamespace
+    from server.controller import _build_route_kwargs
+    result=_build_route_kwargs(route=SimpleNamespace(name='non_pipeline',toolset_name='non_pipeline'),
+        runtime=SimpleNamespace(cfg={},machine_guid=None,mem_user_id=None),
+        user_message='открой gpt',device_id='givi',device_info={},
+        all_devices={'givi':{'info':{'hostname':'first'}},'Second':{'info':{'hostname':'second'}}},
+        send_command_fn=None,get_file_link_fn=None,chat_history=[],user_id=1,chat_id=1,device_profile=None,
+        modes={},poll_task_id=None)
+    prompt=result['system_msg']
+    assert len(prompt)<1800 and 'givi' in prompt and 'Second' in prompt and 'first' in prompt
+    assert 'window_control' in prompt and 'не выполняй' in prompt.lower()
+
+
+
+def test_missing_gpt_stops_after_one_selection_without_shell_recovery(monkeypatch):
+    control=wc.WindowControl(FakeAdapter([])); requests=[]; sent=[]
+    async def completion(**kw):
+        requests.append(kw); assert len(requests)==1
+        return tool_call('window_control',{'action':'activate','target':'gpt'})
+    async def send(device,action,args): sent.append(action); return control.run(**args)
+    result=run_actual_window_request(monkeypatch,'открой gpt',send,completion)
+    assert sent==['window.control'] and 'не найдено' in result['answer']
+    assert result['commands'][-1]['tool_name']=='answer.report_failure'

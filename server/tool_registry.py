@@ -399,7 +399,7 @@ DEVICE_TOOL_SCHEMAS = [
                                                 'target': {'type': 'string', 'default': 'current'},
                                                 'title': {'type': 'string'},
                                                 'pid': {'type': 'integer', 'minimum': 1},
-                                                'window_id': {'type': 'string'},
+                                                'window_id': {'type': 'string', 'description': 'Opaque 32-character ID returned ONLY by window_control; never a HWND/handle from window_find. For legacy window_find results use pid/title instead.'},
                                                 'x': {'type': 'integer'},
                                                 'y': {'type': 'integer'},
                                                 'width': {'type': 'integer', 'minimum': 1, 'maximum': 32768},

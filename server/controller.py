@@ -226,8 +226,8 @@ def _thinking_request_fields(
 ) -> dict:
     """Return provider thinking fields for the selected DeepSeek V4 model."""
     request_phase = phase or (usage_context or {}).get("phase")
-    if request_phase in {"pipeline.plan", "pipeline.plan.retry"}:
-        # Planning emits bounded JSON; reserve its output budget for the plan.
+    if (request_phase or "").startswith("window_control.") or request_phase in {"pipeline.plan", "pipeline.plan.retry"}:
+        # Planning and ordinary window selection reserve output for structured calls.
         return {"thinking": {"type": "disabled"}}
 
     base_model = cfg.get("model", "deepseek-v4-flash")
@@ -594,8 +594,29 @@ def _build_route_kwargs(
             device_tool_fn=device_tool_fn,
         )
 
-    system_msg = _build_non_pipeline_system_prompt(runtime=runtime, device_id=device_id)
-    if modes.get("autonomous"):
+    try:
+        from .window_policy import ordinary_window_request
+    except ImportError:
+        from window_policy import ordinary_window_request
+    if ordinary_window_request(user_message):
+        inventory = [{"device_id": did, "hostname": (dev.get("info") or {}).get("hostname", did),
+                      "os": (dev.get("info") or {}).get("os", "unknown")}
+                     for did, dev in all_devices.items()]
+        system_msg = (
+            "Ты ИРУ. Выполни только явно запрошенные действия с существующими окнами. "
+            "Используй window_control, никогда execute_cmd, клавиатуру/мышь или старые window_find/window_focus. "
+            "Один tool call за итерацию. Не предлагай PLAN для оконных действий. "
+            "Не выполняй дополнительные действия после запрошенного результата. "
+            "current означает реально активное окно. Относительные ссылки разрешай по наблюдаемому контексту окон; "
+            "при нескольких кандидатах уточни пользователя. Непрозрачный window_id бери только из window_control, "
+            "никогда не используй HWND из старых инструментов. gpt означает существующее приложение ChatGPT. "
+            "При выборе устройства используй точный device_id из inventory; неизвестное устройство не заменяй текущим. "
+            "Ошибки/информацию сообщай кратко; silent_on_success означает результат в UI без голосовой реплики. "
+            f"Текущее устройство: {device_id}. Inventory: {json.dumps(inventory, ensure_ascii=False)}"
+        )
+    else:
+        system_msg = _build_non_pipeline_system_prompt(runtime=runtime, device_id=device_id)
+    if modes.get("autonomous") and not ordinary_window_request(user_message):
         system_msg = system_msg + "\n\n## Активные режимы\n" + (
             "АВТОНОМНЫЙ РЕЖИМ: Пользователь дал согласие на выполнение без дополнительных "
             "подтверждений. Действуй самостоятельно, не спрашивай перед каждой командой. "

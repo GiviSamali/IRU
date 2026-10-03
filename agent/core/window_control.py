@@ -13,6 +13,8 @@ ACTIONS = frozenset({'active', 'list', 'find', 'monitors', 'activate', 'minimize
 SILENT = ACTIONS - {'active', 'list', 'find', 'monitors', 'close'}
 ALIASES = {
     'word': {'winword.exe'}, 'ворд': {'winword.exe'}, 'excel': {'excel.exe'}, 'эксель': {'excel.exe'}, 'блокнот': {'notepad.exe'},
+    'gpt': {'chatgpt.exe'}, 'chatgpt': {'chatgpt.exe'}, 'чатгпт': {'chatgpt.exe'},
+    'проводник': {'explorer.exe'}, 'explorer': {'explorer.exe'},
     'notepad': {'notepad.exe'}, 'vs code': {'code.exe'}, 'vscode': {'code.exe'},
     'браузер': {'chrome.exe', 'msedge.exe', 'firefox.exe', 'comet.exe', 'browser.exe', 'opera.exe', 'brave.exe'},
     'browser': {'chrome.exe', 'msedge.exe', 'firefox.exe', 'comet.exe', 'browser.exe', 'opera.exe', 'brave.exe'},
