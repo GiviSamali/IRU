@@ -226,9 +226,9 @@ async def process_non_pipeline_command(
     except ImportError:
         from window_policy import ordinary_window_request, window_action_sequence, direct_window_action, recent_window_context, unsupported_virtual_desktop_request
     try:
-        from .browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_tabs_report, browser_partial_read
+        from .browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_tabs_report, browser_partial_read, browser_failure_text
     except ImportError:
-        from browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_tabs_report, browser_partial_read
+        from browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_tabs_report, browser_partial_read, browser_failure_text
     browser_policy = BrowserTaskPolicy(user_message, device_id, chat_history)
     browser_only = browser_policy.browser_only
     if browser_only:
@@ -245,7 +245,7 @@ async def process_non_pipeline_command(
                               if tool["function"]["name"] in allowed_window_tools]
     if browser_only:
         non_pipeline_tools = [tool for tool in DEFAULT_CONTROLLER_TOOLS
-                              if tool["function"]["name"] in BROWSER_TOOL_NAMES
+                              if APP_WINDOW_ACTIONS.get(tool["function"]["name"]) in browser_policy.allowed_operations
                               or tool["function"]["name"] in {"answer_text", "answer_ask_clarification", "answer_report_failure"}]
     messages = [{"role": "system", "content": system_msg}]
     if browser_only:
@@ -734,7 +734,7 @@ async def process_non_pipeline_command(
                     if fn_name in BROWSER_TOOL_NAMES and browser_policy.contextual_task:
                         browser_only = browser_policy.browser_only
                         max_iterations = min(max_iterations,12)
-                        non_pipeline_tools = [tool for tool in non_pipeline_tools if tool["function"]["name"] in BROWSER_TOOL_NAMES
+                        non_pipeline_tools = [tool for tool in non_pipeline_tools if APP_WINDOW_ACTIONS.get(tool["function"]["name"]) in browser_policy.allowed_operations
                                               or is_terminal_answer_tool(tool["function"]["name"])]
                     if browser_page_seen and not canonical_browser_tool.startswith(("web.", "answer.")):
                         allowed, reason = False, "untrusted_web_content_cannot_authorize_privileged_action"
@@ -1169,7 +1169,7 @@ async def process_non_pipeline_command(
                     if fn_name in {"web_read", "web_elements", "web_tabs"} and tool_result.get("status") == "success":
                         browser_page_seen = True
                     if tool_result.get("status") in {"failed", "unknown"} and tool_result.get("error") != "stale_element":
-                        text = "Действие браузера не подтверждено: " + str(tool_result.get("error") or "needs_verification")
+                        text = browser_failure_text(tool_result)
                         append_answer_step(commands_log, "answer_report_failure", {"message": text,
                             "reason": tool_result.get("error") or "needs_verification", "recoverable": False,
                             "suggested_next_action": "Проверьте состояние страницы; действие автоматически не повторяется.",

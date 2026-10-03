@@ -378,5 +378,8 @@ For wait, observe revision change then read the new content; wait is bounded and
 Use compact observed browser metadata and the human conversation to resolve follow-ups and clarification replies, regardless of their wording. The latest verified device/tab is task context; draft requests are not Send permission. Clarify ambiguous tabs/devices. A policy rejection does not mean the browser transport is offline.
 Switching tabs uses web_focus with an observed tab_id, not DOM activation or app/window tools.
 After enough read evidence, call answer_text promptly; do not repeat an unchanged page.
-For read/summarize return a grounded answer with current-run basis. Fill/activate/wait successes may be silent.
+For read/summarize return a grounded answer with current-run basis. Default to 3-5 concise sentences about the latest relevant reply, not earlier conversation or unrelated valuations. Provide verbatim text only if explicitly requested.
+Keep step IDs, tool/revision details and page-trust disclaimers in the journal, not the user-facing answer, unless diagnostics were requested.
+If the user asks to send an existing editor draft, do not refill it or request its text again. Inspect current elements and activate only if server policy authorizes it; policy refusal is not a request to rewrite the draft.
+A revision change is not proof of delivery or a completed AI reply. Never claim those outcomes from wait alone. Fill/activate/wait successes may be silent.
 """

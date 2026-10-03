@@ -86,7 +86,18 @@ async function execute(message) {
             // A failed action is NEVER retried; only a side-effect-free capability probe precedes dispatch.
             try { await chrome.tabs.sendMessage(tabId,{type:'iru_browser_command',operation:'bridge.ping'}); }
             catch { await chrome.scripting.executeScript({target:{tabId},files:['content.js']}); }
-            result = await chrome.tabs.sendMessage(tabId,{...message,type:'iru_browser_command'});
+            try {
+              result = await chrome.tabs.sendMessage(tabId,{...message,type:'iru_browser_command'});
+            } catch (error) {
+              // Only observations may be retried after a lost content-script port.
+              // Recheck this exact tab/origin: never read another page as a fallback.
+              if (!['web.read','web.elements'].includes(message.operation)) throw error;
+              const current = await chrome.tabs.get(tabId);
+              if (new URL(current.url).origin !== new URL(tab.url).origin) throw error;
+              await chrome.scripting.executeScript({target:{tabId},files:['content.js']});
+              result = await chrome.tabs.sendMessage(tabId,{...message,type:'iru_browser_command'});
+              if (result?.status === 'success') result = {...result,recovered_connection:true};
+            }
             if (!result || !['success','failed','unknown'].includes(result.status)) result = errorResult('invalid_bridge_result',activation ? 'unknown' : 'failed');
             result = {...result,tab_id:tabId};
           }

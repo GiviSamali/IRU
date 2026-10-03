@@ -1097,9 +1097,9 @@ async def run_pipeline_worker(
 
     chat_completion_request_fn = bounded_completion
     try:
-        from .browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_partial_read
+        from .browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_partial_read, browser_failure_text
     except ImportError:
-        from browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_partial_read
+        from browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_partial_read, browser_failure_text
     browser_policy = BrowserTaskPolicy(shared.get("browser_original_request") or overall_goal,
                                        step.get("device_id") or shared["current_device_id"], chat_history)
     worker_prompt = pipeline_worker_prompt(shared, overall_goal, step, completed_steps)
@@ -1111,7 +1111,7 @@ async def run_pipeline_worker(
         worker_prompt += BROWSER_BRIDGE_RULES
         if browser_policy.browser_only or shared.get("browser_page_seen"):
             worker_tools = [tool for tool in (worker_tools or DEFAULT_CONTROLLER_TOOLS)
-                            if tool["function"]["name"] in BROWSER_TOOL_NAMES
+                            if PIPELINE_APP_WINDOW_ACTIONS.get(tool["function"]["name"]) in browser_policy.allowed_operations
                             or tool["function"]["name"] in {"answer_text", "answer_ask_clarification", "answer_report_failure"}]
     messages = [{"role": "system", "content": worker_prompt}]
     browser_context = recent_browser_context(chat_history)
@@ -1814,7 +1814,7 @@ async def run_pipeline_worker(
                 if fn_name in {"web_read", "web_elements", "web_tabs"} and tool_result.get("status") == "success":
                     shared["browser_page_seen"] = True
                 if tool_result.get("status") in {"failed", "unknown"} and tool_result.get("error") != "stale_element":
-                    return {"status": "error", "answer": "Действие браузера не подтверждено: " + str(tool_result.get("error") or "needs_verification"), "commands": commands_log}
+                    return {"status": "error", "answer": browser_failure_text(tool_result), "commands": commands_log}
             if fn_name == "transfer_file" and tool_result.get("status") != "success":
                 return {"status": "error", "answer": "Передача файла не выполнена: " + str(tool_result.get("error", "transfer_failed")), "commands": commands_log}
             if completion_matches(step, commands_log[-1]):

@@ -122,6 +122,47 @@ def _immediate_browser_context(history: list[dict[str, Any]] | None) -> list[dic
     return recent_browser_context([latest] if latest else [])
 
 
+def _immediate_verified_drafts(history: list[dict[str, Any]] | None, device: str | None) -> list[tuple[int,str]]:
+    """Preserve already verified fill facts through same-revision observations.
+
+    This does not grant Send intent. Only the latest assistant turn is considered;
+    changed/failed observations, native actions and any possible Send invalidate it.
+    """
+    latest = next((m for m in reversed(history or []) if m.get("role") == "assistant"), {})
+    drafts: dict[tuple[str,int],tuple[str,str]] = {}
+    for command in latest.get("commands") or []:
+        op = _canonical(str(command.get("tool_name") or command.get("action") or ""))
+        if op.startswith(("answer.","answer_")):
+            continue
+        if op not in WEB_OPERATIONS:
+            drafts.clear(); continue
+        result = command.get("result")
+        if not isinstance(result, dict):
+            drafts.clear()
+            continue
+        target = str(command.get("target_device_id") or command.get("device_id") or "")
+        tab = result.get("tab_id")
+        if op == "web.activate" and result.get("status") in {"success","unknown"}:
+            drafts.clear(); continue
+        if op in {"web.fill","web.read","web.elements"} and (result.get("error") or result.get("status") != "success"):
+            drafts.clear(); continue
+        if type(tab) is not int:
+            continue
+        key = (target.casefold(),tab)
+        document,revision = result.get("document_id"), result.get("revision")
+        if op == "web.fill":
+            element = result.get("element") if isinstance(result.get("element"), dict) else {}
+            element_id = result.get("element_id") or element.get("element_id")
+            if all(isinstance(value, str) and 0 < len(value) <= 128
+                   for value in (document, revision, element_id)):
+                drafts[key] = (document, revision)
+            else:
+                drafts.pop(key, None)
+        elif op in {"web.read","web.elements","web.wait"} and key in drafts and drafts[key] != (document,revision):
+            drafts.pop(key,None)
+    return [(tab,document) for (owner,tab),(document,revision) in drafts.items() if owner == str(device or "").casefold()]
+
+
 def _active_browser_context(history: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """Carry verified metadata across browser-only refusal/clarification turns.
 
@@ -191,9 +232,7 @@ class BrowserTaskPolicy:
         self.draft_action = bool(self.is_browser_task and _DRAFT_START.match(text))
         self.external_action = bool(self.is_browser_task and _SEND_START.match(text))
         self.bare_send = bool(re.fullmatch(r"(?:отправь|отправляй|пошли|send|submit)(?: на [\w-]+)?", text, re.I))
-        self.draft_targets = [(row["tab_id"], row["document_id"]) for row in _immediate_browser_context(history)
-                              if str(row.get("device_id") or "").casefold() == str(current_device or "").casefold() and row.get("draft_ready") and row.get("document_id") and row.get("revision")]
-        self.draft_targets = list(dict.fromkeys(self.draft_targets))
+        self.draft_targets = _immediate_verified_drafts(history, current_device)
         if self.bare_send:
             # A follow-up references exactly one immediately observed draft. It never
             # grants permission to pick another tab or alter the draft before sending.
@@ -399,3 +438,16 @@ def browser_partial_read(journal: list[dict[str, Any]]) -> dict[str, Any]:
     return {"answer_type":"partial_report","text":text,"basis":[observed["step_id"]],
             "self_check":{"depends_on_current_external_state":True,"claims_completed_action":False,
                           "has_sufficient_evidence":True,"missing_evidence_question":"Не удалось выделить запрошенное сообщение"}}
+
+
+
+def browser_failure_text(result: dict) -> str:
+    """Keep protocol detail in the operation journal, not in spoken UI text."""
+    reason = result.get("error")
+    if result.get("status") == "unknown" or reason in {"needs_verification","browser_action_unknown","prior_browser_action_needs_verification"}:
+        return "Выполнение отправки пока не подтверждено. Повторно отправлять сообщение не буду, чтобы не создать дубль."
+    if reason in {"tab_disconnected","browser_disconnected","browser_not_connected","browser_timeout"}:
+        return "Не удалось прочитать вкладку: связь с браузером временно недоступна."
+    if reason in {"stale_element","browser_tab_mismatch"}:
+        return "Страница изменилась. Нужно заново проверить выбранную вкладку."
+    return "Не удалось выполнить действие в браузере. Подробности есть в ходе выполнения."

@@ -313,3 +313,41 @@ for(const verified of [true,false]) test('focus checks actual tab and window sta
   const missing=await harness.command(socket,{request_id:'focus-missing',operation:'web.focus',params:{tab_id:999}});
   assert.equal(missing.status,'failed');
 });
+
+
+for(const operation of ['web.read','web.elements']) test('lost observation port is recovered exactly once: '+operation,async()=>{
+  let reads=0;
+  const harness=backgroundHarness({sendMessage:async(_id,message)=>{
+    if(message.operation==='bridge.ping')return{status:'success'};
+    if(++reads===1)throw new Error('Content script port disconnected');
+    return{status:'success',page:{document_id:'document',revision:'2'}};
+  }}),socket=await harness.ready();
+  const result=await harness.command(socket,{request_id:'recover-observation',operation,params:{tab_id:1}});
+  assert.equal(result.status,'success');assert.equal(result.recovered_connection,true);assert.equal(reads,2);
+});
+
+test('read recovery is bounded and mutation dispatch is never retried',async()=>{
+  for(const operation of ['web.read','web.fill','web.activate']){
+    let calls=0;
+    const harness=backgroundHarness({sendMessage:async(_id,message)=>{
+      if(message.operation==='bridge.ping')return{status:'success'};
+      calls++;throw new Error('lost port');
+    }}),socket=await harness.ready();
+    const result=await harness.command(socket,{request_id:'bounded-recovery',operation,params:operation==='web.read'?{tab_id:1}:activationParams,authorization:{external_action:true}});
+    assert.equal(calls,operation==='web.read'?2:1);assert.equal(result.status,operation==='web.activate'?'unknown':'failed');
+  }
+});
+
+
+test('observation recovery cannot follow a changed tab origin',async()=>{
+  let reads=0,injections=0,harness;
+  harness=backgroundHarness({sendMessage:async(_id,message)=>{
+    if(message.operation==='bridge.ping')return{status:'success'};
+    reads++;harness.context.chrome.tabs.get=async()=>({id:1,url:'https://another.test/',windowId:10});
+    throw new Error('navigation disconnected port');
+  }});
+  harness.context.chrome.scripting.executeScript=async()=>{injections++;};
+  const socket=await harness.ready();
+  const result=await harness.command(socket,{request_id:'changed-origin',operation:'web.read',params:{tab_id:1}});
+  assert.equal(result.status,'failed');assert.equal(reads,1);assert.equal(injections,0);
+});

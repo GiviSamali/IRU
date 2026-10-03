@@ -358,3 +358,19 @@ def test_contextual_read_repairs_raw_answer_without_phrase_classification(monkey
     raw={"choices":[{"message":{"content":"Текст ответа без answer tool"}}]}
     outcome=run_normal(monkeypatch,"А что он мне там ответил?",[call("web_read",{"tab_id":7}),raw,grounded()],send,history)
     assert sent==["web.read"] and outcome["answer"]=="Получен ответ: тест"
+
+
+
+def test_explicit_send_uses_existing_draft_without_refill_or_extra_wait(monkeypatch):
+    draft=result("web.fill")
+    history=[{"role":"assistant","commands":[{"tool_name":"web.fill","target_device_id":"givi","result":draft},
+             {"tool_name":"web.elements","target_device_id":"givi","result":result("web.elements")}]}]
+    iterations=[];sent=[]
+    async def completion(**kw):
+        names={tool["function"]["name"] for tool in kw["tools"]}
+        assert "web_fill" not in names and "web_activate" in names
+        iterations.append(1);return call("web_activate",{**ELEMENT,"element_id":"send-button"})
+    async def send(device,operation,params):sent.append(operation);return result(operation)
+    outcome=run_normal(monkeypatch,"Отправляй",[],send,history,real_completion=completion)
+    assert sent==["web.activate"] and len(iterations)==1
+    assert outcome["commands"][-1]["tool_name"]=="answer.text"

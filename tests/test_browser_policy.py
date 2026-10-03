@@ -430,3 +430,47 @@ def test_selected_tab_keeps_identity_without_promoting_page_text():
     row=recent_browser_context([message])[0]
     assert row["selected"] and row["tab_id"]==7
     assert "title" not in row and "origin" not in row
+
+
+@pytest.mark.parametrize("reason",["tab_disconnected","browser_timeout","browser_not_connected"])
+def test_browser_transport_failure_is_readable_without_protocol_codes(reason):
+    from server.browser_policy import browser_failure_text
+    text=browser_failure_text({"status":"failed","error":reason})
+    assert "временно" in text and reason not in text
+
+
+def test_unknown_send_is_honest_and_never_invites_duplicate_submission():
+    from server.browser_policy import browser_failure_text
+    text=browser_failure_text({"status":"unknown","error":"needs_verification"})
+    assert "не подтверждено" in text and "не буду" in text and "needs_verification" not in text
+
+
+
+def test_same_revision_elements_do_not_forget_already_verified_draft():
+    context=history(operation="web.fill",element_id="draft")
+    context[0]["commands"].append({"tool_name":"web.elements","target_device_id":"givi","result":{"status":"success","tab_id":10,"document_id":"doc-a","revision":"rev-1"}})
+    policy=BrowserTaskPolicy("Отправляй","givi",context)
+    assert policy.external_action and policy.allows("web.activate","givi",args())[0]
+    assert not policy.allows("web.fill","givi",args(text="rewrite"))[0]
+
+
+@pytest.mark.parametrize("result",[{"status":"success","tab_id":10,"document_id":"doc-a","revision":"changed"},{"status":"failed","error":"tab_disconnected"}])
+def test_changed_or_failed_observation_invalidates_draft_for_bare_send(result):
+    context=history(operation="web.fill",element_id="draft")
+    context[0]["commands"].append({"tool_name":"web.elements","target_device_id":"givi","result":result})
+    assert not BrowserTaskPolicy("Отправляй","givi",context).external_action
+
+
+@pytest.mark.parametrize("malformed", [
+    {"element": "not-an-object", "element_id": None},
+    {"element_id": 42},
+    {"document_id": ""},
+    {"revision": "r" * 129},
+    {"element_id": "e" * 129},
+])
+def test_malformed_fill_cannot_keep_previous_draft_ready(malformed):
+    context = history(operation="web.fill", element_id="draft")
+    context[0]["commands"].append({"tool_name": "web.fill", "target_device_id": "givi",
+        "result": {"status": "success", "tab_id": 10, "document_id": "doc-a",
+                   "revision": "rev-1", **malformed}})
+    assert not BrowserTaskPolicy("Отправляй", "givi", context).external_action
