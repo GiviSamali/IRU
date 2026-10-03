@@ -83,15 +83,27 @@ def recent_browser_context(history: list[dict[str, Any]] | None, *, device_id: s
             result = command.get("result")
             if not isinstance(result, dict) or result.get("error") or result.get("status") not in {"success", "ok", "changed", "timeout", "filled", "activated"}:
                 continue
+            if operation == "web.tabs":
+                for tab in result.get("tabs") or []:
+                    if not isinstance(tab, dict) or type(tab.get("tab_id")) is not int:
+                        continue
+                    existing = next((item for item in rows if item["device_id"] == target and item["tab_id"] == tab["tab_id"]), None)
+                    if existing is None:
+                        rows.append({"device_id":target,"tab_id":tab["tab_id"],"operation":operation})
+                    if len(rows) >= 6:
+                        return rows
+                continue
             page = result.get("page") if isinstance(result.get("page"), dict) else {}
             observed = {**page, **result}
             tab_id = observed.get("tab_id")
             if not isinstance(tab_id, int) or isinstance(tab_id, bool):
                 continue
             row: dict[str, Any] = {"device_id": target, "tab_id": tab_id, "operation": operation}
-            for key in ("document_id", "revision"):
+            for key in ("document_id","revision"):
                 if isinstance(observed.get(key), str):
                     row[key] = observed[key][:128]
+            if operation == "web.focus" and observed.get("focused") is True:
+                row["selected"] = True
             # A successful fill supplies the exact draft ID, but never supplies submit intent.
             element = observed.get("element") if isinstance(observed.get("element"), dict) else {}
             draft_id = observed.get("element_id") or element.get("element_id")
@@ -110,6 +122,28 @@ def _immediate_browser_context(history: list[dict[str, Any]] | None) -> list[dic
     return recent_browser_context([latest] if latest else [])
 
 
+def _active_browser_context(history: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Carry verified metadata across browser-only refusal/clarification turns.
+
+    Neither answer prose nor page text grants capabilities. An intervening native
+    action, unrelated answer or new device scope ends this continuation.
+    """
+    assistants = [item for item in history or [] if item.get("role") == "assistant"]
+    for message in reversed(assistants[-3:]):
+        commands = message.get("commands") or []
+        operations = [_canonical(str(c.get("tool_name") or c.get("action") or "")) for c in commands]
+        if any(op not in WEB_OPERATIONS and not op.startswith(("answer.","answer_")) for op in operations):
+            break
+        rows = recent_browser_context([message])
+        if rows:
+            return rows
+        clarification = any(op in {"answer.ask_clarification", "answer_ask_clarification"} for op in operations)
+        browser_attempt = any(op in WEB_OPERATIONS for op in operations)
+        if not commands or not (clarification or browser_attempt):
+            break
+    return []
+
+
 def browser_request(message: str, history: list[dict[str, Any]] | None = None) -> bool:
     try:
         from .window_policy import ordinary_window_request
@@ -118,7 +152,7 @@ def browser_request(message: str, history: list[dict[str, Any]] | None = None) -
     if ordinary_window_request(message):
         return False
     text = _intent_text(message)
-    context = _immediate_browser_context(history)
+    context = _active_browser_context(history)
     authority_text = text.split(":", 1)[0] if (_DRAFT_START.match(text) or _SEND_START.match(text)) and ":" in text else text
     if _OPEN_START.match(text):
         # Starting a browser/opening an arbitrary URL remains app.launch/open_url.
@@ -126,6 +160,8 @@ def browser_request(message: str, history: list[dict[str, Any]] | None = None) -
             return False
         page_reference = re.search(r"(?:эту|этот|текущую|выбранную) (?:ссылку|вкладку)|ссылку на (?:этой|текущей) странице", text, re.I)
         return bool(page_reference or context)
+    if context and not _PRIVILEGED_CLAUSE.search(text.split(":",1)[0]):
+        return True
     if _BROWSER_NOUNS.search(authority_text):
         return bool(_READ_START.match(text) or _DRAFT_START.match(text) or _SEND_START.match(text)
                     or _WAIT_START.match(text) or _OPEN_START.match(text) or _FOCUS_START.match(text))
@@ -145,16 +181,18 @@ class BrowserTaskPolicy:
                  *, authorized_device_ids: set[str] | list[str] | None = None):
         self.message = str(message or "")
         self.current_device = current_device
-        self.context = [row for row in _immediate_browser_context(history)
+        active_context = _active_browser_context(history)
+        self.context = [row for row in active_context
                         if str(row.get("device_id") or "").casefold() == str(current_device or "").casefold()]
         text = _intent_text(self.message)
         self.is_browser_task = browser_request(self.message, history)
+        self.contextual_task = bool(self.is_browser_task and active_context)
         # Do not inspect quoted/payload draft text for new verbs or local-tool requests.
         self.draft_action = bool(self.is_browser_task and _DRAFT_START.match(text))
         self.external_action = bool(self.is_browser_task and _SEND_START.match(text))
         self.bare_send = bool(re.fullmatch(r"(?:отправь|отправляй|пошли|send|submit)(?: на [\w-]+)?", text, re.I))
-        self.draft_targets = [(row["tab_id"], row["document_id"]) for row in self.context
-                              if row.get("draft_ready") and row.get("document_id") and row.get("revision")]
+        self.draft_targets = [(row["tab_id"], row["document_id"]) for row in _immediate_browser_context(history)
+                              if str(row.get("device_id") or "").casefold() == str(current_device or "").casefold() and row.get("draft_ready") and row.get("document_id") and row.get("revision")]
         self.draft_targets = list(dict.fromkeys(self.draft_targets))
         if self.bare_send:
             # A follow-up references exactly one immediately observed draft. It never
@@ -173,25 +211,33 @@ class BrowserTaskPolicy:
         literal_draft = self.draft_action and re.match(r"^(?:напиши|впиши|вставь|набери|write|draft)\b", intent_prefix, re.I)
         self.literal_payload = (self.message.split(":", 1)[1].strip()
                                 if ":" in self.message and (literal_draft or self.external_action) else None)
+        if self.contextual_task and ":" in self.message and not self.external_action:
+            self.literal_payload = self.message.split(":",1)[1].strip()
         self.tabs_only = bool(self.is_browser_task and not (self.draft_action or self.external_action) and _READ_START.match(text) and re.search(r"вклад|что.*открыт.*браузер|список.*страниц", text, re.I) and not re.search(r"прочитай|читай|сообщен|содерж|сравни|read|summari", text, re.I))
-        self.focus_action = bool(self.is_browser_task and _FOCUS_START.match(text))
-        self.focus_only = self.focus_action and not re.search(r"прочитай|читай|дождись|напиши|отправ|заполни|read|wait|write|send|\sи\s|;", text, re.I)
-        self.navigation_action = bool(self.is_browser_task and _OPEN_START.match(text))
-        self.browser_only = self.is_browser_task and (self.draft_action or not _PRIVILEGED_CLAUSE.search(intent_prefix))
+        self.focus_action = bool(self.is_browser_task and (_FOCUS_START.match(text) or self.contextual_task))
+        self.focus_only = self.focus_action and bool(_FOCUS_START.match(text) or _OPEN_START.match(text)) and not re.search(r"прочитай|читай|дождись|напиши|отправ|заполни|read|wait|write|send|\sи\s|;", text, re.I)
+        self.navigation_action = bool(self.is_browser_task and _OPEN_START.match(text) and not self.focus_action)
+        self.browser_only = bool(self.is_browser_task and (browser_request(self.message) or self.draft_action or self.focus_only or self.external_action or _WAIT_START.match(text))
+                                 and not _PRIVILEGED_CLAUSE.search(intent_prefix))
         self.page_data_seen = False
         self.authorized_device_ids = set(authorized_device_ids or [])
         self.named_devices, self.unresolved_device_alias = _device_mentions(self.message)
         if self.named_devices:
             # Exact Unicode names are fail-closed; only case spelling is normalized.
             self.authorized_device_ids = set(self.named_devices)
+            if self.contextual_task and not any(pattern.match(text) for pattern in (_READ_START,_DRAFT_START,_FOCUS_START,_SEND_START,_OPEN_START)):
+                context_devices = {str(row["device_id"]).casefold() for row in active_context if row.get("device_id")}
+                self.authorized_device_ids = {name for name in self.named_devices if name.casefold() in context_devices}
         elif self.unresolved_device_alias:
             # Only an existing authoritative router may supply an alias resolution.
             # Without that scope the worker must clarify instead of acting on current.
             self.authorized_device_ids = set(authorized_device_ids or [])
+        elif self.contextual_task:
+            self.authorized_device_ids = {str(row["device_id"]) for row in active_context if row.get("device_id")}
         elif current_device:
             self.authorized_device_ids.add(current_device)
         self.allowed_operations = set(WEB_OPERATIONS - {"web.fill", "web.activate", "web.focus"}) if self.is_browser_task else set()
-        if self.draft_action or self.external_action and not self.bare_send:
+        if self.draft_action or self.external_action and not self.bare_send or self.contextual_task and not self.bare_send and not _READ_START.match(text):
             self.allowed_operations.add("web.fill")
         if self.focus_action:
             self.allowed_operations.add("web.focus")
@@ -211,6 +257,10 @@ class BrowserTaskPolicy:
             return True, ""
         if not self.is_browser_task:
             return False, "explicit_browser_task_required"
+        if self.contextual_task:
+            # The model selected a browser operation for the current human turn.
+            # Bind the candidate context now; subsequent native fallback is denied.
+            self.browser_only = True
         target = device_id or (params or {}).get("device_id") or self.current_device
         if not target or str(target).casefold() not in {str(identifier).casefold() for identifier in self.authorized_device_ids}:
             return False, "browser_device_not_authorized_by_user"

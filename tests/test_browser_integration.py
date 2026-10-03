@@ -317,3 +317,44 @@ def test_focus_and_read_does_not_finish_after_focus(monkeypatch):
     outcome=run_normal(monkeypatch,"Переключись на вкладку DeepSeek и прочитай последнее сообщение",
         [call("web_focus",{"tab_id":7}),call("web_read",{"tab_id":7}),grounded(basis=["step_2"])],send)
     assert sent==["web.focus","web.read"] and outcome["answer"]=="Получен ответ: тест"
+
+
+@pytest.mark.parametrize("followup",[False,True])
+def test_open_tab_and_named_clarification_complete_without_window_fallback(monkeypatch,followup):
+    from test_browser_policy import tab_selection_history
+    history=tab_selection_history()
+    sent=[]
+    async def send(device,operation,params):
+        sent.append(operation);assert operation=="web.focus";return {"status":"success","tab_id":7,"focused":True}
+    outcome=run_normal(monkeypatch,"дипсик" if followup else "Открой поиск зеркало",
+        [call("web_focus",{"tab_id":7}),grounded()],send,history if followup else history[:1])
+    assert sent==["web.focus"] and outcome["answer"] in {"Вкладка выбрана, окно браузера в фокусе.","Получен ответ: тест"}
+
+
+def test_polite_write_to_observed_chat_creates_draft_without_send(monkeypatch):
+    history=[{"role":"assistant","commands":[{"tool_name":"web.read","target_device_id":"givi","result":result("web.read")}]}]
+    sent=[]
+    async def send(device,operation,params):sent.append(operation);return result(operation)
+    outcome=run_normal(monkeypatch,"можешь написать дипсику что он тоже прав",
+        [call("web_fill",{**ELEMENT,"text":"Ты тоже прав"}),clarification()],send,history)
+    assert sent==["web.fill"]
+
+
+def test_new_weather_task_after_browser_read_keeps_yandex_search_available(monkeypatch):
+    history=[{"role":"assistant","commands":[{"tool_name":"web.read","target_device_id":"givi","result":result("web.read")}]}]
+    searches=[]
+    async def search(cfg,query,max_results):
+        searches.append(query);return {"status":"success","results":[{"title":"Прогноз","url":"https://fixture.test/weather","snippet":"Завтра ясно"}]}
+    monkeypatch.setattr(normal,"_run_web_search",search)
+    async def send(*a):pytest.fail("New web search does not execute browser/device commands")
+    outcome=run_normal(monkeypatch,"Какая завтра погода в Тейково?",[call("web_search",{"query":"погода Тейково завтра"}),grounded("Завтра ясно")],send,history)
+    assert searches==["погода Тейково завтра"] and outcome["answer"]=="Завтра ясно"
+
+
+def test_contextual_read_repairs_raw_answer_without_phrase_classification(monkeypatch):
+    history=[{"role":"assistant","commands":[{"tool_name":"web.focus","target_device_id":"givi","result":{"status":"success","tab_id":7,"focused":True}}]}]
+    sent=[]
+    async def send(device,operation,params):sent.append(operation);return result(operation)
+    raw={"choices":[{"message":{"content":"Текст ответа без answer tool"}}]}
+    outcome=run_normal(monkeypatch,"А что он мне там ответил?",[call("web_read",{"tab_id":7}),raw,grounded()],send,history)
+    assert sent==["web.read"] and outcome["answer"]=="Получен ответ: тест"

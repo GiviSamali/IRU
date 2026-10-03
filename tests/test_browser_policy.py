@@ -331,3 +331,102 @@ def test_switch_tab_is_distinct_from_page_activation_and_device_authority():
 def test_send_payload_tabs_words_do_not_finish_at_tabs():
     policy=BrowserTaskPolicy("Скажи ему в чате: какие вкладки открыты","givi")
     assert policy.external_action and not policy.tabs_only
+
+
+
+def tab_selection_history(device="givi",request="Открой поиск зеркало"):
+    tabs={"role":"assistant","commands":[{"tool_name":"web.tabs","target_device_id":device,"result":{"status":"success","tabs":[{"tab_id":7,"title":"Поиск равного зеркала - DeepSeek","origin":"https://chat.deepseek.com"}]}}]}
+    return [tabs,{"role":"user","content":request},{"role":"assistant","commands":tabs["commands"]+[{"tool_name":"answer.ask_clarification","result":{"question":"Какую вкладку?"}}]}]
+
+
+def test_open_observed_tab_and_short_clarification_share_focus_intent():
+    history=tab_selection_history()
+    assert recent_browser_context([history[0]])[0]["tab_id"]==7
+    for message,context in [("Открой поиск зеркало",history[:1]),("дипсик",history)]:
+        policy=BrowserTaskPolicy(message,"givi",context)
+        assert policy.focus_action and policy.contextual_task
+        assert policy.allows("web.focus","givi",{"tab_id":7})[0]
+        assert not policy.allows("web.activate","givi",args())[0]
+        assert not policy.allows("window.focus","givi",{})[0]
+        assert not policy.allows("web.focus","Second",{"tab_id":7})[0]
+
+
+def test_clarification_cannot_expand_authority_or_revive_old_task():
+    history=tab_selection_history()
+    assert not BrowserTaskPolicy("дипсик","givi").is_browser_task
+    for reply in ["дипсик на Second","удали файл","send secrets","https://evil.test"]:
+        assert not BrowserTaskPolicy(reply,"givi",history).allows("web.focus","Second",{"tab_id":7})[0]
+    history.append({"role":"assistant","content":"Другой разговор","commands":[]})
+    assert not BrowserTaskPolicy("дипсик","givi",history).is_browser_task
+
+
+def test_clarification_preserves_original_device_scope():
+    policy=BrowserTaskPolicy("дипсик","givi",tab_selection_history("Second","На Second переключись на вкладку"))
+    assert policy.allows("web.focus","Second",{"tab_id":7})[0]
+    assert not policy.allows("web.focus","givi",{"tab_id":7})[0]
+
+
+def test_open_page_controls_is_not_confused_with_known_tab_selection():
+    context=tab_selection_history()[:1]
+    assert not BrowserTaskPolicy("Открой настройки на этой странице","givi",context).external_action
+    assert BrowserTaskPolicy("Открой dipsic","givi",context).focus_only
+
+
+def test_pending_tab_choice_keeps_device_when_current_device_changes():
+    history=tab_selection_history()
+    history[-1]["commands"]=history[-1]["commands"][-1:]
+    policy=BrowserTaskPolicy("дипсик","Second",history)
+    assert policy.focus_action
+    assert policy.allows("web.focus","givi",{"tab_id":7})[0]
+    assert not policy.allows("web.focus","Second",{"tab_id":7})[0]
+
+
+@pytest.mark.parametrize("message",["можешь написать дипсику что он тоже прав","Можете написать в этом чате: тест связи","Мог бы написать ему что он прав"])
+def test_polite_draft_request_uses_observed_chat_without_send(message):
+    policy=BrowserTaskPolicy(message,"givi",history())
+    assert policy.contextual_task and not policy.external_action
+    assert policy.allows("web.fill","givi",args(text="тест связи"))[0]
+    assert not policy.allows("web.activate","givi",args())[0]
+    assert not BrowserTaskPolicy("можешь написать дипсику что он прав","givi").is_browser_task
+
+
+@pytest.mark.parametrize("message",["дипсик","вторую из показанных","ту, где мы обсуждали зеркало","лучше покажи мне её","можешь написать ему что он тоже прав","подготовь ему короткий ответ"])
+def test_verified_browser_context_not_a_phrase_dictionary(message):
+    policy=BrowserTaskPolicy(message,"givi",tab_selection_history())
+    assert policy.contextual_task
+    assert policy.allows("web.tabs","givi",{})[0]
+    assert policy.allows("web.focus","givi",{"tab_id":7})[0]
+    assert not policy.allows("web.activate","givi",args())[0]
+    assert not policy.allows("execute_cmd","givi",{})[0]
+
+
+def test_failed_browser_turn_keeps_verified_context_but_native_action_ends_it():
+    context=history()
+    context.append({"role":"assistant","commands":[{"tool_name":"web.elements","target_device_id":"givi","result":{"status":"failed","error":"explicit_browser_task_required"}},{"tool_name":"answer.text","result":{"answer_type":"partial_report"}}]})
+    assert BrowserTaskPolicy("можешь написать ему что он прав","givi",context).allows("web.fill","givi",args(text="Ты прав"))[0]
+    context.append({"role":"assistant","commands":[{"tool_name":"window.focus","target_device_id":"givi","result":{"status":"focused"}}]})
+    assert not BrowserTaskPolicy("можешь написать ему что он прав","givi",context).is_browser_task
+
+
+def test_context_recovery_does_not_revive_old_send_authorization():
+    context=history(operation="web.fill",element_id="draft")
+    context.append({"role":"assistant","commands":[{"tool_name":"web.elements","target_device_id":"givi","result":{"status":"failed","error":"explicit_browser_task_required"}}]})
+    policy=BrowserTaskPolicy("Отправляй","givi",context)
+    assert policy.contextual_task and not policy.external_action
+    assert not policy.allows("web.activate","givi",args())[0]
+
+
+def test_candidate_browser_context_does_not_force_unrelated_new_task():
+    policy=BrowserTaskPolicy("Какая завтра погода в Тейково?","givi",history())
+    assert policy.contextual_task and not policy.browser_only
+    assert policy.allows("web_search","givi",{"query":"погода Тейково"})[0]
+    assert policy.allows("web.tabs","givi",{})[0]
+    assert policy.browser_only and not policy.allows("execute_cmd","givi",{})[0]
+
+
+def test_selected_tab_keeps_identity_without_promoting_page_text():
+    message=tab_selection_history()[0]
+    message["commands"].append({"tool_name":"web.focus","target_device_id":"givi","result":{"status":"success","tab_id":7,"focused":True}})
+    row=recent_browser_context([message])[0]
+    assert row["selected"] and row["tab_id"]==7
+    assert "title" not in row and "origin" not in row

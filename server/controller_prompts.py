@@ -375,7 +375,7 @@ After fill or page changes, obtain fresh elements before activation; stale_eleme
 Fill is draft only. Explicit original-user Send/Say/Ask authorizes activation; 'Напиши: ...' alone does not send.
 Do not open payment/password/OAuth/file-upload workflows. Unknown activation outcome must never be retried blindly.
 For wait, observe revision change then read the new content; wait is bounded and does not prove an AI response finished.
-Use compact observed browser metadata to resolve follow-ups, clarify ambiguous tabs/devices.
+Use compact observed browser metadata and the human conversation to resolve follow-ups and clarification replies, regardless of their wording. The latest verified device/tab is task context; draft requests are not Send permission. Clarify ambiguous tabs/devices. A policy rejection does not mean the browser transport is offline.
 Switching tabs uses web_focus with an observed tab_id, not DOM activation or app/window tools.
 After enough read evidence, call answer_text promptly; do not repeat an unchanged page.
 For read/summarize return a grounded answer with current-run basis. Fill/activate/wait successes may be silent.

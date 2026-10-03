@@ -882,7 +882,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 if action in {"web.read", "web.elements", "web.tabs"} and result.get("status") == "success":
                     browser_page_seen = True
                 return result
-            if browser_page_seen:
+            if browser_page_seen or browser_policy.browser_only:
                 # Page/planner text is data. This bounded web capability cannot mint local authority.
                 return {"status": "failed", "error": "untrusted_web_content_cannot_authorize_device_action"}
             if action == "transfer_file":
@@ -1111,7 +1111,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 from .browser_policy import browser_request
             except ImportError:
                 from browser_policy import browser_request
-            if browser_request(message, get_messages(chat_id, limit=8)):
+            if browser_request(message):
                 kind, plan_desc = "SIMPLE", ""
             else:
                 kind, plan_desc = await _call_with_optional_usage_context(
