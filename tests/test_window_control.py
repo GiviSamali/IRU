@@ -422,3 +422,41 @@ def test_missing_gpt_stops_after_one_selection_without_shell_recovery(monkeypatc
     result=run_actual_window_request(monkeypatch,'открой gpt',send,completion)
     assert sent==['window.control'] and 'не найдено' in result['answer']
     assert result['commands'][-1]['tool_name']=='answer.report_failure'
+
+
+@pytest.mark.parametrize('message', ['разверни обратно', 'Теперь верни обратно', 'восстанови обратно'])
+def test_restore_back_uses_same_observed_window_without_llm(monkeypatch, message):
+    adapter=FakeAdapter(); control=wc.WindowControl(adapter)
+    previous=control.run('minimize',target='Word')
+    adapter.rows.append(window(202,20,'Browser','comet.exe')); adapter.current=202
+    history=[{'role':'assistant','commands':[{'tool_name':'window.control','target_device_id':'device-1','result':previous}]}]
+    async def send(device,action,args): return control.run(**args)
+    result=run_actual_window_request(monkeypatch,message,send,history=history)
+    assert adapter.calls == [(101,'minimize',None),(101,'restore',None)]
+    assert not adapter.rows[0]['minimized'] and not adapter.rows[1]['maximized']
+    assert result['commands'][-1]['tool_name']=='answer.text'
+    assert silent_window_success({'status':'done','commands':result['commands']})
+
+def test_restoring_minimized_maximized_window_accepts_visible_previous_state():
+    class RestorePrevious(FakeAdapter):
+        def perform(self,handle,action,rect=None):
+            super().perform(handle,action,rect)
+            if action=='restore': self.rows[0]['maximized']=True
+            return True
+    adapter=RestorePrevious(); adapter.rows[0]['minimized']=True
+    result=wc.WindowControl(adapter).run('restore')
+    assert result['status']=='success' and result['window']['maximized']
+    assert not result['window']['minimized'] and len(adapter.calls)==1
+
+def test_restore_does_not_accept_unchanged_maximized_window(monkeypatch):
+    class Unchanged(FakeAdapter):
+        def perform(self,*args): self.calls.append(args); return True
+    adapter=Unchanged(); adapter.rows[0]['maximized']=True
+    clock=iter([0,1]); monkeypatch.setattr(wc.time,'monotonic',lambda:next(clock))
+    assert wc.WindowControl(adapter).run('restore')['error']=='action_not_verified'
+
+def test_back_restore_never_uses_other_device():
+    from server.window_policy import direct_window_action
+    history=[{'role':'assistant','commands':[{'tool_name':'window.control','target_device_id':'Second',
+        'result':{'status':'success','completion_state':'success','window':{'window_id':'a'*32}}}]}]
+    assert direct_window_action('разверни обратно',history,'device-1') is None

@@ -18,7 +18,8 @@ _DEVICE = r'(?: на (?:[\w-]+|первом пк|втором пк))?'
 _CLAUSE = re.compile(r'(?:сверни|разверни|восстанови|активируй|покажи|закрой|верни) ' + _OBJECT + r'(?: в обычный размер)?' + _DEVICE + r'|' + _OBJECT + r' (?:вправо|влево|справа|слева)' + _DEVICE + r'|поставь ' + _OBJECT + r' (?:слева|справа|на левую половину экрана|на правую половину экрана)' + _DEVICE + r'|перенеси ' + _OBJECT + r' на (?:второй|первый|\d+) монитор' + _DEVICE + r'|открой (?:gpt|chatgpt|чатгпт)' + _DEVICE)
 
 _BARE = {'сверни': 'minimize', 'разверни': 'maximize', 'восстанови': 'restore',
-         'верни': 'restore', 'на весь экран': 'maximize', 'в обычный размер': 'restore'}
+         'верни': 'restore', 'разверни обратно': 'restore', 'верни обратно': 'restore',
+         'восстанови обратно': 'restore', 'на весь экран': 'maximize', 'в обычный размер': 'restore'}
 
 def normalize_window_request(message):
     text = re.sub(r'\s+', ' ', message.lower()).strip().rstrip('.!?')
@@ -100,7 +101,7 @@ def direct_window_action(message, history, device_id):
     if text not in _BARE:
         return None
     args = {'action': _BARE[text], 'target': 'current'}
-    if text in {'на весь экран', 'в обычный размер', 'верни', 'восстанови', 'разверни'}:
+    if text in {'на весь экран', 'в обычный размер', 'верни', 'восстанови', 'разверни', 'разверни обратно', 'верни обратно', 'восстанови обратно'}:
         # Follow-up references require one observed window from the immediately preceding assistant turn.
         assistant = next((m for m in reversed(history or []) if m.get('role') == 'assistant'), None)
         mutations = [command for command in (assistant or {}).get('commands', [])

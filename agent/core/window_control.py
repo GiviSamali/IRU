@@ -199,12 +199,12 @@ class WindowControl:
                 if width is None or height is None or not 1 <= width <= 32768 or not 1 <= height <= 32768: return self.failure('invalid_size')
                 rect = {**bounds, 'right': bounds['left']+width, 'bottom': bounds['top']+height}
             if not self.adapter.perform(handle, action, rect): return self.failure('native_action_failed')
-            deadline = time.monotonic() + (0.75 if action == 'close' else 0.3)
+            deadline = time.monotonic() + 0.75
             while True:
                 updated = self.adapter.record(handle)
                 verified = (not updated) if action == 'close' else bool(updated and updated['pid'] == row['pid'] and (
-                    updated['minimized'] if action == 'minimize' else updated['maximized'] if action == 'maximize' else
-                    not updated['minimized'] and not updated['maximized'] if action == 'restore' else
+                    updated['minimized'] if action == 'minimize' else updated['maximized'] and not updated['minimized'] if action == 'maximize' else
+                    not updated['minimized'] and (fresh['minimized'] or not updated['maximized']) if action == 'restore' else
                     self.adapter.foreground() == handle if action == 'activate' else updated['bounds'] == rect))
                 if verified or time.monotonic() >= deadline: break
                 time.sleep(0.03)
