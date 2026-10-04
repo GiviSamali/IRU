@@ -1,172 +1,131 @@
-# Agent Shell WebView v1
+# Desktop AgentShell ИРУ
 
-Agent Shell v1 — минимальная desktop-обертка для существующего Web UI ИРУ.
+Рабочая Windows-оболочка `IruAgent.exe` использует существующий PySide6 UI
+из `agent/ui/shell.py`. Главное окно теперь показывает текущий сайт ИРУ через
+`QWebEngineView`. Backend, frontend, agent actions, WebSocket protocol и voice JS
+не меняются. Локальной копии сайта и второго frontend нет.
 
-Это не второй интерфейс, не отдельный чат и не desktop rewrite. Shell открывает тот же сайт ИРУ в отдельном окне, чтобы на локальном ПК не держать вручную вкладку браузера.
+## Запуск и URL
 
-## Что делает
-
-- открывает существующий Web UI URL;
-- использует `pywebview`, если он установлен и доступен;
-- если WebView недоступен, открывает тот же URL в браузере через `webbrowser.open`;
-- запускает optional tray/status слой, если доступны `pystray` и `Pillow`;
-- не внедряет scripts в сайт;
-- не обходит auth;
-- не хранит пароль, access token или refresh token в shell config.
-
-Если сайт требует вход, пользователь входит через тот же Web UI, что и в браузере.
-
-## Что не делает
-
-- не дублирует Web UI logic;
-- не копирует `ui/index.html`;
-- не запускает второй chat frontend;
-- не меняет agent WebSocket behavior;
-- не меняет Tool Registry, Device Passport, Memory, task progress или auth;
-- не добавляет voice, wake-word, overlay или screen automation.
-
-## Запуск
-
-Из корня репозитория:
-
-```bash
-python -m agent.shell
-```
-
-Также можно запустить напрямую:
-
-```bash
-python agent/shell/main.py
-```
-
-На Windows есть короткий launcher:
+Из репозитория с установленными `PySide6`, `websockets`, `httpx`:
 
 ```powershell
-.\agent\shell\run_shell.ps1
+python agent/agent.py
 ```
 
-## Настройка URL
+Сначала работает существующая настройка локального агента и проверка обновлений.
+Затем появляется окно ИРУ. URL берётся из текущего `server_url` агента:
+`wss://irumode.ru` → `https://irumode.ru/`. Поэтому другой явно настроенный сервер
+не смешивается с production. Для локального теста допустим `ws://localhost:8000`.
+`IRU_WEB_URL` может явно переопределить HTTP(S) URL. Credentials и query с токенами
+в адрес WebView не переносятся. Вход в сайт выполняется обычной формой сайта,
+отдельно от регистрации локального агента; agent user_token не внедряется в JS.
 
-URL выбирается в таком порядке:
+## Главное окно, локальные настройки и tray
 
-1. `IRU_WEB_URL` environment variable.
-2. `IRU_HOME/state/shell_config.json`.
-3. `IRU_HOME/shell_config.json`.
-4. bundled `shell_config.json` рядом с `IruShell.exe`, если shell собран как artifact.
-5. fallback: `http://127.0.0.1:8000`.
+- Главное окно — существующий сайт, плюс стандартное native menu «ИРУ».
+- «Настройки агента» открывает прежнее окно статуса: устройство, соединение,
+  версия, обновления, переподключение, перенастройка и диагностика.
+- Окно диагностики и папка логов остаются доступны.
+- Крестик главного окна при доступном tray скрывает окно, не уничтожая страницу.
+- Крестик настроек/диагностики также только скрывает соответствующее окно.
+- Tray: «Открыть ИРУ», «Настройки агента», диагностика, существующие локальные
+  действия, «Выход». Нажатие на tray icon возвращает главное окно.
+- Только «Выход» выполняет обычный runtime.stop(wait=True) и завершает Qt loop.
+  Shutdown идемпотентен; отложенный startup callback не запускает runtime после выхода.
+- Если ОС не предоставила system tray, крестик главного окна завершает приложение:
+  скрывать окно без возможности вернуть его нельзя. Native menu «Выход» тоже доступно.
 
-Пример:
+## Сессия и WebView
+
+Qt WebEngine выбран как встроенный компонент текущего PySide6 стека.
+Сайт получает обычные JS/CSS, cookies и localStorage, без native bridge к runtime.
+Named profile сохраняется рядом с конфигом локального агента:
+`%LOCALAPPDATA%\IRUAgent\webview\storage` и `webview\cache`.
+Профиль сохраняет session cookies и localStorage между запусками. Это отдельный
+профиль, он не импортирует сессию Comet/Chrome. На первом запуске нужен вход.
+Не удалять этот каталог при обычном обновлении приложения.
+
+Внешние HTTP(S) ссылки открываются в системном браузере. Ссылки внутри origin
+ИРУ остаются в WebView. Download использует системный диалог сохранения;
+отмена не сохраняет файл, существующий файл требует штатного подтверждения диалога.
+Всплывающие окна с пустым/нестандартным адресом и сложные OAuth popup flows
+не гарантируются первой версией. Сертификаты TLS не обходятся.
+При недоступном сайте появляется сообщение с предложением обновить страницу.
+
+## Voice и wake word
+
+В текущем проекте распознавание и wake word находятся в `ui/js/voice.js` и
+`voice-session.js`, а не в AgentRuntime. Нативная оболочка не вызывает stopVoice,
+не делает reload/unload, не мутит страницу и не переводит её в Frozen/Discarded
+при скрытии. Документ остаётся активным и видимым для renderer; окно Windows
+при этом скрыто. WebSocket локального агента живёт в прежнем отдельном runtime thread.
+
+Доступ к микрофону запрашивается только для origin ИРУ и требует пользовательского
+разрешения. Нельзя выдавать наличие SpeechRecognition API за успешное распознавание:
+его сервис, сеть и реальный микрофон проверяются отдельно на целевом ПК.
+Автоматические тесты доказывают сохранность документа/таймеров после X,
+но не распознавание настоящей речи и не доступность провайдера STT.
+Без успешного voice smoke критерии G и полного voice loop остаются непроверенными.
+Голосовая архитектура и браузерный fallback не переделываются в этой задаче.
+
+## Сборка
+
+Обычный `deploy/build_windows.ps1` теперь включает QtWebEngineCore/Widgets и
+позволяет PyInstaller собрать WebEngine process/resources через стандартные hooks.
+Размер ZIP увеличится из-за Chromium. Ветка предназначена для проверки desktop
+опыта; не публикуйте экспериментальную сборку в production до smoke.
 
 ```powershell
-$env:IRU_WEB_URL = "https://irumode.ru"
-python -m agent.shell
+# Подставьте выбранную новую версию:
+.\deploy\build_windows.ps1 -Version <НОВАЯ_ВЕРСИЯ> -SkipUpload
 ```
 
-Если config отсутствует, Shell создает файл:
+Запускать полученный `dist\IruAgent\IruAgent.exe` вместе с полной onedir-папкой.
+Не копировать только EXE. Установленный агент другой сборки предварительно
+закрыть через его tray «Выход», чтобы не создать второе подключение устройства.
 
-```json
-{
-  "web_url": "http://127.0.0.1:8000",
-  "window": {
-    "title": "ИРУ",
-    "width": 1200,
-    "height": 800,
-    "min_width": 900,
-    "min_height": 600
-  }
-}
-```
+Старый отдельный `python -m agent.shell` / optional `IruShell.exe` использует
+pywebview и pystray и не владеет локальным AgentRuntime. Это прежний standalone
+wrapper; он не изменён и не является точкой входа новой объединённой desktop-оболочки.
+Параметр `-BuildShell` по-прежнему собирает его отдельно и не загружает в agent API.
 
-URL можно изменить вручную в JSON. Не добавляйте туда секреты: Shell config не предназначен для токенов, паролей или auth cookies.
+## Ручная проверка acceptance criteria
 
-Source-запуск `python -m agent.shell` открывает `http://127.0.0.1:8000` по умолчанию, если `IRU_WEB_URL` и config отсутствуют. Для production URL задайте environment variable или создайте shell config.
+1. Запустить новую onedir-сборку. Главное окно должно показать сайт ИРУ.
+2. Войти в аккаунт, выполнить обычную безопасную задачу и проверить устройство online.
+3. Открыть «Настройки агента»: статус, reconnect, настройка, диагностика и логи доступны.
+4. Включить голос обычной кнопкой сайта, дать доступ к микрофону, проверить wake word
+   и короткую команду при открытом окне. Если распознавание не работает уже здесь,
+   это проблема совместимости STT/WebEngine, а не hide/exit; сохранить ошибку.
+5. Нажать X. Убедиться, что приложение осталось в tray, а устройство online
+   видно с другого браузера/телефона. Сказать wake word, короткую команду и услышать ответ.
+6. Нажать «Открыть ИРУ» в tray: та же страница и разговор возвращаются без перезагрузки.
+7. Перезапустить приложение через «Выход»: login должен сохраниться.
+8. Сохранить созданный сайтом файл; проверить отказ от сохранения и штатный overwrite prompt.
+9. Через tray «Выход» закрыть приложение. Убедиться, что IruAgent.exe и его
+   QtWebEngineProcess завершились, а устройство стало offline.
 
-## Windows build artifact
+## Автоматические проверки
 
-Unified Windows build script может собрать Agent Shell отдельно от IruAgent:
+`tests/test_agent_desktop_shell.py` запускает реальный offscreen Qt/WebEngine
+в отдельных процессах, использует localhost страницы и synthetic runtime.
+Проверяет главное окно и меню, X/reopen, активный документ/JS timers,
+localStorage и session cookie после process restart, shutdown, внешние ссылки,
+границу microphone origin и отмену download. Реальные аккаунты и микрофон не используются.
+Без PySide6 эти desktop integration tests явно skip; для их полноценного запуска
+установить PySide6 в тестовое окружение. Build-contract tests проверяют inclusion
+WebEngine; готовую onedir-сборку нужно проверить отдельно на Windows.
 
-```powershell
-.\deploy\build_windows.ps1 -Version 3.7 -BuildShell -ShellWebUrl "https://irumode.ru"
-```
+Qt API: [QWebEngineProfile](https://doc.qt.io/qtforpython-6/PySide6/QtWebEngineCore/QWebEngineProfile.html)
+и [QWebEnginePage](https://doc.qt.io/qtforpython-6/PySide6/QtWebEngineCore/QWebEnginePage.html).
 
-Результат:
-
-```text
-dist/IruShell/
-  IruShell.exe
-  VERSION.txt
-  BUILD_INFO.json
-  shell_config.json
-```
-
-`IruShell` — локальный wrapper Web UI. Он не загружается в `/api/agent/upload` и не участвует в текущем auto-update механизме `IruAgent`. Auto-update агента по-прежнему использует только `dist/IruAgent.zip`.
-
-Если `-BuildShell` указан без `-ShellWebUrl`, shell URL берется из параметра `-Server`. Это не меняет server upload contract для `IruAgent`.
-
-## IRU_HOME
-
-По умолчанию:
-
-Windows:
-
-```text
-%LOCALAPPDATA%\IRU
-```
-
-Linux:
-
-```text
-~/.iru
-```
-
-Для разработки можно указать:
-
-```bash
-IRU_HOME=/tmp/iru python -m agent.shell
-```
-
-## WebView dependency
-
-`pywebview` опционален. Если он не установлен, Shell не падает, а пишет:
-
-```text
-WebView недоступен, открываю ИРУ в браузере: <url>
-```
-
-и открывает URL в браузере.
-
-Для desktop-окна можно установить зависимость вручную:
-
-```bash
-pip install pywebview
-```
-
-## Tray dependency
-
-Tray тоже опционален. Если `pystray` или `Pillow` недоступны, Shell пишет понятное сообщение и продолжает работать без tray.
-
-Для desktop-окна и tray:
-
-```bash
-pip install pywebview pystray pillow
-```
-
-Tray menu v1:
-
-- `Открыть ИРУ` — фокусирует WebView window, если это поддерживает текущий backend `pywebview`; иначе открывает URL в браузере.
-- `Открыть в браузере` — всегда открывает текущий `web_url` через браузер.
-- `Настройки` — открывает shell config в Explorer/Finder/file manager, если возможно; иначе печатает путь.
-- `Статус` — показывает или печатает минимальный status: `web_url`, `config_path`, доступность WebView и tray.
-- `Выход` — останавливает tray и закрывает shell window, если это поддерживается.
-
-Если WebView недоступен, но tray доступен, Shell открывает URL в браузере и остается в tray до выхода через menu.
-
-## Roadmap
-
-Планируется позже, не реализовано в v1:
-
-- hotkey / push-to-talk;
-- voice input;
-- overlay;
-- более плотная интеграция с локальным agent lifecycle.
-
+Проверки 04.10.2026: 20 связанных Python tests passed; полный набор split-запусками
+929 + 11 = 940 passed. Единый pytest сохраняет две прежние collection errors
+`agent.py` / `agent.shell`. Node voice/PLAN: 42 passed. py_compile четырёх файлов,
+PowerShell parser и git diff --check прошли. Отдельный frozen onedir WebView smoke
+через PyInstaller и настоящий QtWebEngineProcess прошёл: localhost документ
+загрузился, исполнил JS и сохранился после X. Это проверка компонента, а не
+готового IruAgent ZIP и не реальных аккаунтов/микрофона. Для frozen smoke пришлось
+убрать из PATH стороннюю ICU из среды Codex; обычный Windows Python со стандартными
+Qt/PyInstaller hooks собирает компонент без изменений приложения.

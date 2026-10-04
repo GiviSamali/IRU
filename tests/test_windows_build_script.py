@@ -115,3 +115,12 @@ function curl.exe {
         env = {key: value for key, value in os.environ.items() if key.lower() != "psmodulepath"}
         result = subprocess.run([powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)], capture_output=True, env=env)
         assert (result.returncode == 0) == (failure == "none"), result.stderr.decode(errors="replace")
+
+
+def test_windows_desktop_build_includes_webengine_instead_of_excluding_it():
+    source = _source()
+    imports = source.split("$qtHiddenImports = @(", 1)[1].split("\n)", 1)[0]
+    excluded = source.split("$qtExcludedModules = @(", 1)[1].split("\n)", 1)[0]
+    for module in ("PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets"):
+        assert module in imports and module not in excluded
+    assert "PySide6.QtWebChannel" not in excluded

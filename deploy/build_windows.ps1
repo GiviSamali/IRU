@@ -331,7 +331,9 @@ New-Item -ItemType Directory -Path $stagingSpecDir -Force | Out-Null
 $qtHiddenImports = @(
     "PySide6.QtCore",
     "PySide6.QtGui",
-    "PySide6.QtWidgets"
+    "PySide6.QtWidgets",
+    "PySide6.QtWebEngineCore",
+    "PySide6.QtWebEngineWidgets"
 )
 
 $qtExcludedModules = @(
@@ -360,10 +362,7 @@ $qtExcludedModules = @(
     "PySide6.QtQuickTest",
     "PySide6.QtQuickWidgets",
     "PySide6.QtShaderTools",
-    "PySide6.QtWebChannel",
-    "PySide6.QtWebEngineCore",
-    "PySide6.QtWebEngineQuick",
-    "PySide6.QtWebEngineWidgets"
+    "PySide6.QtWebEngineQuick"
 )
 
 $pyiArgs = @(
