@@ -105,6 +105,23 @@ API сайта. Голосовая кнопка работает с сущест
 подтверждения и полный wake/sleep цикл пока не проверены в desktop.
 Из этого теста нельзя делать вывод, что качество совпадает с полным Edge.
 
+Общий toast сайта скрывает точный SpeechRecognition error. Desktop-оболочка
+показывает код и причину в нижней status bar, а в `agent.log` пишет только
+`[desktop] speech recognition error=<code> runtime=<version>`.
+Служебный JS observer сохраняет native recognizer и обработчики сайта;
+он наблюдает только error events главного документа origin ИРУ. Host получает
+изолированное console event через DevTools protocol; WebMessage/host objects
+остаются отключены. Текст речи, произвольные console messages и auth данные
+не выводятся в лог. Диагностика не устраняет отказ провайдера STT и не
+подключает другой платный сервис. Обновлять сервер для неё не требуется.
+
+После обновления локального агента нажать микрофон, затем скопировать код
+из нижней строки окна или получить диагностические строки в PowerShell:
+
+```powershell
+Select-String -Path "$env:LOCALAPPDATA\IRUAgent\logs\agent.log" -Pattern "engine=WebView2", "speech recognition error=", "microphone permission=" | Select-Object -Last 8
+```
+
 ## Сборка
 
 ```powershell
@@ -186,3 +203,12 @@ QtWebEngine. Production ZIP не публиковался.
 11 passed (949 суммарно). py_compile двух изменённых Python файлов и
 `git diff --check` прошли. Прежний collection conflict единого запуска
 остаётся указанным выше.
+
+
+Диагностика SpeechRecognition 04.10.2026: 32 связанных Python tests passed;
+py_compile трёх изменённых Python файлов и git diff --check прошли.
+Новый native regression проверяет code/network в status bar и agent log,
+сохранение native recognizer/обработчика сайта и исключение постороннего
+console fixture из логов. Он использует synthetic error event, не внешний
+STT provider; причина отказа на пользовательском ПК остаётся неподтверждённой.
+Полный pytest в этом диагностическом изменении повторно не запускался.

@@ -43,6 +43,7 @@ class IruMainWindow(QtWidgets.QMainWindow):
             self.web_view.loadFinished.connect(self._loaded)
             self.web_view.fatalError.connect(lambda message: QtCore.QTimer.singleShot(0, lambda: self._unavailable(message)))
             self.web_view.processFailed.connect(self._renderer_failed)
+            self.web_view.speechFailed.connect(self._speech_failed)
             self.statusBar().showMessage("Открываю ИРУ…")
         except Exception:
             logging.getLogger("iru_agent").exception("[desktop] cannot create WebView2 host")
@@ -88,6 +89,17 @@ class IruMainWindow(QtWidgets.QMainWindow):
     def _renderer_failed(self, kind):
         recovery = "Перезапустите ИРУ" if kind == "BrowserProcessExited" else "Выберите ИРУ → Обновить страницу"
         self.statusBar().showMessage(f"Браузерный процесс остановился. {recovery}. Причина записана в лог агента.")
+
+    def _speech_failed(self, code):
+        reasons = {
+            "network": "Нет связи с сервисом распознавания",
+            "not-allowed": "Доступ к микрофону не разрешён",
+            "audio-capture": "Не удалось получить звук с микрофона",
+            "service-not-allowed": "Сервис распознавания отклонил доступ",
+            "language-not-supported": "Язык распознавания не поддерживается",
+        }
+        reason = reasons.get(code, "Ошибка сервиса распознавания")
+        self.statusBar().showMessage(f"Голос: {reason} ({code}). Подробности в логе агента.")
 
     def dispose_browser(self):
         if self.web_view is not None:

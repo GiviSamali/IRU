@@ -82,7 +82,7 @@ QtWidgets.QWidget.showNormal = isolated_show_normal
                                env=env, capture_output=True, text=True, timeout=30,
                                encoding="utf-8", errors="replace")
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    return completed.stdout
+    return completed.stdout + completed.stderr
 
 
 def test_desktop_close_reopen_and_explicit_exit_keep_runtime_independent(tmp_path):
@@ -478,3 +478,49 @@ def test_webview_viewport_fills_native_host_on_start_resize_and_reopen(tmp_path,
         view.loadFinished.connect(lambda ok:QtCore.QTimer.singleShot(150,observe) if ok else None)
         QtCore.QTimer.singleShot(18000,lambda:os._exit(4));app.exec()
     ''',tmp_path,web_origin)
+
+
+def test_native_speech_error_diagnostics_preserve_recognizer_and_hide_other_console_data(tmp_path,web_origin):
+    output=run_qt(r'''
+        import os,logging
+        from pathlib import Path
+        from PySide6 import QtCore,QtWidgets
+        from ui.webview import IruMainWindow
+        logging.basicConfig(level=logging.WARNING)
+        app=QtWidgets.QApplication([])
+        origin=os.environ["IRU_DESKTOP_TEST_ORIGIN"]
+        window=IruMainWindow(site_url=origin+"/voice",config_dir=Path(os.environ["IRU_DESKTOP_TEST_DIR"]),
+            icon=app.windowIcon(),tray_available=True,show_agent_settings=lambda:None,shutdown=app.quit)
+        window.show();view=window.web_view;assert view is not None
+        errors=[];view.speechFailed.connect(errors.append)
+        def loaded(ok):
+            assert ok
+            view.evaluate("""(() => {
+                console.warn('PRIVATE_CONSOLE_FIXTURE_DO_NOT_LOG');
+                const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+                const rec = new SR();
+                window.recognizerPreserved = rec instanceof SR && rec.lang === '';
+                window.siteErrorCount = 0;
+                rec.onerror = () => window.siteErrorCount++;
+                for (const code of ['no-speech','aborted','network']) {
+                    const event = new Event('error');
+                    Object.defineProperty(event,'error',{value:code});
+                    rec.dispatchEvent(event);
+                }
+                return window.recognizerPreserved && window.siteErrorCount === 3;
+            })()""",checked)
+        def checked(value):
+            assert value is True
+            def observe():
+                if not errors:QtCore.QTimer.singleShot(40,observe);return
+                assert errors==['network']
+                assert 'network' in window.statusBar().currentMessage()
+                assert not view.core.Settings.AreHostObjectsAllowed and not view.core.Settings.IsWebMessageEnabled
+                window.dispose_browser();print('speech error diagnostics passed');app.quit()
+            observe()
+        view.loadFinished.connect(loaded)
+        QtCore.QTimer.singleShot(12000,lambda:os._exit(4));app.exec()
+    ''',tmp_path,web_origin)
+    assert "speech error diagnostics passed" in output
+    assert "PRIVATE_CONSOLE_FIXTURE_DO_NOT_LOG" not in output
+    assert "speech recognition error=network runtime=" in output

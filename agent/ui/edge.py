@@ -81,6 +81,7 @@ class EdgeWebView(QtWidgets.QWidget):
     loadFinished = QtCore.Signal(bool)
     fatalError = QtCore.Signal(str)
     processFailed = QtCore.Signal(str)
+    speechFailed = QtCore.Signal(str)
     ready = QtCore.Signal()
 
     def __init__(self, site_url: str, config_dir: Path, parent=None):
@@ -93,6 +94,7 @@ class EdgeWebView(QtWidgets.QWidget):
         self._disposed = False
         self._dialogs = []
         self._microphone_allowed = False
+        self._speech_marker = "IRU_SPEECH_ERROR_" + os.urandom(16).hex()
         self._sdk = _load_sdk()
         try:
             self._panel = self._sdk.Panel()
@@ -160,8 +162,71 @@ class EdgeWebView(QtWidgets.QWidget):
         self.core.ProcessFailed += self._process_failed
         LOG.info("[desktop] engine=WebView2 runtime=%s", self.core.Environment.BrowserVersionString)
         self._resize_native()
-        self.ready.emit()
-        self.core.Navigate(self.site_url)
+        self._install_speech_diagnostics()
+
+    def _install_speech_diagnostics(self):
+        # Observe metadata only through the host's DevTools receiver. No native
+        # objects/WebMessage channel are exposed, and recognition behavior stays
+        # with the site's own handlers. Await registration before site scripts.
+        configuration = json.dumps({"site": self.site_url, "marker": self._speech_marker})
+        script = """(() => {
+            const config = CONFIG;
+            if (window !== window.top || location.origin !== new URL(config.site).origin) return;
+            for (const name of ['SpeechRecognition', 'webkitSpeechRecognition']) {
+                const Native = window[name];
+                if (typeof Native !== 'function') continue;
+                window[name] = new Proxy(Native, {
+                    construct(Target, args, newTarget) {
+                        const recognition = Reflect.construct(Target, args, newTarget);
+                        recognition.addEventListener('error', event => {
+                            if (event.error !== 'aborted' && event.error !== 'no-speech')
+                                console.warn(config.marker, event.error || 'unknown');
+                        });
+                        return recognition;
+                    }
+                });
+            }
+        })();""".replace("CONFIG", configuration)
+        try:
+            self._speech_receiver = self.core.GetDevToolsProtocolEventReceiver("Runtime.consoleAPICalled")
+            self._speech_receiver.DevToolsProtocolEventReceived += self._speech_error
+            tasks = [self.core.CallDevToolsProtocolMethodAsync("Runtime.enable", "{}"),
+                     self.core.AddScriptToExecuteOnDocumentCreatedAsync(script)]
+        except Exception:
+            LOG.warning("[desktop] speech diagnostics registration failed")
+            self.ready.emit()
+            self.core.Navigate(self.site_url)
+            return
+        deadline = time.monotonic() + 3
+
+        def registered():
+            if self._disposed:
+                return
+            if not all(task.IsCompleted for task in tasks) and time.monotonic() < deadline:
+                QtCore.QTimer.singleShot(20, registered)
+                return
+            if any(not task.IsCompleted or task.IsFaulted or task.IsCanceled for task in tasks):
+                LOG.warning("[desktop] speech diagnostics registration incomplete")
+            self.ready.emit()
+            self.core.Navigate(self.site_url)
+        registered()
+
+    def _speech_error(self, sender, args):
+        if self._disposed or origin(self.current_url()) != self.site_origin:
+            return
+        try:
+            values = json.loads(str(args.ParameterObjectAsJson)).get("args", [])
+            if len(values) != 2 or values[0].get("value") != self._speech_marker:
+                return
+            code = values[1].get("value")
+            if code not in {"network", "not-allowed", "audio-capture", "service-not-allowed",
+                            "language-not-supported", "bad-grammar", "phrases-not-supported"}:
+                code = "unknown"
+        except (ValueError, TypeError, AttributeError):
+            return
+        LOG.warning("[desktop] speech recognition error=%s runtime=%s", code,
+                    self.core.Environment.BrowserVersionString)
+        self.speechFailed.emit(code)
 
     def _navigation_starting(self, sender, args):
         address = str(args.Uri)
