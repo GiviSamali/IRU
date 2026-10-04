@@ -359,6 +359,10 @@ def test_webview2_leaves_site_speech_recognition_enabled(tmp_path,web_origin):
             assert "speech-marker" in result["text"] and not errors
             assert not view.core.Settings.AreHostObjectsAllowed and not view.core.Settings.IsWebMessageEnabled
             assert view.core.Environment.BrowserVersionString
+            arguments=str(view._browser.CreationProperties.AdditionalBrowserArguments)
+            assert "--disable-features=msSpeechRecognitionServiceUseCetoService" in arguments
+            assert "--disable-background-timer-throttling" in arguments
+            assert "--no-sandbox" not in arguments and "--disable-web-security" not in arguments
             window.dispose_browser();print("speech API enabled");app.quit()
         view.loadFinished.connect(loaded)
         QtCore.QTimer.singleShot(12000,lambda:os._exit(4))

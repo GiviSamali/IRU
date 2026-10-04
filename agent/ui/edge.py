@@ -23,6 +23,10 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 LOG = logging.getLogger("iru_agent")
 BACKGROUND_ARGUMENTS = "--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows"
+# Microsoft workaround for speech's immediate network error on Runtime 153/154.
+# Keep Evergreen updates; select the previous built-in Microsoft speech service
+# for this WebView2 environment only. See WebView2Feedback issue #5724.
+SPEECH_SERVICE_ARGUMENT = "--disable-features=msSpeechRecognitionServiceUseCetoService"
 
 
 def origin(url: str):
@@ -114,7 +118,7 @@ class EdgeWebView(QtWidgets.QWidget):
             props = self._sdk.Properties()
             props.UserDataFolder = str(self.profile_path)
             props.IsInPrivateModeEnabled = False
-            props.AdditionalBrowserArguments = BACKGROUND_ARGUMENTS
+            props.AdditionalBrowserArguments = f"{BACKGROUND_ARGUMENTS} {SPEECH_SERVICE_ARGUMENT}"
             self._browser.CreationProperties = props
             self._panel.Controls.Add(self._browser)
             self._browser.Dock = self._sdk.DockStyle.Fill
@@ -160,7 +164,7 @@ class EdgeWebView(QtWidgets.QWidget):
         self.core.PermissionRequested += self._permission
         self.core.DownloadStarting += self._download
         self.core.ProcessFailed += self._process_failed
-        LOG.info("[desktop] engine=WebView2 runtime=%s", self.core.Environment.BrowserVersionString)
+        LOG.info("[desktop] engine=WebView2 runtime=%s speech_service=compatibility", self.core.Environment.BrowserVersionString)
         self._resize_native()
         self._install_speech_diagnostics()
 

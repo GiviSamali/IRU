@@ -105,6 +105,24 @@ API сайта. Голосовая кнопка работает с сущест
 подтверждения и полный wake/sleep цикл пока не проверены в desktop.
 Из этого теста нельзя делать вывод, что качество совпадает с полным Edge.
 
+Позднее в тот же день отказ подтверждён на пользовательском ПК:
+`microphone permission=granted`, затем `network`, Runtime 154.0.4258.53.
+В [Microsoft WebView2Feedback #5724](https://github.com/MicrosoftEdge/WebView2Feedback/issues/5724)
+инженер Microsoft предложил отключить новый speech service через
+`--disable-features=msSpeechRecognitionServiceUseCetoService`; автор подтвердил
+обход на 153. На нашей версии 154 проверены два отдельных процесса с разными
+тестовыми профилями и synthetic audio: default → `network`; с флагом →
+`start`, `audiostart`, `result`, `result` без `network` за время проверки.
+Флаг теперь добавляется автоматически в AdditionalBrowserArguments только
+WebView2 окружения ИРУ. Звук распознавания направляется прежнему встроенному
+сервису Microsoft `speech.platform.bing.com/speech/recognition/edge/interactive/v1`;
+использование этого сервиса явно согласовано с пользователем.
+Evergreen Runtime продолжает обновляться. Реестр, системный Edge, profile data,
+backend и voice JS не меняются; отдельный платный STT не добавлен.
+Это временный workaround: после подтверждённого исправления Microsoft его
+следует отдельно перепроверить и удалить. Реальные русские фразы, пунктуация
+и полный wake/sleep loop требуют smoke на целевом ПК.
+
 Общий toast сайта скрывает точный SpeechRecognition error. Desktop-оболочка
 показывает код и причину в нижней status bar, а в `agent.log` пишет только
 `[desktop] speech recognition error=<code> runtime=<version>`.
@@ -212,3 +230,14 @@ py_compile трёх изменённых Python файлов и git diff --check
 console fixture из логов. Он использует synthetic error event, не внешний
 STT provider; причина отказа на пользовательском ПК остаётся неподтверждённой.
 Полный pytest в этом диагностическом изменении повторно не запускался.
+
+
+Проверка включённого workaround 04.10.2026: 32 связанных Python tests passed;
+py_compile двух изменённых Python файлов и git diff --check прошли.
+Повторный live smoke с обычными настройками ИРУ после исправления, Runtime
+154.0.4258.53 и synthetic audio дал start/audiostart/result/result без network.
+Настройки браузера проверены через настоящий WebView2 control: флаг установлен,
+фоновые timers сохранены, sandbox/TLS guards не отключаются. Полный pytest
+для этого изменения повторно не запускался. На целевом ПК закрыть агент через
+«Выход», обновить ветку и запустить заново; проверка настоящей речи остаётся
+ручной. Production ZIP не публиковался.
