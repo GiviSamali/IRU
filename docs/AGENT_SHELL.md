@@ -275,3 +275,19 @@ agent core, packaging/build и voice endpoints passed. Проверка наст
 Windows process AppUserModelID и значка окна включена в desktop lifecycle test.
 Используются localhost и изолированные процессы, без настоящего микрофона.
 Полный pytest для этого небольшого изменения повторно не запускался.
+
+
+Сборка в смешанном Qt-окружении 04.10.2026: pywebview при анализе зависимостей
+может найти PyQt5, установленный для другого проекта. PyInstaller запрещает
+сборку нескольких Qt bindings в одном приложении. Для `IruAgent` скрипт
+явно исключает корневые `PyQt5`, `PyQt6` и `PySide2`; PySide6 остаётся.
+Удалять пакеты из пользовательского venv не требуется. Отдельная legacy
+сборка `IruShell` не изменялась.
+
+Новый regression исполняет настоящую PowerShell-сборку аргументов и проверяет
+передачу исключений PyInstaller. Build/package tests: 11 passed, PowerShell
+parser и git diff --check прошли. Полная onedir-сборка из прежнего failed spec
+с этими же исключениями в Python 3.13.7 / PyInstaller 6.22.3 / PySide6 6.11.2 /
+PyQt5 5.15.10 завершилась с exit code 0. В COLLECT подтверждены WebView2 SDK,
+loader и Python.Runtime; остальные Qt bindings и QtWebEngine отсутствуют.
+Сборка выполнена в TEMP, без запуска агента и без публикации ZIP.

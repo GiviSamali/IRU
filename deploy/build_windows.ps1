@@ -334,7 +334,12 @@ $qtHiddenImports = @(
     "PySide6.QtWidgets"
 )
 
+# pywebview can discover other Qt bindings installed for unrelated projects.
+# The IRU desktop uses PySide6 only; prevent PyInstaller's mixed-Qt abort.
 $qtExcludedModules = @(
+    "PyQt5",
+    "PyQt6",
+    "PySide2",
     "PySide6.QtWebEngineCore",
     "PySide6.QtWebEngineWidgets",
     "PySide6.QtWebChannel",
