@@ -1,6 +1,8 @@
 """The existing IRU website hosted in the agent's existing Qt application."""
 from __future__ import annotations
 
+import json
+import logging
 import os
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -25,8 +27,25 @@ class SitePage(QtWebEngineCore.QWebEnginePage):
     def __init__(self, profile, site_url, parent=None):
         super().__init__(profile, parent)
         self.site_origin = _origin(QtCore.QUrl(site_url))
-        self.featurePermissionRequested.connect(self._request_permission)
+        self._permission_dialogs = []
+        self.permissionRequested.connect(self._request_permission)
         self.newWindowRequested.connect(self._new_window)
+        # Qt 6.11.2 exposes SpeechRecognition without its SpeechRecognizer binder:
+        # constructing it kills the renderer. The prefixed API also failed to start
+        # in our reproduction. Hide both unsupported APIs before site scripts run;
+        # let the existing voice UI use its unsupported-browser state honestly.
+        script = QtWebEngineCore.QWebEngineScript()
+        script.setName("iru-unsupported-web-speech")
+        script.setInjectionPoint(script.InjectionPoint.DocumentCreation)
+        script.setWorldId(script.ScriptWorldId.MainWorld)
+        script.setRunsOnSubFrames(False)
+        script.setSourceCode("""(() => {
+            if (location.origin !== new URL(%s).origin) return;
+            for (const name of ['SpeechRecognition', 'webkitSpeechRecognition']) {
+                Object.defineProperty(window, name, {value: undefined, configurable: true, writable: true});
+            }
+        })();""" % json.dumps(site_url))
+        self.scripts().insert(script)
 
     def acceptNavigationRequest(self, url, navigation_type, is_main_frame):
         if is_main_frame and url.scheme() not in {"http", "https", "about"}:
@@ -46,16 +65,34 @@ class SitePage(QtWebEngineCore.QWebEnginePage):
         else:
             QtGui.QDesktopServices.openUrl(url)
 
-    def _request_permission(self, origin, feature):
-        allow = False
-        if _origin(origin) == self.site_origin and feature == self.Feature.MediaAudioCapture:
-            allow = QtWidgets.QMessageBox.question(
-                self.parent(), "Микрофон ИРУ", "Разрешить сайту ИРУ доступ к микрофону?",
-                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
-                QtWidgets.QMessageBox.StandardButton.No,
-            ) == QtWidgets.QMessageBox.StandardButton.Yes
-        self.setFeaturePermission(origin, feature, self.PermissionPolicy.PermissionGrantedByUser
-                                  if allow else self.PermissionPolicy.PermissionDeniedByUser)
+    def _request_permission(self, permission):
+        # Keep the Chromium event loop running while native UI asks for consent.
+        if (_origin(permission.origin()) != self.site_origin
+                or permission.permissionType() != QtWebEngineCore.QWebEnginePermission.PermissionType.MediaAudioCapture):
+            permission.deny()
+            return
+        initial_url = self.url()
+        dialog = QtWidgets.QMessageBox(self.parent())
+        dialog.setWindowTitle("Микрофон ИРУ")
+        dialog.setText("Разрешить сайту ИРУ доступ к микрофону?")
+        dialog.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
+        dialog.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
+        dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+        self._permission_dialogs.append(dialog)
+
+        def resolved(answer):
+            allowed = (answer == QtWidgets.QMessageBox.StandardButton.Yes
+                       and self.url() == initial_url and permission.isValid())
+            if allowed:
+                permission.grant()
+            else:
+                permission.deny()
+            logging.getLogger("iru_agent").info("[desktop] microphone permission=%s", "granted" if allowed else "denied")
+            self._permission_dialogs.remove(dialog)
+            dialog.deleteLater()
+
+        dialog.finished.connect(resolved)
+        dialog.open()
 
 
 class IruMainWindow(QtWidgets.QMainWindow):
@@ -83,6 +120,7 @@ class IruMainWindow(QtWidgets.QMainWindow):
         self.web_view.setPage(self.page)
         self.setCentralWidget(self.web_view)
         self.web_view.loadFinished.connect(self._loaded)
+        self.page.renderProcessTerminated.connect(self._renderer_terminated)
 
         menu = self.menuBar().addMenu("ИРУ")
         menu.addAction("Настройки агента", show_agent_settings)
@@ -118,9 +156,21 @@ class IruMainWindow(QtWidgets.QMainWindow):
 
     def _loaded(self, success):
         if success:
-            self.statusBar().clearMessage()
+            if _origin(self.page.url()) == self.page.site_origin:
+                self.statusBar().showMessage(
+                    "Голос недоступен в этой версии приложения. Для голоса: ИРУ → Открыть в браузере.")
+            else:
+                self.statusBar().clearMessage()
         else:
             self.statusBar().showMessage("Сайт недоступен. Проверьте сеть и выберите ИРУ → Обновить страницу.")
+
+    def _renderer_terminated(self, status, exit_code):
+        if status == self.page.RenderProcessTerminationStatus.NormalTerminationStatus:
+            return
+        logging.getLogger("iru_agent").error("[desktop] renderer terminated status=%s code=%s", status.name, exit_code)
+        self.statusBar().showMessage(
+            "Браузерный процесс остановился. Выберите ИРУ → Обновить страницу. Причина записана в лог агента.")
+        # No automatic reload: it would destroy voice state and could repeat actions.
 
     def _download(self, download):
         filename = Path(download.downloadFileName().replace("\\", "/")).name or "download"

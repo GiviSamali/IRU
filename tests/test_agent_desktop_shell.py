@@ -20,8 +20,14 @@ def web_origin():
             body = b"<html>Storage test</html>"
             if self.path == "/voice":
                 body = b"<script>window.marker='same-document';window.ticks=0;setInterval(()=>ticks++,20)</script>"
+            if self.path == "/capture":
+                body = b"<html><body>capture-marker<button id='mic' onclick=\"navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{window.outcome='captured';s.getTracks().forEach(t=>t.stop())}).catch(e=>window.outcome=e.name)\">Mic</button></body></html>"
+            if self.path == "/voice-adapter":
+                body = (ROOT / "ui/js/voice.js").read_bytes()
+            if self.path == "/speech":
+                body = b"<html><head><script>window.initialSpeech=typeof(window.SpeechRecognition||window.webkitSpeechRecognition);window.constructed=false;if(window.SpeechRecognition||window.webkitSpeechRecognition){new (window.SpeechRecognition||window.webkitSpeechRecognition)();window.constructed=true}</script></head><body>speech-marker<button id='voiceBtn'>Voice</button><span id='voiceStatus'></span><button id='voiceStopSpeech'>Stop</button><script>window.createVoiceSession=()=>({enabled:false,disable(){},stopSpeech(){}})</script><script src='/voice-adapter'></script></body></html>"
             self.send_response(200)
-            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Type", "application/javascript" if self.path == "/voice-adapter" else "text/html")
             if self.path == "/login":
                 self.send_header("Set-Cookie", "desktop-session=ok; HttpOnly; Path=/")
             if self.path == "/session":
@@ -140,7 +146,7 @@ def test_webview_document_and_timers_survive_hide(tmp_path, web_origin):
             import json
             result=json.loads(value)
             assert result["marker"] == "same-document" and result["ticks"] >= 2
-            assert result["speech"] == "function"
+            assert result["speech"] == "undefined"
             assert not window.isVisible()
             print("hidden document alive")
             app.quit()
@@ -191,7 +197,7 @@ def test_url_navigation_permission_and_download_boundaries(tmp_path):
     assert "boundaries passed" in run_qt(r'''
         import os
         from pathlib import Path
-        from PySide6 import QtCore, QtGui, QtWidgets
+        from PySide6 import QtCore, QtGui, QtWidgets, QtWebEngineCore
         from ui.webview import IruMainWindow, resolve_site_url
         assert resolve_site_url({"server_url":"wss://irumode.ru"}) == "https://irumode.ru/"
         assert resolve_site_url({"server_url":"ws://localhost:8000"}) == "http://localhost:8000/"
@@ -212,13 +218,29 @@ def test_url_navigation_permission_and_download_boundaries(tmp_path):
         assert not window.page.acceptNavigationRequest(QtCore.QUrl("https://outside.test"),kind,True)
         assert opened == ["https://outside.test"]
         assert not window.page.acceptNavigationRequest(QtCore.QUrl("file:///private"),kind,True)
-        permissions=[]
-        window.page.setFeaturePermission=lambda *args:permissions.append(args[-1])
-        QtWidgets.QMessageBox.question=lambda *args:QtWidgets.QMessageBox.StandardButton.Yes
-        window.page._request_permission(QtCore.QUrl("https://outside.test"),window.page.Feature.MediaAudioCapture)
-        assert permissions[-1] == window.page.PermissionPolicy.PermissionDeniedByUser
-        window.page._request_permission(QtCore.QUrl("https://irumode.ru"),window.page.Feature.MediaAudioCapture)
-        assert permissions[-1] == window.page.PermissionPolicy.PermissionGrantedByUser
+        class Permission:
+            def __init__(self,origin,valid=True):
+                self.address=origin;self.valid=valid;self.granted=0;self.denied=0
+            def origin(self):return QtCore.QUrl(self.address)
+            def permissionType(self):return QtWebEngineCore.QWebEnginePermission.PermissionType.MediaAudioCapture
+            def isValid(self):return self.valid
+            def grant(self):self.granted+=1
+            def deny(self):self.denied+=1
+        denied=Permission("https://outside.test")
+        window.page._request_permission(denied)
+        assert denied.denied == 1 and not window.page._permission_dialogs
+        granted=Permission("https://irumode.ru")
+        window.page._request_permission(granted)
+        assert granted.granted == 0 and len(window.page._permission_dialogs) == 1
+        window.page._permission_dialogs[0].done(QtWidgets.QMessageBox.StandardButton.Yes)
+        assert granted.granted == 1 and not window.page._permission_dialogs
+        invalid=Permission("https://irumode.ru",valid=False)
+        window.page._request_permission(invalid)
+        window.page._permission_dialogs[0].done(QtWidgets.QMessageBox.StandardButton.Yes)
+        assert invalid.granted == 0 and invalid.denied == 1
+        before=window.page.url()
+        window._renderer_terminated(window.page.RenderProcessTerminationStatus.CrashedTerminationStatus,17)
+        assert "Обновить страницу" in window.statusBar().currentMessage() and window.page.url() == before
         QtWidgets.QFileDialog.getSaveFileName=lambda *args:("", "")
         class Download:
             cancelled=False
@@ -228,3 +250,114 @@ def test_url_navigation_permission_and_download_boundaries(tmp_path):
         window.show();window.close();assert exits == [1]
         print("boundaries passed")
     ''',tmp_path)
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_real_microphone_permission_is_async_and_preserves_document(tmp_path, web_origin, monkeypatch, accepted):
+    # Synthetic Chromium device: never capture the developer's actual microphone.
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --use-fake-device-for-media-stream")
+    code = r'''
+        import os,json
+        from pathlib import Path
+        from PySide6 import QtCore,QtWidgets
+        from ui.webview import IruMainWindow
+        app=QtWidgets.QApplication([])
+        origin=os.environ["IRU_DESKTOP_TEST_ORIGIN"]
+        window=IruMainWindow(site_url=origin+"/capture",config_dir=Path(os.environ["IRU_DESKTOP_TEST_DIR"]),
+                             icon=app.windowIcon(),tray_available=True,show_agent_settings=lambda:None,shutdown=app.quit)
+        window.show()
+        permission_seen=[];permission_states=[];crashes=[]
+        window.page.renderProcessTerminated.connect(lambda *args:crashes.append(args))
+        def permitted(permission):
+            permission_seen.append(permission.permissionType())
+            assert len(window.page._permission_dialogs) == 1
+            def answer():
+                window.page._permission_dialogs[0].done(QtWidgets.QMessageBox.StandardButton.Yes if ACCEPTED else QtWidgets.QMessageBox.StandardButton.No)
+                permission_states.append(permission.state())
+                QtCore.QTimer.singleShot(200,poll)
+            QtCore.QTimer.singleShot(20,answer)
+        window.page.permissionRequested.connect(permitted)
+        def loaded(ok):
+            assert ok
+            window.page.runJavaScript("document.getElementById('mic').click()")
+        window.web_view.loadFinished.connect(loaded)
+        def observed(value):
+            result=json.loads(value)
+            if (ACCEPTED and not result.get("outcome")) or not permission_states:
+                QtCore.QTimer.singleShot(50,poll);return
+            assert len(permission_seen) == 1 and not crashes
+            from PySide6.QtWebEngineCore import QWebEnginePermission
+            assert permission_states == [QWebEnginePermission.State.Granted if ACCEPTED else QWebEnginePermission.State.Denied]
+            if ACCEPTED:
+                assert result["outcome"] == "captured"
+            else:
+                # Qt can report AbortError for a denied media request.
+                assert result.get("outcome") in (None, "NotAllowedError", "AbortError")
+            assert "capture-marker" in result["text"] and not window.page._permission_dialogs
+            window.close()
+            assert not window.isVisible()
+            print("microphone permission passed")
+            app.quit()
+        def poll():
+            window.page.runJavaScript("JSON.stringify({outcome:window.outcome,text:document.body.innerText})",observed)
+        QtCore.QTimer.singleShot(100,poll)
+        QtCore.QTimer.singleShot(10000,lambda:os._exit(4))
+        app.exec()
+    '''
+    assert "microphone permission passed" in run_qt("ACCEPTED="+repr(accepted)+"\n"+textwrap.dedent(code),tmp_path,web_origin)
+
+
+def test_site_scripts_never_construct_unsupported_speech_recognizer(tmp_path, web_origin):
+    assert "speech crash guarded" in run_qt(r'''
+        import os,json
+        from pathlib import Path
+        from PySide6 import QtCore,QtWidgets
+        from ui.webview import IruMainWindow
+        app=QtWidgets.QApplication([])
+        origin=os.environ["IRU_DESKTOP_TEST_ORIGIN"]
+        window=IruMainWindow(site_url=origin+"/speech",config_dir=Path(os.environ["IRU_DESKTOP_TEST_DIR"]),
+                             icon=app.windowIcon(),tray_available=True,show_agent_settings=lambda:None,shutdown=app.quit)
+        crashes=[]
+        window.page.renderProcessTerminated.connect(lambda *args:crashes.append(args))
+        def loaded(ok):
+            assert ok
+            def observe():
+                window.page.runJavaScript("JSON.stringify({speech:window.initialSpeech,constructed:window.constructed,disabled:document.getElementById('voiceBtn').disabled,enabled:window.iruVoice.enabled,text:document.body.innerText})",checked)
+            QtCore.QTimer.singleShot(500,observe)
+        def checked(value):
+            result=json.loads(value)
+            assert result["speech"] == "undefined" and result["constructed"] is False
+            assert result["disabled"] is True and result["enabled"] is False
+            assert "speech-marker" in result["text"] and not crashes
+            assert "Голос недоступен" in window.statusBar().currentMessage()
+            print("speech crash guarded")
+            app.quit()
+        window.web_view.loadFinished.connect(loaded)
+        QtCore.QTimer.singleShot(10000,lambda:os._exit(4))
+        app.exec()
+    ''',tmp_path,web_origin)
+
+
+def test_speech_guard_does_not_modify_other_origins(tmp_path, web_origin):
+    assert "speech origin guard passed" in run_qt(r'''
+        import os,json
+        from pathlib import Path
+        from PySide6 import QtCore,QtWidgets
+        from ui.webview import IruMainWindow
+        app=QtWidgets.QApplication([])
+        origin=os.environ["IRU_DESKTOP_TEST_ORIGIN"]
+        window=IruMainWindow(site_url="https://iru.example.test",config_dir=Path(os.environ["IRU_DESKTOP_TEST_DIR"]),
+                             icon=app.windowIcon(),tray_available=True,show_agent_settings=lambda:None,shutdown=app.quit)
+        # Different origin: inspect the exposed API without instantiating it.
+        window.web_view.setUrl(QtCore.QUrl(origin+"/voice"))
+        def loaded(ok):
+            if not ok:return
+            window.page.runJavaScript("typeof(window.SpeechRecognition||window.webkitSpeechRecognition)",checked)
+        def checked(value):
+            assert value == "function"
+            print("speech origin guard passed")
+            app.quit()
+        window.web_view.loadFinished.connect(loaded)
+        QtCore.QTimer.singleShot(10000,lambda:os._exit(4))
+        app.exec()
+    ''',tmp_path,web_origin)
