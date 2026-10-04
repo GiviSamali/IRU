@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -45,9 +46,18 @@ def create_router(ui_dir: Path, agent_download_dir: Path, updates_dir: Path | No
     @router.get("/", response_class=HTMLResponse)
     async def root():
         index = ui_dir / "index.html"
+        headers = {"Cache-Control": "no-cache"}
         if index.exists():
-            return HTMLResponse(index.read_text(encoding="utf-8"))
-        return HTMLResponse("<h1>ИРУ v3.5 — UI не найден</h1>")
+            html = index.read_text(encoding="utf-8")
+            # WebView2/browser caches can outlive a server deploy. A changed
+            # voice or submission script must get a distinct resource URL.
+            for name in ("chat.js", "voice-session.js", "voice.js"):
+                asset = ui_dir / "js" / name
+                if asset.is_file():
+                    revision = hashlib.sha256(asset.read_bytes()).hexdigest()[:16]
+                    html = html.replace(f'src="js/{name}"', f'src="js/{name}?v={revision}"')
+            return HTMLResponse(html, headers=headers)
+        return HTMLResponse("<h1>ИРУ v3.5 — UI не найден</h1>", headers=headers)
 
     @router.get("/instruction")
     async def instruction_page():

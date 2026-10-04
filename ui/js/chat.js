@@ -705,7 +705,7 @@ async function sendMessage(options = {}) {
   const input = document.getElementById('chatInput');
   const fromVoice = typeof options.voiceText === 'string';
   const text = (fromVoice ? options.voiceText : input.value).trim();
-  if (!text) return;
+  if (!text || (fromVoice && !/[\p{L}\p{N}]/u.test(text))) return;
   if (text.length > MAX_INPUT_LENGTH) {
     showToast(`Максимум ${MAX_INPUT_LENGTH} символов`, true);
     return;
