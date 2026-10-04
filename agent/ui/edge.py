@@ -104,7 +104,6 @@ class EdgeWebView(QtWidgets.QWidget):
             self._user32.SetParent.argtypes = [wintypes.HWND, wintypes.HWND]
             self._user32.SetParent.restype = wintypes.HWND
             self._user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
-            self._user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
             ctypes.set_last_error(0)
             self._user32.SetParent(self._hwnd, int(self.winId()))
             if ctypes.get_last_error():
@@ -160,6 +159,7 @@ class EdgeWebView(QtWidgets.QWidget):
         self.core.DownloadStarting += self._download
         self.core.ProcessFailed += self._process_failed
         LOG.info("[desktop] engine=WebView2 runtime=%s", self.core.Environment.BrowserVersionString)
+        self._resize_native()
         self.ready.emit()
         self.core.Navigate(self.site_url)
 
@@ -292,16 +292,22 @@ class EdgeWebView(QtWidgets.QWidget):
             return
         rectangle = wintypes.RECT()
         if self._user32.GetClientRect(int(self.winId()), ctypes.byref(rectangle)):
-            self._user32.SetWindowPos(self._hwnd, None, 0, 0, max(1, rectangle.right), max(1, rectangle.bottom), 0x0004 | 0x0010 | 0x0040)
+            # Resize through WinForms, not only the HWND. SetWindowPos leaves
+            # managed bounds/layout stale and Dock=Fill at its default 100x30.
+            # GetClientRect provides physical pixels even on scaled Qt screens.
+            self._panel.SetBounds(0, 0, max(1, rectangle.right - rectangle.left),
+                                  max(1, rectangle.bottom - rectangle.top))
+            self._panel.PerformLayout()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "_user32"):
-            self._resize_native()
+            # Qt delivers resizeEvent before its native HWND gets new bounds.
+            QtCore.QTimer.singleShot(0, self._resize_native)
 
     def showEvent(self, event):
         super().showEvent(event)
-        self._resize_native()
+        QtCore.QTimer.singleShot(0, self._resize_native)
 
     def focusInEvent(self, event):
         super().focusInEvent(event)

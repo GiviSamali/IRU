@@ -426,3 +426,55 @@ def test_native_download_save_and_cancel(tmp_path,web_origin,accepted):
         QtCore.QTimer.singleShot(12000,lambda:os._exit(4));app.exec()
     '''
     assert "native download passed" in run_qt("ACCEPTED="+repr(accepted)+"\n"+textwrap.dedent(code),tmp_path,web_origin)
+
+
+@pytest.mark.parametrize("scale", ["1", "1.25", "1.5"])
+def test_webview_viewport_fills_native_host_on_start_resize_and_reopen(tmp_path,web_origin,monkeypatch,scale):
+    monkeypatch.setenv("QT_SCALE_FACTOR",scale)
+    assert "viewport fills native host" in run_qt(r'''
+        import ctypes,json,os,time
+        from ctypes import wintypes
+        from pathlib import Path
+        from PySide6 import QtCore,QtWidgets
+        from ui.webview import IruMainWindow
+        app=QtWidgets.QApplication([])
+        origin=os.environ["IRU_DESKTOP_TEST_ORIGIN"]
+        window=IruMainWindow(site_url=origin+"/voice",config_dir=Path(os.environ["IRU_DESKTOP_TEST_DIR"]),
+            icon=app.windowIcon(),tray_available=True,show_agent_settings=lambda:None,shutdown=app.quit)
+        window.show();view=window.web_view;assert view is not None
+        observations=[];deadline=[time.monotonic()+6]
+        def observe():
+            view.evaluate("JSON.stringify({w:innerWidth,h:innerHeight,dpr:devicePixelRatio,marker,ticks})",checked)
+        def checked(value):
+            result=json.loads(value)
+            rectangle=wintypes.RECT()
+            assert view._user32.GetClientRect(int(view.winId()),ctypes.byref(rectangle))
+            width=rectangle.right-rectangle.left;height=rectangle.bottom-rectangle.top
+            assert width>=800 and height>=400
+            # WebView2 applies compositor/renderer resize asynchronously.
+            # Wait for actual geometry, keeping a bounded failure deadline.
+            if (abs(result["w"]*result["dpr"]-width)>3
+                    or abs(result["h"]*result["dpr"]-height)>3):
+                assert time.monotonic()<deadline[0],(result,width,height)
+                QtCore.QTimer.singleShot(40,observe)
+                return
+            assert view._panel.ClientSize.Width==width and view._panel.ClientSize.Height==height
+            assert view._browser.Width==width and view._browser.Height==height
+            assert result["marker"]=="same-document"
+            if observations:assert result["ticks"]>observations[-1]
+            observations.append(result["ticks"])
+            deadline[0]=time.monotonic()+3
+            if len(observations)==1:
+                window.resize(900,640)
+            elif len(observations)==2:
+                window.resize(1440,900)
+            elif len(observations)==3:
+                window.close();assert not window.isVisible()
+                window.show_iru()
+                assert window.web_view is view and window.isVisible()
+            else:
+                window.dispose_browser();print("viewport fills native host");app.quit();return
+            QtCore.QTimer.singleShot(150,observe)
+        view.loadFinished.connect(lambda ok:QtCore.QTimer.singleShot(150,observe) if ok else None)
+        QtCore.QTimer.singleShot(18000,lambda:os._exit(4));app.exec()
+    ''',tmp_path,web_origin)

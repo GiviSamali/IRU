@@ -50,6 +50,11 @@ WebView2 выполняются на STA UI thread. Запросы permission и
 асинхронные Qt dialogs и WebView2 deferrals: UI не блокирует .NET Task.Result
 до завершения операции и не запускает дополнительный UI loop.
 
+Размер host синхронизируется после применения native geometry Qt, через
+WinForms SetBounds и layout дочернего WebView2. Одного SetWindowPos недостаточно:
+оно оставляло managed bounds и страницу размером 100×30. Берутся физические
+пиксели client area, поэтому масштабирование Qt не учитывается дважды.
+
 ## Сессия, навигация и скачивание
 
 Постоянный профиль: `%LOCALAPPDATA%\IRUAgent\webview2` рядом с конфигом агента.
@@ -143,6 +148,7 @@ localhost страница загрузилась, выполнила JS и со
 `tests/test_agent_desktop_shell.py` использует настоящий Windows HWND,
 Qt widgets и WebView2 в изолированных процессах с localhost страницами.
 Проверяются меню/tray/runtime lifecycle, сохранение документа и таймеров,
+реальный viewport при старте/resize/возврате из tray с масштабом 100/125/150%,
 localStorage и постоянная HttpOnly cookie после process restart,
 разрешения synthetic microphone grant/deny, безопасный SpeechRecognition
 constructor и существующий voice JS, навигация/popup, настоящий бинарный
@@ -169,3 +175,14 @@ QtWebEngine. Production ZIP не публиковался.
 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/),
 [STA и deferrals](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/threading-model),
 [User data folder](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/user-data-folder).
+
+
+Исправление размера 04.10.2026: новый regression воспроизвёл исходный viewport
+100×30. После исправления проверены startup, resize и tray/reopen с масштабом
+100/125/150%. Frozen onedir smoke теперь проверяет и реальный размер страницы:
+1200×746 вместо 100×30. Renderer применяет resize асинхронно; regression
+ожидает нужную геометрию с ограниченным deadline.
+Основной pytest после исправления: 938 passed; legacy shell отдельно:
+11 passed (949 суммарно). py_compile двух изменённых Python файлов и
+`git diff --check` прошли. Прежний collection conflict единого запуска
+остаётся указанным выше.
