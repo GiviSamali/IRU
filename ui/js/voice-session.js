@@ -1,5 +1,12 @@
 /* Voice lifecycle, independent of DOM/audio/network for deterministic tests. */
 (function (root) {
+  // STT may punctuate the name or spell out the acronym. Match whole words only.
+  const wakeName = String.raw`(?:иру|и[\s.]+р[\s.]+у|iru|i[\s.]+r[\s.]+u)`;
+  const wake = new RegExp(String.raw`(^|[^\p{L}\p{N}])${wakeName}(?=$|[^\p{L}\p{N}])`, 'iu');
+  const separators = /^[\s.,!?…:;—–«»“”"']+/u;
+  const wakePrefix = new RegExp(String.raw`^[\s.,!?…:;—–«»“”"']*${wakeName}(?=$|[^\p{L}\p{N}])[\s.,!?…:;—–«»“”"']*`, 'iu');
+  const hasWords = text => /[\p{L}\p{N}]/u.test(text);
+  const decisionWords = text => text.replace(wakePrefix, '').toLocaleLowerCase('ru').replace(/[.!?,…]+$/u, '').trim();
   function createVoiceSession(io) {
     let enabled = false, epoch = 0, phase = 'off', activeUntil = 0;
     let utterance = '', silenceTimer = null, wakeTimer = null, playback = null;
@@ -153,12 +160,12 @@
     function transcript(text, final) {
       if (!enabled || busy()) return;
       const clean = text.trim();
-      if (final && /^(?:иру[\s,]*)?усни[.!?,]*$/iu.test(clean)) {
+      if (final && decisionWords(clean) === 'усни') {
         clearUtterance(); clear(wakeTimer); queue = []; planOffer = null;
         standby = true; activeUntil = 0; stopPlayback(); io.listen(false); resume(); return;
       }
       if (standby) {
-        if (!final || !/(^|[^\p{L}\p{N}])иру(?=$|[^\p{L}\p{N}])/iu.test(clean)) return;
+        if (!final || !wake.test(clean)) return;
         standby = false;
         if (planReview || commandConfirmation) {
           const item = planReview ? { id: planReview.taskId, review: planReview } : { id: commandConfirmation.taskId, confirmation: commandConfirmation };
@@ -168,7 +175,7 @@
       }
       if (phase === 'awaiting_command') {
         if (!final) return;
-        const words = clean.toLocaleLowerCase('ru').replace(/^иру[\s,]*/u, '').replace(/[.!?,]+$/u, '').trim();
+        const words = decisionWords(clean);
         const accepted = /^(да|подтверждаю|да выполни|да, выполни|выполняй)$/u.test(words);
         if (!accepted && !/^(нет|не выполняй|отмена)$/u.test(words)) return;
         const offer = commandConfirmation, savedEpoch = epoch;
@@ -182,22 +189,23 @@
       }
       if (phase === 'awaiting_plan_review') {
         if (!final) return;
-        const words = clean.toLocaleLowerCase('ru').replace(/^иру[\s,]*/u, '').replace(/[.!?,]+$/u, '').trim();
+        const words = decisionWords(clean);
         if (/^(нет|нет изменений|ничего не менять|всё устраивает|все устраивает|нет запускай|нет, запускай)$/u.test(words)) submitReview('');
         else if (/^(да|да изменить|да, изменить|хочу изменить|изменить)$/u.test(words)) editPlan(planReview.taskId);
         return;
       }
       if (phase === 'editing_plan') {
-        if (final && clean) utterance = [utterance, clean].filter(Boolean).join(' ');
+        const words = clean.replace(wakePrefix, '').trim();
+        if (final && hasWords(words)) utterance = [utterance, words].filter(Boolean).join(' ');
         clear(silenceTimer);
         silenceTimer = later(() => {
-          if (enabled && phase === 'editing_plan' && utterance.trim()) submitReview(utterance.trim());
+          if (enabled && phase === 'editing_plan' && hasWords(utterance)) submitReview(utterance.trim());
         }, 1200);
         return;
       }
       if (phase === 'awaiting_plan') {
         if (!final) return;
-        const words = clean.toLocaleLowerCase('ru').replace(/^иру[\s,]*/u, '').replace(/[.!?,]+$/u, '').trim();
+        const words = decisionWords(clean);
         const accepted = /^(да|запускай|запустить|да запускай|да, запускай)$/u.test(words);
         if (!accepted && !/^(нет|не надо|без плана|отмена)$/u.test(words)) return;
         const offer = planOffer, savedEpoch = epoch;
@@ -209,24 +217,23 @@
         return;
       }
       if (phase === 'speaking') {
-        if (/^(?:иру[\s,]*)?стоп[.!?,]*$/iu.test(clean)) stopSpeech();
+        if (decisionWords(clean) === 'стоп') stopSpeech();
         return;
       }
       if (!['idle', 'listening'].includes(phase)) return;
-      const wake = /(^|[^\p{L}\p{N}])иру(?=$|[^\p{L}\p{N}])/iu;
       const woke = wake.test(clean);
       if (!woke && now() >= activeUntil && !utterance) return;
       if (woke) activeUntil = now() + 10000;
       setPhase('listening'); clear(wakeTimer);
       if (final) {
-        const words = clean.replace(wake, '$1').trim();
-        if (words) utterance = [utterance, words].filter(Boolean).join(' ');
+        const words = (woke ? clean.replace(wake, '$1').replace(separators, '') : clean).trim();
+        if (hasWords(words)) utterance = [utterance, words].filter(Boolean).join(' ');
       }
       clear(silenceTimer);
       silenceTimer = later(() => {
         const textToSend = utterance.trim(); clearUtterance();
         if (!enabled || busy()) return;
-        if (!textToSend || /^стоп[.!?,]*$/iu.test(textToSend)) { resume(true); return; }
+        if (!hasWords(textToSend) || decisionWords(textToSend) === 'стоп') { resume(true); return; }
         io.listen(false); setPhase('working');
         const savedEpoch = epoch;
         Promise.resolve(io.submit(textToSend)).then(() => {

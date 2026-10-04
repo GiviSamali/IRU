@@ -87,9 +87,10 @@ QtWidgets.QWidget.showNormal = isolated_show_normal
 
 def test_desktop_close_reopen_and_explicit_exit_keep_runtime_independent(tmp_path):
     output = run_qt(r'''
-        import logging, os
+        import ctypes, logging, os
         from pathlib import Path
-        from PySide6 import QtCore, QtWidgets
+        from PySide6 import QtCore, QtGui, QtWidgets
+        import core.config as config_module
         from core.config import AgentPaths
         from core.state import AgentState, AgentSnapshot
         from ui.shell import launch_windows_shell
@@ -107,12 +108,28 @@ def test_desktop_close_reopen_and_explicit_exit_keep_runtime_independent(tmp_pat
         runtime = Runtime()
         root = Path(os.environ["IRU_DESKTOP_TEST_DIR"])
         paths = AgentPaths(root, root, root/"config.json", root/"legacy.json",
-                           root, root/"agent.log", root/"missing.ico")
+                           root, root/"agent.log", Path(config_module.__file__).parents[1]/"IruIcon.ico")
         state = AgentState(AgentSnapshot(version="test", device_id="demo", server_url="ws://127.0.0.1:9",
                                         config_path=str(paths.config_path), logs_dir=str(root), log_path=str(paths.log_path)))
         def check():
             main = next(w for w in app.topLevelWidgets() if isinstance(w, IruMainWindow))
             assert main.isVisible() and runtime.started == 1 and runtime.stopped == 0
+            get_app_id = ctypes.windll.shell32.GetCurrentProcessExplicitAppUserModelID
+            get_app_id.argtypes = [ctypes.POINTER(ctypes.c_wchar_p)]
+            get_app_id.restype = ctypes.c_long
+            app_id = ctypes.c_wchar_p()
+            assert get_app_id(ctypes.byref(app_id)) == 0
+            try:
+                assert app_id.value == "IRU.Agent.Desktop"
+            finally:
+                free = ctypes.windll.ole32.CoTaskMemFree
+                free.argtypes = [ctypes.c_void_p]
+                free.restype = None
+                free(ctypes.cast(app_id, ctypes.c_void_p))
+            expected_icon = QtGui.QIcon(str(paths.source_icon_path))
+            assert not expected_icon.isNull()
+            assert main.windowIcon().pixmap(32, 32).toImage() == expected_icon.pixmap(32, 32).toImage()
+            assert app.windowIcon().pixmap(32, 32).toImage() == expected_icon.pixmap(32, 32).toImage()
             page = main.web_view
             main.close()
             assert not main.isVisible() and runtime.stopped == 0

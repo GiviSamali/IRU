@@ -29,6 +29,7 @@ from core.state import AgentSnapshot, AgentState
 from core.update import check_for_update
 from core.version import read_agent_version
 from ui.setup import collect_setup, gui_available
+from ui.windows_identity import set_taskbar_identity
 
 
 if sys.platform == "win32":
@@ -79,6 +80,7 @@ def should_launch_windows_shell() -> bool:
 def main() -> int:
     paths = detect_paths()
     logger = configure_logging(paths)
+    set_taskbar_identity(logger)  # Before first-run setup or any other UI.
     config = load_config(paths, logger=logger)
     agent_version = read_agent_version()
     state = build_state(agent_version, config, paths)

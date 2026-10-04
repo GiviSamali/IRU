@@ -11,6 +11,7 @@ from core.logging_utils import tail_log
 from core.runtime import AgentRuntime
 from core.state import AgentState
 from ui.setup import collect_setup
+from ui.windows_identity import set_taskbar_identity
 
 
 def launch_windows_shell(
@@ -21,6 +22,7 @@ def launch_windows_shell(
     logger,
     startup_update_check: Callable[[], bool] | None = None,
 ) -> int:
+    set_taskbar_identity(logger)
     from PySide6 import QtCore, QtGui, QtWidgets
     from ui.webview import IruMainWindow, resolve_site_url
 
