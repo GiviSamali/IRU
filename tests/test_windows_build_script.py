@@ -117,10 +117,16 @@ function curl.exe {
         assert (result.returncode == 0) == (failure == "none"), result.stderr.decode(errors="replace")
 
 
-def test_windows_desktop_build_includes_webengine_instead_of_excluding_it():
+def test_windows_desktop_build_packages_webview2_and_excludes_qt_browser():
     source = _source()
     imports = source.split("$qtHiddenImports = @(", 1)[1].split("\n)", 1)[0]
     excluded = source.split("$qtExcludedModules = @(", 1)[1].split("\n)", 1)[0]
-    for module in ("PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets"):
+    for module in ("PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets"):
         assert module in imports and module not in excluded
-    assert "PySide6.QtWebChannel" not in excluded
+    for module in ("PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"):
+        assert module not in imports and module in excluded
+    assert '"pywebview==6.2.1"' in source and '"pythonnet==3.2.0"' in source
+    for requirement in ('"--hidden-import", "clr"', '"--hidden-import", "webview"',
+                        '"--collect-data", "webview"', '"--collect-binaries", "webview"',
+                        '"--collect-all", "pythonnet"', '"--collect-all", "clr_loader"'):
+        assert requirement in source

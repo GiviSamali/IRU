@@ -141,6 +141,7 @@ def launch_windows_shell(
             return
         shutting_down = True
         timer.stop()
+        main_window.dispose_browser()
         runtime.stop(wait=True)
         if tray is not None:
             tray.hide()
@@ -330,12 +331,9 @@ def launch_windows_shell(
 
     exit_code = app.exec()
     shutdown()
-    profile = main_window.profile
     main_window.deleteLater()
     status_window.deleteLater()
     diagnostics_window.deleteLater()
-    QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
-    profile.deleteLater()
     QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
     return exit_code
 

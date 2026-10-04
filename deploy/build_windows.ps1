@@ -303,8 +303,8 @@ Write-Host "Обновляем pip..."
 & python -m pip install --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw "pip upgrade завершился с кодом $LASTEXITCODE" }
 
-Write-Host "Устанавливаем зависимости сборки (pyinstaller, websockets, httpx, PySide6)..."
-& python -m pip install --upgrade pyinstaller websockets httpx PySide6
+Write-Host "Устанавливаем зависимости сборки (pyinstaller, websockets, httpx, PySide6, pywebview, pythonnet)..."
+& python -m pip install --upgrade pyinstaller websockets httpx PySide6 "pywebview==6.2.1" "pythonnet==3.2.0"
 if ($LASTEXITCODE -ne 0) { throw "pip install завершился с кодом $LASTEXITCODE" }
 
 Write-Host "Зависимости установлены." -ForegroundColor DarkGray
@@ -331,12 +331,13 @@ New-Item -ItemType Directory -Path $stagingSpecDir -Force | Out-Null
 $qtHiddenImports = @(
     "PySide6.QtCore",
     "PySide6.QtGui",
-    "PySide6.QtWidgets",
-    "PySide6.QtWebEngineCore",
-    "PySide6.QtWebEngineWidgets"
+    "PySide6.QtWidgets"
 )
 
 $qtExcludedModules = @(
+    "PySide6.QtWebEngineCore",
+    "PySide6.QtWebEngineWidgets",
+    "PySide6.QtWebChannel",
     "PySide6.Qt3DAnimation",
     "PySide6.Qt3DCore",
     "PySide6.Qt3DExtras",
@@ -380,7 +381,13 @@ $pyiArgs = @(
     "--hidden-import", "ui",
     "--hidden-import", "platforms",
     "--hidden-import", "platforms.windows",
-    "--hidden-import", "platforms.linux"
+    "--hidden-import", "platforms.linux",
+    "--hidden-import", "clr",
+    "--hidden-import", "webview",
+    "--collect-data", "webview",
+    "--collect-binaries", "webview",
+    "--collect-all", "pythonnet",
+    "--collect-all", "clr_loader"
 )
 
 foreach ($module in $qtHiddenImports) {
