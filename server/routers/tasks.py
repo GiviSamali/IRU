@@ -424,7 +424,7 @@ async def api_get_task(task_id: str, request: Request):
     if not task or task["user_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
-    memory_stats = None
+    memory_stats = get_memory_stats(None, str(user["id"]))
     if task.get("device_ids"):
         try:
             first_did = _short_did(task["device_ids"][0])

@@ -1801,10 +1801,6 @@ async def run_pipeline_worker(
             if isinstance(commands_log[-1].get("result"), dict) and commands_log[-1]["result"].get("error") == "memory_write_requires_explicit_user_intent":
                 messages.append({"role": "user", "content": MEMORY_WRITE_CORRECTION})
             if fn_name in BROWSER_TOOL_NAMES:
-                if fn_name == "web_focus" and tool_result.get("status") == "success" and tool_result.get("focused") is True and not re.search(r"прочитай|читай|дождись|read|wait", step.get("instruction") or step_title, re.I):
-                    payload=validate_answer_text_payload(synthesize_terminal_answer_payload(commands_log[-1]),commands_log)
-                    append_answer_step(commands_log,"answer_text",payload,target_device_id=target_device,iteration=iteration+1)
-                    return {"status":"ok","answer":payload["text"],"commands":commands_log}
                 if fn_name == "web_read" and tool_result.get("status") == "success":
                     observation=(target_device,json.dumps(fn_args,sort_keys=True),json.dumps(tool_result,sort_keys=True))
                     if browser_policy.browser_only and (browser_answer_ready(step.get("instruction") or step_title, commands_log) or observation == browser_last_observation):

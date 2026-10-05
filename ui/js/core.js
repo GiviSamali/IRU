@@ -165,6 +165,9 @@ function doLogout() {
   _clearTokens();
   stopDevicePolling();
   state.user = null;
+  if (typeof updateUsageVisibility === 'function') updateUsageVisibility();
+  state.memoryFacts = [];
+  if (typeof closeMemoryPanel === 'function') closeMemoryPanel();
   state.chats = [];
   state.currentChatId = null;
   state.messages = [];
@@ -238,6 +241,7 @@ function showApp() {
   checkConsent();
   checkTermsStatus();
   fetchUserInfo();
+  if (typeof refreshMemoryStats === 'function') refreshMemoryStats().catch(() => {});
   if (typeof refreshUsageSummary === 'function') refreshUsageSummary();
   if (typeof renderInputModeBtn === 'function') renderInputModeBtn();
   if (typeof updateCharCount === 'function') updateCharCount();

@@ -141,6 +141,7 @@ async def api_user_info(request: Request):
             "devices_count": dev_count,
             "devices_limit": limits["max_devices"],
             "terms_accepted": has_accepted_terms(user["id"]),
+            "is_admin": user["id"] == 1,
         },
     }
 

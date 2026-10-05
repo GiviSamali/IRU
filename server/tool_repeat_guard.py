@@ -14,6 +14,7 @@ READ_ONLY_IDEMPOTENT_TOOLS = {
     "memory.get_stats",
     "memory.list_facts",
     "device.get_passport",
+    "web.tabs", "web.read", "web.elements",
 }
 
 
@@ -72,7 +73,9 @@ def find_prior_successful_read_only_tool_step(
     key = repeat_guard_key(tool_name, args)
     if not key:
         return None
-    for entry in journal:
+    for entry in reversed(journal):
+        if canonical_tool_name(tool_name).startswith("web.") and canonical_tool_name(entry.get("tool_name") or entry.get("action", "")) in {"web.wait","web.fill","web.activate","web.focus"}:
+            break  # A browser action/wait invalidates earlier observations.
         if entry.get("repeat_guard_key") != key:
             continue
         if entry.get("status") in {"failed", "error", "blocked"}:

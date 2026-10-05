@@ -46,7 +46,7 @@ function updateMemoryBadge(stats) {
   badge.style.display = 'inline-flex';
   const cLabel = c > 20 ? '20+' : c;
   const fLabel = f > 20 ? '20+' : f;
-  text.textContent = f || c ? `Память · ${fLabel}/${cLabel}` : 'Память';
+  text.textContent = 'Настройки';
 }
 
 function toggleMemoryPopover() {
@@ -170,7 +170,7 @@ function toggleMemoryPanel() {
   const pop = document.getElementById('memoryPopover');
   if (pop) pop.classList.remove('show');
   renderMemoryPanel();
-  if (state.memoryPanelOpen) loadMemoryFacts();
+  if (state.memoryPanelOpen) { loadMemoryFacts(); refreshBrowserConnection(); }
 }
 
 function closeMemoryPanel() {
@@ -479,3 +479,22 @@ if (window.visualViewport) {
     }
   });
 }
+
+async function refreshBrowserConnection() {
+  const status = document.getElementById('browserConnectionStatus');
+  if (!status) return;
+  const device = state.selectedDevice;
+  if (!device) { status.textContent = 'Для браузера подключите компьютер. Факты доступны без устройства.'; return; }
+  status.textContent = 'Проверяем соединение…';
+  try {
+    const response = await apiFetch(`${API}/api/browser/status?device_id=${encodeURIComponent(device)}`, {headers:authHeaders()});
+    const data = await response.json();
+    if (device !== state.selectedDevice) return;
+    if (!response.ok) throw new Error('Компьютер недоступен. Проверьте подключение агента.');
+    status.textContent = data.status === 'connected' ? `Браузер подключён к ИРУ на ${device}.` :
+      data.status === 'pairing_required' ? 'Обновите привязку в расширении Browser Bridge.' : `Сервер не видит соединение браузера на ${device}. Проверьте расширение и адрес сервера.`;
+  } catch (error) { status.textContent = error.message || 'Не удалось проверить соединение.'; }
+}
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('browserConnectionCheckBtn')?.addEventListener('click', refreshBrowserConnection);
+});

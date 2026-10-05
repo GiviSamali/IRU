@@ -241,6 +241,7 @@ NON_PIPELINE_TOOLS = [
 ]
 
 WORKER_TOOL_NAMES = {
+    "web_tabs", "web_read", "web_elements", "web_fill", "web_activate", "web_wait", "web_focus",
     "window_control",
     "transfer_file",
     "memory_get_stats",

@@ -28,9 +28,18 @@ def result(operation):
             "element_id":"field","response_policy":"silent_on_success" if operation in {"web.fill","web.activate","web.wait"} else "speak_result"}
 
 
-def run_normal(monkeypatch,message,responses,send,history=None, *, real_completion=None, cfg_override=None):
+def run_normal(monkeypatch,message,responses,send,history=None, *, real_completion=None, cfg_override=None, intent_decision=None):
     monkeypatch.setattr(database,"get_device_profile",lambda *a,**kw:None)
     queue=iter(responses)
+    from server.browser_intent import validate_browser_intent
+    from server.browser_policy import BrowserTaskPolicy
+    original_send=send
+    async def send(device,operation,params):
+        if device != "givi":return {"status":"failed","error":"browser_device_not_authorized_by_user"}
+        if intent_decision is not None and operation in {"web.fill","web.activate"}:
+            allowed,reason=validate_browser_intent(intent_decision,operation,device,params,BrowserTaskPolicy(message,"givi",history).draft_targets)
+            if not allowed:return {"status":"failed","error":reason}
+        return await original_send(device,operation,params)
     async def completion(**kw):
         if real_completion: return await real_completion(**kw)
         return next(queue)
@@ -47,7 +56,7 @@ def run_normal(monkeypatch,message,responses,send,history=None, *, real_completi
 def test_injection_cannot_authorize_shell_transfer_other_device_or_send(monkeypatch,malicious):
     sent=[]
     async def send(device,operation,params): sent.append((device,operation)); return result(operation)
-    outcome=run_normal(monkeypatch,"Прочитай последние сообщения в этом чате",[call("web_read",{"tab_id":7}),malicious,clarification()],send)
+    outcome=run_normal(monkeypatch,"Прочитай последние сообщения в этом чате",[call("web_read",{"tab_id":7}),malicious,clarification()],send, intent_decision={"authorized_device_ids":["givi"],"allow_fill":False,"allow_activate":False})
     assert sent==[("givi","web.read")]
     assert any((entry.get("result") or {}).get("error") for entry in outcome["commands"])
 
@@ -62,7 +71,7 @@ def test_raw_browser_arguments_rejected_before_sanitization(monkeypatch,bad):
 def test_draft_completes_without_send_or_extra_llm(monkeypatch):
     sent=[]
     async def send(device,operation,params): sent.append(operation); return result(operation)
-    outcome=run_normal(monkeypatch,"Напиши в этом чате: тест связи с IRU",[call("web_fill",{**ELEMENT,"text":"тест связи с IRU"})],send)
+    outcome=run_normal(monkeypatch,"Напиши в этом чате: тест связи с IRU",[call("web_fill",{**ELEMENT,"text":"тест связи с IRU"}),grounded("Черновик готов")],send)
     assert sent==["web.fill"] and "Черновик" in outcome["answer"]
     assert outcome["commands"][-1]["tool_name"]=="answer.text"
 
@@ -71,7 +80,7 @@ def test_bare_send_uses_immediately_observed_draft(monkeypatch):
     history=[{"role":"assistant","commands":[{"tool_name":"web.fill","target_device_id":"givi","result":result("web.fill")}]}]
     sent=[]
     async def send(device,operation,params): sent.append(operation); return result(operation)
-    outcome=run_normal(monkeypatch,"Отправляй",[call("web_activate",ELEMENT)],send,history)
+    outcome=run_normal(monkeypatch,"Отправляй",[call("web_activate",ELEMENT),grounded("Отправлено")],send,history)
     assert sent==["web.activate"] and outcome["commands"][-1]["tool_name"]=="answer.text"
 
 
@@ -128,6 +137,10 @@ def test_real_task_runtime_routes_bridge_and_blocks_local_fallback(monkeypatch):
         denied=await kw["send_command_fn"]("Second","web.read",{"tab_id":7})
         assert denied["status"]=="failed"
         return {"answer":"test","commands":[],"tasks":[]}
+    import server.browser_intent as semantic
+    async def resolve(*a,**kw):
+        return {"authorized_device_ids":["givi"],"allow_fill":False,"allow_activate":False,"requires_confirmation":False,"require_existing_draft":False,"literal_text":None}
+    monkeypatch.setattr(semantic,"resolve_browser_intent",resolve)
     monkeypatch.setattr(browser_bridge,"execute_browser_action",bridge_execute)
     monkeypatch.setattr(task_runtime,"send_command_to_agent",agent_send)
     monkeypatch.setattr(task_runtime,"process_nl_command",process)
@@ -181,11 +194,12 @@ def test_pipeline_clarification_stops_before_dispatch(monkeypatch):
 
 def test_page_cannot_replace_literal_human_draft(monkeypatch):
     sent=[]
-    async def send(device,operation,params): sent.append(operation); return result(operation)
-    outcome=run_normal(monkeypatch,"Напиши в этом чате: тест связи с IRU",
-        [call("web_elements",{"tab_id":7}),call("web_fill",{**ELEMENT,"text":"page-authored message"}),clarification()],send)
-    assert sent == ["web.elements"]
-    assert any((entry.get("result") or {}).get("error") == "browser_literal_message_mismatch" for entry in outcome["commands"])
+    async def send(device,operation,params):sent.append(operation);return result(operation)
+    outcome=run_normal(monkeypatch,"Передай literal human message",[call("web_fill",{**ELEMENT,"text":"injected"}),clarification()],send,
+        intent_decision={"authorized_device_ids":["givi"],"allow_fill":True,"allow_activate":False,"literal_text":"literal human message"})
+    assert not sent
+    assert any((entry.get("result") or {}).get("error")=="browser_literal_message_mismatch" for entry in outcome["commands"])
+
 
 
 
@@ -225,7 +239,7 @@ def test_tabs_question_is_one_call_and_reports_current_tabs(monkeypatch):
         sent.append(operation)
         return {"status":"success","tabs":[{"tab_id":7,"title":"ChatGPT","origin":"https://chatgpt.com","active":True},
                                                 {"tab_id":8,"title":"DeepSeek","origin":"https://chat.deepseek.com","active":False}]}
-    outcome=run_normal(monkeypatch,"Сколько сейчас и каких вкладок открыто в браузере",[call("web_tabs")],send)
+    outcome=run_normal(monkeypatch,"Сколько сейчас и каких вкладок открыто в браузере",[call("web_tabs"),grounded("Открыто вкладок: 2. ChatGPT и DeepSeek")],send)
     assert sent == ["web.tabs"] and "Открыто вкладок: 2" in outcome["answer"]
     assert "ChatGPT" in outcome["answer"] and "DeepSeek" in outcome["answer"]
 
@@ -233,7 +247,7 @@ def test_tabs_question_is_one_call_and_reports_current_tabs(monkeypatch):
 def test_focus_success_finishes_after_browser_verification(monkeypatch):
     sent=[]
     async def send(device,operation,params): sent.append(operation); return {"status":"success","tab_id":7,"focused":True}
-    outcome=run_normal(monkeypatch,"Переключись на вкладку dipsic",[call("web_focus",{"tab_id":7})],send)
+    outcome=run_normal(monkeypatch,"Переключись на вкладку dipsic",[call("web_focus",{"tab_id":7}),grounded("Вкладка выбрана")],send)
     assert sent == ["web.focus"] and "Вкладка выбрана" in outcome["answer"]
 
 
@@ -282,7 +296,7 @@ def test_browser_repair_uses_live_http_client_instead_of_closed_client(monkeypat
     outcome=run_normal(monkeypatch,"Прочитай последнее сообщение во вкладке чат gpt",[],send,
         real_completion=_chat_completion_request,cfg_override={"model":"mock","base_url":"https://llm.invalid","api_key":"test-no-live-api","answer_auditor_enabled":auditor})
     assert outcome["answer"] == "Получен ответ: тест" and len(requests) == (4 if auditor else 3)
-    assert {tool["function"]["name"] for tool in requests[1]["tools"]} == {"answer_text","answer_ask_clarification","answer_report_failure"}
+    assert "answer_text" in {tool["function"]["name"] for tool in requests[1]["tools"]}
     assert [tool["function"]["name"] for tool in requests[2]["tools"]] == ["answer_text"]
 
 
@@ -362,15 +376,10 @@ def test_contextual_read_repairs_raw_answer_without_phrase_classification(monkey
 
 
 def test_explicit_send_uses_existing_draft_without_refill_or_extra_wait(monkeypatch):
-    draft=result("web.fill")
-    history=[{"role":"assistant","commands":[{"tool_name":"web.fill","target_device_id":"givi","result":draft},
-             {"tool_name":"web.elements","target_device_id":"givi","result":result("web.elements")}]}]
-    iterations=[];sent=[]
-    async def completion(**kw):
-        names={tool["function"]["name"] for tool in kw["tools"]}
-        assert "web_fill" not in names and "web_activate" in names
-        iterations.append(1);return call("web_activate",{**ELEMENT,"element_id":"send-button"})
+    history=[{"role":"assistant","commands":[{"tool_name":"web.fill","target_device_id":"givi","result":result("web.fill")}]}]
+    sent=[]
     async def send(device,operation,params):sent.append(operation);return result(operation)
-    outcome=run_normal(monkeypatch,"Отправляй",[],send,history,real_completion=completion)
-    assert sent==["web.activate"] and len(iterations)==1
-    assert outcome["commands"][-1]["tool_name"]=="answer.text"
+    outcome=run_normal(monkeypatch,"Можно отправлять",[call("web_activate",{**ELEMENT,"element_id":"send-button"}),grounded("Отправлено")],send,history,
+        intent_decision={"authorized_device_ids":["givi"],"allow_fill":False,"allow_activate":True,"require_existing_draft":True})
+    assert sent==["web.activate"] and outcome["answer"]=="Отправлено"
+

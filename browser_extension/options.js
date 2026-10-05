@@ -2,11 +2,13 @@
   'use strict';
   const form = document.getElementById('pairForm'), status = document.getElementById('status');
   const server = document.getElementById('server'), device = document.getElementById('device'), account = document.getElementById('accountToken');
-  const labels = {connected:'Подключено',disconnected:'Связь с сервером отсутствует',pairing_required:'Нужно повторно подключить браузер',browser_already_connected:'Другой браузер уже подключён к этому устройству: сначала отключите его'};
+  const labels = {connecting:'Проверяем соединение',connected:'Подключено',disconnected:'Связь с сервером отсутствует',pairing_required:'Нужно повторно подключить браузер',browser_already_connected:'Другой браузер уже подключён к этому устройству: сначала отключите его'};
   async function display() {
     const stored = await chrome.storage.local.get(['bridge_config','bridge_status']);
     if (stored.bridge_config) { server.value = stored.bridge_config.server_url; device.value = stored.bridge_config.device_id; }
-    status.textContent = stored.bridge_config ? (labels[stored.bridge_status?.status] || 'Ожидаем соединение с сервером') + ': ' + stored.bridge_config.device_id : 'Не подключено.';
+    let live;
+    try { live = await chrome.runtime.sendMessage({type:'iru_bridge_status'}); } catch { live = {status:'disconnected'}; }
+    status.textContent = stored.bridge_config ? (labels[live?.status] || 'Ожидаем соединение с сервером') + ': ' + stored.bridge_config.device_id : 'Не подключено.';
   }
   form.addEventListener('submit',async event => {
     event.preventDefault(); const button = document.getElementById('pair'); button.disabled = true;
@@ -28,4 +30,5 @@
   document.getElementById('disconnect').addEventListener('click',async () => { await chrome.storage.local.remove(['bridge_config','bridge_status']); await display(); });
   chrome.storage.onChanged.addListener((changes,area) => { if (area === 'local' && changes.bridge_status) display(); });
   display();
+  setInterval(display,5000);
 })();

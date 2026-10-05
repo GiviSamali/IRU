@@ -250,11 +250,10 @@ async def process_non_pipeline_command(
                               if APP_WINDOW_ACTIONS.get(tool["function"]["name"]) in browser_policy.allowed_operations
                               or tool["function"]["name"] in {"answer_text", "answer_ask_clarification", "answer_report_failure"}]
     messages = [{"role": "system", "content": system_msg}]
-    if browser_only:
-        context = recent_browser_context(chat_history)
-        if context:
-            messages.append({"role": "system", "content": data_only_context("observed_browser_metadata", context)})
-    elif window_only:
+    context = recent_browser_context(chat_history, device_id=device_id)
+    if context:
+        messages.append({"role": "system", "content": data_only_context("observed_browser_metadata", context)})
+    if window_only:
         context = recent_window_context(chat_history)
         if context:
             messages.append({"role": "system", "content": data_only_context("observed_window_metadata", context)})

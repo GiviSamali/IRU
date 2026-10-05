@@ -9,14 +9,6 @@ import re
 from typing import Any
 
 WEB_OPERATIONS = frozenset({"web.tabs", "web.read", "web.elements", "web.fill", "web.activate", "web.wait", "web.focus"})
-_BROWSER_NOUNS = re.compile(r"(?:браузер|вклад|веб[- ]|web\b|browser\b|tabs?\b|страниц|\bчат(?:е|а|у|ы|ов|ом)?\b|поле сообщения|композер|ссылк)", re.I)
-_READ_START = re.compile(r"^(?:прочитай|читай|покажи|перечисли|найди|что|какие|сколько|какой|какая|какое|посмотри|скажи|what\b|which\b|how many\b|read\b|list\b|show\b)", re.I)
-_DRAFT_START = re.compile(r"^(?:напиши|впиши|заполни|вставь|набери|подготовь(?: текст| сообщение)?|write\b|fill\b|draft\b)", re.I)
-_SEND_START = re.compile(r"^(?:отправь|отправляй|пошли|спроси(?! меня\b)|скажи (?:ему|ей|им)|нажми|активируй|send\b|submit\b|ask (?:him|her|them)\b|tell (?:him|her|them)\b|activate\b)", re.I)
-_WAIT_START = re.compile(r"^(?:дождись|подожди|жди|wait\b)", re.I)
-_FOCUS_START = re.compile(r"^(?:переключись|переключи|выбери|активируй вкладку|switch|focus)\b", re.I)
-_OPEN_START = re.compile(r"^(?:открой|перейди|open\b|navigate\b|follow\b)", re.I)
-_PRIVILEGED_CLAUSE = re.compile(r"(?:execute_cmd|transfer_file|передай.{0,40}файл|сохрани.{0,40}файл|создай.{0,40}файл|удали|скачай|загрузи|установи|python|powershell)", re.I)
 _ALLOWED_ARGUMENTS = {
     "web.tabs": {"device_id"},
     "web.focus": {"device_id", "tab_id"},
@@ -34,39 +26,7 @@ def _canonical(operation: str) -> str:
 
 
 def _normalize(message: str) -> str:
-    text = re.sub(r"\s+", " ", str(message or "")).strip().rstrip(".!?")
-    return re.sub(r"^(?:(?:пожалуйста|а теперь|теперь|хорошо|отлично)[, ]+)+", "", text, flags=re.I)
-
-
-def _intent_text(message: str) -> str:
-    # Prefix device routing is human input; draft payload is otherwise opaque.
-    text = _normalize(message)
-    return re.sub(r"^на (?:(?:устройстве|пк|компьютере) )?(?:первом пк|втором пк|[\w-]+)[, ]+", "", text, flags=re.I)
-
-
-_NON_DEVICE_LOCATIONS = frozenset({
-    "странице", "страницу", "страницах", "вкладке", "вкладку", "вкладках", "сайте", "сайтах",
-    "экране", "экран", "форме", "кнопке", "этом", "этой", "этих", "текущей", "главной",
-    "рабочем", "столе", "завтра", "сегодня", "русском", "английском", "page", "tab", "screen",
-})
-
-
-def _device_mentions(message: str) -> tuple[set[str], bool]:
-    """Read human device clauses, never colon-delimited draft/message payload."""
-    raw = _normalize(message)
-    intent = _intent_text(raw)
-    if (_DRAFT_START.match(intent) or _SEND_START.match(intent)) and ":" in raw:
-        raw = raw.split(":", 1)[0]
-    names: set[str] = set()
-    alias = False
-    for found in re.finditer(r"\bна (?:(?:устройстве|пк|компьютере) )?([\w-]+)", raw, re.I):
-        name = found.group(1)
-        folded = name.casefold()
-        if folded in {"первом", "втором", "первый", "второй"}:
-            alias = True
-        elif folded not in _NON_DEVICE_LOCATIONS:
-            names.add(name)
-    return names, alias
+    return re.sub(r"\s+", " ", str(message or "")).strip()
 
 
 def recent_browser_context(history: list[dict[str, Any]] | None, *, device_id: str | None = None) -> list[dict[str, Any]]:
@@ -186,102 +146,44 @@ def _active_browser_context(history: list[dict[str, Any]] | None) -> list[dict[s
 
 
 def browser_request(message: str, history: list[dict[str, Any]] | None = None) -> bool:
-    try:
-        from .window_policy import ordinary_window_request
-    except ImportError:
-        from window_policy import ordinary_window_request
-    if ordinary_window_request(message):
-        return False
-    text = _intent_text(message)
-    context = _active_browser_context(history)
-    authority_text = text.split(":", 1)[0] if (_DRAFT_START.match(text) or _SEND_START.match(text)) and ":" in text else text
-    if _OPEN_START.match(text):
-        # Starting a browser/opening an arbitrary URL remains app.launch/open_url.
-        if re.search(r"https?://", text, re.I) or re.match(r"^(?:открой|open) (?:браузер|chrome|edge|comet)\b", text, re.I):
-            return False
-        page_reference = re.search(r"(?:эту|этот|текущую|выбранную) (?:ссылку|вкладку)|ссылку на (?:этой|текущей) странице", text, re.I)
-        return bool(page_reference or context)
-    if context and not _PRIVILEGED_CLAUSE.search(text.split(":",1)[0]):
-        return True
-    if _BROWSER_NOUNS.search(authority_text):
-        return bool(_READ_START.match(text) or _DRAFT_START.match(text) or _SEND_START.match(text)
-                    or _WAIT_START.match(text) or _OPEN_START.match(text) or _FOCUS_START.match(text))
-    # Follow-up draft/send/wait has meaning only after an observed Browser Bridge turn.
-    return bool(context and (_READ_START.match(text) or _DRAFT_START.match(text)
-                             or _SEND_START.match(text) or _WAIT_START.match(text) or _OPEN_START.match(text) or _FOCUS_START.match(text)))
+    """Compatibility route hint: language never restricts access to web tools.
+
+    The LLM chooses a capability from the request and conversation, not a keyword router.
+    A new turn starts with the ordinary tool inventory; prior page text cannot force a route.
+    """
+    return False
 
 
-# Alias retained for callers that parallel the ordinary-window classifier.
 ordinary_browser_request = browser_request
 
 
 class BrowserTaskPolicy:
-    """Original-user-intent policy; never construct this from a PLAN step or web result."""
+    """Deterministic device/data boundary, independent of the phrasing of the request.
 
-    def __init__(self, message: str, current_device: str | None, history: list[dict[str, Any]] | None = None,
+    Draft/activation intent is checked separately by the runtime against human inputs only.
+    This object never authorizes external effects from page or planner content.
+    """
+    def __init__(self, message: str, current_device: str | None, history=None,
                  *, authorized_device_ids: set[str] | list[str] | None = None):
         self.message = str(message or "")
         self.current_device = current_device
-        active_context = _active_browser_context(history)
-        self.context = [row for row in active_context
-                        if str(row.get("device_id") or "").casefold() == str(current_device or "").casefold()]
-        text = _intent_text(self.message)
-        self.is_browser_task = browser_request(self.message, history)
-        self.contextual_task = bool(self.is_browser_task and active_context)
-        # Do not inspect quoted/payload draft text for new verbs or local-tool requests.
-        self.draft_action = bool(self.is_browser_task and _DRAFT_START.match(text))
-        self.external_action = bool(self.is_browser_task and _SEND_START.match(text))
-        self.bare_send = bool(re.fullmatch(r"(?:отправь|отправляй|пошли|send|submit)(?: на [\w-]+)?", text, re.I))
-        self.draft_targets = _immediate_verified_drafts(history, current_device)
-        if self.bare_send:
-            # A follow-up references exactly one immediately observed draft. It never
-            # grants permission to pick another tab or alter the draft before sending.
-            self.external_action = self.external_action and len(self.draft_targets) == 1
-        intent_prefix = text.split(":", 1)[0]
-        compound = re.search(r"\b(?:дождись|подожди|прочитай|перечисли|wait|read)\b", intent_prefix, re.I)
-        simple_draft = bool(self.draft_action and ":" in text
-                            and re.match(r"^(?:напиши|впиши|вставь|набери|write|draft)\b", intent_prefix, re.I))
-        self.single_mutation_completion = bool(
-            self.is_browser_task and not compound
-            and (self.bare_send and self.external_action or simple_draft
-                 or self.external_action and ":" in text))
-        # A colon-delimited message supplied by the human is literal payload. DOM
-        # instructions may not replace it with a different message before activation.
-        literal_draft = self.draft_action and re.match(r"^(?:напиши|впиши|вставь|набери|write|draft)\b", intent_prefix, re.I)
-        self.literal_payload = (self.message.split(":", 1)[1].strip()
-                                if ":" in self.message and (literal_draft or self.external_action) else None)
-        if self.contextual_task and ":" in self.message and not self.external_action:
-            self.literal_payload = self.message.split(":",1)[1].strip()
-        self.tabs_only = bool(self.is_browser_task and not (self.draft_action or self.external_action) and _READ_START.match(text) and re.search(r"вклад|что.*открыт.*браузер|список.*страниц", text, re.I) and not re.search(r"прочитай|читай|сообщен|содерж|сравни|read|summari", text, re.I))
-        self.focus_action = bool(self.is_browser_task and (_FOCUS_START.match(text) or self.contextual_task))
-        self.focus_only = self.focus_action and bool(_FOCUS_START.match(text) or _OPEN_START.match(text)) and not re.search(r"прочитай|читай|дождись|напиши|отправ|заполни|read|wait|write|send|\sи\s|;", text, re.I)
-        self.navigation_action = bool(self.is_browser_task and _OPEN_START.match(text) and not self.focus_action)
-        self.browser_only = bool(self.is_browser_task and (browser_request(self.message) or self.draft_action or self.focus_only or self.external_action or _WAIT_START.match(text))
-                                 and not _PRIVILEGED_CLAUSE.search(intent_prefix))
+        self.context = recent_browser_context(history, device_id=current_device)
+        self.is_browser_task = False
+        self.contextual_task = False
+        self.browser_only = False
         self.page_data_seen = False
-        self.authorized_device_ids = set(authorized_device_ids or [])
-        self.named_devices, self.unresolved_device_alias = _device_mentions(self.message)
-        if self.named_devices:
-            # Exact Unicode names are fail-closed; only case spelling is normalized.
-            self.authorized_device_ids = set(self.named_devices)
-            if self.contextual_task and not any(pattern.match(text) for pattern in (_READ_START,_DRAFT_START,_FOCUS_START,_SEND_START,_OPEN_START)):
-                context_devices = {str(row["device_id"]).casefold() for row in active_context if row.get("device_id")}
-                self.authorized_device_ids = {name for name in self.named_devices if name.casefold() in context_devices}
-        elif self.unresolved_device_alias:
-            # Only an existing authoritative router may supply an alias resolution.
-            # Without that scope the worker must clarify instead of acting on current.
-            self.authorized_device_ids = set(authorized_device_ids or [])
-        elif self.contextual_task:
-            self.authorized_device_ids = {str(row["device_id"]) for row in active_context if row.get("device_id")}
-        elif current_device:
-            self.authorized_device_ids.add(current_device)
-        self.allowed_operations = set(WEB_OPERATIONS - {"web.fill", "web.activate", "web.focus"}) if self.is_browser_task else set()
-        if self.draft_action or self.external_action and not self.bare_send or self.contextual_task and not self.bare_send and not _READ_START.match(text):
-            self.allowed_operations.add("web.fill")
-        if self.focus_action:
-            self.allowed_operations.add("web.focus")
-        if self.external_action or self.navigation_action:
-            self.allowed_operations.add("web.activate")
+        self.external_action = False
+        self.draft_action = False
+        self.bare_send = False
+        self.single_mutation_completion = False
+        self.tabs_only = False
+        self.focus_only = False
+        self.focus_action = False
+        self.navigation_action = False
+        self.literal_payload = None
+        self.draft_targets = _immediate_verified_drafts(history, current_device)
+        self.authorized_device_ids = set(authorized_device_ids) if authorized_device_ids is not None else None
+        self.allowed_operations = set(WEB_OPERATIONS)
 
     def mark_page_data(self) -> None:
         self.page_data_seen = True
@@ -294,30 +196,15 @@ class BrowserTaskPolicy:
             if self.browser_only or self.page_data_seen:
                 return False, "untrusted_page_data_cannot_authorize_privileged_tool"
             return True, ""
-        if not self.is_browser_task:
-            return False, "explicit_browser_task_required"
-        if self.contextual_task:
-            # The model selected a browser operation for the current human turn.
-            # Bind the candidate context now; subsequent native fallback is denied.
-            self.browser_only = True
+        # Tool selection is semantic; it establishes the current capability scope.
+        self.is_browser_task = self.contextual_task = self.browser_only = True
         target = device_id or (params or {}).get("device_id") or self.current_device
-        if not target or str(target).casefold() not in {str(identifier).casefold() for identifier in self.authorized_device_ids}:
+        if not target or (self.authorized_device_ids is not None and str(target).casefold() not in {str(identifier).casefold() for identifier in self.authorized_device_ids}):
             return False, "browser_device_not_authorized_by_user"
         try:
             validate_browser_arguments(operation, params or {})
         except ValueError as exc:
             return False, str(exc)
-        if operation == "web.focus" and operation not in self.allowed_operations:
-            return False, "explicit_tab_focus_intent_required"
-        if operation == "web.fill" and operation not in self.allowed_operations:
-            return False, "explicit_draft_intent_required"
-        if operation == "web.fill" and self.literal_payload is not None and params.get("text") != self.literal_payload:
-            return False, "browser_literal_message_mismatch"
-        if operation == "web.activate" and operation not in self.allowed_operations:
-            return False, "ambiguous_or_missing_browser_draft" if self.bare_send else "explicit_external_action_intent_required"
-        if operation == "web.activate" and self.bare_send:
-            if str(target).casefold() != str(self.current_device or "").casefold() or (params.get("tab_id"), params.get("document_id")) not in self.draft_targets:
-                return False, "browser_draft_target_mismatch"
         return True, ""
 
     def allow_tool(self, tool_name: str, target_device_id: str | None = None, params: dict[str, Any] | None = None,
@@ -390,29 +277,9 @@ def silent_browser_success(task: dict[str, Any]) -> bool:
 
 
 def browser_answer_ready(message: str, journal: list[dict[str, Any]]) -> bool:
-    """Completion hint only. Never supplies authority or page-selected capabilities."""
-    text = _intent_text(message)
-    if (_DRAFT_START.match(text) or _SEND_START.match(text)) and ":" in text:
-        text = text.split(":", 1)[0]
-    if _DRAFT_START.match(text) or _FOCUS_START.match(text) or _OPEN_START.match(text):
-        return False
-    if re.search(r"сравни|кажд|всех вклад|все вклад|две вклад|двух вклад|нескольк|compare|each|all tabs|two tabs", text, re.I):
-        return False
-    if re.search(r"напиши|заполни|переключ|создай|сохрани|скачай|открой|fill|focus|create|save|download|open", text, re.I):
-        return False
-    required = {"web.read"}
-    if _SEND_START.match(text):
-        if not re.search(r"прочитай|читай|ответ|read|reply", text, re.I):
-            return False
-        required.add("web.activate")
-    elif not (_READ_START.match(text) or _WAIT_START.match(text)):
-        return False
-    if re.search(r"дождись|подожди|wait", text, re.I):
-        required.add("web.wait")
-    successful = {_canonical(str(entry.get("tool_name") or entry.get("action") or ""))
-                  for entry in journal if isinstance(entry.get("result"), dict)
-                  and entry["result"].get("status") == "success" and not entry["result"].get("error")}
-    return required <= successful
+    # Only the model can decide whether a multi-part human request is complete.
+    # Equivalent reads are bounded by the existing repeat/answer-phase guards.
+    return False
 
 
 def browser_tabs_report(result: dict[str, Any]) -> str:
@@ -446,6 +313,14 @@ def browser_failure_text(result: dict) -> str:
     reason = result.get("error")
     if result.get("status") == "unknown" or reason in {"needs_verification","browser_action_unknown","prior_browser_action_needs_verification"}:
         return "Выполнение отправки пока не подтверждено. Повторно отправлять сообщение не буду, чтобы не создать дубль."
+    if reason == "browser_confirmation_expired":
+        return "Время подтверждения истекло. Действие в браузере не выполнено."
+    if reason in {"browser_intent_unavailable", "browser_action_not_requested"}:
+        return "Не удалось подтвердить намерение выполнить это действие. Уточните, что нужно сделать в браузере."
+    if reason == "browser_offline":
+        return "На выбранном устройстве нет активного соединения Browser Bridge с сервером ИРУ. Проверьте браузер в Настройках."
+    if reason in {"invalid_browser_credential", "pairing_required"}:
+        return "Привязку браузера нужно обновить в расширении Browser Bridge."
     if reason in {"tab_disconnected","browser_disconnected","browser_not_connected","browser_timeout"}:
         return "Не удалось прочитать вкладку: связь с браузером временно недоступна."
     if reason in {"stale_element","browser_tab_mismatch"}:

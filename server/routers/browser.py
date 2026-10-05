@@ -66,7 +66,13 @@ async def browser_status(request: Request, device_id: str):
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=403, headers=headers)
     connection = bridges.get(_dk(user["id"], device_id))
-    return JSONResponse({"status": "connected" if connection else "offline", "device_id": device_id,
+    status = "connected" if connection else "offline"
+    if connection:
+        try:
+            authenticate_credential_hash(connection)
+        except ValueError:
+            status = "pairing_required"
+    return JSONResponse({"status": status, "device_id": device_id,
             "bridge_id": connection.bridge_id if connection else None}, headers=headers)
 
 
@@ -118,6 +124,7 @@ async def browser_socket(ws: WebSocket):
             if not isinstance(message, dict):
                 raise ValueError("malformed_browser_message")
             if message.get("type")=="ping" and set(message)=={"type"}:
+                authenticate_credential_hash(connection)
                 await ws.send_json({"type": "pong"})
             elif message.get("type")=="result":
                 receive_result(connection, message)

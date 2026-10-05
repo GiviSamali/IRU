@@ -866,19 +866,56 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             from browser_policy import BrowserTaskPolicy
             from browser_bridge import execute_browser_action
         browser_policy = BrowserTaskPolicy(message, _short_did(device_id), chat_history,
-                                           authorized_device_ids=[_short_did(did) for did in device_ids])
+                                           authorized_device_ids=set(all_devices_info))
         browser_page_seen = False
+        browser_intent = None
+
+        async def authorize_browser_operation(action, target, params):
+            nonlocal browser_intent
+            if browser_intent is None:
+                from .browser_intent import resolve_browser_intent
+                browser_intent = await resolve_browser_intent(message, chat_history, {
+                    "user_id":user_id,"chat_id":chat_id,"poll_task_id":task_id,"route":"browser_bridge"},
+                    current_device_id=_short_did(device_id), owned_devices=all_devices_info)
+            from .browser_intent import validate_browser_intent
+            allowed, reason = validate_browser_intent(browser_intent,action,target,params,browser_policy.draft_targets)
+            if not allowed:
+                return {"status":"failed","error":reason}
+            if action == "web.activate" and browser_intent.get("requires_confirmation"):
+                decision = asyncio.get_running_loop().create_future()
+                task["_pipeline_confirm_future"] = decision
+                task["confirm_data"] = command_confirmation({
+                    "command":f"Действие в браузере {target}: {message}", "device_id":target,
+                    "params":{**params,"risk":"unknown"},"chat_id":chat_id,"user_id":user_id})
+                task["status"] = "confirm"
+                try:
+                    accepted = await asyncio.wait_for(decision,timeout=300)
+                except asyncio.TimeoutError:
+                    return {"status":"failed","error":"browser_confirmation_expired"}
+                finally:
+                    if not is_task_cancel_requested(task_id):task["status"]="running"
+                    task.pop("_pipeline_confirm_future",None)
+                    task.pop("confirm_data",None)
+                if not accepted or is_task_cancel_requested(task_id):
+                    return {"status":"failed","error":"task_cancelled"}
+                task["status"] = "running"
+            return None
 
         async def send_fn(target_device_id, action, params):
             nonlocal browser_page_seen
             if action.startswith("web."):
+                if not isinstance(target_device_id,str) or ":" in target_device_id:
+                    return {"status":"failed","error":"target_device_not_found"}
                 if is_task_cancel_requested(task_id):
                     return {"status": "cancelled", "error": "task_cancelled"}
                 allowed, reason = browser_policy.allows(action, _short_did(target_device_id), params)
                 if not allowed:
                     return {"status": "failed", "error": reason or "browser_authorization_required"}
-                result = await execute_browser_action(user_id, task_id, target_device_id, action, params,
-                    external_action=browser_policy.external_action, cancelled=lambda: is_task_cancel_requested(task_id))
+                rejected = await authorize_browser_operation(action, _short_did(target_device_id), params)
+                if rejected:
+                    return rejected
+                result = await execute_browser_action(user_id, task_id, _short_did(target_device_id), action, params,
+                    external_action=bool(browser_intent and browser_intent.get("allow_activate")), cancelled=lambda: is_task_cancel_requested(task_id))
                 if action in {"web.read", "web.elements", "web.tabs"} and result.get("status") == "success":
                     browser_page_seen = True
                 return result

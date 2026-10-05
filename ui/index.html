@@ -90,31 +90,13 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           <span>Скачать агент</span>
         </a>
-        <a class="btn-header-link" href="/about" target="_blank" title="Об ИРУ">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-          <span>Об ИРУ</span>
-        </a>
-        <a class="btn-header-link" href="/instruction" target="_blank" title="Инструкция">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-          <span>Инструкция</span>
-        </a>
-        <a class="btn-header-link" href="/terms" target="_blank" title="Соглашение">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-          <span>Соглашение</span>
-        </a>
         <button class="btn-icon" id="btnAdmin" title="Пользователи" style="display:none">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4-4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
         </button>
-        <div class="memory-badge" id="memoryBadge" aria-label="Память" role="button" aria-expanded="false">
-          <span class="memory-badge-icon">&#129504;</span>
-          <span id="memoryBadgeText">Память</span>
-          <div class="memory-popover" id="memoryPopover">
-            <div class="memory-popover-title">Закреплённые факты</div>
-            <div id="memoryPopoverList"></div>
-            <div class="memory-popover-hint">Память обновляется автоматически на основе выполненных команд</div>
-          </div>
-        </div>
-        <div class="usage-badge" id="usageBadge" role="button" aria-expanded="false" title="Примерная стоимость LLM-вызовов">
+        <button class="btn-header-link memory-badge" id="memoryBadge" type="button" aria-label="Настройки" aria-expanded="false" aria-controls="memoryPanel">
+          <span aria-hidden="true">⚙</span><span id="memoryBadgeText">Настройки</span>
+        </button>
+        <div class="usage-badge" id="usageBadge" style="display:none" role="button" aria-expanded="false" title="Примерная стоимость LLM-вызовов">
           <span id="usageBadgeText">Токены сегодня: —</span>
           <div class="usage-popover" id="usagePopover">
             <div class="usage-popover-title">Использование токенов</div>
@@ -228,11 +210,24 @@
 
       <aside class="memory-panel" id="memoryPanel">
         <div class="memory-panel-header">
-          <h3>Память</h3>
+          <h3>Настройки</h3>
           <button class="btn-icon" id="memoryPanelCloseBtn" title="Закрыть" style="width:24px;height:24px">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
+        <div class="settings-links" aria-label="Информация об ИРУ">
+          <a href="/instruction" target="_blank" rel="noopener">Инструкция</a>
+          <a href="/terms" target="_blank" rel="noopener">Соглашение</a>
+          <a href="/about" target="_blank" rel="noopener">Об ИРУ</a>
+        </div>
+        <section class="settings-browser">
+          <h4>Браузер</h4>
+          <p id="browserConnectionStatus" role="status">Выберите устройство для проверки браузера.</p>
+          <button id="browserConnectionCheckBtn" type="button" class="memory-panel-add">Проверить соединение</button>
+          <p class="settings-hint">Для вкладок нужно расширение Browser Bridge на выбранном компьютере.</p>
+        </section>
+        <h4 class="settings-facts-title">Факты</h4>
+        <p class="settings-hint">Факты аккаунта доступны и без подключённого компьютера. Сохраняются по вашему решению.</p>
         <div class="memory-panel-form">
           <textarea id="memoryFactInput" class="memory-panel-input" rows="3" maxlength="1000" placeholder="Добавить факт, который ИРУ должна помнить..."></textarea>
           <button id="memoryFactAddBtn" class="memory-panel-add" type="button">Добавить</button>

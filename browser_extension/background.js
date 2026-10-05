@@ -5,6 +5,7 @@ const RECEIPT_KEY = 'activation_receipts';
 const RECEIPT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 let socket = null, reconnectTimer = null, heartbeat = null, connecting = false;
 let reconnectDelay = 1000, config = null, pairingRejected = false;
+let acceptedSocket = null, lastPong = 0, pongSerial = 0, lastCloseCode = 0;
 let receiptQueue = Promise.resolve();
 const inflight = new Map();
 const errorResult = (error,status = 'failed') => ({status,error});
@@ -127,16 +128,18 @@ async function connect() {
     config = (await chrome.storage.local.get('bridge_config')).bridge_config;
     if (!config?.token || !config?.device_id || !config?.bridge_id) return;
     const origin = serverUrl(config.server_url), url = origin.replace(/^http/,'ws') + '/ws/browser';
-    const ws = new WebSocket(url); socket = ws;
+    const ws = new WebSocket(url); socket = ws; acceptedSocket = null; lastPong = 0;
+    await chrome.storage.local.set({bridge_status:{status:'connecting',device_id:config.device_id,updated_at:Date.now()}});
     ws.onopen = () => {
       ws.send(JSON.stringify({type:'hello',token:config.token,device_id:config.device_id,bridge_id:config.bridge_id}));
       clearInterval(heartbeat); heartbeat = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type:'ping'})); },20000);
     };
     ws.onmessage = async event => {
+      if (socket !== ws) return;
       if (event.data.length > 128000) { ws.close(1009); return; }
       let message; try { message = JSON.parse(event.data); } catch { ws.close(1003); return; }
-      if (message.type === 'ready') { reconnectDelay = 1000; await chrome.storage.local.set({bridge_status:{status:'connected',device_id:config.device_id,updated_at:Date.now()}}); return; }
-      if (message.type === 'pong') return;
+      if (message.type === 'ready') { acceptedSocket = ws; lastPong = Date.now(); reconnectDelay = 1000; await chrome.storage.local.set({bridge_status:{status:'connected',device_id:config.device_id,updated_at:Date.now()}}); return; }
+      if (message.type === 'pong') { lastPong = Date.now(); pongSerial++; return; }
       if (message.type !== 'command') return;
       let result; try { result = await execute(message); } catch { result = errorResult('bridge_operation_failed',message.operation === 'web.activate' ? 'unknown' : 'failed'); }
       if (ws.readyState === WebSocket.OPEN) {
@@ -145,7 +148,7 @@ async function connect() {
         ws.send(wire);
       }
     };
-    ws.onclose = async event => { if (socket !== ws) return; socket = null; clearInterval(heartbeat); pairingRejected = [1008,4003,4009].includes(event.code); await chrome.storage.local.set({bridge_status:{status:event.code === 4009 ? 'browser_already_connected' : pairingRejected ? 'pairing_required' : 'disconnected',updated_at:Date.now()}}); scheduleReconnect(); };
+    ws.onclose = async event => { if (socket !== ws) return; lastCloseCode = event.code; socket = null; acceptedSocket = null; lastPong = 0; clearInterval(heartbeat); pairingRejected = [1008,4003,4009].includes(event.code); await chrome.storage.local.set({bridge_status:{status:event.code === 4009 ? 'browser_already_connected' : pairingRejected ? 'pairing_required' : 'disconnected',updated_at:Date.now()}}); scheduleReconnect(); };
     ws.onerror = () => ws.close();
   } catch { scheduleReconnect(); }
   finally { connecting = false; }
@@ -160,3 +163,24 @@ chrome.storage.onChanged.addListener((changes,area) => {
   if (socket) socket.close(); socket = null; clearInterval(heartbeat); connect();
 });
 connect();
+
+// Opening options wakes MV3 and asks the live worker, never trusts persisted 'connected'.
+chrome.runtime.onMessage?.addListener((message, sender, reply) => {
+  if (message?.type !== 'iru_bridge_status') return;
+  (async () => {
+    if (!socket || socket.readyState !== WebSocket.OPEN || acceptedSocket !== socket) {
+      await connect();
+      return {status:lastCloseCode === 4009 ? 'browser_already_connected' : pairingRejected ? 'pairing_required' : 'connecting',device_id:config?.device_id};
+    }
+    if (Date.now() - lastPong > 45000) {
+      socket.close();
+      return {status:'disconnected',device_id:config?.device_id};
+    }
+    const currentSocket = socket, before = pongSerial, deadline = Date.now() + 2000;
+    currentSocket.send(JSON.stringify({type:'ping'}));
+    while (socket === currentSocket && pongSerial === before && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve,50));
+    if (socket !== currentSocket || pongSerial === before) { currentSocket.close(); return {status:'disconnected',device_id:config?.device_id}; }
+    return {status:'connected',device_id:config?.device_id,updated_at:lastPong};
+  })().then(reply).catch(() => reply({status:'disconnected'}));
+  return true;
+});
