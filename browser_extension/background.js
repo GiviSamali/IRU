@@ -148,7 +148,7 @@ async function connect() {
         ws.send(wire);
       }
     };
-    ws.onclose = async event => { if (socket !== ws) return; lastCloseCode = event.code; socket = null; acceptedSocket = null; lastPong = 0; clearInterval(heartbeat); pairingRejected = [1008,4003,4009].includes(event.code); await chrome.storage.local.set({bridge_status:{status:event.code === 4009 ? 'browser_already_connected' : pairingRejected ? 'pairing_required' : 'disconnected',updated_at:Date.now()}}); scheduleReconnect(); };
+    ws.onclose = async event => { if (socket !== ws) return; lastCloseCode = event.code; socket = null; acceptedSocket = null; lastPong = 0; clearInterval(heartbeat); pairingRejected = [1008,4003,4009].includes(event.code); await chrome.storage.local.set({bridge_status:{status:event.code === 4009 ? 'browser_already_connected' : event.code === 4004 ? 'agent_offline' : pairingRejected ? 'pairing_required' : 'disconnected',updated_at:Date.now()}}); scheduleReconnect(); };
     ws.onerror = () => ws.close();
   } catch { scheduleReconnect(); }
   finally { connecting = false; }
@@ -170,7 +170,7 @@ chrome.runtime.onMessage?.addListener((message, sender, reply) => {
   (async () => {
     if (!socket || socket.readyState !== WebSocket.OPEN || acceptedSocket !== socket) {
       await connect();
-      return {status:lastCloseCode === 4009 ? 'browser_already_connected' : pairingRejected ? 'pairing_required' : 'connecting',device_id:config?.device_id};
+      return {status:lastCloseCode === 4009 ? 'browser_already_connected' : lastCloseCode === 4004 ? 'agent_offline' : pairingRejected ? 'pairing_required' : 'connecting',device_id:config?.device_id};
     }
     if (Date.now() - lastPong > 45000) {
       socket.close();

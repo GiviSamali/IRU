@@ -380,3 +380,37 @@ def test_confirmation_is_pre_effect_and_approved_retry_remains_idempotent(env):
     assert execute(external_action=True,dangerous_effect_confirmed=True)["deduplicated"]
     assert len(socket.calls)==2
     assert socket.calls[0]["request_id"]!=socket.calls[1]["request_id"]
+
+
+@pytest.mark.parametrize("offline_kind", ["missing", "disconnected"])
+def test_bridge_retries_owned_offline_agent_without_invalidating_credential(env, offline_kind):
+    token=pair(env).json()["token"]
+    if offline_kind == "missing":
+        bridge.devices.pop("1:same")
+    else:
+        bridge.devices["1:same"]["ws"] = None
+    with env.websocket_connect("/ws/browser",headers={"Origin":ORIGIN}) as ws:
+        ws.send_json(hello(token))
+        with pytest.raises(WebSocketDisconnect) as rejected:
+            ws.receive_json()
+        assert rejected.value.code == 4004
+    assert not bridge.bridges
+    bridge.devices["1:same"]={"user_id":1,"ws":object()}
+    with env.websocket_connect("/ws/browser",headers={"Origin":ORIGIN}) as ws:
+        ws.send_json(hello(token))
+        assert ws.receive_json()["type"] == "ready"
+        ws.send_json({"type":"ping"})
+        assert ws.receive_json() == {"type":"pong"}
+
+
+def test_unknown_owner_or_expired_credential_never_gets_retryable_offline(env):
+    token=pair(env).json()["token"]
+    bridge.devices.pop("1:same")
+    with db.get_db() as conn:
+        conn.execute("UPDATE browser_credentials SET expires_at=0")
+    with env.websocket_connect("/ws/browser",headers={"Origin":ORIGIN}) as ws:
+        ws.send_json(hello(token))
+        with pytest.raises(WebSocketDisconnect) as rejected:
+            ws.receive_json()
+        assert rejected.value.code == 4003
+    assert not bridge.bridges

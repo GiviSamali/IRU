@@ -7,12 +7,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 try:
     from ..api_support import get_current_user
-    from ..browser_bridge import (BrowserConnection, MAX_MESSAGE_BYTES, authenticate_credential, authenticate_credential_hash,
+    from ..browser_bridge import (BrowserConnection, BrowserDeviceOffline, MAX_MESSAGE_BYTES, authenticate_credential, authenticate_credential_hash,
         bridges, disconnect_bridge, issue_pairing, receive_result, require_owned_device)
     from ..runtime_state import _dk
 except ImportError:
     from api_support import get_current_user
-    from browser_bridge import (BrowserConnection, MAX_MESSAGE_BYTES, authenticate_credential, authenticate_credential_hash,
+    from browser_bridge import (BrowserConnection, BrowserDeviceOffline, MAX_MESSAGE_BYTES, authenticate_credential, authenticate_credential_hash,
         bridges, disconnect_bridge, issue_pairing, receive_result, require_owned_device)
     from runtime_state import _dk
 
@@ -132,6 +132,10 @@ async def browser_socket(ws: WebSocket):
                 raise ValueError("unsupported_browser_message")
     except WebSocketDisconnect:
         pass
+    except BrowserDeviceOffline:
+        # Valid owned credential, but agent has not reconnected yet after startup.
+        # A retryable close must not permanently disable the extension connection.
+        await ws.close(code=4004, reason="target_device_offline")
     except (ValueError, TypeError, asyncio.TimeoutError):
         await ws.close(code=4003, reason="invalid_browser_protocol_or_credentials")
     finally:

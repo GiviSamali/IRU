@@ -68,13 +68,19 @@ def init_browser_bridge(restart: bool = False) -> None:
         conn.execute("DELETE FROM browser_effects WHERE created_at<? AND status!='pending'", (time.time()-RECEIPT_TTL,))
 
 
+class BrowserDeviceOffline(ValueError):
+    """Owned device is temporarily offline; credentials must not be revoked."""
+
+
 def require_owned_device(owner: int, device_id: str) -> dict:
     if not isinstance(device_id, str) or not device_id or len(device_id) > 128 or ":" in device_id or any(ord(c) < 32 for c in device_id):
         raise ValueError("target_device_not_found")
     dev = devices.get(_dk(owner, device_id))
     profile = db.get_device_profile(device_id, user_id=owner)
-    if not profile or profile.get("user_id") != owner or not dev or dev.get("user_id") != owner or not dev.get("ws"):
+    if not profile or profile.get("user_id") != owner or (dev and dev.get("user_id") != owner):
         raise ValueError("target_device_not_found_or_offline")
+    if not dev or not dev.get("ws"):
+        raise BrowserDeviceOffline("target_device_offline")
     return dev
 
 

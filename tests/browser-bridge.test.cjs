@@ -368,3 +368,18 @@ test('executable download requires approval before click and approved request is
   assert.deepEqual(await command(page,'web.activate',item.params,authorization,'approved-download'),approved);
   assert.equal(await page.evaluate(()=>window.downloadClicks),1);await page.close();
 });
+
+
+test('offline agent keeps pairing and reconnects automatically when the agent returns',async()=>{
+  const harness=backgroundHarness(),socket=await harness.ready();
+  socket.close(4004);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(harness.local.bridge_status.status,'agent_offline');
+  assert.equal(vm.runInContext('pairingRejected',harness.context),false);
+  assert.ok(vm.runInContext('reconnectTimer',harness.context));
+  await vm.runInContext('connect()',harness.context);
+  assert.equal(harness.sockets.length,2);
+  const retry=harness.sockets[1];retry.readyState=1;retry.onopen();
+  await retry.onmessage({data:JSON.stringify({type:'ready',device_id:'givi'})});
+  assert.equal(harness.local.bridge_status.status,'connected');
+  assert.equal(retry.messages[0].token,'scoped-test-token');
+});
