@@ -101,7 +101,7 @@ def test_wrapper_labels_web_results_as_data_without_destroying_evidence():
     assert wrapped["trust_level"] == "untrusted_page_data"
     assert wrapped["authority"] == "data_only"
     assert wrapped["result"] == entry["result"]
-    assert "trust_level" not in wrap_tool_result_for_llm({"action":"execute_cmd", "result":{}})
+    assert wrap_tool_result_for_llm({"action":"execute_cmd", "result":{}})["trust_level"] == "untrusted_tool_data"
 
 
 @pytest.mark.parametrize("operation, params", [

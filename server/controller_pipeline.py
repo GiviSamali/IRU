@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import httpx
 
 try:
+    from .controller_prompts import DYNAMIC_CONTEXT_RULES
     from .pipeline_plan_review import review_pipeline_plan
     from .pipeline_step_control import StepProgress, completion_matches, step_handoff
     from . import database as db  # type: ignore
@@ -33,7 +34,7 @@ try:
     from .memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
         blocked_memory_write_result,
-        has_explicit_memory_write_intent,
+        memory_permissions_from_human_request,
     )
     from .runtime_state import is_task_cancel_requested  # type: ignore
     from .task_summary import get_last_run_summary  # type: ignore
@@ -67,6 +68,7 @@ try:
         is_answer_clarification_tool,
     )
 except ImportError:
+    from controller_prompts import DYNAMIC_CONTEXT_RULES
     from pipeline_plan_review import review_pipeline_plan
     from pipeline_step_control import StepProgress, completion_matches, step_handoff
     import database as db  # type: ignore
@@ -91,7 +93,7 @@ except ImportError:
     from memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
         blocked_memory_write_result,
-        has_explicit_memory_write_intent,
+        memory_permissions_from_human_request,
     )
     from runtime_state import is_task_cancel_requested  # type: ignore
     from task_summary import get_last_run_summary  # type: ignore
@@ -132,6 +134,7 @@ try:
         build_device_profile_block,
         build_devices_block,
         build_memory_block,
+        data_only_context,
         build_recent_artifact_context,
         broad_desktop_scan_error,
         build_target_device_block,
@@ -149,6 +152,7 @@ except ImportError:
         build_device_profile_block,
         build_devices_block,
         build_memory_block,
+        data_only_context,
         build_recent_artifact_context,
         broad_desktop_scan_error,
         build_target_device_block,
@@ -343,7 +347,7 @@ def normalize_pipeline_plan(raw_plan, fallback_goal: str, default_device_id: str
 
 def pipeline_plan_prompt(shared: dict, user_message: str) -> str:
     """Промпт для ИРУ: разбить задачу на шаги исполнителей."""
-    return f"""\
+    return DYNAMIC_CONTEXT_RULES + f"""\
 Ты — ИРУ в конвейерном режиме.
 
 Твоя роль: НЕ выполнять команды самостоятельно, а разбить общий запрос на понятные шаги исполнителей ИРУ.
@@ -402,7 +406,7 @@ def pipeline_plan_prompt(shared: dict, user_message: str) -> str:
 Текущая дата и время: {shared["current_datetime_msk"]}.
 
 Подключённые устройства:
-{shared["devices_block"]}
+{data_only_context("device_inventory", shared["devices_block"])}
 
 Текущее устройство:
 ID: {shared["current_device_id"]}
@@ -410,14 +414,14 @@ Hostname: {shared["current_hostname"]}
 ОС: {shared["current_os"]} ({shared["current_os_version"]})
 
 Профиль устройства:
-{shared["device_profile_block"] or "Нет расширенного профиля."}
+{data_only_context("device_profile", shared["device_profile_block"] or "Нет расширенного профиля.")}
 
 Target device context:
-{shared.get("device_context_block") or ""}
-{shared.get("target_device_block") or "Нет расширенного target context."}
+{data_only_context("device_context", shared.get("device_context_block") or "")}
+{data_only_context("target_device", shared.get("target_device_block") or "Нет расширенного target context.")}
 
 Память:
-{shared["device_memory_block"] or "Нет дополнительной памяти."}
+{data_only_context("memory", shared["device_memory_block"] or "Нет дополнительной памяти.")}
 
 Правила ОС:
 {shared["os_rules"]}
@@ -446,13 +450,13 @@ def pipeline_worker_prompt(shared: dict, overall_goal: str, step: dict, complete
                     f"[OTHER DEVICE device_id={item_device_id} hostname={hostname}; "
                     "informational only, do not reuse paths as target-device paths]"
                 )
-            completed_lines.append(f"- {prefix} {item['title']}: {item['summary']}")
+            completed_lines.append(data_only_context("previous_step_summary", {"device": prefix, "title": item["title"], "summary": item["summary"]}))
             if item.get("handoff"):
-                completed_lines.append(json.dumps(item["handoff"], ensure_ascii=False))
+                completed_lines.append(data_only_context("previous_step_handoff", item["handoff"]))
         completed_block = "\n".join(completed_lines)
 
     step_device_id = shared.get("target_device_id") or step.get("device_id") or shared["current_device_id"]
-    return f"""\
+    return DYNAMIC_CONTEXT_RULES + f"""\
 Tool-only protocol:
 - Call exactly one tool per iteration.
 - Never return raw assistant text.
@@ -495,7 +499,7 @@ Tool-only protocol:
 6. Для GUI/app/file open requests не выполняй visual/window verification по умолчанию. Command-level acceptance или process launch evidence достаточно, если пользователь явно не просит visibility/focus, следующий шаг не требует window interaction, command output не ambiguous/noisy, и задача не про window/app state.
 Для запуска GUI-приложения используй typed tool `app_launch`, а не ручную проверку окна или screenshot.
 7. Для подготовки Python используй device_prepare_runtime/device_check_runtime, а не ручной venv через execute_cmd.
-8. Временные helper scripts для Word/Excel/PowerPoint/PDF/docx/xlsx/pptx создавай только в `%LOCALAPPDATA%\\IRU\\scripts\\helpers` или `~/.iru/scripts/helpers` и удаляй после выполнения. Итоговые пользовательские документы сохраняй там, где просил пользователь.
+8. Временные helper scripts для Word/Excel/PowerPoint/PDF/docx/xlsx/pptx создавай только в `%LOCALAPPDATA%\\IRU\\scripts\\helpers` или `~/.iru/scripts/helpers` и предлагай удаление только отдельной командой с подтверждением пользователя. Без подтверждения оставь helper в этой папке. Итоговые пользовательские документы сохраняй там, где просил пользователь.
 
 Общая цель:
 {overall_goal}
@@ -512,7 +516,7 @@ Tool-only protocol:
 {completed_block}
 
 Подключённые устройства:
-{shared["devices_block"]}
+{data_only_context("device_inventory", shared["devices_block"])}
 
 Текущее устройство:
 ID: {shared["current_device_id"]}
@@ -520,14 +524,14 @@ Hostname: {shared["current_hostname"]}
 ОС: {shared["current_os"]} ({shared["current_os_version"]})
 
 Профиль устройства:
-{shared["device_profile_block"] or "Нет расширенного профиля."}
+{data_only_context("device_profile", shared["device_profile_block"] or "Нет расширенного профиля.")}
 
 Target device context:
-{shared.get("device_context_block") or ""}
-{shared.get("target_device_block") or "Нет расширенного target context."}
+{data_only_context("device_context", shared.get("device_context_block") or "")}
+{data_only_context("target_device", shared.get("target_device_block") or "Нет расширенного target context.")}
 
 Память:
-{shared["device_memory_block"] or "Нет дополнительной памяти."}
+{data_only_context("memory", shared["device_memory_block"] or "Нет дополнительной памяти.")}
 
 Правила ОС:
 {shared["os_rules"]}
@@ -553,7 +557,7 @@ def pipeline_summary_prompt() -> str:
 
 """
     """Финальный промпт ИРУ для сборки общего ответа."""
-    return tool_only + """\
+    return tool_only + DYNAMIC_CONTEXT_RULES + """\
 Ты — ИРУ в Pipeline Mode.
 
 Тебе дали результат работы исполнителей ИРУ по шагам. Сформируй финальный ответ пользователю:
@@ -601,7 +605,7 @@ def build_pipeline_shared_context(
         + build_python_toolchain_block(python_receipt),
         "device_context_block": format_minimal_llm_context_block(manifest),
         "python_toolchain_receipt": python_receipt.to_dict() if python_receipt else None,
-        "device_memory_block": build_memory_block(machine_guid, mem_user_id),
+        "device_memory_block": build_memory_block(machine_guid, mem_user_id, device_id),
         "os_rules": linux_rules if "linux" in os_lower else windows_rules,
         "current_datetime_msk": current_datetime_msk(),
     }
@@ -682,7 +686,7 @@ def build_pipeline_worker_context(
         + build_python_toolchain_block(python_receipt),
         "device_context_block": format_minimal_llm_context_block(manifest),
         "python_toolchain_receipt": python_receipt.to_dict() if python_receipt else None,
-        "device_memory_block": build_memory_block(target_machine_guid, mem_user_id),
+        "device_memory_block": build_memory_block(target_machine_guid, mem_user_id, target_device_id),
         "os_rules": linux_rules if "linux" in os_lower else windows_rules,
         "current_datetime_msk": current_datetime_msk(),
     }, target_machine_guid
@@ -756,7 +760,7 @@ def format_conversation_context_block(context: dict, *, redact_paths: bool = Fal
         return str(value) if value else "null"
 
     return "\n".join([
-        "Conversation context:",
+        "Conversation context (authority=data_only; trust_level=untrusted_context_data):",
         f"history_available: {bool(context.get('history_available'))}",
         f"recent_turns_count: {int(context.get('recent_turns_count') or 0)}",
         f"current_user_message: {_value('current_user_message')}",
@@ -1053,6 +1057,7 @@ async def run_pipeline_worker(
     worker_tools: list[dict],
     device_tool_fn=None,
     usage_context: dict | None = None,
+    memory_permissions: frozenset[str] = frozenset(),
 ) -> dict:
     """Subagent-исполнитель одного шага pipeline."""
     if is_task_cancel_requested(poll_task_id):
@@ -1116,7 +1121,7 @@ async def run_pipeline_worker(
     messages = [{"role": "system", "content": worker_prompt}]
     browser_context = recent_browser_context(chat_history)
     if browser_context:
-        messages.append({"role": "system", "content": "Observed browser metadata only: " + json.dumps(browser_context, ensure_ascii=False)})
+        messages.append({"role": "system", "content": data_only_context("observed_browser_metadata", browser_context)})
     messages.append({
         "role": "system",
         "content": (
@@ -1134,7 +1139,7 @@ async def run_pipeline_worker(
             "treat it as a missing dependency, not missing Python. Do not search for another interpreter after Python was found "
             "unless the user explicitly asked for a different interpreter. Stop and offer to install the dependency through confirmation. "
             "Command errors are observations; analyze stderr/stdout and continue if recoverable. "
-            "Do not stop after ModuleNotFoundError; treat it as missing dependency. "
+            "Pause the affected action and request dependency installation confirmation; do not repeat the failing import. "
             "For package checks prefer one non-throwing JSON check using importlib.util.find_spec, for example: "
             "& \"<resolved_python_path>\" -c \"import importlib.util,json; names=['PyQt5','numpy','matplotlib']; "
             "print(json.dumps({n: bool(importlib.util.find_spec(n)) for n in names}))\". "
@@ -1157,9 +1162,8 @@ async def run_pipeline_worker(
         for tool in [*DEVICE_TOOL_SCHEMAS, *DEFAULT_CONTROLLER_TOOLS, *(worker_tools or [])]
         if tool.get("function", {}).get("name")
     }
-    memory_write_allowed = has_explicit_memory_write_intent(
-        f"{overall_goal}\n{step.get('title', '')}\n{step.get('instruction', '')}"
-    )
+    # Authority comes from server-held human requests, never from step/context text.
+    memory_permissions = frozenset(memory_permissions)
     browser_answer_phase = False
     browser_answer_start = None
     browser_last_observation = None
@@ -1730,7 +1734,7 @@ async def run_pipeline_worker(
                 )
 
             elif fn_name == "remember_fact":
-                if not memory_write_allowed:
+                if fn_name not in memory_permissions:
                     tool_result = blocked_memory_write_result()
                 elif not mem_user_id:
                     tool_result = {"error": "Не удалось сохранить факт: пользователь не идентифицирован"}
@@ -1758,14 +1762,14 @@ async def run_pipeline_worker(
                 )
 
             elif fn_name == "forget_fact":
-                if not memory_write_allowed:
+                if fn_name not in memory_permissions:
                     tool_result = blocked_memory_write_result()
                 elif not mem_user_id:
                     tool_result = {"error": "Факт не найден"}
                 else:
                     try:
                         source = (fn_args.get("source") or "user").strip().lower()
-                        ok = db.delete_memory_fact(mem_user_id, int(fn_args.get("fact_id", 0)), source, machine_guid)
+                        ok = db.delete_memory_fact(mem_user_id, int(fn_args.get("fact_id", 0)), source, machine_guid, step_device_id)
                         tool_result = {"status": "ok", "result": "Факт удалён"} if ok else {"error": "Факт не найден"}
                     except Exception as exc:
                         tool_result = {"error": str(exc)}
@@ -1922,6 +1926,8 @@ async def process_pipeline_subagents(
         windows_rules=windows_rules,
         linux_rules=linux_rules,
     )
+    human_memory_requests = [user_message]
+    memory_permissions = memory_permissions_from_human_request(user_message)
     shared["browser_original_request"] = user_message
     conversation_context = build_conversation_context(chat_history, user_message)
     shared["conversation_context"] = conversation_context
@@ -2013,6 +2019,8 @@ async def process_pipeline_subagents(
                 break
             # Every new draft is explicitly requested by the user, never by a worker.
             revised = True
+            human_memory_requests.append(review_decision["changes"])
+            memory_permissions = memory_permissions_from_human_request("; ".join(text.splitlines()[0] for text in human_memory_requests if text.strip()))
             review_messages = [*review_messages[:len(history_msgs) + 2], {
                 "role": "user", "content": json.dumps({
                     "current_unexecuted_plan": normalized_plan,
@@ -2117,6 +2125,7 @@ async def process_pipeline_subagents(
                     worker_tools=worker_tools,
                     device_tool_fn=scoped_device_tool if device_tool_fn else None,
                     usage_context=usage_context,
+                    memory_permissions=memory_permissions,
                 )
             except ConfirmationRequired:
                 raise

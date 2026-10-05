@@ -6,13 +6,13 @@ import httpx
 try:
     from .web_search import run_web_search
     from .controller_tools import TOOLS
-    from .controller_prompts import INSTRUCTION_TEXT, ONBOARDING_PROMPT  # type: ignore
+    from .controller_prompts import DYNAMIC_CONTEXT_RULES, INSTRUCTION_TEXT, ONBOARDING_PROMPT  # type: ignore
     from .controller_shared import build_chat_messages  # type: ignore
     from .llm_usage import extract_usage, record_llm_usage_event  # type: ignore
 except ImportError:
     from web_search import run_web_search
     from controller_tools import TOOLS
-    from controller_prompts import INSTRUCTION_TEXT, ONBOARDING_PROMPT  # type: ignore
+    from controller_prompts import DYNAMIC_CONTEXT_RULES, INSTRUCTION_TEXT, ONBOARDING_PROMPT  # type: ignore
     from controller_shared import build_chat_messages  # type: ignore
     from llm_usage import extract_usage, record_llm_usage_event  # type: ignore
 
@@ -31,7 +31,7 @@ async def process_onboarding_message(
     """
     cfg = load_llm_config_fn()
 
-    system_msg = ONBOARDING_PROMPT.format(
+    system_msg = DYNAMIC_CONTEXT_RULES + ONBOARDING_PROMPT.format(
         instruction_text=INSTRUCTION_TEXT,
         current_datetime_msk=current_datetime_msk_fn(),
     )

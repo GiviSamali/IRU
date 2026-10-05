@@ -116,7 +116,7 @@ def test_pipeline_recoverable_failure_later_verification_completes_with_recovery
     }])
     monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
     monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
-    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id: "")
+    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id, device_id: "")
     monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
 
     async def _send_command_fn(device_id, action, params):
@@ -220,7 +220,7 @@ def test_pipeline_dispatches_advertised_device_runtime_tool(monkeypatch):
     }])
     monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
     monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
-    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id: "")
+    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id, device_id: "")
     monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
 
     async def _send_command_fn(device_id, action, params):

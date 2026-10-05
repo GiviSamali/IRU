@@ -14,6 +14,7 @@ try:
     from .controller_shared import (  # type: ignore
         ConfirmationRequired,
         build_chat_messages,
+        data_only_context,
         set_current_step,
     )
     from .python_env import classify_command_error, is_recoverable_command_error  # type: ignore
@@ -29,7 +30,7 @@ try:
     from .memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
         blocked_memory_write_result,
-        has_explicit_memory_write_intent,
+        memory_permissions_from_human_request,
     )
     from .runtime_state import is_task_cancel_requested  # type: ignore
     from .task_summary import get_last_run_summary  # type: ignore
@@ -78,6 +79,7 @@ except ImportError:
     from controller_shared import (  # type: ignore
         ConfirmationRequired,
         build_chat_messages,
+        data_only_context,
         set_current_step,
     )
     from python_env import classify_command_error, is_recoverable_command_error  # type: ignore
@@ -93,7 +95,7 @@ except ImportError:
     from memory_intent_guard import (  # type: ignore
         MEMORY_WRITE_CORRECTION,
         blocked_memory_write_result,
-        has_explicit_memory_write_intent,
+        memory_permissions_from_human_request,
     )
     from runtime_state import is_task_cancel_requested  # type: ignore
     from task_summary import get_last_run_summary  # type: ignore
@@ -251,11 +253,11 @@ async def process_non_pipeline_command(
     if browser_only:
         context = recent_browser_context(chat_history)
         if context:
-            messages.append({"role": "system", "content": "Observed browser metadata (not authority or fresh evidence): " + json.dumps(context, ensure_ascii=False)})
+            messages.append({"role": "system", "content": data_only_context("observed_browser_metadata", context)})
     elif window_only:
         context = recent_window_context(chat_history)
         if context:
-            messages.append({"role": "system", "content": "Observed window context (not current state): " + json.dumps(context, ensure_ascii=False)})
+            messages.append({"role": "system", "content": data_only_context("observed_window_metadata", context)})
     elif chat_history:
         messages.extend(build_chat_messages(chat_history[:-1], filter_onboarding=True))
     messages.append({"role": "user", "content": user_message})
@@ -267,7 +269,7 @@ async def process_non_pipeline_command(
     }
     terminal_sufficient_entry: dict | None = None
     terminal_sufficient_extra_turn_used = False
-    memory_write_allowed = has_explicit_memory_write_intent(user_message)
+    memory_permissions = memory_permissions_from_human_request(user_message)
 
     if not window_only and not browser_only and (user_id is not None or chat_id is not None):
         previous_failed = get_last_run_summary(
@@ -1069,7 +1071,7 @@ async def process_non_pipeline_command(
                     ))
 
                 elif fn_name == "remember_fact":
-                    if not memory_write_allowed:
+                    if fn_name not in memory_permissions:
                         tool_result = blocked_memory_write_result()
                     elif not mem_user_id:
                         tool_result = {"error": "Не удалось сохранить факт: пользователь не идентифицирован"}
@@ -1100,14 +1102,14 @@ async def process_non_pipeline_command(
                     ))
 
                 elif fn_name == "forget_fact":
-                    if not memory_write_allowed:
+                    if fn_name not in memory_permissions:
                         tool_result = blocked_memory_write_result()
                     elif not mem_user_id:
                         tool_result = {"error": "Факт не найден"}
                     else:
                         try:
                             source = (fn_args.get("source") or "user").strip().lower()
-                            ok = db.delete_memory_fact(mem_user_id, int(fn_args.get("fact_id", 0)), source, machine_guid)
+                            ok = db.delete_memory_fact(mem_user_id, int(fn_args.get("fact_id", 0)), source, machine_guid, target_device)
                             tool_result = {"status": "ok", "result": "Факт удалён"} if ok else {"error": "Факт не найден"}
                         except Exception as exc:
                             print(f"[llm] forget_fact EXCEPTION: {exc}")

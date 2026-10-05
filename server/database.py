@@ -451,6 +451,13 @@ def update_chat_title(chat_id: int, user_id: int, title: str) -> bool:
 
 def delete_chat(chat_id: int, user_id: int) -> bool:
     with get_db() as conn:
+        # Lock ownership before destructive operations; all deletes share this transaction.
+        conn.execute("BEGIN IMMEDIATE")
+        owner = conn.execute(
+            "SELECT 1 FROM chats WHERE id = ? AND user_id = ?", (chat_id, user_id)
+        ).fetchone()
+        if owner is None:
+            return False
         conn.execute("DELETE FROM training_data WHERE chat_id = ?", (chat_id,))
         conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
         cursor = conn.execute(
@@ -996,14 +1003,14 @@ def add_command_memory(machine_guid: str, device_id: str | None,
 
 
 def add_fact(machine_guid: str, device_id: str | None,
-             text: str, category: str | None) -> int:
+             text: str, category: str | None, *, user_id: str | None = None) -> int:
     """Добавить закреплённый факт. Возвращает id."""
     with get_db() as conn:
         cur = conn.execute(
             """INSERT INTO device_memory
-               (machine_guid, device_id, type, fact_text, category, pinned, created_at)
-               VALUES (?, ?, 'fact', ?, ?, 1, ?)""",
-            (machine_guid, device_id, text, category, _utc_iso()),
+               (machine_guid, device_id, type, fact_text, category, pinned, created_at, user_id)
+               VALUES (?, ?, 'fact', ?, ?, 1, ?, ?)""",
+            (machine_guid, device_id, text, category, _utc_iso(), user_id),
         )
         return cur.lastrowid
 
@@ -1019,30 +1026,20 @@ def delete_fact(machine_guid: str, fact_id: int) -> bool:
 
 
 def get_recent_commands(machine_guid: str, user_id: str | None = None,
-                        limit: int = 20) -> list[dict]:
-    """Последние команды для устройства (новые первыми).
-    Если user_id передан — фильтрует по нему тоже."""
+                        limit: int = 20, device_id: str | None = None) -> list[dict]:
+    """Return only commands with a proven owner and exact device scope."""
+    if not machine_guid or not user_id or not device_id:
+        return []
     with get_db() as conn:
-        if user_id:
-            rows = conn.execute(
-                """SELECT id, command, intent, exit_code, success,
-                          stdout_preview, stderr_preview, created_at
-                   FROM device_memory
-                   WHERE machine_guid = ? AND type = 'command' AND (user_id = ? OR user_id IS NULL)
-                   ORDER BY created_at DESC LIMIT ?""",
-                (machine_guid, user_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """SELECT id, command, intent, exit_code, success,
-                          stdout_preview, stderr_preview, created_at
-                   FROM device_memory
-                   WHERE machine_guid = ? AND type = 'command'
-                   ORDER BY created_at DESC LIMIT ?""",
-                (machine_guid, limit),
-            ).fetchall()
+        rows = conn.execute(
+            """SELECT id, command, intent, exit_code, success,
+                      stdout_preview, stderr_preview, created_at
+               FROM device_memory
+               WHERE machine_guid = ? AND user_id = ? AND device_id = ? AND type = 'command'
+               ORDER BY created_at DESC LIMIT ?""",
+            (machine_guid, user_id, device_id, limit),
+        ).fetchall()
         return [dict(r) for r in rows]
-
 
 def get_pinned_facts(machine_guid: str) -> list[dict]:
     """Все закреплённые факты для устройства (старые первыми)."""
@@ -1057,72 +1054,45 @@ def get_pinned_facts(machine_guid: str) -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def get_memory_stats(machine_guid: str, user_id: str | None = None) -> dict:
-    """Количество фактов и команд + facts_list для единого источника в UI.
+def get_memory_stats(machine_guid: str | None, user_id: str | None = None,
+                     device_id: str | None = None) -> dict:
+    """User facts plus device records whose owner AND device are explicit.
 
-    Если есть user_id — берём факты из user_memory, плюс legacy-факты
-    из device_memory (pinned=1), чтобы старые записи до миграции не пропали.
-    Дедупликация по тексту (user_memory приоритетнее).
+    Ambiguous legacy rows stay in storage; ownership is never inferred from a GUID.
     """
+    facts_list = []
+    command_count = 0
+    if not user_id:
+        return {"facts": 0, "commands": 0, "facts_list": []}
     with get_db() as conn:
-        facts_list = []
-        seen_texts: set[str] = set()
-
-        if user_id:
-            # Основной источник — user_memory
-            rows = conn.execute(
-                """SELECT id, fact_text, category, created_at
-                   FROM user_memory WHERE user_id = ? ORDER BY created_at ASC""",
-                (user_id,),
+        rows = conn.execute(
+            """SELECT id, fact_text, category FROM user_memory
+               WHERE user_id = ? ORDER BY created_at ASC""", (user_id,)
+        ).fetchall()
+        seen = set()
+        for row in rows:
+            facts_list.append({"id": row["id"], "text": row["fact_text"],
+                               "category": row["category"], "source": "user"})
+            seen.add((row["fact_text"] or "").strip().lower())
+        if machine_guid and device_id:
+            scoped = (machine_guid, user_id, device_id)
+            legacy = conn.execute(
+                """SELECT id, fact_text, category FROM device_memory
+                   WHERE machine_guid = ? AND user_id = ? AND device_id = ?
+                     AND type = 'fact' AND pinned = 1 ORDER BY created_at ASC""", scoped
             ).fetchall()
-            for r in rows:
-                facts_list.append({"id": r["id"], "text": r["fact_text"],
-                                   "category": r["category"], "source": "user"})
-                seen_texts.add((r["fact_text"] or "").strip().lower())
-
-            # Legacy: device_memory (pinned facts до миграции)
-            if machine_guid:
-                legacy = conn.execute(
-                    """SELECT id, fact_text, category, created_at
-                       FROM device_memory
-                       WHERE machine_guid = ? AND type = 'fact' AND pinned = 1
-                       ORDER BY created_at ASC""",
-                    (machine_guid,),
-                ).fetchall()
-                for r in legacy:
-                    key = (r["fact_text"] or "").strip().lower()
-                    if key not in seen_texts:
-                        facts_list.append({"id": r["id"], "text": r["fact_text"],
-                                           "category": r["category"], "source": "device"})
-                        seen_texts.add(key)
-        else:
-            rows = conn.execute(
-                """SELECT id, fact_text, category, created_at
-                   FROM device_memory
-                   WHERE machine_guid = ? AND type = 'fact' AND pinned = 1
-                   ORDER BY created_at ASC""",
-                (machine_guid,),
-            ).fetchall()
-            facts_list = [{"id": r["id"], "text": r["fact_text"],
-                           "category": r["category"], "source": "device"} for r in rows]
-
-        if user_id:
-            cmds_row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM device_memory WHERE machine_guid = ? AND type = 'command' AND user_id = ?",
-                (machine_guid, user_id),
-            ).fetchone()
-        else:
-            cmds_row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM device_memory WHERE machine_guid = ? AND type = 'command'",
-                (machine_guid,),
-            ).fetchone()
-
-        return {
-            "facts": len(facts_list),
-            "commands": cmds_row["cnt"] if cmds_row else 0,
-            "facts_list": facts_list,
-        }
-
+            for row in legacy:
+                key = (row["fact_text"] or "").strip().lower()
+                if key not in seen:
+                    facts_list.append({"id": row["id"], "text": row["fact_text"],
+                                       "category": row["category"], "source": "device"})
+                    seen.add(key)
+            command_count = conn.execute(
+                """SELECT COUNT(*) FROM device_memory
+                   WHERE machine_guid = ? AND user_id = ? AND device_id = ? AND type = 'command'""",
+                scoped,
+            ).fetchone()[0]
+    return {"facts": len(facts_list), "commands": command_count, "facts_list": facts_list}
 
 # ── User Memory (факты пользователя) ──────────────────────────────────────
 
@@ -1147,12 +1117,13 @@ def delete_user_fact(user_id: str, fact_id: int) -> bool:
         return cur.rowcount > 0
 
 
-def delete_memory_fact(user_id: str, fact_id: int, source: str, machine_guid: str | None = None) -> bool:
+def delete_memory_fact(user_id: str, fact_id: int, source: str, machine_guid: str | None = None,
+                       device_id: str | None = None) -> bool:
     """Delete/unpin a fact from its explicit backend source."""
     if source == "user":
         return delete_user_fact(user_id, fact_id)
 
-    if source != "device" or not machine_guid:
+    if source != "device" or not machine_guid or not user_id or not device_id:
         return False
 
     with get_db() as conn:
@@ -1163,8 +1134,8 @@ def delete_memory_fact(user_id: str, fact_id: int, source: str, machine_guid: st
                  AND machine_guid = ?
                  AND type = 'fact'
                  AND pinned = 1
-                 AND (user_id = ? OR user_id IS NULL)""",
-            (fact_id, machine_guid, user_id),
+                 AND user_id = ? AND device_id = ?""",
+            (fact_id, machine_guid, user_id, device_id),
         )
         return cur.rowcount > 0
 

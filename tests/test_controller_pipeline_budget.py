@@ -291,7 +291,8 @@ def _build_device_a_worker_context(monkeypatch):
             }
         return None
 
-    def _memory(machine_guid, user_id):
+    def _memory(machine_guid, user_id, device_id):
+        assert device_id in {"device-a", "device-b"}
         if machine_guid == "guid-a":
             return "target memory only"
         if machine_guid == "guid-b":
@@ -435,7 +436,7 @@ def test_pipeline_invalid_planner_device_fails_closed(monkeypatch, caplog):
     monkeypatch.setattr("server.controller_pipeline.collect_tasks", lambda task_ids: [])
     monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
     monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
-    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id: "")
+    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id, device_id: "")
     monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
 
     async def _send_command_fn(device_id, action, params):

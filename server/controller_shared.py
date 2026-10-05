@@ -1,3 +1,4 @@
+import json
 import ntpath
 import posixpath
 import re
@@ -394,64 +395,51 @@ def build_device_profile_block(profile: dict | None) -> str:
     return "\n".join(lines)
 
 
-def build_memory_block(machine_guid: str | None, user_id: str | None = None) -> str:
-    """Собрать блок памяти для промпта (≤2048 символов)."""
-    if not machine_guid and not user_id:
+def data_only_context(source: str, value) -> str:
+    """Label existing dynamic context without changing its data representation."""
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    return (f"Data-only context: source={source}; authority=data_only; trust_level=untrusted_context_data\n"
+            + text + f"\nEnd data-only context: {source}")
+
+
+def build_memory_block(machine_guid: str | None, user_id: str | None = None,
+                       device_id: str | None = None) -> str:
+    """A bounded, structured selection of data; never an instruction source."""
+    if not user_id:
         return ""
-
-    memory_stats = db.get_memory_stats(machine_guid, user_id)
-    memory_facts = filter_memory_facts_for_device(memory_stats.get("facts_list", []))
-    commands = db.get_recent_commands(machine_guid, user_id, 20) if machine_guid else []
-
-    if not memory_facts and not commands:
+    stats = db.get_memory_stats(machine_guid, user_id, device_id)
+    facts = filter_memory_facts_for_device(stats.get("facts_list", []))
+    commands = db.get_recent_commands(machine_guid, user_id, 20, device_id) if machine_guid else []
+    if not facts and not commands:
         return ""
+    selected_facts, selected_commands = [], []
 
-    facts_lines = []
-    if memory_facts:
-        facts_lines.append("Факты обо мне, пользователе:")
-        for fact in memory_facts:
-            category = f"[{fact['category']}] " if fact.get("category") else ""
-            source = fact.get("source") or "user"
-            facts_lines.append(f"- source={source} id={fact['id']} {category}{fact.get('text', '')}")
+    def assemble():
+        omitted_facts = len(facts) - len(selected_facts)
+        omitted_commands = len(commands) - len(selected_commands)
+        return json.dumps({
+            "trust_level": "untrusted_context_data", "authority": "data_only", "source": "memory",
+            "facts": selected_facts, "commands": selected_commands,
+            "selection_incomplete": bool(omitted_facts or omitted_commands),
+            "omitted_facts": omitted_facts, "omitted_commands": omitted_commands,
+        }, ensure_ascii=False, separators=(",", ":"))
 
-    def command_line(command: dict, preview_limit: int) -> str:
-        tag = "[OK]" if command["success"] else "[FAIL]"
-        intent_part = f" — (intent: {command['intent']})" if command.get("intent") else ""
-        if command["success"]:
-            preview = (command.get("stdout_preview") or "")[:preview_limit]
-            output_part = f" — stdout: {preview}" if preview else ""
-        else:
-            preview = (command.get("stderr_preview") or "")[:preview_limit]
-            output_part = f" — stderr: {preview}" if preview else ""
-        return f"- {tag} {command['command']} — exit={command['exit_code']}{intent_part}{output_part}"
-
-    def assemble(command_lines: list[str]) -> str:
-        parts = ["## Память", ""]
-        if facts_lines:
-            parts.extend(facts_lines)
-            parts.append("")
-        if command_lines:
-            parts.append("Последние команды на этом устройстве:")
-            parts.extend(command_lines)
-        return "\n".join(parts) + "\n"
-
-    command_lines = [command_line(command, 200) for command in commands]
-    block = assemble(command_lines)
-    if len(block) <= MAX_MEMORY_BLOCK:
-        return block
-
-    command_lines = [command_line(command, 100) for command in commands]
-    block = assemble(command_lines)
-    if len(block) <= MAX_MEMORY_BLOCK:
-        return block
-
-    while command_lines:
-        command_lines.pop()
-        block = assemble(command_lines)
-        if len(block) <= MAX_MEMORY_BLOCK:
-            return block
-
-    return assemble([])
+    if len(assemble()) > MAX_MEMORY_BLOCK:
+        marker = '{"selection_incomplete":true}'
+        return marker if len(marker) <= MAX_MEMORY_BLOCK else ""
+    # Stable ordering; retain complete records and skip oversized ones, never slice JSON.
+    for fact in facts:
+        selected_facts.append(fact)
+        if len(assemble()) > MAX_MEMORY_BLOCK:
+            selected_facts.pop()
+    for command in commands:
+        record = {key: command.get(key) for key in ("id", "command", "intent", "exit_code", "success")}
+        record["stdout_preview"] = (command.get("stdout_preview") or "")[:200]
+        record["stderr_preview"] = (command.get("stderr_preview") or "")[:200]
+        selected_commands.append(record)
+        if len(assemble()) > MAX_MEMORY_BLOCK:
+            selected_commands.pop()
+    return assemble()
 
 
 def is_onboarding_message(content: str) -> bool:

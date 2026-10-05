@@ -174,7 +174,8 @@ def _owned_device_profile(user: dict, device_id: str | None = None, machine_guid
 
 def _memory_stats_for_profile(user: dict, profile: dict | None) -> dict:
     machine_guid = profile.get("machine_guid") if profile else None
-    return get_memory_stats(machine_guid, str(user["id"]) if user.get("id") else None)
+    return get_memory_stats(machine_guid, str(user["id"]) if user.get("id") else None,
+                            profile.get("device_id") if profile else None)
 
 
 class RawCommand(BaseModel):
@@ -387,7 +388,8 @@ async def api_delete_memory_fact_v1(
     if source == "device" and not machine_guid:
         raise HTTPException(status_code=404, detail="Device memory source not found")
 
-    ok = delete_memory_fact(str(user["id"]), fact_id, source, machine_guid)
+    ok = delete_memory_fact(str(user["id"]), fact_id, source, machine_guid,
+                            profile.get("device_id") if profile else None)
     if not ok:
         raise HTTPException(status_code=404, detail="Memory fact not found")
     return {"status": "ok", "facts": _memory_facts_for_profile(user, profile)}
@@ -407,7 +409,8 @@ async def api_delete_memory_fact(body: MemoryFactDeleteBody, request: Request):
     if source == "device" and not machine_guid:
         raise HTTPException(status_code=404, detail="Device memory source not found")
 
-    ok = delete_memory_fact(str(user["id"]), body.id, source, machine_guid)
+    ok = delete_memory_fact(str(user["id"]), body.id, source, machine_guid,
+                            profile.get("device_id") if profile else None)
     if not ok:
         raise HTTPException(status_code=404, detail="Memory fact not found")
 
@@ -427,7 +430,7 @@ async def api_get_task(task_id: str, request: Request):
             first_did = _short_did(task["device_ids"][0])
             profile = get_device_profile(first_did, user_id=user["id"])
             if profile and profile.get("machine_guid"):
-                memory_stats = get_memory_stats(profile["machine_guid"], str(user["id"]) if user.get("id") else None)
+                memory_stats = get_memory_stats(profile["machine_guid"], str(user["id"]) if user.get("id") else None, profile["device_id"])
         except Exception:
             pass
 
