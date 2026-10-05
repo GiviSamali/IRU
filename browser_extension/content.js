@@ -171,7 +171,7 @@
   }
   async function execute(message) {
     const {operation,params = {},request_id:requestId,authorization = {}} = message;
-    const requestFingerprint = JSON.stringify({params,external_action:authorization.external_action === true});
+    const requestFingerprint = JSON.stringify({params,external_action:authorization.external_action === true,dangerous_effect_confirmed:authorization.dangerous_effect_confirmed === true});
     if (operation === 'bridge.ping') return {status:'success',...pageInfo()};
     if (!validate(operation,params)) return failure('invalid_parameters');
     refresh();
@@ -222,7 +222,11 @@
     const elementRole = role(node);
     if (!['button','link','checkbox','radio','switch'].includes(elementRole)) return failure('unsupported_element');
     if (elementRole === 'link') {
-      try { const url = new URL(node.getAttribute('href'),location.href); if (!['http:','https:'].includes(url.protocol)) return failure('unsupported_url'); }
+      try { const url = new URL(node.getAttribute('href'),location.href); if (!['http:','https:'].includes(url.protocol)) return failure('unsupported_url');
+        // Structural download guard, unrelated to natural-language browser intent.
+        const filename = node.getAttribute('download') || url.pathname;
+        if (/\.(?:exe|msi|msix|appx|bat|cmd|ps1|vbs|js|scr|com|jar)$/i.test(filename)
+            && authorization.dangerous_effect_confirmed !== true) return failure('browser_confirmation_required'); }
       catch { return failure('unsupported_url'); }
     } else if (authorization.external_action !== true) return failure('external_action_not_authorized');
     if (typeof requestId !== 'string' || !requestId || requestId.length > 128) return failure('invalid_request_id');

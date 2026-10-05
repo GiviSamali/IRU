@@ -17,7 +17,7 @@ function serverUrl(value) {
 }
 function fingerprint(message) {
   const params = Object.fromEntries(Object.entries(message.params || {}).sort(([a],[b]) => a.localeCompare(b)));
-  return JSON.stringify({operation:message.operation,params,external_action:message.authorization?.external_action === true});
+  return JSON.stringify({operation:message.operation,params,external_action:message.authorization?.external_action === true,dangerous_effect_confirmed:message.authorization?.dangerous_effect_confirmed === true});
 }
 async function savedReceipt(requestId) {
   await receiptQueue;

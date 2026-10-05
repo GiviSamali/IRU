@@ -214,10 +214,10 @@ def _reserve_effect(owner: int, task_id: str, device_id: str, operation: str, pa
         row = conn.execute("SELECT * FROM browser_effects WHERE operation_key=?", (key,)).fetchone()
         if row:
             result = json.loads(row["result_json"]) if row["result_json"] else failure("browser_action_in_progress", unknown=True)
-            # The static extension reports stale_element BEFORE DOM activation.
+            # The static extension rejects stale IDs / missing approval BEFORE DOM activation.
             # A fresh observation may safely retry that rejected attempt; success,
             # pending and unknown outcomes remain permanently guarded for this run.
-            if not (row["status"] == "failed" and result.get("error") == "stale_element"):
+            if not (row["status"] == "failed" and result.get("error") in {"stale_element", "browser_confirmation_required"}):
                 return key, row["request_id"], {**result, "deduplicated": True}
         uncertain = conn.execute("SELECT request_id FROM browser_effects WHERE owner_user_id=? AND device_id=? AND task_id=? AND status IN ('pending','unknown') LIMIT 1", (owner, device_id, task_id)).fetchone()
         if uncertain:
@@ -261,7 +261,7 @@ def receive_result(connection: BrowserConnection, message: dict) -> None:
         future.set_result(result)
 
 
-async def execute_browser_action(user_id: int, task_id: str, device_id: str, operation: str, params: dict, *, external_action: bool = False, cancelled=None) -> dict:
+async def execute_browser_action(user_id: int, task_id: str, device_id: str, operation: str, params: dict, *, external_action: bool = False, dangerous_effect_confirmed: bool = False, cancelled=None) -> dict:
     try:
         require_owned_device(user_id, device_id)
         clean = validate_params(operation, params)
@@ -286,7 +286,7 @@ async def execute_browser_action(user_id: int, task_id: str, device_id: str, ope
     sent = False
     try:
         command = {"type": "command", "request_id": request_id, "operation": operation, "params": clean,
-                   "authorization": {"external_action": external_action is True}}
+                   "authorization": {"external_action": external_action is True, "dangerous_effect_confirmed": dangerous_effect_confirmed is True}}
         await asyncio.wait_for(connection.send_lock.acquire(), timeout=3)
         try:
             if cancelled and cancelled():

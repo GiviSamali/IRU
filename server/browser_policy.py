@@ -1,7 +1,6 @@
-"""Small Browser Bridge v1 intent boundary derived only from the human request.
+"""Deterministic Browser Bridge device, argument and untrusted-data guards.
 
-This is deliberately conservative. Page observations and planner text never grant
-capabilities, device scope, or permission to submit a draft.
+The primary LLM chooses web tools. No browser intent classifier is used.
 """
 from __future__ import annotations
 
@@ -160,8 +159,8 @@ ordinary_browser_request = browser_request
 class BrowserTaskPolicy:
     """Deterministic device/data boundary, independent of the phrasing of the request.
 
-    Draft/activation intent is checked separately by the runtime against human inputs only.
-    This object never authorizes external effects from page or planner content.
+    Runtime and the static extension validate effects, identities and confirmations.
+    Page or planner content never overrides server ownership and argument guards.
     """
     def __init__(self, message: str, current_device: str | None, history=None,
                  *, authorized_device_ids: set[str] | list[str] | None = None):
@@ -201,6 +200,8 @@ class BrowserTaskPolicy:
         target = device_id or (params or {}).get("device_id") or self.current_device
         if not target or (self.authorized_device_ids is not None and str(target).casefold() not in {str(identifier).casefold() for identifier in self.authorized_device_ids}):
             return False, "browser_device_not_authorized_by_user"
+        if "device_id" in (params or {}) and params["device_id"] != target:
+            return False, "browser_device_scope_mismatch"
         try:
             validate_browser_arguments(operation, params or {})
         except ValueError as exc:
@@ -315,8 +316,8 @@ def browser_failure_text(result: dict) -> str:
         return "Выполнение отправки пока не подтверждено. Повторно отправлять сообщение не буду, чтобы не создать дубль."
     if reason == "browser_confirmation_expired":
         return "Время подтверждения истекло. Действие в браузере не выполнено."
-    if reason in {"browser_intent_unavailable", "browser_action_not_requested"}:
-        return "Не удалось подтвердить намерение выполнить это действие. Уточните, что нужно сделать в браузере."
+    if reason == "browser_confirmation_declined":
+        return "Действие в браузере не выполнено: подтверждение не получено."
     if reason == "browser_offline":
         return "На выбранном устройстве нет активного соединения Browser Bridge с сервером ИРУ. Проверьте браузер в Настройках."
     if reason in {"invalid_browser_credential", "pairing_required"}:

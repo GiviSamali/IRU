@@ -367,3 +367,16 @@ def test_focus_transport_requires_exact_owned_device_and_verified_result(env):
     socket.result={"status":"success","tab_id":7,"focused":False}
     assert execute("web.focus",{"tab_id":7})["status"] == "failed"
     assert execute("web.focus",{"tab_id":7,"script":"evil"})["status"] == "failed"
+
+
+def test_confirmation_is_pre_effect_and_approved_retry_remains_idempotent(env):
+    def reply(command):
+        if not command["authorization"]["dangerous_effect_confirmed"]:
+            return {"status":"failed","error":"browser_confirmation_required", "tab_id":7, "page":PAGE}
+        return {"status":"success","tab_id":7,"page":PAGE,"effect":"activation_dispatched"}
+    socket,_=connection(env,result=reply)
+    assert execute(external_action=True)["error"]=="browser_confirmation_required"
+    assert execute(external_action=True,dangerous_effect_confirmed=True)["status"]=="success"
+    assert execute(external_action=True,dangerous_effect_confirmed=True)["deduplicated"]
+    assert len(socket.calls)==2
+    assert socket.calls[0]["request_id"]!=socket.calls[1]["request_id"]

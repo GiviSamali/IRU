@@ -351,3 +351,20 @@ test('observation recovery cannot follow a changed tab origin',async()=>{
   const result=await harness.command(socket,{request_id:'changed-origin',operation:'web.read',params:{tab_id:1}});
   assert.equal(result.status,'failed');assert.equal(reads,1);assert.equal(injections,0);
 });
+
+
+test('executable download requires approval before click and approved request is idempotent',async () => {
+  const page=await fixture();
+  await page.evaluate(() => {
+    const link=document.createElement('a');link.href='https://example.test/setup.exe';link.textContent='Installer';
+    window.downloadClicks=0;link.onclick=e=>{e.preventDefault();window.downloadClicks++;};document.querySelector('main').append(link);
+  });
+  const item=await observed(page,'Installer');
+  const denied=await command(page,'web.activate',item.params,{external_action:true});
+  assert.equal(denied.error,'browser_confirmation_required');assert.equal(await page.evaluate(()=>window.downloadClicks),0);
+  const authorization={external_action:true,dangerous_effect_confirmed:true};
+  const approved=await command(page,'web.activate',item.params,authorization,'approved-download');
+  assert.equal(approved.status,'success');
+  assert.deepEqual(await command(page,'web.activate',item.params,authorization,'approved-download'),approved);
+  assert.equal(await page.evaluate(()=>window.downloadClicks),1);await page.close();
+});

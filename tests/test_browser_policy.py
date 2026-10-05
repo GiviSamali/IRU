@@ -146,7 +146,7 @@ def test_browser_scope_does_not_require_magic_words(message):
     assert policy.allows("web.tabs","givi",{})==(True,"")
     assert policy.allows("web.focus","givi",{"tab_id":10})==(True,"")
     assert policy.browser_only
-    assert not policy.external_action  # Semantic runtime supplies external authority separately.
+    assert not policy.external_action  # The actual validated activation call supplies transport authority.
 
 
 def test_scope_and_data_guards_are_independent_of_request_words():

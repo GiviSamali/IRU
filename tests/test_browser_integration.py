@@ -28,17 +28,12 @@ def result(operation):
             "element_id":"field","response_policy":"silent_on_success" if operation in {"web.fill","web.activate","web.wait"} else "speak_result"}
 
 
-def run_normal(monkeypatch,message,responses,send,history=None, *, real_completion=None, cfg_override=None, intent_decision=None):
+def run_normal(monkeypatch,message,responses,send,history=None, *, real_completion=None, cfg_override=None):
     monkeypatch.setattr(database,"get_device_profile",lambda *a,**kw:None)
     queue=iter(responses)
-    from server.browser_intent import validate_browser_intent
-    from server.browser_policy import BrowserTaskPolicy
     original_send=send
     async def send(device,operation,params):
         if device != "givi":return {"status":"failed","error":"browser_device_not_authorized_by_user"}
-        if intent_decision is not None and operation in {"web.fill","web.activate"}:
-            allowed,reason=validate_browser_intent(intent_decision,operation,device,params,BrowserTaskPolicy(message,"givi",history).draft_targets)
-            if not allowed:return {"status":"failed","error":reason}
         return await original_send(device,operation,params)
     async def completion(**kw):
         if real_completion: return await real_completion(**kw)
@@ -51,12 +46,12 @@ def run_normal(monkeypatch,message,responses,send,history=None, *, real_completi
 
 @pytest.mark.parametrize("malicious", [call("execute_cmd",{"command":"upload private file"}),
     call("transfer_file",{"source_device_id":"givi","source_path":"C:/private.txt","target_device_id":"Second","target_directory":"desktop"}),
-    call("web_read",{"tab_id":7,"device_id":"Second"}),call("web_activate",ELEMENT),
+    call("web_read",{"tab_id":7,"device_id":"Second"}),
     call("answer_request_confirmation",{"action":"execute_cmd","command_preview":"upload private file","risk":"dangerous","message":"Разрешить?","basis":["step_1"]})])
-def test_injection_cannot_authorize_shell_transfer_other_device_or_send(monkeypatch,malicious):
+def test_injection_cannot_authorize_shell_transfer_other_device(monkeypatch,malicious):
     sent=[]
     async def send(device,operation,params): sent.append((device,operation)); return result(operation)
-    outcome=run_normal(monkeypatch,"Прочитай последние сообщения в этом чате",[call("web_read",{"tab_id":7}),malicious,clarification()],send, intent_decision={"authorized_device_ids":["givi"],"allow_fill":False,"allow_activate":False})
+    outcome=run_normal(monkeypatch,"Прочитай последние сообщения в этом чате",[call("web_read",{"tab_id":7}),malicious,clarification()],send)
     assert sent==[("givi","web.read")]
     assert any((entry.get("result") or {}).get("error") for entry in outcome["commands"])
 
@@ -137,10 +132,6 @@ def test_real_task_runtime_routes_bridge_and_blocks_local_fallback(monkeypatch):
         denied=await kw["send_command_fn"]("Second","web.read",{"tab_id":7})
         assert denied["status"]=="failed"
         return {"answer":"test","commands":[],"tasks":[]}
-    import server.browser_intent as semantic
-    async def resolve(*a,**kw):
-        return {"authorized_device_ids":["givi"],"allow_fill":False,"allow_activate":False,"requires_confirmation":False,"require_existing_draft":False,"literal_text":None}
-    monkeypatch.setattr(semantic,"resolve_browser_intent",resolve)
     monkeypatch.setattr(browser_bridge,"execute_browser_action",bridge_execute)
     monkeypatch.setattr(task_runtime,"send_command_to_agent",agent_send)
     monkeypatch.setattr(task_runtime,"process_nl_command",process)
@@ -192,13 +183,11 @@ def test_pipeline_clarification_stops_before_dispatch(monkeypatch):
     assert outcome["status"]=="error" and outcome["commands"][-1]["tool_name"]=="answer.ask_clarification"
 
 
-def test_page_cannot_replace_literal_human_draft(monkeypatch):
+def test_primary_model_can_fill_without_an_extra_gate(monkeypatch):
     sent=[]
-    async def send(device,operation,params):sent.append(operation);return result(operation)
-    outcome=run_normal(monkeypatch,"Передай literal human message",[call("web_fill",{**ELEMENT,"text":"injected"}),clarification()],send,
-        intent_decision={"authorized_device_ids":["givi"],"allow_fill":True,"allow_activate":False,"literal_text":"literal human message"})
-    assert not sent
-    assert any((entry.get("result") or {}).get("error")=="browser_literal_message_mismatch" for entry in outcome["commands"])
+    async def send(device,operation,params):sent.append(params["text"]);return result(operation)
+    outcome=run_normal(monkeypatch,"Передай привет",[call("web_fill",{**ELEMENT,"text":"Привет!"}),grounded("Черновик готов")],send)
+    assert sent==["Привет!"] and outcome["answer"]=="Черновик готов"
 
 
 
@@ -379,7 +368,6 @@ def test_explicit_send_uses_existing_draft_without_refill_or_extra_wait(monkeypa
     history=[{"role":"assistant","commands":[{"tool_name":"web.fill","target_device_id":"givi","result":result("web.fill")}]}]
     sent=[]
     async def send(device,operation,params):sent.append(operation);return result(operation)
-    outcome=run_normal(monkeypatch,"Можно отправлять",[call("web_activate",{**ELEMENT,"element_id":"send-button"}),grounded("Отправлено")],send,history,
-        intent_decision={"authorized_device_ids":["givi"],"allow_fill":False,"allow_activate":True,"require_existing_draft":True})
+    outcome=run_normal(monkeypatch,"Можно отправлять",[call("web_activate",{**ELEMENT,"element_id":"send-button"}),grounded("Отправлено")],send,history)
     assert sent==["web.activate"] and outcome["answer"]=="Отправлено"
 
