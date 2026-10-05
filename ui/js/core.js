@@ -14,6 +14,7 @@ const state = {
   explorerOpen: false,
   explorerPath: null,
   explorerHistory: [],
+  settingsPanelOpen: false,
   memoryPanelOpen: false,
   memoryPanelLoading: false,
   memoryPanelError: '',
@@ -168,6 +169,7 @@ function doLogout() {
   if (typeof updateUsageVisibility === 'function') updateUsageVisibility();
   state.memoryFacts = [];
   if (typeof closeMemoryPanel === 'function') closeMemoryPanel();
+  if (typeof closeSettingsPanel === 'function') closeSettingsPanel();
   state.chats = [];
   state.currentChatId = null;
   state.messages = [];

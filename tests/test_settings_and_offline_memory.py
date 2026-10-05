@@ -63,8 +63,12 @@ def test_facts_crud_api_and_settings_are_available_without_device(client):
     assert client.delete(f"/api/memory/facts/{fact_id}",headers=headers).status_code==200
     from pathlib import Path
     html=(Path(__file__).parents[1]/"ui/index.html").read_text(encoding="utf-8")
-    drawer=html[html.index('<aside class="memory-panel"'):html.index('<!-- ADMIN PANEL -->')]
-    assert all(label in drawer for label in ("Настройки","Факты","Об ИРУ","Инструкция","Соглашение","browserConnectionStatus"))
+    settings=html[html.index('<aside class="memory-panel" id="settingsPanel"'):html.index('<aside class="memory-panel" id="memoryPanel"')]
+    facts=html[html.index('<aside class="memory-panel" id="memoryPanel"'):html.index('<!-- ADMIN PANEL -->')]
+    assert all(label in settings for label in ("Настройки","Об ИРУ","Инструкция","Соглашение","browserConnectionStatus"))
+    assert 'memoryFactInput' not in settings and 'memoryPanelList' not in settings
+    assert 'Факты' in facts and 'memoryFactInput' in facts
+    assert 'settings-links' not in facts and 'browserConnectionStatus' not in facts
     header=html[html.index('id="headerActions"'):html.index('id="chatMessages"')]
     assert 'href="/about"' not in header and 'href="/terms"' not in header
 

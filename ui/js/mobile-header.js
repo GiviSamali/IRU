@@ -7,7 +7,7 @@
     panel.classList.remove('mobile-open');
     toggle.setAttribute('aria-expanded', 'false');
     panel.querySelectorAll('.show, .usage-badge.open').forEach(el => el.classList.remove('show', 'open'));
-    panel.querySelectorAll('[aria-expanded="true"]').forEach(el => el.setAttribute('aria-expanded', 'false'));
+    panel.querySelectorAll('[aria-expanded="true"]:not(#memoryBadge):not(#settingsToggle)').forEach(el => el.setAttribute('aria-expanded', 'false'));
     if (restoreFocus) toggle.focus();
   }
   toggle.addEventListener('click', () => {
@@ -22,7 +22,7 @@
     if (event.key === 'Escape' && panel.classList.contains('mobile-open')) close(true);
   });
   panel.addEventListener('click', event => {
-    if (mobile.matches && event.target.closest('a, #explorerToggle, #devModeToggle, #btnAdmin, #devicePassportToggle')) close();
+    if (mobile.matches && event.target.closest('a, #explorerToggle, #devModeToggle, #btnAdmin, #devicePassportToggle, #memoryBadge, #settingsToggle')) close();
   });
   panel.addEventListener('focusout', () => {
     setTimeout(() => {

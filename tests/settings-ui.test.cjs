@@ -44,20 +44,21 @@ for (const viewport of [{width:1440,height:1000},{width:390,height:844}]) {
       });
       await page.goto(origin, {waitUntil:'networkidle'});
       if (viewport.width < 768) await page.locator('#mobileHeaderToggle').click();
-      const label = page.locator('#memoryBadgeText');
+      const label = page.locator('#settingsToggleText');
       assert.equal(await label.isVisible(), true);
       assert.equal(await label.innerText(), 'Настройки');
-      assert.ok((await page.locator('#memoryBadge').boundingBox()).width >= 100);
-      await page.locator('#memoryBadge').click();
-      await page.locator('#memoryPanel.open').waitFor();
-      await page.getByText('Факт без подключённого устройства', {exact:true}).waitFor();
+      assert.ok((await page.locator('#settingsToggle').boundingBox()).width >= 100);
+      await page.locator('#settingsToggle').click();
+      await page.locator('#settingsPanel.open').waitFor();
+      assert.equal(await page.locator('#settingsPanel #memoryFactInput').count(), 0);
+      assert.equal(await page.locator('#memoryPanel').evaluate(el=>el.classList.contains('open')), false);
       const styles = await page.evaluate(() => {
         const css = selector => getComputedStyle(document.querySelector(selector));
         const links = css('.settings-links'), link = css('.settings-links a'), section = css('.settings-browser');
         return {display:links.display,gap:links.gap,padding:links.paddingTop,
           decoration:link.textDecorationLine,border:link.borderTopWidth,
           sectionPadding:section.paddingLeft,sectionGap:section.gap,
-          hintSize:css('.settings-hint').fontSize,iconDisplay:css('#memoryBadge > span').display};
+          hintSize:css('.settings-hint').fontSize,iconDisplay:css('#settingsToggle > span').display};
       });
       assert.equal(styles.display, 'grid');
       assert.equal(styles.gap, '8px');
@@ -68,6 +69,17 @@ for (const viewport of [{width:1440,height:1000},{width:390,height:844}]) {
       assert.equal(styles.sectionGap, '10px');
       assert.equal(styles.hintSize, '12px');
       assert.notEqual(styles.iconDisplay, 'none');
+      await page.locator('#settingsPanelCloseBtn').click();
+      assert.equal(await page.locator('#settingsToggle').getAttribute('aria-expanded'), 'false');
+      if (viewport.width < 768) await page.locator('#mobileHeaderToggle').click();
+      assert.equal(await page.locator('#memoryBadgeText').innerText(), 'Факты');
+      await page.locator('#memoryBadge').click();
+      await page.locator('#memoryPanel.open').waitFor();
+      await page.getByText('Факт без подключённого устройства', {exact:true}).waitFor();
+      assert.equal(await page.locator('#settingsPanel').evaluate(el=>el.classList.contains('open')), false);
+      assert.equal(await page.locator('#memoryPanel .settings-links').count(), 0);
+      assert.equal(await page.locator('#memoryBadge').getAttribute('aria-expanded'), 'true');
+      if (viewport.width < 768) assert.equal(await page.locator('#headerActions').evaluate(el=>el.classList.contains('mobile-open')), false);
       assert.equal(await page.locator('#usageBadge').isVisible(), false);
       assert.deepEqual(errors, []);
       if (process.env.IRU_SCREENSHOT_DIR) {

@@ -18,6 +18,8 @@ function bindStaticEvents() {
   bindOnce('sidebarOverlay', 'click', closeMobileSidebar);
   bindOnce('btnMenuMobile', 'click', toggleMobileSidebar);
   bindOnce('btnAdmin', 'click', toggleAdmin);
+  bindOnce('settingsToggle', 'click', toggleSettingsPanel);
+  bindOnce('settingsPanelCloseBtn', 'click', closeSettingsPanel);
   bindOnce('memoryBadge', 'click', toggleMemoryPanel);
   bindOnce('memoryPanelCloseBtn', 'click', closeMemoryPanel);
   bindOnce('memoryFactAddBtn', 'click', addMemoryFactFromPanel);

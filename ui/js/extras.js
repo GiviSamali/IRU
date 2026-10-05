@@ -46,7 +46,7 @@ function updateMemoryBadge(stats) {
   badge.style.display = 'inline-flex';
   const cLabel = c > 20 ? '20+' : c;
   const fLabel = f > 20 ? '20+' : f;
-  text.textContent = 'Настройки';
+  text.textContent = 'Факты';
 }
 
 function toggleMemoryPopover() {
@@ -165,12 +165,30 @@ async function loadMemoryFacts() {
   }
 }
 
+function renderSettingsPanel() {
+  document.getElementById('settingsPanel')?.classList.toggle('open', state.settingsPanelOpen);
+  document.getElementById('settingsToggle')?.setAttribute('aria-expanded', state.settingsPanelOpen ? 'true' : 'false');
+}
+
+function toggleSettingsPanel() {
+  state.settingsPanelOpen = !state.settingsPanelOpen;
+  if (state.settingsPanelOpen) closeMemoryPanel();
+  renderSettingsPanel();
+  if (state.settingsPanelOpen) refreshBrowserConnection();
+}
+
+function closeSettingsPanel() {
+  state.settingsPanelOpen = false;
+  renderSettingsPanel();
+}
+
 function toggleMemoryPanel() {
   state.memoryPanelOpen = !state.memoryPanelOpen;
+  if (state.memoryPanelOpen) closeSettingsPanel();
   const pop = document.getElementById('memoryPopover');
   if (pop) pop.classList.remove('show');
   renderMemoryPanel();
-  if (state.memoryPanelOpen) { loadMemoryFacts(); refreshBrowserConnection(); }
+  if (state.memoryPanelOpen) loadMemoryFacts();
 }
 
 function closeMemoryPanel() {
