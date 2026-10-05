@@ -13,7 +13,7 @@ try:
     from ..runtime_state import _dk, _short_did, devices, get_user_devices
     from ..task_runtime import collect_device_live_snapshot, compact_state_snapshot_summary, send_command_to_agent
     from ..tool_registry import tool_log_entry
-    from ..python_runtime import compact_python_runtime_summary, parse_python_runtime_summary, python_runtime_status_from_summary, validate_python_runtime_receipt
+    from ..python_runtime import current_runtime_summary, compact_python_runtime_summary, parse_python_runtime_summary, python_runtime_status_from_summary, validate_python_runtime_receipt
 except ImportError:
     from api_support import _is_admin, get_current_user
     from database import get_device_profile, get_user_device_profiles, update_device_activation_summary, update_device_python_runtime_summary
@@ -27,7 +27,7 @@ except ImportError:
     from runtime_state import _dk, _short_did, devices, get_user_devices
     from task_runtime import collect_device_live_snapshot, compact_state_snapshot_summary, send_command_to_agent
     from tool_registry import tool_log_entry
-    from python_runtime import compact_python_runtime_summary, parse_python_runtime_summary, python_runtime_status_from_summary, validate_python_runtime_receipt
+    from python_runtime import current_runtime_summary, compact_python_runtime_summary, parse_python_runtime_summary, python_runtime_status_from_summary, validate_python_runtime_receipt
 
 
 router = APIRouter()
@@ -105,24 +105,27 @@ def _state_summary_for_api(dev: dict) -> tuple[dict, str, dict]:
 def _device_api_item(short_did: str, dev: dict, profile: dict | None) -> dict:
     cached = _agent_cached_passport(dev)
     summary = dev.get("activation_summary") or cached.get("activation_summary") or parse_activation_summary((profile or {}).get("activation_summary"))
-    runtime_summary = dev.get("python_runtime_summary") or cached.get("runtime_summary") or parse_python_runtime_summary((profile or {}).get("python_runtime_summary"))
+    runtime_summary = current_runtime_summary(dev, profile)
     state_summary, state_source, hardware_summary = _state_summary_for_api(dev)
     runtime_status = python_runtime_status_from_summary(runtime_summary)
-    activation_runtime_status = runtime_status_from_summary(summary)
     caps = (summary.get("capabilities_summary") if isinstance(summary, dict) else None) or {}
+    caps = dict(caps) if isinstance(caps, dict) else {str(item): "available" for item in caps}
+    caps.pop("python", None)
     if runtime_status == "ok":
-        caps = dict(caps) if isinstance(caps, dict) else {str(item): "available" for item in caps}
         caps["python"] = "available"
     return {
         "device_id": short_did,
         "info": dev.get("info", {}),
         "connected": bool(dev.get("ws")),
         "activation_status": activation_status_from_summary(summary),
-        "runtime_status": runtime_status if runtime_status != "unknown" else activation_runtime_status,
+        "runtime_status": runtime_status,
         "python_runtime_status": runtime_status,
         "python_version": runtime_summary.get("python_version"),
         "pip_status": runtime_summary.get("pip_status"),
         "last_runtime_check": runtime_summary.get("last_runtime_check"),
+        "pip_version": runtime_summary.get("pip_version"),
+        "runtime_source": runtime_summary.get("runtime_source"),
+        "runtime_fresh": runtime_summary.get("runtime_fresh", False),
         "venv_python": runtime_summary.get("venv_python"),
         "health_status": state_summary.get("health_status"),
         "last_snapshot_at": state_summary.get("last_snapshot_at"),

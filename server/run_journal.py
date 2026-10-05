@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
+import time
+from contextvars import ContextVar
+from functools import wraps
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,6 +15,111 @@ try:
 except ImportError:
     from tool_completion import execute_cmd_result_is_negative  # type: ignore
     from tool_registry import canonical_tool_name, compact_tool_summary, tool_log_fields  # type: ignore
+
+
+# Request lifecycle metadata extends the existing tool journal. The server's
+# normal Uvicorn stderr/systemd journal persists it; no second trace store.
+_DIAGNOSTIC_CONTEXT = ContextVar("iru_diagnostic_context", default=None)
+_TRACE_LOGGER = logging.getLogger("uvicorn.error.iru.lifecycle")
+_TRACE_LABELS = frozenset({"nl", "onboarding", "pipeline", "non_pipeline", "broadcast", "PLAN", "SIMPLE", "skipped",
+    "running", "done", "completed", "completed_with_recovery", "failed", "error", "blocked", "cancelled", "confirm",
+    "success", "unknown", "partial", "terminal", "pending", "server", "model", "answer_text", "answer_tool",
+    "pipeline_step_report", "per_device_report", "server_fallback", "trust_guard", "plan_suggestion", "answer_auditor", "invalid_plan",
+    "classification_fallback", "plan_keyword", "window_policy", "classification_model", "explicit_pipeline",
+    "plan_declined", "protocol_recovery", "ordinary_task", "other", "grounded_report", "partial_report",
+    "ask_clarification", "report_failure", "request_confirmation", "dialogue", "conversation", "factual_answer",
+    "iteration_limit", "no_progress", "success_criteria", "browser_answer_unavailable", "completed_successfully"})
+
+
+def record_lifecycle_event(event: str, **metadata) -> None:
+    """Strict metadata allowlist: never serialize a request, arguments or result text."""
+    try:
+        context = _DIAGNOSTIC_CONTEXT.get()
+        if context is None:
+            return
+        events = {"request_started", "classification_path", "classification", "controller_selected", "tool_result", "recovery", "answer_adjusted", "request_finished"}
+        row = {"task_id":context["task_id"], "event":event if event in events else "other_event",
+               "elapsed_ms":int((time.monotonic()-context["started"])*1000)}
+        for key in ("controller", "mode", "classification", "source", "status", "answer_type", "terminal_reason"):
+            if key in metadata:
+                value = metadata[key]
+                row[key] = value if isinstance(value,str) and value in _TRACE_LABELS else "other"
+        for key in ("tool_count", "device_count", "iteration", "step_index"):
+            if type(metadata.get(key)) is int:
+                row[key] = max(0, min(metadata[key], 100000))
+        if "tool_name" in metadata:
+            tool = canonical_tool_name(str(metadata["tool_name"]))
+            # Registry membership, not arbitrary model output or arguments.
+            row["tool_name"] = tool if tool in _TRACE_TOOLS else "unknown_tool"
+        if len(context["events"]) < 256:
+            context["events"].append(row)
+        elif event == "request_finished":
+            context["events"][-1] = row
+        _TRACE_LOGGER.info("iru_lifecycle %s", json.dumps(row, separators=(",",":")))
+    except Exception:
+        # Diagnostics may fail, execution must not.
+        pass
+
+
+try:
+    from .tool_registry import TOOL_METADATA
+except ImportError:
+    from tool_registry import TOOL_METADATA
+_TRACE_TOOLS = frozenset(TOOL_METADATA) | frozenset({"answer.text", "answer.ask_clarification", "answer.report_failure",
+    "answer.request_confirmation", "web_search", "remember_fact", "forget_fact", "memory.list_facts", "memory.get_stats",
+    "memory_list_facts", "memory_get_stats", "answer_auditor", "tool_only_protocol", "task.cancel", "system.get_last_run_summary"})
+
+
+def _trace_journal_step(entry: dict) -> None:
+    try:
+        context = _DIAGNOSTIC_CONTEXT.get()
+        if context is None or id(entry) in context["seen"]:
+            return
+        context["seen"].add(id(entry))
+        result = entry.get("result") if isinstance(entry.get("result"), dict) else {}
+        name = entry.get("tool_name") or entry.get("action")
+        record_lifecycle_event("tool_result", tool_name=name, status=entry.get("tool_status") or entry.get("status"),
+            iteration=entry.get("iteration"), step_index=entry.get("step_index"), answer_type=result.get("answer_type"))
+        if name in {"tool_only_protocol", "answer_auditor"}:
+            record_lifecycle_event("recovery", source="answer_auditor" if name == "answer_auditor" else "protocol_recovery")
+    except Exception:
+        pass
+
+
+def diagnostic_task(kind: str, task_lookup):
+    def decorate(fn):
+        @wraps(fn)
+        async def wrapped(task_id, *args, **kwargs):
+            token = None
+            try:
+                task = task_lookup(task_id) or {}
+                events = task.setdefault("diagnostic_trace", [])
+                token = _DIAGNOSTIC_CONTEXT.set({"task_id":str(task_id),"events":events,"seen":set(),"started":time.monotonic()})
+                mode = "pipeline" if (task.get("modes") or {}).get("pipeline") else kind
+                record_lifecycle_event("request_started", mode=mode, device_count=len(args[2]) if len(args)>2 and isinstance(args[2],list) else 0)
+            except Exception:
+                task = {}
+            try:
+                return await fn(task_id, *args, **kwargs)
+            finally:
+                try:
+                    task = task_lookup(task_id) or task
+                    for entry in task.get("commands") or []:
+                        _trace_journal_step(entry)
+                    receipt = task.get("task_receipt") or {}
+                    source = receipt.get("answer_source") or ("plan_suggestion" if task.get("plan_suggestion") else
+                        "answer_tool" if any(is_terminal_answer_tool(e.get("tool_name")) for e in task.get("commands") or []) else "server_fallback")
+                    record_lifecycle_event("request_finished", status=task.get("status"), source=source,
+                        terminal_reason=receipt.get("terminal_reason"), tool_count=len(task.get("commands") or []))
+                except Exception:
+                    pass
+                if token is not None:
+                    try:
+                        _DIAGNOSTIC_CONTEXT.reset(token)
+                    except Exception:
+                        pass
+        return wrapped
+    return decorate
 
 
 ANSWER_TOOL_NAMES = {
@@ -210,6 +319,7 @@ def make_run_step(
 def append_tool_step(journal: list[dict[str, Any]], entry: dict[str, Any]) -> dict[str, Any]:
     if entry.get("step_id") and entry.get("idx") is not None:
         journal.append(entry)
+        _trace_journal_step(entry)
         return entry
     idx = _next_idx(journal)
     action = entry.get("action") or entry.get("tool_name") or ""
@@ -230,6 +340,7 @@ def append_tool_step(journal: list[dict[str, Any]], entry: dict[str, Any]) -> di
     if "target_device_id" not in entry:
         entry["target_device_id"] = entry.get("device_id")
     journal.append(entry)
+    _trace_journal_step(entry)
     return entry
 
 
@@ -257,6 +368,7 @@ def append_answer_step(
         summary=f"answer_type={answer_type}",
     )
     journal.append(entry)
+    _trace_journal_step(entry)
     return entry
 
 

@@ -95,6 +95,11 @@ def load_llm_config() -> dict:
     return cfg
 
 
+try:
+    from .run_journal import record_lifecycle_event
+except ImportError:
+    from run_journal import record_lifecycle_event
+
 logger = logging.getLogger("iru.classify")
 
 # ── Быстрые слова-триггеры для PLAN ──────────────────────────────────────
@@ -111,7 +116,7 @@ async def classify_task_complexity(message: str, usage_context: dict | None = No
     msg_lower = message.lower()
     for kw in _PLAN_KEYWORDS:
         if kw in msg_lower:
-            logger.info("[classify] fast-path keyword=%r → PLAN, message=%r", kw, message[:100])
+            record_lifecycle_event("classification_path", source="plan_keyword")
             return ("PLAN", "Запрошен пошаговый план")
 
     try:
@@ -123,6 +128,7 @@ async def classify_task_complexity(message: str, usage_context: dict | None = No
     except ImportError:
         from browser_policy import browser_request
     if ordinary_window_request(message) or browser_request(message):
+        record_lifecycle_event("classification_path", source="window_policy")
         return ("SIMPLE", "")
     cfg = load_llm_config()
     try:
@@ -174,15 +180,16 @@ async def classify_task_complexity(message: str, usage_context: dict | None = No
             error_message=str(exc),
             phase="classify_task_complexity",
         )
-        logger.warning("[classify] LLM error, fallback to SIMPLE: %s", exc)
+        record_lifecycle_event("recovery", source="classification_fallback", status="error")
+        logger.warning("[classify] LLM error, fallback to SIMPLE: %s", type(exc).__name__)
         return ("SIMPLE", "")
 
     if answer.upper().startswith("PLAN:"):
         plan_desc = answer[5:].strip()
-        logger.info("[classify] kind=PLAN plan_desc=%r message=%r", plan_desc[:80], message[:100])
+        record_lifecycle_event("classification_path", source="classification_model", classification="PLAN")
         return ("PLAN", plan_desc)
 
-    logger.info("[classify] kind=SIMPLE message=%r", message[:100])
+    record_lifecycle_event("classification_path", source="classification_model", classification="SIMPLE")
     return ("SIMPLE", "")
 
 
@@ -313,7 +320,7 @@ async def _chat_completion_request(
                 fallback_json["tool_choice"] = "auto"
                 print(
                     "[llm] 400 with tool_choice=required; retrying with tool_choice=auto. "
-                    f"body={_he.response.text[:500]}"
+                    "response body omitted"
                 )
                 try:
                     resp = await client.post(

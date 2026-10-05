@@ -112,7 +112,8 @@ def get_machine_guid() -> str:
         import winreg
         with winreg.OpenKey(
             winreg.HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\Microsoft\Cryptography"
+            r"SOFTWARE\Microsoft\Cryptography",
+            0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY
         ) as key:
             return winreg.QueryValueEx(key, "MachineGuid")[0] or ""
     except Exception:

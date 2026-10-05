@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any
+from datetime import datetime, timezone
 
 
 RUNTIME_STATUSES = {"ok", "missing", "install_required", "broken", "degraded"}
 PIP_STATUSES = {"ok", "missing", "broken"}
+RUNTIME_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
 def _canonical_json(data: Any) -> str:
@@ -89,6 +91,8 @@ def compact_python_runtime_summary(receipt: dict | None) -> dict:
         "python_version": python.get("venv_version") or python.get("base_version"),
         "pip_status": pip.get("status") or "unknown",
         "last_runtime_check": receipt.get("created_at"),
+        "pip_version": pip.get("version"),
+        "runtime_verified": True,
         "receipt_hash": runtime_receipt_hash(receipt),
     }
 
@@ -106,3 +110,44 @@ def python_runtime_context_markers(summary: dict | None) -> list[str]:
     if status == "degraded":
         return ["target_device_runtime_degraded"]
     return []
+
+
+def current_runtime_summary(dev: dict | None, profile: dict | None = None, *, now: datetime | None = None) -> dict:
+    """Fresh verified runtime facts win; activation is never current runtime evidence."""
+    dev = dev or {}
+    cached = dev.get("agent_cached_passport") or {}
+    candidates = []
+    receipt = dev.get("python_runtime_receipt")
+    if validate_python_runtime_receipt(receipt)[0]:
+        candidates.append((compact_python_runtime_summary(receipt), "verified_runtime_receipt"))
+    for value, source in ((dev.get("python_runtime_summary"), "runtime_summary"),
+                          (cached.get("runtime_summary"), "agent_cache"),
+                          ((profile or {}).get("python_runtime_summary"), "server_cache")):
+        summary = parse_python_runtime_summary(value)
+        if summary:
+            candidates.append((summary, source))
+    now = now or datetime.now(timezone.utc)
+    dated = []
+    for summary, source in candidates:
+        try:
+            stamp = datetime.fromisoformat(str(summary.get("last_runtime_check") or "").replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                continue
+            dated.append((stamp, summary, source))
+        except (TypeError, ValueError):
+            continue
+    if dated:
+        stamp, summary, source = max(dated, key=lambda item: item[0])
+    else:
+        summary, source = candidates[0] if candidates else ({}, "missing")
+        stamp = None
+    age = (now - stamp).total_seconds() if stamp is not None else None
+    verified = summary.get("runtime_verified") is True or bool(summary.get("receipt_hash"))
+    fresh = bool(verified and summary.get("runtime_status") in RUNTIME_STATUSES and age is not None and -300 <= age <= RUNTIME_MAX_AGE_SECONDS)
+    if fresh and summary.get("runtime_status") == "ok":
+        fresh = bool(summary.get("venv_python") and summary.get("python_version") and summary.get("pip_status") == "ok")
+    result = {**summary, "runtime_source": source, "runtime_fresh": fresh}
+    if not fresh:
+        result.update(runtime_status="unknown", python_version=None, pip_status="unknown", venv_python=None,
+                      last_known_runtime_status=summary.get("runtime_status") or "unknown")
+    return result

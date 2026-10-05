@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import re
 import shlex
+from datetime import datetime, timezone
+
+try:
+    from .python_runtime import current_runtime_summary, RUNTIME_MAX_AGE_SECONDS
+except ImportError:
+    from python_runtime import current_runtime_summary, RUNTIME_MAX_AGE_SECONDS
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -54,6 +60,7 @@ class PythonToolchainReceipt:
 
 
 _RECEIPT_CACHE: dict[str, PythonToolchainReceipt] = {}
+_RECEIPT_CHECKED_AT: dict[str, datetime] = {}
 
 
 def _cache_keys(device_context: dict[str, Any] | None) -> list[str]:
@@ -70,17 +77,23 @@ def get_cached_python_toolchain(device_context: dict[str, Any] | None) -> Python
     for key in _cache_keys(device_context):
         receipt = _RECEIPT_CACHE.get(key)
         if receipt:
-            return receipt
+            checked = _RECEIPT_CHECKED_AT.get(key)
+            if checked is not None and -300 <= (datetime.now(timezone.utc)-checked).total_seconds() <= RUNTIME_MAX_AGE_SECONDS:
+                return receipt
+            _RECEIPT_CACHE.pop(key, None)
+            _RECEIPT_CHECKED_AT.pop(key, None)
     return None
 
 
-def remember_python_toolchain(receipt: PythonToolchainReceipt, *, user_id=None) -> None:
+def remember_python_toolchain(receipt: PythonToolchainReceipt, *, user_id=None, verified_at: datetime | None = None) -> None:
     if receipt.status == "ok" and not is_verified_python_receipt(receipt):
         return
     if receipt.status not in {"ok", "broken_stub", "install_required"}:
         return
     if receipt.device_id:
-        _RECEIPT_CACHE[f"{user_id}:device_id:{receipt.device_id}"] = receipt
+        key = f"{user_id}:device_id:{receipt.device_id}"
+        _RECEIPT_CACHE[key] = receipt
+        _RECEIPT_CHECKED_AT[key] = verified_at or datetime.now(timezone.utc)
 
 
 def python_toolchain_from_runtime_summary(
@@ -91,7 +104,8 @@ def python_toolchain_from_runtime_summary(
 ) -> PythonToolchainReceipt | None:
     if not isinstance(summary, dict):
         return None
-    if summary.get("runtime_status") != "ok":
+    current = current_runtime_summary({"python_runtime_summary": summary})
+    if current.get("runtime_status") != "ok" or not current.get("runtime_fresh"):
         return None
     interpreter = str(summary.get("venv_python") or "").strip()
     version = str(summary.get("python_version") or "").strip()
@@ -104,14 +118,15 @@ def python_toolchain_from_runtime_summary(
         launcher=interpreter,
         version=version,
         pip_available=summary.get("pip_status") == "ok",
-        pip_version=None,
+        pip_version=summary.get("pip_version"),
         site_packages=[],
         packages={},
         raw_evidence=["managed_python_runtime_summary"],
         confidence=0.99,
     )
     if is_verified_python_receipt(receipt):
-        remember_python_toolchain(receipt, user_id=user_id)
+        verified_at = datetime.fromisoformat(str(summary["last_runtime_check"]).replace("Z", "+00:00"))
+        remember_python_toolchain(receipt, user_id=user_id, verified_at=verified_at)
         return receipt
     return None
 

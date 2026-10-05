@@ -53,6 +53,7 @@ try:
         GROUNDED_CORRECTION,
         ONE_TOOL_CORRECTION,
         RAW_CONTENT_CORRECTION,
+        record_lifecycle_event,
         ProtocolValidationError,
         append_answer_step,
         append_tool_step,
@@ -112,6 +113,7 @@ except ImportError:
         GROUNDED_CORRECTION,
         ONE_TOOL_CORRECTION,
         RAW_CONTENT_CORRECTION,
+        record_lifecycle_event,
         ProtocolValidationError,
         append_answer_step,
         append_tool_step,
@@ -1229,7 +1231,7 @@ async def run_pipeline_worker(
                     "If the step cannot be completed, report failure or partial results now.")})
         print(
             f"[pipeline/worker] iteration {iteration + 1}/{PIPELINE_WORKER_MAX_ITERATIONS}, "
-            f"step={step.get('title', '')[:60]!r}"
+            f"step_index={step_index}"
         )
         data = await chat_completion_request_fn(
             client=client,
@@ -1249,7 +1251,7 @@ async def run_pipeline_worker(
         print(
             f"[pipeline/worker] response: finish_reason={finish_reason}, "
             f"tool_calls={len(tool_calls) if tool_calls else 0}, "
-            f"content_preview={content_preview!r}"
+            f"content_chars={len(assistant_msg.get('content') or '')}"
         )
 
         if finish_reason == "length":
@@ -1265,12 +1267,14 @@ async def run_pipeline_worker(
                 browser_answer_phase = True
             if browser_answer_phase:
                 break
+            record_lifecycle_event("recovery", source="protocol_recovery")
             messages.append({"role": "user", "content": RAW_CONTENT_CORRECTION})
             continue
 
         try:
             tool_call = validate_tool_call_batch(tool_calls)
         except ProtocolValidationError as exc:
+            record_lifecycle_event("recovery", source="protocol_recovery")
             messages.append({"role": "user", "content": exc.correction})
             continue
 
@@ -1404,7 +1408,7 @@ async def run_pipeline_worker(
                 repeat_guard_args["device_id"] = requested_device_id
             print(
                 f"[pipeline/worker] tool_call: {fn_name}"
-                f"({'' if fn_name in BROWSER_TOOL_NAMES else json.dumps(fn_args, ensure_ascii=False)[:250]}) -> device={target_device}"
+                f" parameter_count={len(fn_args)} -> device={target_device}"
             )
 
             canonical_browser_tool = PIPELINE_APP_WINDOW_ACTIONS.get(fn_name, fn_name)
@@ -2336,7 +2340,7 @@ async def process_pipeline_subagents(
                         )
                         if audit_infra_error:
                             receipt["summary_warning"] = "auditor_unavailable"
-                            logger.warning("Pipeline summary auditor unavailable: %s", audit_reason)
+                            logger.warning("Pipeline summary auditor unavailable")
                             break
                         if not audit_ok:
                             summary_messages.append({"role": "user", "content": GROUNDED_CORRECTION})
@@ -2368,7 +2372,7 @@ async def process_pipeline_subagents(
             if not final_answer:
                 receipt["summary_warning"] = "model_did_not_select_answer_tool"
         except Exception as exc:
-            logger.warning("Pipeline summary unavailable: %s", exc)
+            logger.warning("Pipeline summary unavailable: %s", type(exc).__name__)
             receipt["summary_warning"] = "summary_unavailable"
             final_answer = ""
         if not final_answer or receipt.get("summary_warning") or final_answer.startswith("Не удалось безопасно проверить"):

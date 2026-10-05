@@ -105,6 +105,11 @@ except ImportError:
     from tool_registry import compact_device_passport
 
 
+try:
+    from .run_journal import diagnostic_task, record_lifecycle_event
+except ImportError:
+    from run_journal import diagnostic_task, record_lifecycle_event
+
 logger = logging.getLogger("iru.run_plan")
 
 
@@ -130,6 +135,9 @@ def _registered_identity(device_id: str, dev: dict | None, profile: dict | None 
         "registered_hostname": registered.get("registered_hostname") or info.get("hostname") or (profile or {}).get("hostname"),
         "registered_machine_guid": registered.get("registered_machine_guid") or info.get("machine_guid") or (profile or {}).get("machine_guid"),
         "registered_device_id": info.get("device_id") or _short_did(device_id),
+        "registered_machine_guid_type": registered.get("machine_guid_type") or info.get("machine_guid_type") or
+            ("windows_machine_guid" if "windows" in str(info.get("os") or (profile or {}).get("os") or "").lower()
+             else "linux_machine_id" if "linux" in str(info.get("os") or (profile or {}).get("os") or "").lower() else None),
     }
 
 
@@ -149,8 +157,10 @@ def _build_identity_receipt(
         **_registered_identity(device_id, dev, profile),
         "observed_hostname": observed.get("observed_hostname") or observed.get("hostname"),
         "observed_computer_name": observed.get("observed_computer_name") or observed.get("computer_name"),
-        "observed_machine_guid": observed.get("observed_machine_guid") or observed.get("machine_uuid") or observed.get("uuid"),
+        "observed_machine_guid": observed.get("observed_machine_guid"),
         "observed_username": observed.get("observed_username") or observed.get("username"),
+        "observed_machine_guid_type": observed.get("machine_guid_type") or observed.get("observed_machine_guid_type"),
+        "observed_system_uuid": observed.get("system_uuid"),
         "collected_at": observed.get("collected_at") or _utc_now_iso(),
         "identity_status": "unknown",
     }
@@ -160,16 +170,22 @@ def _build_identity_receipt(
         _norm_identity_value(receipt.get("observed_computer_name")),
     ]
     observed_names = [name for name in observed_names if name]
-    if observed_names:
-        receipt["identity_status"] = "ok"
-        if registered_hostname and registered_hostname not in observed_names:
-            receipt["identity_status"] = "mismatch"
-
+    comparisons = []
+    registered_type = receipt.get("registered_machine_guid_type")
+    if registered_type and registered_type == receipt.get("observed_machine_guid_type"):
+        registered_guid = _norm_identity_value(receipt.get("registered_machine_guid"))
+        observed_guid = _norm_identity_value(receipt.get("observed_machine_guid"))
+        if registered_guid and observed_guid:
+            comparisons.append(registered_guid == observed_guid)
     for stable_key in ("bios_serial", "system_uuid"):
         registered_value = _norm_identity_value((dev or {}).get("info", {}).get(stable_key) if isinstance(dev, dict) else "")
         observed_value = _norm_identity_value(observed.get(stable_key))
         if registered_value and observed_value:
-            receipt["identity_status"] = "ok" if registered_value == observed_value else "mismatch"
+            comparisons.append(registered_value == observed_value)
+    if comparisons:
+        receipt["identity_status"] = "ok" if all(comparisons) else "mismatch"
+    elif registered_hostname and observed_names:
+        receipt["identity_status"] = "ok" if registered_hostname in observed_names else "mismatch"
     return receipt
 
 
@@ -184,6 +200,7 @@ def _attach_identity_receipt(result: dict, *, device_id: str, dev: dict | None) 
                 "observed_hostname",
                 "observed_computer_name",
                 "observed_machine_guid",
+                "machine_guid_type",
                 "observed_username",
                 "bios_serial",
                 "system_uuid",
@@ -289,7 +306,7 @@ async def send_command_to_agent(
             )
         if needs_confirmation(cmd_text):
             if skip_confirm:
-                logger.info("[security] skip_confirm=True, команда пропущена без плашки: %s", cmd_text[:80])
+                logger.info("[security] skip_confirm=True, command_chars=%s", len(cmd_text))
             else:
                 raise RuntimeError("CONFIRM_REQUIRED: Команда требует подтверждения пользователя.")
 
@@ -412,7 +429,7 @@ def _snapshot_command_for_device(device_info: dict) -> str:
             "    try: return subprocess.check_output(cmd, text=True).strip()\n"
             "    except Exception: return ''\n"
             "print(json.dumps({'observed_hostname': platform.node(), 'observed_computer_name': platform.node(), "
-            "'observed_machine_guid': run(['cat','/etc/machine-id']), 'observed_username': getpass.getuser(), "
+            "'observed_machine_guid': run(['cat','/etc/machine-id']) or run(['cat','/var/lib/dbus/machine-id']), 'machine_guid_type': 'linux_machine_id', 'observed_username': getpass.getuser(), "
         "'os_caption': platform.platform(), 'os_version': platform.version(), 'cpu': platform.processor(), "
         "'cpu_load': os.getloadavg()[0] if hasattr(os, 'getloadavg') else None, "
         "'process_count': len([p for p in os.listdir('/proc') if p.isdigit()])}))\n"
@@ -422,13 +439,15 @@ def _snapshot_command_for_device(device_info: dict) -> str:
         "$ErrorActionPreference='SilentlyContinue'; "
         "$cs=Get-CimInstance Win32_ComputerSystem; $os=Get-CimInstance Win32_OperatingSystem; "
         "$prod=Get-CimInstance Win32_ComputerSystemProduct; $bios=Get-CimInstance Win32_BIOS; "
+        "$reg=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64); "
+        "$key=$reg.OpenSubKey('SOFTWARE\\Microsoft\\Cryptography'); $mid=$key.GetValue('MachineGuid'); $key.Close(); $reg.Close(); "
         "$cpu=Get-CimInstance Win32_Processor | Select-Object -First 1; "
         "$gpus=Get-CimInstance Win32_VideoController | ForEach-Object { "
         "[pscustomobject]@{name=$_.Name; adapter_ram_mb=if($_.AdapterRAM){[math]::Round($_.AdapterRAM/1MB,0)}else{$null}; driver_version=$_.DriverVersion; status=$_.Status} }; "
         "$disks=Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" | ForEach-Object { "
         "[pscustomobject]@{drive=$_.DeviceID; total_gb=[math]::Round($_.Size/1GB,2); free_gb=[math]::Round($_.FreeSpace/1GB,2)} }; "
         "[pscustomobject]@{observed_hostname=[System.Net.Dns]::GetHostName(); observed_computer_name=$env:COMPUTERNAME; "
-        "observed_machine_guid=$prod.UUID; bios_serial=$bios.SerialNumber; observed_username=[Environment]::UserName; "
+        "observed_machine_guid=$mid; machine_guid_type='windows_machine_guid'; system_uuid=$prod.UUID; bios_serial=$bios.SerialNumber; observed_username=[Environment]::UserName; "
         "os_caption=$os.Caption; os_version=$os.Version; os_build=$os.BuildNumber; cpu=$cpu.Name; cpu_load=$cpu.LoadPercentage; "
         "ram_total_gb=[math]::Round($cs.TotalPhysicalMemory/1GB,2); ram_free_gb=[math]::Round($os.FreePhysicalMemory/1MB,2); "
         "disks=$disks; gpus=$gpus; process_count=@(Get-Process).Count; uptime=((Get-Date)-$os.LastBootUpTime).ToString()} | ConvertTo-Json -Depth 6 -Compress"
@@ -770,6 +789,7 @@ def _device_execution_status(result: dict) -> str:
     return "ok"
 
 
+@diagnostic_task("nl", lambda task_id: tasks.get(task_id))
 async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list[str], chat_id: int):
     """
     Execute an NL task in the background.
@@ -1062,6 +1082,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     user_id=user_id,
                     send_fn=send_fn,
                 )
+            record_lifecycle_event("controller_selected", controller="pipeline" if task_modes.get("pipeline") else "non_pipeline",
+                mode="broadcast" if is_broadcast else "ordinary_task")
             result = await process_nl_command(
                 user_message=message,
                 device_id=_short_did(device_id),
@@ -1117,8 +1139,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         except Exception as exc:
             if is_task_cancel_requested(task_id):
                 return cancellation_payload()
-            print(f"[run_nl_task] ERROR on device={device_id}: {type(exc).__name__}: {exc}")
-            traceback.print_exc()
+            print(f"[run_nl_task] ERROR on device={device_id}: {type(exc).__name__}")
+            logger.warning("[task] exception type=%s", type(exc).__name__)
             error_text = str(exc).strip() or type(exc).__name__
             return {
                 "device_id": device_id,
@@ -1131,6 +1153,9 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
     if is_task_cancel_requested(task_id):
         finish_cancelled()
         return
+    if is_pipeline or plan_declined_for_request:
+        record_lifecycle_event("classification", classification="skipped",
+            source="explicit_pipeline" if is_pipeline else "plan_declined")
     if not is_pipeline:
         if not plan_declined_for_request:
             if is_task_cancel_requested(task_id):
@@ -1154,13 +1179,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                         "phase": "classify_task_complexity",
                     },
                 )
-            logger.info(
-                "[classify] kind=%s plan_desc=%r user_id=%s message=%r",
-                kind,
-                plan_desc[:80] if plan_desc else "",
-                user_id,
-                message[:100],
-            )
+            record_lifecycle_event("classification", classification=kind)
+            logger.info("[classify] kind=%s user_id=%s task_id=%s", kind, user_id, task_id)
             if kind == "PLAN":
                 task["plan_suggestion"] = plan_desc
                 task["plan_original_request"] = message
@@ -1275,7 +1295,10 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             finish_cancelled(combined_commands)
             return
         if not ("combined_task_receipt" in locals() and (combined_task_receipt or {}).get("answer_source") in {"pipeline_step_report", "per_device_report"}):
+            before_trust_guard = combined_answer
             combined_answer = enforce_trusted_answer(combined_answer, combined_commands)
+            if combined_answer != before_trust_guard:
+                record_lifecycle_event("answer_adjusted", source="trust_guard")
         combined_answer = strip_markdown(combined_answer)
         add_message(chat_id, "assistant", combined_answer, combined_commands)
 
@@ -1323,20 +1346,22 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         if "combined_task_receipt" in locals() and combined_task_receipt:
             task["task_receipt"] = combined_task_receipt
     except Exception as exc:
-        print(f"[run_nl_task] FATAL task={task_id[:8]}: {type(exc).__name__}: {exc}")
-        traceback.print_exc()
+        print(f"[run_nl_task] FATAL task={task_id[:8]}: {type(exc).__name__}")
+        logger.warning("[task] exception type=%s", type(exc).__name__)
         error_text = str(exc).strip() or type(exc).__name__
         task["status"] = "error"
         task["answer"] = f"Ошибка: {error_text}" if error_text else "Произошла внутренняя ошибка. Попробуйте ещё раз."
         task["commands"] = []
 
 
+@diagnostic_task("onboarding", lambda task_id: tasks.get(task_id))
 async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id: int):
     """Background task for onboarding mode when no devices are connected."""
     task = tasks[task_id]
     task["current_step"] = "ИРУ думает..."
     try:
         chat_history = get_messages(chat_id, limit=50)
+        record_lifecycle_event("controller_selected", controller="onboarding", mode="onboarding")
         result = await _call_with_optional_usage_context(
             process_onboarding_message,
             user_message=message,

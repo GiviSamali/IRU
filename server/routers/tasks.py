@@ -444,6 +444,7 @@ async def api_get_task(task_id: str, request: Request):
         "commands": task.get("commands"),
         "tasks": task.get("tasks", []),
         "task_receipt": task.get("task_receipt"),
+        "diagnostic_trace": task.get("diagnostic_trace", []),
         "current_step": task.get("current_step"),
         "results": task.get("results", {}),
         "overall_status": task.get("overall_status"),

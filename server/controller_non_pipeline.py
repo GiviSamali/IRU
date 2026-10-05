@@ -53,6 +53,7 @@ try:
         INSUFFICIENT_EVIDENCE_CORRECTION,
         ONE_TOOL_CORRECTION,
         RAW_CONTENT_CORRECTION,
+        record_lifecycle_event,
         ProtocolValidationError,
         append_answer_step,
         append_tool_step,
@@ -118,6 +119,7 @@ except ImportError:
         INSUFFICIENT_EVIDENCE_CORRECTION,
         ONE_TOOL_CORRECTION,
         RAW_CONTENT_CORRECTION,
+        record_lifecycle_event,
         ProtocolValidationError,
         append_answer_step,
         append_tool_step,
@@ -288,6 +290,7 @@ async def process_non_pipeline_command(
             })
 
     def add_correction(correction: str):
+        record_lifecycle_event("recovery", source="protocol_recovery")
         messages.append({"role": "user", "content": correction})
 
     def append_entry(entry: dict) -> dict:
@@ -389,13 +392,13 @@ async def process_non_pipeline_command(
                     phase=f"window_control.iteration.{iteration + 1}" if window_only else f"browser_bridge.iteration.{iteration + 1}" if browser_only else f"non_pipeline.iteration.{iteration + 1}",
                 )
             except httpx.HTTPStatusError as exc:
-                print(f"[llm] HTTP error: {exc.response.status_code} {exc.response.text[:500]}")
+                print(f"[llm] HTTP error: {exc.response.status_code}")
                 raise
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
-                print(f"[llm] network error: {type(exc).__name__}: {exc}")
+                print(f"[llm] network error: {type(exc).__name__}")
                 raise RuntimeError("Сервис ИИ временно недоступен. Попробуйте через минуту.")
             except Exception as exc:
-                print(f"[llm] request error: {type(exc).__name__}: {exc}")
+                print(f"[llm] request error: {type(exc).__name__}")
                 raise
 
             choice = data["choices"][0]
@@ -407,7 +410,7 @@ async def process_non_pipeline_command(
                 f"[llm] response: finish_reason={finish_reason}, "
                 f"has_content={'yes' if content_preview else 'no'}, "
                 f"tool_calls={len(tool_calls) if tool_calls else 0}, "
-                f"content_preview={content_preview[:100]!r}"
+                f"content_chars={len(assistant_msg.get('content') or '')}"
             )
 
             if finish_reason == "length":
@@ -486,7 +489,7 @@ async def process_non_pipeline_command(
             try:
                 fn_args_preview = json.loads(tool_call["function"].get("arguments") or "{}")
             except json.JSONDecodeError as exc:
-                print(f"[llm] BAD JSON in tool args: {exc}, raw={tool_call['function'].get('arguments', '')[:300]}")
+                print("[llm] invalid JSON in tool arguments")
                 add_correction(f"Tool arguments must be valid JSON. {ONE_TOOL_CORRECTION}")
                 continue
 
@@ -539,7 +542,7 @@ async def process_non_pipeline_command(
                                 "training_context": _training_context(device_info),
                             }
                         if not audit_ok:
-                            print(f"[answer-auditor] rejected answer_text: {audit_reason}")
+                            print("[answer-auditor] rejected terminal answer")
                             add_correction(GROUNDED_CORRECTION)
                             continue
                         append_answer_step(
@@ -627,7 +630,7 @@ async def process_non_pipeline_command(
                 try:
                     fn_args = json.loads(tool_call["function"]["arguments"])
                 except json.JSONDecodeError as exc:
-                    print(f"[llm] BAD JSON in tool args: {exc}, raw={tool_call['function']['arguments'][:300]}")
+                    print("[llm] invalid JSON in tool arguments")
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call["id"],
@@ -725,7 +728,7 @@ async def process_non_pipeline_command(
                 if requested_device_id:
                     repeat_guard_args["device_id"] = requested_device_id
                 print(
-                    f"[llm] tool_call: {fn_name}({'' if fn_name in BROWSER_TOOL_NAMES else json.dumps(fn_args, ensure_ascii=False)[:250]}) "
+                    f"[llm] tool_call: {fn_name} parameter_count={len(fn_args)} "
                     f"-> device={target_device}"
                 )
 
@@ -897,7 +900,7 @@ async def process_non_pipeline_command(
                         tool_result = await send_command_fn(target_device, agent_action, fn_args)
                     except Exception as exc:
                         err_str = str(exc)
-                        print(f"[llm] {fn_name} EXCEPTION: {type(exc).__name__}: {err_str[:200]}")
+                        print(f"[llm] tool exception: {type(exc).__name__}")
                         if "CONFIRM_REQUIRED" in err_str:
                             raise ConfirmationRequired(
                                 command=f"{agent_action}: {fn_args.get('command') or fn_args.get('pid') or fn_args.get('title_contains') or ''}",
@@ -940,13 +943,11 @@ async def process_non_pipeline_command(
                         else:
                             tool_result = await send_command_fn(target_device, "execute_cmd", fn_args)
                         print(
-                            f"[llm] cmd result: returncode={tool_result.get('returncode')}, "
-                            f"stdout={tool_result.get('stdout', '')[:100]!r}, "
-                            f"stderr={tool_result.get('stderr', '')[:100]!r}"
+                            f"[llm] cmd result: returncode={tool_result.get('returncode')}"
                         )
                     except Exception as exc:
                         err_str = str(exc)
-                        print(f"[llm] cmd EXCEPTION: {type(exc).__name__}: {err_str[:200]}")
+                        print(f"[llm] tool exception: {type(exc).__name__}")
                         if "CONFIRM_REQUIRED" in err_str:
                             raise ConfirmationRequired(
                                 command=fn_args.get("command", ""),
@@ -1016,10 +1017,10 @@ async def process_non_pipeline_command(
                     try:
                         tool_result = await send_command_fn(target_device, "write_content", fn_args)
                         tool_result = compact_write_content_result(fn_args, tool_result)
-                        print(f"[llm] write_content result: {str(tool_result)[:150]}")
+                        print(f"[llm] write_content result: status={tool_result.get('status', 'unknown')}")
                     except Exception as exc:
                         err_str = str(exc)
-                        print(f"[llm] write_content EXCEPTION: {type(exc).__name__}: {err_str[:200]}")
+                        print(f"[llm] tool exception: {type(exc).__name__}")
                         if "CONFIRM_REQUIRED" in err_str:
                             raise ConfirmationRequired(
                                 command=f"write_content: {fn_args.get('path', '')}",
@@ -1089,7 +1090,7 @@ async def process_non_pipeline_command(
                             )
                             tool_result = {"status": "ok", "fact_id": fact_id, "result": f"Запомнил факт о тебе (id={fact_id})"}
                         except Exception as exc:
-                            print(f"[llm] remember_fact EXCEPTION: {exc}")
+                            print(f"[llm] tool exception: {type(exc).__name__}")
                             tool_result = {"error": str(exc)}
                     append_entry(_command_log_entry(
                         fn_name,
@@ -1111,7 +1112,7 @@ async def process_non_pipeline_command(
                             ok = db.delete_memory_fact(mem_user_id, int(fn_args.get("fact_id", 0)), source, machine_guid, target_device)
                             tool_result = {"status": "ok", "result": "Факт удалён"} if ok else {"error": "Факт не найден"}
                         except Exception as exc:
-                            print(f"[llm] forget_fact EXCEPTION: {exc}")
+                            print(f"[llm] tool exception: {type(exc).__name__}")
                             tool_result = {"error": str(exc)}
                     append_entry(_command_log_entry(
                         fn_name,

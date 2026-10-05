@@ -85,7 +85,8 @@ def test_registration_payload_includes_cached_passport(monkeypatch, tmp_path):
 
     assert payload["cached_passport"]["device_id"] == "givi"
     assert payload["activation_summary"]["activation_status"] == "activated"
-    assert payload["runtime_summary"]["runtime_status"] == "ok"
+    assert payload["runtime_summary"]["runtime_status"] == "unknown"
+    assert payload["runtime_summary"]["runtime_fresh"] is False
     assert payload["state_snapshot_summary"]["process_count"] == 9
     assert payload["hardware_summary"]["gpus"][0]["name"] == "Intel UHD"
     assert payload["agent_version"] == "1.2.3"

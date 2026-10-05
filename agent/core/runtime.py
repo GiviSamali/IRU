@@ -115,30 +115,12 @@ class AgentRuntime:
         return text[:limit].rstrip() + "..."
 
     def _format_params_for_log(self, action_name: str, params: dict) -> str:
+        # Diagnostic logs contain control flow, never command literals or payloads.
         if action_name == "execute_cmd":
-            command_preview = self._preview_text(params.get("command", ""))
-            timeout = params.get("timeout", 30)
-            shell = params.get("shell", "auto")
-            return f"command='{command_preview}', timeout={timeout}, shell={shell}"
-
+            return f"command_len={len(str(params.get('command') or ''))}"
         if action_name == "write_content":
-            content = str(params.get("content", ""))
-            return (
-                f"path='{params.get('path', '')}', append={bool(params.get('append'))}, "
-                f"encoding={params.get('encoding', 'utf-8')}, content_len={len(content)}"
-            )
-
-        if action_name == "get_file_content":
-            return f"path='{params.get('path', '')}'"
-
-        if action_name == "list_dir":
-            return f"path='{params.get('path', '') or '<desktop>'}'"
-
-        if action_name.startswith("file.transfer_"):
-            return "[private transfer parameters]"
-
-        raw = json.dumps(params, ensure_ascii=False, default=str)
-        return self._preview_text(raw)
+            return f"content_len={len(str(params.get('content') or ''))}"
+        return f"parameter_count={len(params)}"
 
     async def _run_async(self) -> None:
         self._loop = asyncio.get_running_loop()

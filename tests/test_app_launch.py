@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import asyncio
 import json
 import sys
@@ -119,7 +120,7 @@ def test_non_pipeline_app_launch_rewrites_python_to_managed_runtime():
             "status": "ok",
             "device_id": args["device_id"],
             "runtime_summary": {
-                "runtime_status": "ok",
+                "runtime_status": "ok", "last_runtime_check": datetime.now(timezone.utc).isoformat(), "runtime_verified": True,
                 "venv_python": venv_python,
                 "python_version": "3.11.9",
                 "pip_status": "ok",

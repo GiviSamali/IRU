@@ -457,7 +457,8 @@ def test_devices_api_falls_back_to_agent_cached_passport(monkeypatch):
     assert item["state_snapshot_fresh"] is False
     assert item["last_snapshot_at"] == "2026-05-16T09:00:00Z"
     assert item["process_count"] == 111
-    assert item["python_runtime_status"] == "ok"
+    assert item["python_runtime_status"] == "unknown"
+    assert item["runtime_fresh"] is False
     assert item["activation_status"] == "activated"
     assert item["gpu_summary"] == ["Intel UHD", "NVIDIA RTX 4060"]
     assert item["gpu_count"] == 2

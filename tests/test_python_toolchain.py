@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from server.python_toolchain import (
     PythonToolchainReceipt,
     build_python_toolchain_block,
@@ -395,7 +396,7 @@ def test_any_python_fact_requires_verified_receipt():
 def test_managed_runtime_summary_has_priority_for_rewrite():
     receipt = python_toolchain_from_runtime_summary(
         {
-            "runtime_status": "ok",
+            "runtime_status": "ok", "last_runtime_check": datetime.now(timezone.utc).isoformat(), "runtime_verified": True,
             "venv_python": r"C:\Users\tester\AppData\Local\IRU\runtime\venv\Scripts\python.exe",
             "python_version": "3.11.9",
             "pip_status": "ok",
@@ -412,7 +413,7 @@ def test_managed_runtime_summary_has_priority_for_rewrite():
 def test_managed_runtime_app_launch_rewrite_is_process_safe():
     receipt = python_toolchain_from_runtime_summary(
         {
-            "runtime_status": "ok",
+            "runtime_status": "ok", "last_runtime_check": datetime.now(timezone.utc).isoformat(), "runtime_verified": True,
             "venv_python": r"C:\Users\tester\AppData\Local\IRU\runtime\venv\Scripts\python.exe",
             "python_version": "3.11.9",
             "pip_status": "ok",
