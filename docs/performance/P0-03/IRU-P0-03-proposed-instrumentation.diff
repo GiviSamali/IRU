@@ -1,0 +1,173 @@
+--- a/server/llm_usage.py
++++ b/server/llm_usage.py
+@@ -1,5 +1,8 @@
+ from __future__ import annotations
+ 
++import json
++import os
++import time
+ from typing import Any
+ 
+ try:
+@@ -27,6 +30,75 @@
+     "deepseek-v4-flash": "deepseek-v4-flash",
+     "deepseek-v4-pro": "deepseek-v4-pro",
+ }
++
++
++
++# Proposal only: opt-in numeric accounting in existing llm_usage metadata.
++def performance_context(context, payload):
++    if os.getenv("IRU_PERFORMANCE_BASELINE") != "1":
++        return context
++    try:
++        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
++        fields = {
++            "serialized_input_bytes": len(encoded.encode("utf-8")),
++            "serialized_input_chars": len(encoded),
++            "message_count": len(payload.get("messages") or []),
++            "schema_count": len(payload.get("tools") or []),
++            "schemas_bytes": len(json.dumps(payload["tools"], ensure_ascii=False, separators=(",", ":")).encode("utf-8")) if "tools" in payload else 0,
++            "http_attempt_count": 0,
++            "llm_http_elapsed_ms": 0.0,
++        }
++        for role in ("system", "user", "assistant", "tool"):
++            fields[role + "_content_bytes"] = sum(
++                len(row["content"].encode("utf-8"))
++                for row in payload.get("messages", [])
++                if row.get("role") == role and isinstance(row.get("content"), str)
++            )
++        return {**(context or {}), "_performance": {"started": time.perf_counter(), "fields": fields}}
++    except Exception:
++        return context
++
++
++async def performance_post(client, context, *args, **kwargs):
++    perf = (context or {}).get("_performance")
++    if perf is None:
++        return await client.post(*args, **kwargs)
++    started = time.perf_counter()
++    try:
++        return await client.post(*args, **kwargs)
++    finally:
++        try:
++            fields = perf["fields"]
++            fields["http_attempt_count"] += 1
++            fields["llm_http_elapsed_ms"] += (time.perf_counter() - started) * 1000
++        except Exception:
++            pass
++
++
++def performance_usage(context, data):
++    try:
++        perf = (context or {}).get("_performance")
++        if perf is None:
++            return
++        usage = data.get("usage") if isinstance(data, dict) else None
++        valid = isinstance(usage, dict)
++        for key in ("prompt_tokens", "completion_tokens", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
++            perf["fields"][key + "_known"] = int(valid and type(usage.get(key)) is int)
++    except Exception:
++        pass
++
++
++def performance_metadata(context, metadata):
++    try:
++        perf = context.get("_performance")
++        if perf is None:
++            return metadata
++        fields = dict(perf["fields"])
++        fields["llm_request_elapsed_ms"] = (time.perf_counter() - perf["started"]) * 1000
++        # Content, credentials, filenames and raw provider errors never enter this object.
++        return {**(metadata if isinstance(metadata, dict) else {}), "performance": fields}
++    except Exception:
++        return metadata
+ 
+ 
+ def _int_value(value: Any) -> int:
+@@ -114,7 +186,7 @@
+     usage = usage or {}
+     effective_phase = phase or context.get("phase")
+     provider = context.get("provider") or "deepseek"
+-    metadata = context.get("metadata")
++    metadata = performance_metadata(context, context.get("metadata"))
+     estimated_cost = (
+         estimate_deepseek_cost_usd(model, usage, cfg)
+         if request_ok
+--- a/server/controller.py
++++ b/server/controller.py
+@@ -76,6 +76,11 @@
+     from python_toolchain import build_python_toolchain_block, get_cached_python_toolchain  # type: ignore
+ import asyncio
+ import httpx
++
++try:
++    from .llm_usage import performance_context, performance_post, performance_usage
++except ImportError:
++    from llm_usage import performance_context, performance_post, performance_usage
+ from pathlib import Path
+ 
+ CONFIG_PATH = Path(__file__).parent / "llm_config.json"
+@@ -131,26 +136,21 @@
+         record_lifecycle_event("classification_path", source="window_policy")
+         return ("SIMPLE", "")
+     cfg = load_llm_config()
++    classification_json = {'model': cfg.get('model', 'deepseek-v4-flash'), 'messages': [{'role': 'system', 'content': _CLASSIFY_SYSTEM}, {'role': 'user', 'content': message}], 'max_tokens': 100, 'thinking': {'type': 'disabled'}}
++    usage_context = performance_context(usage_context, classification_json)
+     try:
+         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+-            resp = await client.post(
++            resp = await performance_post(client, usage_context,
+                 f"{cfg['base_url']}/chat/completions",
+                 headers={
+                     "Authorization": f"Bearer {cfg['api_key']}",
+                     "Content-Type": "application/json",
+                 },
+-                json={
+-                    "model": cfg.get("model", "deepseek-v4-flash"),
+-                    "messages": [
+-                        {"role": "system", "content": _CLASSIFY_SYSTEM},
+-                        {"role": "user", "content": message},
+-                    ],
+-                    "max_tokens": 100,
+-                    "thinking": {"type": "disabled"},
+-                },
++                json=classification_json,
+             )
+             resp.raise_for_status()
+             data = resp.json()
++            performance_usage(usage_context, data)
+             usage_ctx = {
+                 **(usage_context or {}),
+                 "route": (usage_context or {}).get("route") or "classification",
+@@ -295,11 +295,12 @@
+     if model == base_model:
+         request_json["temperature"] = cfg.get("temperature", 0.0)
+ 
++    usage_context = performance_context(usage_context, request_json)
+     resp = None
+     last_error: Exception | None = None
+     for _attempt in range(2):
+         try:
+-            resp = await client.post(
++            resp = await performance_post(client, usage_context,
+                 f"{cfg['base_url']}/chat/completions",
+                 headers={
+                     "Authorization": f"Bearer {cfg['api_key']}",
+@@ -323,7 +324,7 @@
+                     "response body omitted"
+                 )
+                 try:
+-                    resp = await client.post(
++                    resp = await performance_post(client, usage_context,
+                         f"{cfg['base_url']}/chat/completions",
+                         headers={
+                             "Authorization": f"Bearer {cfg['api_key']}",
+@@ -390,6 +391,7 @@
+ 
+     try:
+         data = resp.json()
++        performance_usage(usage_context, data)
+         record_llm_usage_event(
+             usage_context=usage_context,
+             model=model,
