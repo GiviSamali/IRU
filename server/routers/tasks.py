@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from copy import deepcopy
 import logging
 import time
 import uuid
@@ -41,6 +42,8 @@ try:
         download_tokens,
         get_user_devices,
         mark_task_cancelled,
+        is_task_cancel_requested,
+        TASK_TTL,
         mark_suggested_fact_declined,
         mark_plan_declined,
         request_task_cancel,
@@ -79,6 +82,8 @@ except ImportError:
         download_tokens,
         get_user_devices,
         mark_task_cancelled,
+        is_task_cancel_requested,
+        TASK_TTL,
         mark_suggested_fact_declined,
         mark_plan_declined,
         request_task_cancel,
@@ -88,6 +93,15 @@ except ImportError:
     from python_toolchain import PythonToolchainReceipt, validate_toolchain_fact_against_receipt
     from task_runtime import run_nl_task, run_onboarding_task, send_command_to_agent
 
+
+try:
+    from ..command_confirmation import confirmed_command_outcome
+    from ..tool_completion import execute_cmd_outcome_marker
+    from ..run_journal import make_run_step, append_tool_step, append_answer_step, validate_answer_text_payload
+except ImportError:
+    from command_confirmation import confirmed_command_outcome
+    from tool_completion import execute_cmd_outcome_marker
+    from run_journal import make_run_step, append_tool_step, append_answer_step, validate_answer_text_payload
 
 router = APIRouter()
 logger = logging.getLogger("iru.run_plan")
@@ -572,29 +586,112 @@ async def api_confirm_task(task_id: str, request: Request):
         # Never use the single-command completion path for an orphaned PLAN.
         raise HTTPException(409, detail="Продолжение PLAN недоступно. Запустите исходную задачу заново.")
 
-    confirm_data = task.get("confirm_data", {})
-    short_did = confirm_data.get("device_id", "")
-    params = confirm_data.get("params", {})
-    chat_id = confirm_data.get("chat_id", task.get("chat_id"))
-    confirm_dk = _dk(task["user_id"], short_did) if ":" not in short_did else short_did
+    # Legacy ordinary confirmation: the controller frame has already unwound.
+    # Never restart it, replay old actions, or equate one command with the whole goal.
+    if is_task_cancel_requested(task_id):
+        raise HTTPException(409, detail="Задача отменена; команда не будет выполнена.")
+    created = task.get("created_at")
+    if type(created) not in (int, float) or not 0 <= time.time() - created <= TASK_TTL:
+        raise HTTPException(409, detail="Подтверждение устарело. Запустите исходную задачу заново.")
+    confirm_data = deepcopy(task.get("confirm_data") or {})
+    short_did = confirm_data.get("device_id")
+    params = confirm_data.get("params")
+    if (not isinstance(short_did, str) or not short_did or not isinstance(params, dict)
+            or not isinstance(params.get("command"), str) or not params["command"].strip()
+            or confirm_data.get("command") != params["command"]
+            or set(params) - {"command", "timeout", "shell"}):
+        raise HTTPException(409, detail="Нет точной исполняемой команды. Продолжение исходной задачи недоступно.")
+    chat_id = task.get("chat_id")
+    confirm_dk = _dk(user["id"], short_did) if ":" not in short_did else short_did
+    execution_token = object()
+    # Claim synchronously, before scheduling or any await: approval is one-shot.
     task["status"] = "running"
+    task["_confirmed_execution_token"] = execution_token
     task.pop("confirm_data", None)
+
+    def active():
+        return tasks.get(task_id) is task and task.get("_confirmed_execution_token") is execution_token
+
+    def finish(result, outcome, reason):
+        if not active():
+            return
+        journal = list(task.get("commands") or [])
+        # Keep evidence metadata, not literal commands, stdout/stderr or exceptions.
+        evidence = {"status": outcome, "confirmation_outcome": outcome, "reason": reason}
+        if isinstance(result, dict):
+            code = result.get("returncode")
+            if type(code) is int or code == "0":
+                evidence["returncode"] = code
+            evidence["outcome_marker"] = execute_cmd_outcome_marker(result)
+            for name in ("stdout", "stderr"):
+                if isinstance(result.get(name), str):
+                    evidence[name + "_chars"] = len(result[name])
+        if outcome == "failed":
+            evidence["error"] = reason
+        entry = append_tool_step(journal, make_run_step(journal=journal, tool_name="execute_cmd",
+            command="[tool] execute_cmd (confirmed)", target_device_id=short_did,
+            result=evidence, status=outcome, summary=f"confirmed_execution={outcome}; original_goal=not_verified"))
+        if outcome == "success":
+            text = "Подтверждённая команда выполнена по проверенному результату. "
+        elif reason == "device_unavailable":
+            text = "Устройство отключено или недоступно. Подтверждённая команда не выполнялась. "
+        elif outcome == "failed":
+            code = evidence.get("returncode")
+            text = "Подтверждённая команда завершилась с ошибкой" + (f" (код {code})" if code is not None else "") + ". "
+        else:
+            text = "Исход выполнения подтверждённой команды не подтверждён. Команда могла выполниться; автоматически её не повторяю. "
+        text += "Продолжение исходной задачи недоступно: дальнейшие шаги не выполнялись, завершение всей задачи не подтверждено."
+        cancelled = is_task_cancel_requested(task_id)
+        if cancelled:
+            text = "Задача остановлена пользователем. " + text
+        payload = {"answer_type": "error_report" if outcome == "failed" else "partial_report",
+            "text": text, "basis": [entry["step_id"]], "self_check": {
+                "depends_on_current_external_state": True, "claims_completed_action": outcome == "success",
+                "has_sufficient_evidence": outcome != "unknown", "missing_evidence_question":
+                    "Продолжение controller loop и выполнение всей исходной цели не подтверждены."}}
+        append_answer_step(journal, "answer_text", validate_answer_text_payload(payload, journal), target_device_id=short_did)
+        task["commands"] = journal
+        task["answer"] = text
+        task["status"] = "cancelled" if cancelled else "failed" if outcome == "failed" else "blocked"
+        task["overall_status"] = "cancelled" if cancelled else "failed" if outcome == "failed" else "partial_failure"
+        task["task_receipt"] = {"task_status": "cancelled" if cancelled else "failed" if outcome == "failed" else "partial",
+            "answer_source": "confirmation_result", "command_outcome": outcome, "goal_completed": False,
+            "continuation_status": "unavailable", "terminal_reason": reason, "basis": [entry["step_id"]]}
+        try:
+            add_message(chat_id, "assistant", text, journal)
+        except Exception as exc:
+            logger.warning("confirmation result persistence failed task_id=%s error_type=%s", task_id, type(exc).__name__)
 
     async def execute_confirmed():
         try:
-            result = await send_command_to_agent(confirm_dk, "execute_cmd", params, skip_confirm=True)
-            cmd_entry = {"command": confirm_data.get("command", ""), "device_id": short_did, "result": result}
-            existing_cmds = task.get("commands", []) or []
-            existing_cmds.append(cmd_entry)
-            task["commands"] = existing_cmds
-            ok = not result.get("error")
-            task["answer"] = "Выполнено." if ok else f"Ошибка: {result.get('error', '')}"
-            task["status"] = "done"
-            add_message(chat_id, "assistant", task["answer"], task["commands"])
-        except Exception as exc:
-            task["status"] = "error"
-            task["answer"] = f"Ошибка: {str(exc)}"
-            add_message(chat_id, "assistant", task["answer"])
+            if not active():
+                return
+            if is_task_cancel_requested(task_id):
+                mark_task_cancelled(task_id, answer="Остановлено пользователем.", commands=task.get("commands") or [])
+                return
+            if task.get("status") != "running" or time.time() - created > TASK_TTL:
+                task["status"] = "blocked"
+                task["answer"] = "Подтверждение устарело. Команда не выполнялась; исходная задача не завершена."
+                task["task_receipt"] = {"task_status":"blocked", "command_outcome":"not_executed",
+                    "goal_completed":False, "continuation_status":"unavailable", "terminal_reason":"confirmation_expired"}
+                return
+            dev = devices.get(confirm_dk)
+            if not dev or dev.get("user_id") != user["id"] or not dev.get("ws"):
+                finish(None, "failed", "device_unavailable")
+                return
+            try:
+                result = await send_command_to_agent(confirm_dk, "execute_cmd", params,
+                                                     user_id=user["id"], skip_confirm=True)
+            except Exception:
+                # A transport exception can occur after dispatch. Never retry blindly.
+                finish(None, "unknown", "confirmed_transport_outcome_unknown")
+                return
+            outcome = confirmed_command_outcome(result)
+            finish(result, outcome, "confirmation_continuation_unavailable" if outcome == "success"
+                   else "confirmed_execution_failed" if outcome == "failed" else "confirmed_execution_unknown")
+        finally:
+            if active():
+                task.pop("_confirmed_execution_token", None)
 
     asyncio.create_task(execute_confirmed())
     return {"status": "ok"}

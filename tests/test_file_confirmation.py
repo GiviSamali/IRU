@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 
 import pytest
 from fastapi import HTTPException
@@ -62,11 +63,12 @@ def test_decision_binds_user_and_command_and_is_one_shot(monkeypatch, pipeline, 
         sent.append((device, params, kw))
         return {"returncode": 0}
     monkeypatch.setattr(routes, "send_command_to_agent", send)
+    monkeypatch.setitem(routes.devices, "1:pc", {"user_id":1, "ws":object()})
     async def scenario():
         data = command_confirmation({"command": "Remove-Item report.txt", "device_id": "pc",
                                      "params": {"command": "Remove-Item report.txt"}})
         task = {"task_id": "delete", "user_id": 1, "chat_id": 1, "status": "confirm", "confirm_data": data,
-                "modes": {"pipeline": pipeline}}
+                "modes": {"pipeline": pipeline}, "created_at": time.time()}
         monkeypatch.setitem(runtime.tasks, "delete", task)
         pending = asyncio.get_running_loop().create_future()
         if pipeline: task["_pipeline_confirm_future"] = pending
