@@ -1,7 +1,7 @@
 /* One deterministic presentation adapter. No requests, execution or voice lifecycle. */
 const IRUSmartUI = (() => {
   const STATUS = Object.freeze({
-    pending: 'waiting', waiting: 'waiting', queued: 'waiting', confirm: 'waiting',
+    pending: 'waiting', waiting: 'waiting', queued: 'waiting', confirm: 'waiting', waiting_confirmation:'waiting',
     thinking: 'running', running: 'running', running_tool: 'running', waiting_agent: 'running',
     preparing_runtime: 'running', refreshing_state: 'running', writing_file: 'running',
     launching_app: 'running', restoring: 'running', cancelling: 'running',
@@ -56,7 +56,8 @@ const IRUSmartUI = (() => {
   }
   function taskState(message, tasks, commands = []) {
     const receipt = message.taskReceipt || message.task_receipt || {};
-    const explicit = [message.taskStatus, message.task_status, receipt.task_status, message.overallStatus];
+    const report=message.workerReport || message.worker_report;
+    const explicit = [report?.status,message.taskStatus,message.task_status,receipt.task_status,message.overallStatus];
     const states = explicit.map(normalizeStatus).filter(Boolean);
     const finalConfirmed = normalizeStatus(receipt.task_status) === 'success'
       && receipt.goal_completed !== false
@@ -79,6 +80,7 @@ const IRUSmartUI = (() => {
     if (states.includes('blocked')) return 'blocked';
     if (states.includes('partial') || receipt.goal_completed === false) return 'partial';
     if (states.includes('unknown')) return 'unknown';
+    if (report?.status === 'queued' || message.taskStatus === 'queued') return 'waiting';
     if (message.cancelRequested || message.loading || states.includes('running')) return 'running';
     if (message.confirmTaskId || message.planReview || states.includes('waiting')) return 'waiting';
     if (finalConfirmed) return 'success';

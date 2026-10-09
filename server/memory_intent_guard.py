@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import re
+from contextvars import ContextVar
+
+ORIGINAL_WORKER_REQUEST = ContextVar("iru_original_worker_request",default=None)
 
 MEMORY_WRITE_REQUIRES_INTENT = "memory_write_requires_explicit_user_intent"
 MEMORY_WRITE_CORRECTION = (
@@ -27,6 +30,7 @@ def memory_permissions_from_human_request(user_message: str | None) -> frozenset
     Only imperative clauses are accepted, not unrestricted natural-language inference.
     Quoted/code examples and discussion are data. Ambiguous requests grant no permission.
     """
+    if ORIGINAL_WORKER_REQUEST.get() is not None:user_message=ORIGINAL_WORKER_REQUEST.get()
     text = _QUOTED_DATA.sub(" quoted_data ", user_message or "").strip()
     # Multiline supplied material is not a new human directive. Ambiguity fails closed.
     text = text.splitlines()[0] if text else ""

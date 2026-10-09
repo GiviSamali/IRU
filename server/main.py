@@ -63,6 +63,15 @@ async def _cleanup_tokens_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    try:
+        from .worker_scheduler import scheduler
+        from .orchestrator import recover_turns
+    except ImportError:
+        from worker_scheduler import scheduler
+        from orchestrator import recover_turns
+    scheduler.closing = False
+    await scheduler.recover()
+    recover_turns()
     init_transfers()
     init_browser_bridge(restart=True)
     await asyncio.to_thread(cleanup_transfers, True)
@@ -73,6 +82,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await scheduler.shutdown()
         transfer_cleanup.cancel()
         task.cancel()
         print("[server] ИРУ v3.5 остановлен")

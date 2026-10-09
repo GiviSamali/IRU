@@ -140,7 +140,7 @@
       const config = await response.json();
       if (id !== activation) return;
       if (!config.available) throw new Error('Озвучка не настроена на сервере.');
-      session.enable(state.pendingTasks.map(task => task.task_id));
+      session.enable(state.pendingTasks.map(task=>({id:task.task_id,background:task.kind !== 'orchestrator'})),{continuous:true});
       const reviewMessage = state.messages.find(message => message.planReview);
       if (reviewMessage) session.taskPlanReview(reviewMessage._taskId, reviewMessage.planReview);
       const confirmationMessage = state.messages.find(message => message.confirmTaskId && message.commandConfirmation?.voice_allowed === true);

@@ -91,3 +91,12 @@ def test_draft_plan_speech_is_short_revision_bound_and_keeps_question(client, mo
     assert response.status_code == 200
     assert spoken == [tasks["offer"]["plan_review"]["speech"]]
     assert spoken[0].endswith("Хотите что-то изменить?")
+
+
+def test_ow_plan_offer_never_ignores_explicit_invalid_device(client, monkeypatch):
+    headers, chat, uid = prepare(client, monkeypatch, admin=True)
+    tasks['offer']['device_ids']=[f'{uid}:device-1']
+    response=client.post(f'/api/run_plan/{chat}',headers=headers,json={
+        'original_request':'Отчёт','confirmed':True,'voice_source_task_id':'offer','device_id':'foreign-or-missing'})
+    assert response.json()=={'status':'error','error':'device_not_owned_or_unavailable'}
+    assert not tasks['offer'].get('voice_plan_started')

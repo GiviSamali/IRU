@@ -491,30 +491,35 @@ def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
         "overallStatus": task.get("overall_status"), "taskTitle": task.get("current_step") or task.get("message"),
         "tasks": task.get("tasks") or [], "_taskId": task_id or task.get("task_id"),
         "taskMode": "plan" if (task.get("modes") or {}).get("pipeline") or (saved_receipt or {}).get("answer_source") == "pipeline_step_report" else "conversation" if task.get("device_ids") == [] else "ordinary",
-        "taskElapsedMs": elapsed,
+        "taskElapsedMs": elapsed, "workerReport": task.get("worker_report"), "taskKind":task.get("kind"),
+        "planSuggestion":task.get("plan_suggestion"),"planOriginalRequest":task.get("plan_original_request"),
     }
 
 
 def _message_metadata(value) -> dict:
     if not isinstance(value, dict):
         return {}
-    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs")
+    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs", "workerReport", "taskKind", "planSuggestion", "planOriginalRequest")
     return {key: value[key] for key in allowed if key in value}
 
 
 def add_message(chat_id: int, role: str, content: str, commands: list | None = None,
-                *, task_metadata: dict | None = None) -> dict:
+                *, task_metadata: dict | None = None, message_id: int | None = None) -> dict:
     now = time.time()
     commands_json = json.dumps(commands, ensure_ascii=False) if commands else None
     metadata = _message_metadata(task_metadata) if role == "assistant" else {}
     metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
     with get_db() as conn:
-        cursor = conn.execute(
-            "INSERT INTO messages (chat_id, role, content, commands, created_at, task_metadata) VALUES (?, ?, ?, ?, ?, ?)",
-            (chat_id, role, content, commands_json, now, metadata_json)
-        )
+        if message_id is not None:
+            cursor=conn.execute("UPDATE messages SET content=?,commands=?,task_metadata=? WHERE id=? AND chat_id=? AND role=?",
+                (content,commands_json,metadata_json,message_id,chat_id,role))
+            if cursor.rowcount != 1:raise ValueError("message_identity_mismatch")
+        else:
+            cursor = conn.execute(
+                "INSERT INTO messages (chat_id, role, content, commands, created_at, task_metadata) VALUES (?, ?, ?, ?, ?, ?)",
+                (chat_id, role, content, commands_json, now, metadata_json))
         conn.execute("UPDATE chats SET updated_at = ? WHERE id = ?", (now, chat_id))
-        msg_id = cursor.lastrowid
+        msg_id = message_id if message_id is not None else cursor.lastrowid
         row = conn.execute("SELECT * FROM messages WHERE id = ?", (msg_id,)).fetchone()
         result = dict(row)
         result["commands"] = commands
@@ -680,6 +685,26 @@ def check_daily_command_limit(user_id: int) -> dict:
             "limit":   limits["max_commands_per_day"],
         }
 
+
+
+def reserve_daily_worker_command(connection, user_id: int) -> None:
+    """Charge one admitted Worker in the caller's transaction; retries/rollback are free."""
+    import datetime
+    today = datetime.date.today().isoformat()
+    row = connection.execute(
+        "SELECT plan, daily_commands_count, daily_commands_date FROM users WHERE id = ?",
+        (user_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("worker_owner_not_found")
+    limit = PLAN_LIMITS.get(row["plan"] or "free", PLAN_LIMITS["free"])["max_commands_per_day"]
+    used = (row["daily_commands_count"] or 0) if row["daily_commands_date"] == today else 0
+    if used >= limit:
+        raise ValueError("daily_command_limit_exceeded")
+    connection.execute(
+        "UPDATE users SET daily_commands_count = ?, daily_commands_date = ? WHERE id = ?",
+        (used + 1, today, user_id),
+    )
 
 def increment_daily_commands(user_id: int):
     import datetime

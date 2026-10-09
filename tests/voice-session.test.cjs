@@ -418,3 +418,48 @@ test('punctuated wake works for plan consent, review and edits without an empty 
   h.session.transcript('И Р У. Нет!', true); await Promise.resolve();
   assert.equal(h.reviews.length, 2); assert.equal(h.reviews[1].changes, '');
 });
+
+
+test('OW background Worker does not occupy dialogue and sleep never cancels it',async()=>{
+ const tickets=[];let h;h=setup({submit:text=>{h.submitted.push(text);tickets.push(h.session.beginRequest());}});h.session.enable([],{continuous:true});
+ h.session.watchTask('worker-A',undefined,true);
+ assert.equal(h.listening,true);
+ h.session.transcript('Иру объясни квантовый компьютер',true);h.advance(1300);
+ assert.deepEqual(h.submitted,['объясни квантовый компьютер']);
+ // The short dialogue response is a different tracked lifecycle.
+ const ticket=tickets[0];h.session.endRequest(ticket,'dialogue');
+ h.session.taskFinished('dialogue',{answer:'Ответ'});h.spoken[0].onSpeaking();
+ assert.equal(h.listening,false); // No self-dictation during TTS.
+ h.session.transcript('Иру повтори собственный ответ',true);h.advance(1500);
+ assert.equal(h.submitted.length,1);
+ h.spoken[0].resolve();await Promise.resolve();
+ h.session.transcript('усни',true);assert.equal(h.session.phase,'idle');
+ h.session.transcript('Иру',true);assert.equal(h.session.phase,'listening');
+ h.session.taskFinished('worker-A',{answer:'Результат'});h.advance(1300);
+ assert.equal(h.spoken.filter(s=>s.id==='worker-A').length,1);
+ h.session.taskFinished('worker-A',{answer:'Дубликат'});
+ assert.equal(h.spoken.filter(s=>s.id==='worker-A').length,1);
+});
+test('OW Worker report waits for human utterance and ongoing TTS; Worker failure keeps session',async()=>{
+ const h=setup();h.session.enable([],{continuous:true});h.session.watchTask('A',undefined,true);
+ h.session.transcript('Иру ещё один вопрос',false);
+ h.session.taskFinished('A',{answer:'Готово'});assert.equal(h.spoken.length,0);
+ h.session.transcript('Иру ещё один вопрос',true);h.advance(1100);
+ assert.equal(h.spoken.length,0);assert.equal(h.submitted.length,1);
+ // Finish the outstanding short request instead of letting Worker completion steal speech.
+ h.session.disable();h.session.enable([],{continuous:true});
+ h.session.watchTask('B',undefined,true);h.session.taskLost('B');
+ assert.equal(h.session.enabled,true);assert.equal(h.listening,true);
+ h.session.watchTask('C',undefined,true);h.session.taskFinished('C',{answer:'Первый'});
+ h.spoken.at(-1).onSpeaking();const playing=h.spoken.at(-1);
+ h.session.watchTask('D',undefined,true);h.session.taskFinished('D',{answer:'Второй'});
+ assert.equal(h.spoken.filter(s=>s.id==='D').length,0);assert.equal(playing.signal.aborted,false);
+ playing.resolve();await Promise.resolve();assert.equal(h.spoken.filter(s=>s.id==='D').length,1);
+});
+test('OW dangerous confirmation does not arm generic yes and background slot remains conversational',()=>{
+ const h=setup();h.session.enable([],{continuous:true});h.session.watchTask('delete',undefined,true);
+ h.session.taskPaused('delete',{kind:'command',voice_allowed:false,confirmation_id:'danger'});
+ assert.equal(h.listening,true);
+ h.session.transcript('Иру да',true);h.advance(1300);
+ assert.equal(h.commandChoices.length,0);
+});

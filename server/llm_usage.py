@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextvars import ContextVar
 
 from typing import Any
 
@@ -28,6 +29,8 @@ MODEL_PRICE_ALIASES = {
     "deepseek-v4-pro": "deepseek-v4-pro",
 }
 
+
+LLM_ENTITY = ContextVar("iru_llm_entity",default=None)
 
 def _int_value(value: Any) -> int:
     try:
@@ -114,7 +117,8 @@ def record_llm_usage_event(
     usage = usage or {}
     effective_phase = phase or context.get("phase")
     provider = context.get("provider") or "deepseek"
-    metadata = context.get("metadata")
+    metadata = dict(context.get("metadata") or {})
+    if LLM_ENTITY.get():metadata["entity"] = LLM_ENTITY.get()
     estimated_cost = (
         estimate_deepseek_cost_usd(model, usage, cfg)
         if request_ok

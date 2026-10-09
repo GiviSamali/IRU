@@ -12,7 +12,7 @@ async function open(width=1280,height=1100){
  await page.addInitScript(()=>{
   localStorage.setItem('iru_token','smart-ui-fixture');
   window.speechCounts={instances:0,start:0,stop:0,abort:0};
-  class FakeRecognition {constructor(){speechCounts.instances++;}start(){speechCounts.start++;queueMicrotask(()=>this.onstart?.());}stop(){speechCounts.stop++;this.onend?.();}abort(){speechCounts.abort++;this.onend?.();}}
+  class FakeRecognition {constructor(){speechCounts.instances++;window.lastFakeRecognition=this;}start(){speechCounts.start++;queueMicrotask(()=>this.onstart?.());}stop(){speechCounts.stop++;this.onend?.();}abort(){speechCounts.abort++;this.onend?.();}}
   window.SpeechRecognition=window.webkitSpeechRecognition=FakeRecognition;
  });
  await page.goto(origin,{waitUntil:'networkidle'});await page.locator('#appRoot.active').waitFor();
@@ -300,6 +300,72 @@ test('A-FIX history preserves PLAN receipt and never relabels unknown as waiting
    assert.ok((await page.locator('.smart-task[data-status="unknown"]').first().textContent()).includes('Результат не подтверждён'));
    assert.equal(await page.locator('[data-action="confirm-task"]').count(),0);
   }
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+
+
+test('OW real page: voice asks three questions during Worker; result stays bound across chat switch',async()=>{
+ const page=await open(400,600);try{
+  await seed(page,[]);
+  const jobs=new Map();let questions=0;
+  await page.route('**/api/voice/tasks/**/speech?*',route=>route.fulfill({status:204}));
+  await page.route('**/nl_command',route=>{
+   const body=JSON.parse(route.request().postData());assert.equal(body.orchestrate,true);assert.ok(body.request_id);
+   const dialogue='dialogue-'+questions;questions++;
+   jobs.set(dialogue,{task_id:dialogue,chat_id:1,status:'done',kind:'orchestrator',device_ids:[],message:body.message,answer:'Ответ '+questions,commands:[{tool_name:'answer.text',status:'terminal',result:{answer_type:'pure_text'}}],tasks:[],task_mode:'conversation',elapsed_ms:20});
+   if(questions===1)jobs.set('worker-A',{task_id:'worker-A',chat_id:1,status:'running',kind:'worker',worker_id:'worker-1',device_ids:['Second'],message:'Презентация',answer:'',commands:[],tasks:[],task_mode:'ordinary',elapsed_ms:10,worker_report:{schema_version:1,status:'running',goal_completed:false},current_step:'Подготовка'});
+   route.fulfill({json:{status:'ok',response_type:'orchestrator',task_id:dialogue,chat_id:1,worker_task_id:questions===1?'worker-A':null,worker_status:'running'}});
+  });
+  await page.route('**/api/tasks/*',route=>{
+   const id=new URL(route.request().url()).pathname.split('/').pop();
+   route.fulfill({json:{status:'ok',task:jobs.get(id)}});
+  });
+  await page.locator('#voiceBtn').click();
+  await page.waitForFunction(()=>window.lastFakeRecognition && speechCounts.start===1);
+  for(const text of ['Иру создай презентацию','Иру объясни квантовый компьютер','Иру объясни фотосинтез','Иру что такое нейрон']){
+   const count=questions;
+   await page.evaluate(text=>{const result=[{transcript:text}];result.isFinal=true;window.lastFakeRecognition.onresult({resultIndex:0,results:[result]});},text);
+   await page.waitForFunction(count=>document.querySelectorAll('.msg').length>0 && state.messages.filter(m=>m.role==='user').length>=count+1,count);
+   await page.waitForFunction(count=>state.messages.some(m=>m.content==='Ответ '+(count+1)) && (window.iruVoice.phase==='listening'||window.iruVoice.phase==='idle'),count);
+   assert.equal(jobs.get('worker-A').status,'running');
+  }
+  assert.equal(questions,4);assert.equal(await page.evaluate(()=>state.messages.filter(m=>m._taskId==='worker-A').length),1);
+  const sourceContents=await page.evaluate(()=>state.messages.filter(m=>m.taskKind==='orchestrator'||m.content.startsWith('Ответ')).map(m=>m.content));
+  assert.equal(sourceContents.filter(text=>text.startsWith('Ответ')).length,4);
+  await page.route('**/api/chats/2/messages',route=>route.fulfill({json:{messages:[{role:'assistant',content:'Другой чат'}]}}));
+  await page.evaluate(()=>openChat(2));
+  jobs.get('worker-A').status='done';jobs.get('worker-A').answer='Поздний результат A';
+  await page.waitForTimeout(1000);
+  assert.deepEqual(await page.evaluate(()=>state.messages.map(m=>m.content)),['Другой чат']);
+  assert.equal(await page.evaluate(()=>state.pendingTasks.some(t=>t.task_id==='worker-A')),false);
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+test('OW SQL placeholders are restored once and queued tasks do not claim running',async()=>{
+ const page=await open(400,280);try{
+  await seed(page,[{role:'assistant',_taskId:'queued-A',taskKind:'worker',taskStatus:'queued',loading:true,content:''}]);
+  assert.equal(await page.locator('.smart-task').getAttribute('data-status'),'waiting');
+  await page.evaluate(()=>{sessionStorage.setItem('iru_active_tasks',JSON.stringify([{taskId:'queued-A',chatId:1}]));state.pendingTasks=[];});
+  await page.route('**/api/tasks/queued-A',route=>route.fulfill({json:{status:'ok',task:{task_id:'queued-A',chat_id:1,status:'queued',kind:'worker',worker_id:'worker-1',message:'Очередь',commands:[],tasks:[],worker_report:{status:'queued'},created_at:Date.now()/1000}}}));
+  await page.evaluate(()=>{restoreActiveChatTasks(1);restoreActiveChatTasks(1);});
+  assert.equal(await page.evaluate(()=>state.messages.filter(m=>m._taskId==='queued-A').length),1);
+  assert.equal(await page.evaluate(()=>state.pendingTasks.filter(m=>m.task_id==='queued-A').length),1);
+  await page.waitForTimeout(500);assert.equal(await page.locator('.smart-task').getAttribute('data-status'),'waiting');
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+
+
+test('OW global Stop selects running Worker by task ID ahead of queued jobs',async()=>{
+ const page=await open(400,600);try{
+  await seed(page,[{role:'assistant',_taskId:'running-A',taskKind:'worker',taskStatus:'running',loading:true,content:''},{role:'assistant',_taskId:'queued-B',taskKind:'worker',taskStatus:'queued',loading:true,content:''}],
+   [{task_id:'running-A',kind:'worker',chatId:1,msgIndex:99},{task_id:'queued-B',kind:'worker',chatId:1,msgIndex:0}]);
+  assert.equal(await page.evaluate(()=>getActivePendingTask().task_id),'running-A');
+  await page.route('**/api/tasks/running-A/cancel',route=>route.fulfill({json:{status:'ok'}}));
+  await page.evaluate(()=>cancelActiveTask());
+  assert.equal(await page.evaluate(()=>state.messages.find(m=>m._taskId==='running-A').cancelRequested),true);
+  assert.equal(await page.evaluate(()=>state.messages.find(m=>m._taskId==='queued-B').cancelRequested),undefined);
   assert.deepEqual(page.errors,[]);
  }finally{await page.close();}
 });

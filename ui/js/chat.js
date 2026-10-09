@@ -221,6 +221,7 @@ const SAFE_TASK_STATUS_LABELS = Object.freeze({
   writing_file: 'Создаю файл...',
   launching_app: 'Запускаю приложение...',
   restoring: 'Восстанавливаю статус операции...',
+  queued: 'В очереди...',
   cancelling: 'Остановка запрошена...',
   cancelled: 'Остановлено пользователем',
   done: 'Готово',
@@ -245,6 +246,7 @@ function deriveLiveTaskStatus(task, currentMessage) {
   }
 
   const taskStatus = String(task?.status || '').trim().toLowerCase();
+  if (taskStatus === 'queued') return 'queued';
   if (taskStatus === 'done' || taskStatus === 'completed' || taskStatus === 'completed_with_recovery') return 'done';
   if (taskStatus === 'cancelling') return 'cancelling';
   if (taskStatus === 'cancelled') return 'cancelled';
@@ -270,6 +272,10 @@ const TERMINAL_TASK_STATUSES = new Set([
   'failed',
   'cancelled',
   'blocked',
+  'partial',
+  'unknown',
+  'interrupted',
+  'success',
 ]);
 
 function isTaskTerminalStatus(status) {
@@ -278,14 +284,16 @@ function isTaskTerminalStatus(status) {
 
 function getActivePendingTask() {
   if (!Array.isArray(state.pendingTasks) || state.pendingTasks.length === 0) return null;
+  let queued = null;
   for (let i = state.pendingTasks.length - 1; i >= 0; i--) {
     const pending = state.pendingTasks[i];
-    if (!pending?.task_id) continue;
-    const msg = state.messages[pending.msgIndex];
-    if (msg && msg.currentStatus === 'cancelled') continue;
+    if (!pending?.task_id || pending.kind === 'orchestrator' || (pending.chatId && pending.chatId !== state.currentChatId)) continue;
+    const msg = state.messages.find(item => item._taskId === pending.task_id);
+    if (msg && isTaskTerminalStatus(msg.currentStatus || msg.taskStatus)) continue;
+    if ((msg?.currentStatus || msg?.taskStatus) === 'queued') { queued = pending; continue; }
     return pending;
   }
-  return null;
+  return queued;
 }
 
 function updateStopButton() {
@@ -303,11 +311,11 @@ function updateStopButton() {
   btn.textContent = active.cancelRequested ? 'Остановка...' : 'Стоп';
 }
 
-async function cancelActiveTask() {
-  const active = getActivePendingTask();
+async function cancelActiveTask(taskId = null) {
+  const active = taskId ? state.pendingTasks.find(item => item.task_id === taskId) : getActivePendingTask();
   if (!active?.task_id || active.cancelRequested) return;
   active.cancelRequested = true;
-  const msg = state.messages[active.msgIndex];
+  const msg = state.messages.find(item => item._taskId === active.task_id);
   const wasConfirm = Boolean(msg?.confirmTaskId || msg?.planReview);
   if (msg) {
     msg.loading = true;
@@ -345,6 +353,7 @@ async function cancelActiveTask() {
 
 const SAFE_TASK_STATE_CLASSES = new Set([
   'pending',
+  'queued',
   'running',
   'cancelling',
   'completed',
@@ -622,7 +631,7 @@ function renderMessages() {
     const m = state.messages[mi];
     if (m.hideAfterPlanChoice) continue;
     const role = m.role === 'user' ? 'user' : 'assistant';
-    const active = getActivePendingTask();
+    const active = state.pendingTasks.find(item => item.task_id === m._taskId && item.kind !== 'orchestrator');
     const view = IRUSmartUI.adapt({ ...m, cancelAvailable:Boolean(m.loading && active && active.task_id === m._taskId && !active.cancelRequested) }, mi, state.currentChatId);
     let bodyHTML = IRUSmartUI.render(view, {
       expanded: state.expandedSmartBlocks,
@@ -659,7 +668,7 @@ function bindChatMessageActions() {
       return;
     }
     if (action === 'cancel-smart-task') {
-      if (getActivePendingTask()?.task_id === target.dataset.taskId) cancelActiveTask();
+      cancelActiveTask(target.dataset.taskId);
       return;
     }
     if (action === 'download-message-file') {
@@ -769,6 +778,19 @@ function bindChatMessageActions() {
 }
 
 const MAX_INPUT_LENGTH = 500;
+let chatCreationPromise = null;
+const taskPollLoops = new Map();
+async function ensureSendChat() {
+  if (state.currentChatId) return state.currentChatId;
+  if (!chatCreationPromise) chatCreationPromise = (async () => {
+    const response = await apiFetch(`${API}/api/chats`, {method:'POST', headers:authHeaders(), body:JSON.stringify({title:''})});
+    const data = await response.json();
+    if (!response.ok || !data.chat?.id) throw new Error('Не удалось создать чат.');
+    if (!state.currentChatId) state.currentChatId = data.chat.id;
+    loadChats(); return data.chat.id;
+  })().finally(() => { chatCreationPromise = null; });
+  return chatCreationPromise;
+}
 
 async function sendMessage(options = {}) {
   const input = document.getElementById('chatInput');
@@ -779,6 +801,9 @@ async function sendMessage(options = {}) {
     showToast(`Максимум ${MAX_INPUT_LENGTH} символов`, true);
     return;
   }
+  let sourceChatId;
+  try {sourceChatId=await ensureSendChat();}catch(error){showToast(error.message,true);return;}
+  const requestId = crypto.randomUUID();
   const ids = Object.keys(state.devices);
   const isOnboarding = ids.length === 0;
 
@@ -795,8 +820,8 @@ async function sendMessage(options = {}) {
   // Добавить сообщение пользователя в UI сразу
   state.messages.push({ role: 'user', content: text });
   // Добавить placeholder для ответа (live-статус вместо точек загрузки)
-  const msgIndex = state.messages.length;
-  state.messages.push({ role: 'assistant', content: '', loading: true, currentStatus: 'thinking', liveTasks: [], liveCommands: [] });
+  let msgIndex = state.messages.length;
+  state.messages.push({ role:'assistant', _requestId:requestId, content:'', loading:true, currentStatus:'thinking', liveTasks:[], liveCommands:[] });
   renderMessages();
 
   try {
@@ -804,7 +829,8 @@ async function sendMessage(options = {}) {
     const body = {
       device_id: isOnboarding ? '' : (state.selectedDevice || ids[0]),
       message: messageToSend,
-      chat_id: state.currentChatId,
+      chat_id: sourceChatId,
+      orchestrate: true, request_id: requestId,
       broadcast: isBroadcast,
       modes: { ...state.modes },
     };
@@ -815,31 +841,33 @@ async function sendMessage(options = {}) {
     });
     const data = await r.json();
 
-    if (data.chat_id && data.chat_id !== state.currentChatId) {
-      state.currentChatId = data.chat_id;
-      loadChats();
-    }
-
+    msgIndex = state.currentChatId === sourceChatId ? state.messages.findIndex(message => message._requestId === requestId || message._taskId === data.task_id) : -1;
     if (data.status === 'ok' && data.task_id) {
       voiceTaskId = data.task_id;
       // Задача запущена в фоне — начинаем polling
-      state.messages[msgIndex]._taskId = data.task_id;
-      state.pendingTasks.push({ task_id: data.task_id, msgIndex });
+      if (msgIndex >= 0) state.messages[msgIndex]._taskId = data.task_id;
+      if (!state.pendingTasks.some(item => item.task_id === data.task_id)) state.pendingTasks.push({task_id:data.task_id,msgIndex,chatId:sourceChatId,kind:data.response_type === 'orchestrator' ? 'orchestrator' : 'worker'});
       updateStopButton();
-      pollTask(data.task_id, msgIndex, voiceTicket);
+      pollTask(data.task_id,msgIndex,voiceTicket,sourceChatId);
+      if (data.worker_task_id) {
+        let workerIndex = state.currentChatId === sourceChatId ? state.messages.findIndex(message => message._taskId === data.worker_task_id) : -1;
+        if (workerIndex < 0 && state.currentChatId === sourceChatId) {
+          workerIndex=state.messages.length;
+          state.messages.push({role:'assistant',_taskId:data.worker_task_id,taskKind:'worker',content:'',loading:true,taskStatus:data.worker_status,currentStatus:data.worker_status === 'queued' ? 'queued' : 'running',liveTasks:[],liveCommands:[]});
+          renderMessages();
+        }
+        if (!state.pendingTasks.some(item => item.task_id === data.worker_task_id)) state.pendingTasks.push({task_id:data.worker_task_id,msgIndex:workerIndex,chatId:sourceChatId,kind:'worker'});
+        window.iruVoice?.watchTask(data.worker_task_id,undefined,true);
+        pollTask(data.worker_task_id,workerIndex,undefined,sourceChatId);
+      }
     } else {
       // Ошибка до запуска задачи
-      state.messages[msgIndex] = {
-        role: 'assistant',
-        content: `Ошибка: ${data.error || 'Неизвестная ошибка'}`,
-      };
+      if (msgIndex >= 0) state.messages[msgIndex] = {role:'assistant',content:`Ошибка: ${data.error || 'Неизвестная ошибка'}`};
       renderMessages();
     }
   } catch (e) {
-    state.messages[msgIndex] = {
-      role: 'assistant',
-      content: `Ошибка сети: ${e.message}`,
-    };
+    const currentIndex = state.currentChatId === sourceChatId ? state.messages.findIndex(message => message._requestId === requestId) : -1;
+    if (currentIndex >= 0) state.messages[currentIndex] = {role:'assistant',content:`Ошибка сети: ${e.message}`};
     window.iruVoice?.requestLost(voiceTicket);
     renderMessages();
   } finally {
@@ -847,19 +875,25 @@ async function sendMessage(options = {}) {
   }
 }
 
-async function pollTask(taskId, msgIndex, voiceTicket) {
-  window.iruVoice?.watchTask(taskId, voiceTicket);
-  const startTime = Date.now();
-  const MAX_POLL_MS = 600000; // 10 минут макс (для длинных конвейеров)
+async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.currentChatId) {
+  if (taskPollLoops.has(taskId)) return;
+  taskPollLoops.set(taskId,true);
+  window.iruVoice?.watchTask(taskId,voiceTicket,state.pendingTasks.find(item=>item.task_id===taskId)?.kind === 'worker');
+  let startTime = Date.now();
+  const MAX_POLL_MS = 3600000; // Один час: соответствует предельному времени Worker.
   let stopped = false;
-  rememberActiveTask(taskId, state.currentChatId);
+  rememberActiveTask(taskId,sourceChatId);
   if (state.messages[msgIndex]) state.messages[msgIndex]._taskId = taskId;
   updateStopButton();
   const poll = async () => {
     if (stopped) return;
+    msgIndex = state.currentChatId === sourceChatId ? state.messages.findIndex(message => message._taskId === taskId) : -1;
+    const tracked=state.pendingTasks.find(item=>item.task_id===taskId);
+    if (tracked) tracked.msgIndex=msgIndex;
     if (Date.now() - startTime > MAX_POLL_MS) {
       window.iruVoice?.taskLost(taskId);
-      state.messages[msgIndex] = { role: 'assistant', content: 'Истекло время ожидания ответа.' };
+      if (msgIndex >= 0) state.messages[msgIndex] = {role:'assistant',content:'Истекло время ожидания ответа. Исход не подтверждён.',taskStatus:'unknown'};
+      stopped=true; taskPollLoops.delete(taskId);
       state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
       forgetActiveTask(taskId);
       renderMessages();
@@ -869,8 +903,8 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       const r = await apiFetch(`${API}/api/tasks/${taskId}`, { headers: authHeaders() });
       if (!r.ok) {
         window.iruVoice?.taskLost(taskId);
-        stopped = true;
-        state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена.' };
+        stopped = true; taskPollLoops.delete(taskId);
+        if (msgIndex >= 0) state.messages[msgIndex] = {role:'assistant',content:'Задача не найдена.',taskStatus:'unknown'};
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
         forgetActiveTask(taskId);
         renderMessages();
@@ -878,15 +912,23 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       }
       const data = await r.json();
       const task = data.task;
-      const smartTaskMetadata = { taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms };
+      if (task.worker_id) window.iruVoice?.watchTask(taskId,voiceTicket,true);
+      if (task.status === 'queued') startTime=Date.now();
+      if (msgIndex < 0) {
+        if (isTaskTerminalStatus(task.status)) {stopped=true;taskPollLoops.delete(taskId);state.pendingTasks=state.pendingTasks.filter(item=>item.task_id!==taskId);forgetActiveTask(taskId);}
+        else setTimeout(poll,800);
+        return;
+      }
+      const smartTaskMetadata = { taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind };
       const pendingTask = state.pendingTasks.find(t => t.task_id === taskId);
+      if (pendingTask && task.kind) pendingTask.kind=task.kind;
       if (pendingTask && String(task.status || '').trim().toLowerCase() === 'cancelling') {
         pendingTask.cancelRequested = true;
       }
 
       if (task.status === 'confirm') {
         if (task.plan_review) {
-          stopped = true;
+          stopped = true; taskPollLoops.delete(taskId);
           state.messages[msgIndex] = { role: 'assistant', _taskId: taskId, ...smartTaskMetadata,
             content: `План:\n${task.plan_review.steps.map((step, i) => `${i + 1}. ${step.title}\n${step.instruction}`).join('\n')}\n\nХотите что-то изменить?`,
             planReview: task.plan_review, tasks: task.tasks || [], commands: task.commands || [] };
@@ -894,7 +936,7 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
           window.iruVoice?.taskPlanReview(taskId, task.plan_review);
           return;
         }
-        stopped = true;
+        stopped = true; taskPollLoops.delete(taskId);
         const cd = task.confirm_data || {};
         const cmdText = cd.command || '';
         state.messages[msgIndex] = {
@@ -913,7 +955,7 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       }
       if (isTaskTerminalStatus(task.status)) {
         window.iruVoice?.taskFinished(taskId, task);
-        stopped = true;
+        stopped = true; taskPollLoops.delete(taskId);
         const isCancelled = String(task.status || '').trim().toLowerCase() === 'cancelled';
         const fallbackAnswer = isCancelled ? 'Остановлено пользователем.' : (task.plan_suggestion ? '' : 'ИРУ завершила задачу без текстового ответа.');
         const msg = {
@@ -969,8 +1011,8 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       poll._retries++;
       if (poll._retries > 30) {
         window.iruVoice?.taskLost(taskId);
-        stopped = true;
-        state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена или истекла.' };
+        stopped = true; taskPollLoops.delete(taskId);
+        if (msgIndex >= 0) state.messages[msgIndex] = {role:'assistant',content:'Связь с задачей потеряна. Исход не подтверждён.',taskStatus:'unknown'};
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
         forgetActiveTask(taskId);
         renderMessages();
@@ -1020,24 +1062,22 @@ function forgetActiveTask(taskId) {
 
 function restoreActiveChatTasks(chatId) {
   if (!chatId) return;
+  for(const message of state.messages) if(message._taskId && message.taskKind && !isTaskTerminalStatus(message.taskStatus))rememberActiveTask(message._taskId,chatId);
   const tasksToRestore = readActiveTasks().filter(item => Number(item?.chatId) === Number(chatId));
   if (!tasksToRestore.length) return;
 
   let added = false;
   for (const item of tasksToRestore) {
     if (!item?.taskId) continue;
-    if (state.pendingTasks.some(task => task.task_id === item.taskId)) continue;
-    const msgIndex = state.messages.length;
-    state.messages.push({
-      role: 'assistant',
-      content: '',
-      loading: true,
-      currentStatus: 'restoring',
-      liveTasks: [],
-      liveCommands: [],
-      _taskId: item.taskId,
-    });
-    state.pendingTasks.push({ task_id: item.taskId, msgIndex });
+    if (state.pendingTasks.some(task=>task.task_id===item.taskId)) {
+      const existing=state.messages.find(message=>message._taskId===item.taskId);
+      if(existing && !isTaskTerminalStatus(existing.taskStatus))Object.assign(existing,{loading:true,currentStatus:'restoring'});
+      continue;
+    }
+    let msgIndex=state.messages.findIndex(message=>message._taskId===item.taskId);
+    if (msgIndex<0) {msgIndex=state.messages.length;state.messages.push({role:'assistant',content:'',loading:true,currentStatus:'restoring',liveTasks:[],liveCommands:[],_taskId:item.taskId});}
+    else Object.assign(state.messages[msgIndex],{loading:true,currentStatus:'restoring'});
+    state.pendingTasks.push({task_id:item.taskId,msgIndex,chatId,kind:state.messages[msgIndex].taskKind || 'worker'});
     added = true;
   }
 

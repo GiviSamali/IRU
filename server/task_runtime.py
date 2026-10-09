@@ -799,8 +799,10 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
     Multiple devices => independent sequential execution in each device context.
     """
     task = tasks[task_id]
+    if task.get("worker_id") and task.get("original_request"):
+        message = task["original_request"]
     task["current_step"] = "ИРУ думает..."
-    is_broadcast = len(device_ids) > 1
+    is_broadcast = bool(task.get("broadcast")) if task.get("orchestrated") else len(device_ids)>1
     task_modes = task.get("modes") or {}
     plan_declined_for_request = bool(task_modes.get("plan_declined")) or is_plan_declined(chat_id, message)
     print(f"[run_nl_task] START task={task_id[:8]}, user={user_id}, devices={device_ids}")
@@ -832,7 +834,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         task["tasks"] = task.get("tasks", [])
         try:
             add_message(chat_id, "assistant", answer, task.get("commands", []),
-                        task_metadata=message_task_metadata(task, task_id=task_id))
+                        task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id"))
         except Exception:
             pass
 
@@ -849,7 +851,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             }
 
         device_info = dev.get("info", {})
-        user_devs = {device_id: dev} if is_broadcast else get_user_devices(user_id)
+        user_devs = {device_id: dev} if is_broadcast else {did: value for did,value in get_user_devices(user_id).items() if not task.get("worker_id") or did in task["device_ids"]}
         all_devices_info = {
             _short_did(did): {
                 "user_id": user_id,
@@ -864,7 +866,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             for did, value in user_devs.items()
         }
         # Broadcast starts each ordinary task afresh: no paths/results from another device.
-        chat_history = [] if is_broadcast else get_messages(chat_id, limit=50)
+        chat_history = task.get("worker_context") or ([] if is_broadcast else get_messages(chat_id, limit=50))
         device_profile = get_device_profile(_short_did(device_id), user_id=user_id)
         autonomous_flag = bool(task_modes.get("autonomous")) and not task_modes.get("pipeline")
         all_devices_info.setdefault(_short_did(device_id), {
@@ -914,6 +916,14 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
 
         async def send_fn(target_device_id, action, params):
             nonlocal browser_page_seen
+            if task.get("worker_id"):
+                target_key=_dk(user_id,target_device_id) if isinstance(target_device_id,str) and ":" not in target_device_id else target_device_id
+                if target_key not in task["device_ids"]:return {"status":"failed","error":"device_outside_worker_assignment"}
+                if action=="transfer_file":
+                    for key in ("source_device_id","target_device_id"):
+                        raw=params.get(key)
+                        if not isinstance(raw,str) or _dk(user_id,raw) not in task["device_ids"]:
+                            return {"status":"failed","error":"device_outside_worker_assignment"}
             if action.startswith("web."):
                 if not isinstance(target_device_id,str) or ":" in target_device_id:
                     return {"status":"failed","error":"target_device_not_found"}
@@ -979,6 +989,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if browser_page_seen:
                 raise RuntimeError("untrusted_web_content_cannot_authorize_file_download")
             target_key = dev_id if ":" in dev_id else _dk(user_id, dev_id)
+            if task.get("worker_id") and target_key not in task["device_ids"]:raise RuntimeError("device_outside_worker_assignment")
             if is_broadcast and target_key != device_id:
                 raise RuntimeError(f"target_device_not_found: {dev_id}")
             return get_file_link_fn(dev_id, path, user_id=user_id)
@@ -991,6 +1002,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             requested = str(args.get("device_id") or device_id)
             target_key = _dk(user_id, requested) if ":" not in requested else requested
             target_dev = devices.get(target_key)
+            if task.get("worker_id") and target_key not in task["device_ids"]:return {"status":"failed","error":"device_outside_worker_assignment"}
             if is_broadcast and target_key != device_id:
                 return {"status": "unavailable", "error": "target_device_not_found"}
             if not target_dev or target_dev.get("user_id") != user_id:
@@ -1307,7 +1319,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             "status": (combined_task_receipt or {}).get("task_status") or "done",
             "task_receipt": combined_task_receipt, "tasks": combined_tasks}, task_id=task_id)
         task["history_metadata"] = history_metadata
-        add_message(chat_id, "assistant", combined_answer, combined_commands, task_metadata=history_metadata)
+        saved_message = add_message(chat_id, "assistant", combined_answer, combined_commands, task_metadata=history_metadata,message_id=task.get("history_message_id"))
+        if isinstance(saved_message, dict):task["history_message_id"] = saved_message.get("id")
 
         try:
             from .database import get_db
@@ -1326,7 +1339,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 add_training_record(
                     user_id=user_id,
                     chat_id=chat_id,
-                    input_text=message,
+                    input_text=task.get("original_request") or message,
                     os_info=os_info,
                     hostname=hostname_info,
                     method=method_info,
@@ -1360,7 +1373,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         task["answer"] = f"Ошибка: {error_text}" if error_text else "Произошла внутренняя ошибка. Попробуйте ещё раз."
         task["commands"] = []
         try:
-            add_message(chat_id, "assistant", task["answer"], [], task_metadata=message_task_metadata(task, task_id=task_id))
+            add_message(chat_id, "assistant", task["answer"], [], task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id"))
         except Exception:
             logger.warning("task error history persistence failed task_id=%s", task_id)
 
@@ -1369,9 +1382,11 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
 async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id: int):
     """Background task for onboarding mode when no devices are connected."""
     task = tasks[task_id]
+    if task.get("worker_id") and task.get("original_request"):
+        message = task["original_request"]
     task["current_step"] = "ИРУ думает..."
     try:
-        chat_history = get_messages(chat_id, limit=50)
+        chat_history = task.get("worker_context") or get_messages(chat_id, limit=50)
         record_lifecycle_event("controller_selected", controller="onboarding", mode="onboarding")
         result = await _call_with_optional_usage_context(
             process_onboarding_message,
@@ -1383,14 +1398,16 @@ async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id:
                 "poll_task_id": task_id,
                 "route": "onboarding",
                 "phase": "onboarding",
+                "worker_execution": bool(task.get("worker_id")),
             },
         )
         answer = result.get("answer", "")
         task["status"] = "done"
         task["answer"] = answer
         task["commands"] = result.get("commands", [])
-        add_message(chat_id, "assistant", answer, task["commands"],
-                    task_metadata=message_task_metadata(task, task_id=task_id))
+        saved_message = add_message(chat_id, "assistant", answer, task["commands"],
+                    task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id"))
+        if isinstance(saved_message, dict):task["history_message_id"] = saved_message.get("id")
     except Exception as exc:
         task["status"] = "error"
         task["answer"] = f"Ошибка: {str(exc)}"

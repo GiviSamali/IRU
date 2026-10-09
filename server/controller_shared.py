@@ -1,4 +1,5 @@
 import json
+from contextvars import ContextVar
 import ntpath
 import posixpath
 import re
@@ -21,6 +22,7 @@ _WEEKDAYS_RU = [
     "понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье",
 ]
 
+WORKER_MEMORY_QUERY = ContextVar("iru_worker_memory_query", default=None)
 MAX_MEMORY_BLOCK = 2048
 LIVE_SNAPSHOT_CONTAINER_KEYS = ("live_snapshot", "current_state", "state_snapshot")
 LIVE_SNAPSHOT_FIELDS = (
@@ -409,6 +411,9 @@ def build_memory_block(machine_guid: str | None, user_id: str | None = None,
         return ""
     stats = db.get_memory_stats(machine_guid, user_id, device_id)
     facts = filter_memory_facts_for_device(stats.get("facts_list", []))
+    if WORKER_MEMORY_QUERY.get() is not None:
+        words=set(re.findall(r"[^\W_]{3,}",WORKER_MEMORY_QUERY.get().casefold()))
+        facts=[fact for fact in facts if any(word in str(fact.get("text") or fact.get("fact_text") or "").casefold() for word in words)][:6]
     commands = db.get_recent_commands(machine_guid, user_id, 20, device_id) if machine_guid else []
     if not facts and not commands:
         return ""

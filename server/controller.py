@@ -15,6 +15,7 @@ Execution details live outside this file:
 """
 
 import json
+import time
 import logging
 import os
 from dataclasses import dataclass
@@ -270,6 +271,9 @@ async def _chat_completion_request(
     phase: str | None = None,
 ) -> dict:
     """Единая обёртка для вызова chat/completions с ретраями."""
+    request_started=time.monotonic()
+    usage_context=dict(usage_context or {})
+    usage_context["metadata"]=dict(usage_context.get("metadata") or {})
     request_json = {
         "model": model,
         "messages": messages,
@@ -390,6 +394,7 @@ async def _chat_completion_request(
 
     try:
         data = resp.json()
+        usage_context["metadata"]["latency_ms"]=int((time.monotonic()-request_started)*1000)
         record_llm_usage_event(
             usage_context=usage_context,
             model=model,

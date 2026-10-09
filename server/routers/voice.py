@@ -14,7 +14,7 @@ except ImportError:
 
 router = APIRouter(prefix="/api/voice")
 _active_users: set[int] = set()
-TERMINAL_STATUSES = {"done", "error", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}
+TERMINAL_STATUSES = {"done", "error", "completed", "completed_with_recovery", "failed", "cancelled", "blocked", "partial", "unknown", "interrupted", "success"}
 
 
 @router.get("/config")
