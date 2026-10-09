@@ -133,3 +133,24 @@
 /* The Action block supplies the single confirmation frame and label. */
 .smart-action .confirm-actions { padding:0; margin:0; border:0; background:transparent; box-shadow:none; }
 .smart-action .confirm-actions::before { display:none; }
+/* Short viewports share the same renderer and scroll containers (desktop widget). */
+@media (max-height: 500px) {
+  .auth-screen { align-items: flex-start; overflow-y: auto; padding: 12px; }
+  .auth-box { flex-shrink: 0; width: min(100%, 480px); margin: 0 auto; padding: 16px; }
+  .auth-logo { margin-bottom: 12px; }
+  .auth-logo img { width: 48px; height: 48px; }
+  .auth-logo-text { font-size: 16px; }
+  .auth-desc { margin-bottom: 12px; }
+  .auth-contact { margin-top: 12px; }
+  .chat-input-area { flex-shrink: 0; padding-top: 4px; padding-bottom: 4px; }
+  .chat-messages { min-height: 0; scroll-padding-block: 4px; }
+  .voice-controls { padding: 2px 4px 0; gap: 4px; font-size: 11px; line-height: 1.3; }
+  .voice-controls #voiceStatus { padding-top: 0; }
+  .voice-stop-speech { min-height: 32px; }
+}
+
+@media (max-height: 500px) {
+  @container iru-shell (max-width: 980px) {
+    .header { min-height: 48px; padding-top: 2px; padding-bottom: 2px; }
+  }
+}

@@ -207,3 +207,47 @@ test('runtime done does not paint failed/partial/blocked nested steps as complet
   assert.deepEqual(page.errors,[]);
  }finally{await page.close();}
 });
+
+for(const [width,height] of [[400,210],[400,280],[320,200]]){
+ test('widget low height '+width+'x'+height+' preserves actions and voice',async()=>{
+  const page=await open(width,height);try{
+   await seed(page,[messages[2],messages[3],messages[4]]);
+   await page.locator('#voiceBtn').click();await page.waitForFunction(()=>speechCounts.start===1);
+   const counts=await page.evaluate(()=>({...speechCounts}));
+   const baseline=effectRequests().length;
+   for(const size of [{width,height},{width:1000,height:700},{width,height}]){
+    await page.setViewportSize(size);
+    await page.waitForTimeout(90);
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    const input=await page.locator('#chatInput').boundingBox();
+    const mic=await page.locator('#voiceBtn').boundingBox();
+    const send=await page.locator('#btnSend').boundingBox();
+    for(const box of [input,mic,send])assert.ok(box && box.y>=0 && box.y+box.height<=size.height+1,JSON.stringify(box));
+    assert.ok(input.x+input.width<=mic.x+1 || mic.x+mic.width<=input.x+1);
+    assert.ok(input.x+input.width<=send.x+1);
+    await page.locator('[data-action="confirm-task"]').scrollIntoViewIfNeeded();
+    await page.waitForTimeout(250);
+    const c=await page.locator('[data-action="confirm-task"]').boundingBox();
+    const chat=await page.locator('#chatMessages').boundingBox();
+    assert.ok(c.y>=chat.y-1 && c.y+c.height<=chat.y+chat.height+1,JSON.stringify({c,chat}));
+    assert.equal(await page.locator('.btn-confirm-no').count(),1);
+    assert.equal(await page.locator('[data-block-type="task"][data-status="blocked"]').count(),1);
+    assert.equal(await page.locator('[data-block-type="file"]').count(),1);
+    assert.deepEqual(await page.evaluate(()=>({...speechCounts})),counts);
+   }
+   assert.equal(effectRequests().length,baseline);assert.deepEqual(page.errors,[]);
+  }finally{await page.close();}
+ });
+}
+test('widget authentication is scrollable at low height',async()=>{
+ const page=await browser.newPage({viewport:{width:400,height:210}});try{
+  await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
+  await page.goto(origin);await page.locator('#authInput').waitFor();
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  for(const id of ['authInput','authBtn']){
+   await page.locator('#'+id).scrollIntoViewIfNeeded();
+   const b=await page.locator('#'+id).boundingBox();assert.ok(b.y>=0&&b.y+b.height<=210);
+  }
+  assert.equal(await page.locator('.auth-contact a').count(),2);
+ }finally{await page.close();}
+});

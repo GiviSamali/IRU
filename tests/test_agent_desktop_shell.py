@@ -146,7 +146,15 @@ def test_desktop_close_reopen_and_explicit_exit_keep_runtime_independent(tmp_pat
                 assert not settings.isVisible() and main.isVisible() and runtime.stopped == 0
                 tray = next(o for o in app.children() if isinstance(o, QtWidgets.QSystemTrayIcon))
                 labels = [a.text() for a in tray.contextMenu().actions()]
-                assert all(s in labels for s in ["Открыть ИРУ", "Настройки агента", "Выход"])
+                assert all(s in labels for s in ["Открыть ИРУ", "Настройки агента", "Выход", "Компактное окно", "Развернуть окно", "Скрыть ИРУ", "Сообщение окна"])
+                next(a for a in tray.contextMenu().actions() if a.text()=="Развернуть окно").trigger()
+                assert not main.is_compact and main.web_view is page
+                next(a for a in tray.contextMenu().actions() if a.text()=="Компактное окно").trigger()
+                assert main.is_compact and main.web_view is page
+                next(a for a in tray.contextMenu().actions() if a.text()=="Скрыть ИРУ").trigger()
+                assert not main.isVisible()
+                next(a for a in tray.contextMenu().actions() if a.text()=="Открыть ИРУ").trigger()
+                assert main.isVisible() and runtime.started==1 and runtime.stopped==0
                 tray.contextMenu().actions()[-1].trigger()
                 assert runtime.stopped == 1
                 main.shutdown()
@@ -471,7 +479,7 @@ def test_webview_viewport_fills_native_host_on_start_resize_and_reopen(tmp_path,
             rectangle=wintypes.RECT()
             assert view._user32.GetClientRect(int(view.winId()),ctypes.byref(rectangle))
             width=rectangle.right-rectangle.left;height=rectangle.bottom-rectangle.top
-            assert width>=800 and height>=400
+            assert width>=320 and height>=140
             # WebView2 applies compositor/renderer resize asynchronously.
             # Wait for actual geometry, keeping a bounded failure deadline.
             if (abs(result["w"]*result["dpr"]-width)>3
@@ -545,3 +553,131 @@ def test_native_speech_error_diagnostics_preserve_recognizer_and_hide_other_cons
     assert "speech error diagnostics passed" in output
     assert "PRIVATE_CONSOLE_FIXTURE_DO_NOT_LOG" not in output
     assert "speech recognition error=network runtime=" in output
+
+
+@pytest.mark.parametrize("scale", ["1", "1.25", "1.5"])
+def test_widget_single_document_geometry_and_monitor_recovery(tmp_path, web_origin, monkeypatch, scale):
+    monkeypatch.setenv("QT_SCALE_FACTOR", scale)
+    assert "widget document survived" in run_qt(r'''
+        import ctypes,json,os,time
+        from ctypes import wintypes
+        from pathlib import Path
+        from PySide6 import QtCore,QtWidgets
+        from ui.webview import IruMainWindow
+        app=QtWidgets.QApplication([])
+        root=Path(os.environ["IRU_DESKTOP_TEST_DIR"])
+        window=IruMainWindow(site_url=os.environ["IRU_DESKTOP_TEST_ORIGIN"]+"/voice",
+            config_dir=root,icon=app.windowIcon(),tray_available=True,
+            show_agent_settings=lambda:None,shutdown=app.quit)
+        assert window.is_compact and window.size()==QtCore.QSize(400,280)
+        assert window.menuBar().isHidden() and window.statusBar().isHidden()
+        window.show();view=window.web_view;assert view is not None
+        original=(id(view),int(view.winId()),view._hwnd,int(window.winId()))
+        loads=[];view.loadFinished.connect(loads.append)
+        observations=[];deadline=[time.monotonic()+10]
+        def loaded(ok):
+            assert ok
+            view.evaluate("window.fixture={voice:{instances:1,tts:'speaking'},pending:'confirm-1',operations:0};window.originalFixture=fixture; true",lambda _:observe())
+        def observe():
+            view.evaluate("JSON.stringify({same:fixture===originalFixture,fixture,marker,ticks,w:innerWidth,h:innerHeight,dpr:devicePixelRatio})",checked)
+        def checked(value):
+            result=json.loads(value)
+            rectangle=wintypes.RECT()
+            assert view._user32.GetClientRect(int(view.winId()),ctypes.byref(rectangle))
+            if abs(result['w']*result['dpr']-rectangle.right)>3 or abs(result['h']*result['dpr']-rectangle.bottom)>3:
+                assert time.monotonic()<deadline[0],result
+                QtCore.QTimer.singleShot(50,observe);return
+            assert result['same'] and result['marker']=='same-document'
+            assert result['fixture']=={'voice':{'instances':1,'tts':'speaking'},'pending':'confirm-1','operations':0}
+            assert original==(id(view),int(view.winId()),view._hwnd,int(window.winId()))
+            if observations:assert result['ticks']>observations[-1]
+            observations.append(result['ticks'])
+            if len(observations)==1:
+                assert not view.core.Settings.AreHostObjectsAllowed and not view.core.Settings.IsWebMessageEnabled
+                window.resize(1000,700)
+                window.set_compact(False)
+                assert not window.menuBar().isHidden() and not window.statusBar().isHidden()
+                window.resize(850,600);window.move(40,50)
+            elif len(observations)==2:
+                window.set_compact(True)
+                assert window.size()==QtCore.QSize(400,280)
+                assert window.menuBar().isHidden() and window.statusBar().isHidden()
+                window._speech_failed('network')
+                assert window._notice_action.isVisible() and 'network' in window._notice
+                window._renderer_failed('BrowserProcessExited')
+                assert 'Перезапустите' in window._notice
+                window.close();assert not window.isVisible()
+                window.show_iru();assert window.isVisible() and not view._disposed
+            elif len(observations)==3:
+                window.move(-9000,-9000);window._screen_removed(app.primaryScreen())
+            elif len(observations)==4:
+                assert app.primaryScreen().availableGeometry().contains(window.frameGeometry())
+                window.set_compact(False)
+                assert window.size()==QtCore.QSize(850,600)
+            else:
+                assert len(loads)==1
+                window.dispose_browser();window.dispose_browser();assert view._disposed
+                assert not window._save_timer.isActive()
+                prefs=json.loads((root/'window.json').read_text())
+                assert set(prefs)=={'compact','expanded'} and prefs['expanded'][2:]==[850,600]
+                print('widget document survived');app.quit();return
+            QtCore.QTimer.singleShot(200,observe)
+        view.loadFinished.connect(loaded)
+        QtCore.QTimer.singleShot(18000,lambda:os._exit(4));app.exec()
+    ''', tmp_path, web_origin)
+
+
+def test_window_preferences_are_validated_and_do_not_store_account_state(tmp_path):
+    # This part runs without Qt/WebView2 too.
+    import importlib.util
+    spec=importlib.util.spec_from_file_location('window_state', ROOT/'agent/ui/window_state.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    import json
+    path=tmp_path/'window.json'
+    path.write_text('{broken')
+    assert module.load_window_state(path)=={}
+    for value in [None, [], [0,0,-1,280], [True,0,400,280], [0,0,500000,280]]:
+        assert module.rectangle(value) is None
+    path.write_text('[]');assert module.load_window_state(path)=={}
+    module.save_window_state(path, {'compact':[10,20,400,280], 'expanded':[20,30,1200,800], 'token':'secret', 'messages':['private']})
+    assert json.loads(path.read_text())=={'compact':[10,20,400,280],'expanded':[20,30,1200,800]}
+    assert not path.with_name('window.json.tmp').exists()
+
+
+def test_widget_restores_only_window_preferences_and_remains_usable_without_tray(tmp_path):
+    assert "widget preferences restored" in run_qt(r'''
+        import json,os
+        from pathlib import Path
+        from PySide6 import QtCore,QtWidgets
+        import ui.webview as module
+        app=QtWidgets.QApplication([])
+        class FakeView(QtWidgets.QWidget):
+            loadFinished=QtCore.Signal(bool)
+            fatalError=QtCore.Signal(str)
+            processFailed=QtCore.Signal(str)
+            speechFailed=QtCore.Signal(str)
+            def __init__(self,url,directory,parent):super().__init__(parent);self.reloads=0;self.disposed=0
+            def reload(self):self.reloads+=1
+            def dispose(self):self.disposed+=1
+        module.EdgeWebView=FakeView
+        root=Path(os.environ["IRU_DESKTOP_TEST_DIR"])
+        (root/'window.json').write_text(json.dumps({'compact':[60,60,420,300],'expanded':[70,70,850,600],'token':'ignored'}))
+        exits=[]
+        w=module.IruMainWindow(site_url='http://127.0.0.1:9',config_dir=root,icon=app.windowIcon(),
+            tray_available=False,show_agent_settings=lambda:None,shutdown=lambda:exits.append(1))
+        assert w.size()==QtCore.QSize(420,300)
+        v=w.web_view;w.show();app.processEvents()
+        w.set_compact(False);assert w.size()==QtCore.QSize(850,600)
+        w.set_compact(True);assert w.size()==QtCore.QSize(420,300)
+        assert w.web_view is v and not v.reloads and not v.disposed
+        assert not w._compact_bar.isHidden()
+        assert not any(a.text()=='Скрыть в tray' for a in w.menuBar().actions()[0].menu().actions())
+        activations=[]
+        w.activateWindow=lambda:activations.append('activate')
+        w.raise_=lambda:activations.append('raise')
+        w._loaded(False);assert w._notice_action.isVisible()
+        assert not activations  # No implicit activation on a load error.
+        w.close();assert exits==[1]
+        assert set(json.loads((root/'window.json').read_text()))=={'compact','expanded'}
+        w.dispose_browser();print('widget preferences restored')
+    ''',tmp_path)
