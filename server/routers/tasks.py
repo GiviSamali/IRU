@@ -543,7 +543,6 @@ async def api_get_task(task_id: str, request: Request):
         "worker_id":task.get("worker_id"),
         "worker_report":report,
         "kind":task.get("kind"),
-        "highlights":task.get("highlights") or [],
         "presentation_status": report["status"] if task.get("worker_id") else task["status"] if task["status"] in {"error", "failed", "blocked", "cancelled"} else presentation.get("taskStatus"),
         "task_mode": presentation["taskMode"],
         "elapsed_ms": presentation["taskElapsedMs"],

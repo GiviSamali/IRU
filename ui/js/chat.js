@@ -928,7 +928,7 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
         else setTimeout(poll,800);
         return;
       }
-      const smartTaskMetadata = { taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind,highlights:task.highlights,conversationalResponse:task.conversational_response,executionDetails:task.execution_details };
+      const smartTaskMetadata = { taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind,conversationalResponse:task.conversational_response,executionDetails:task.execution_details };
       const pendingTask = state.pendingTasks.find(t => t.task_id === taskId);
       if (pendingTask && task.kind) pendingTask.kind=task.kind;
       if (pendingTask && String(task.status || '').trim().toLowerCase() === 'cancelling') {

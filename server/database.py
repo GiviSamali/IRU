@@ -493,7 +493,6 @@ def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
         "taskMode": "plan" if (task.get("modes") or {}).get("pipeline") or (saved_receipt or {}).get("answer_source") == "pipeline_step_report" else "conversation" if task.get("device_ids") == [] else "ordinary",
         "taskElapsedMs": elapsed, "workerReport": task.get("worker_report"), "taskKind":task.get("kind"),
         "planSuggestion":task.get("plan_suggestion"),"planOriginalRequest":task.get("plan_original_request"),
-        "highlights":task.get("highlights") or [],
         "fullSpeechRequested":task.get("full_speech_requested") is True,"dialogueIntent":task.get("dialogue_intent"),"spokenResponse":task.get("dialogue_spoken_response"),
         "spokenResponseAnswer":task.get("dialogue_speech_answer"),
         "conversationalResponse":task.get("conversational_response"),"executionDetails":task.get("execution_details"),
@@ -505,7 +504,7 @@ def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
 def _message_metadata(value) -> dict:
     if not isinstance(value, dict):
         return {}
-    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs", "workerReport", "taskKind", "planSuggestion", "planOriginalRequest", "conversationalResponse", "executionDetails", "assignmentDeviceIds", "sourceTaskIds", "diagnosticTrace", "workerStartedAt", "orchestratorMetrics", "highlights", "dialogueIntent", "spokenResponse", "spokenResponseAnswer", "fullSpeechRequested")
+    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs", "workerReport", "taskKind", "planSuggestion", "planOriginalRequest", "conversationalResponse", "executionDetails", "assignmentDeviceIds", "sourceTaskIds", "diagnosticTrace", "workerStartedAt", "orchestratorMetrics", "dialogueIntent", "spokenResponse", "spokenResponseAnswer", "fullSpeechRequested")
     return {key: value[key] for key in allowed if key in value}
 
 

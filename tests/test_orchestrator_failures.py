@@ -20,7 +20,7 @@ def payload(arguments):
 @pytest.mark.parametrize('bad,stage,error_type',[
  ({'choices':[{'finish_reason':'stop','message':{'content':'ordinary text','tool_calls':[]}}]},'llm_response','ValueError'),
  (payload({'intent':'conversation','answer':'reply','scope':None}),'decision_validation','ValidationError'),
- (payload({'intent':'conversation','answer':'reply','highlights':[{'start':'bad','end':3}]}),'decision_validation','ValidationError'),
+ (payload({'intent':'conversation','answer':'reply','execution_mode':'unapproved'}),'decision_validation','ValidationError'),
 ])
 def test_failed_decision_is_diagnosed_and_does_not_poison_following_turns(client,monkeypatch,caplog,bad,stage,error_type):
  user=owner();calls=[];delegated=[]

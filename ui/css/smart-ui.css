@@ -171,6 +171,3 @@
 
 /* Replies remain selectable ordinary text; there is no card editor/workspace. */
 .smart-text-content { user-select:text; cursor:text; }
-mark[class^=semantic-] { color:inherit; background:#254a5a; border-radius:3px; }
-mark.semantic-warning { background:#674b20; }
-mark.semantic-result { background:#1e503b; }

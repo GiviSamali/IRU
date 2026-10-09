@@ -25,7 +25,7 @@ def test_operations_owner_fifo_and_restore(client):
     assert client.get('/api/operations').status_code in {401,403}
     assert client.get('/api/operations',headers={'X-Token':b['token']}).json()['operations'][0]['task_id']=='dock-3'
 
-def test_highlights_persist_as_ranges_not_html(client,monkeypatch):
+def test_retired_highlights_do_not_persist_or_reach_api(client,monkeypatch):
     from types import SimpleNamespace
     from server import orchestrator as orch
     user=db.create_user('highlight-owner');chat=db.create_chat(user['id'],'dialog')['id']
@@ -36,9 +36,8 @@ def test_highlights_persist_as_ranges_not_html(client,monkeypatch):
     monkeypatch.setattr(orch,'decide',decide)
     cmd=SimpleNamespace(message='Что такое LAN?',request_id='highlight-turn',device_id='',modes={},broadcast=False)
     result=asyncio.run(orch.run_turn(cmd,user,chat,forbidden))
-    expected=[{'start':0,'end':3,'kind':'definition'}]
     row=db.get_messages(chat)[-1]
-    assert row['content']==answer and row['highlights']==expected
-    restored=orch.restore_dialogue(result['task_id'],user['id']);assert restored['highlights']==expected
+    assert row['content']==answer and 'highlights' not in row
+    restored=orch.restore_dialogue(result['task_id'],user['id']);assert 'highlights' not in restored
     view=client.get('/api/tasks/'+result['task_id'],headers={'X-Token':user['token']}).json()['task']
-    assert view['highlights']==expected and view['answer']==answer
+    assert 'highlights' not in view and view['answer']==answer

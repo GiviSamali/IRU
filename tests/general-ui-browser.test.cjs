@@ -45,7 +45,7 @@ for(const width of [360,1280])test(`ordinary reply has no card editing controls 
   const text=page.locator('.smart-text-content');assert.equal(await text.textContent(),original);
   assert.equal(await page.locator('.content-surface, .surface-toolbar, #surfaceEditor, [data-surface-action]').count(),0);
   assert.equal(await page.evaluate(()=>typeof IRUContentSurface),'undefined');
-  assert.equal(await text.locator('mark').count(),1);assert.equal(await text.locator('img').count(),0);
+  assert.equal(await text.locator('mark').count(),0);assert.equal(await text.locator('img').count(),0);
   assert.equal(await text.evaluate(el=>getComputedStyle(el).userSelect),'text');
   await text.evaluate(el=>{const range=document.createRange();range.selectNodeContents(el);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);});
   await page.context().grantPermissions(['clipboard-read','clipboard-write']);await page.keyboard.press('Control+c');

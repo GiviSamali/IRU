@@ -10,7 +10,7 @@ from datetime import datetime,timezone,timedelta
 from typing import Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 try:
     from . import database as db
@@ -26,13 +26,6 @@ except ImportError:
 MAX_CONTEXT_CHARS = 14000
 
 
-class HighlightRange(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    start: int = Field(ge=0)
-    end: int = Field(gt=0)
-    kind: Literal["definition", "warning", "result"] = "result"
-
-
 class Decision(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     intent: Literal["conversation","delegate","task_status","cancel","clarify"]
@@ -45,7 +38,14 @@ class Decision(BaseModel):
         # A malformed optional projection must not lose a valid answer/routing decision.
         return value.strip() if isinstance(value,str) and len(value.strip())<=420 else ""
 
-    highlights: list[HighlightRange] = Field(default_factory=list, max_length=5)
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_retired_decoration(cls, value):
+        # No schema/rendering feature; tolerate this obsolete key from older model replies only.
+        if isinstance(value,dict) and "highlights" in value:
+            return {key:item for key,item in value.items() if key!="highlights"}
+        return value
+
     scope: Literal["device","server"] = "device"
     objective: str = Field(default="", max_length=2000)
     context_summary: str = Field(default="", max_length=2000)
@@ -78,7 +78,6 @@ SYSTEM = """Ты ИРУ: единственный пользовательски
 а предупреждение о непроверенном исполнении нужно только при обсуждении исполнения, не при «привет, проверка связи».
 При просьбе показать полный отчёт выполнения выбирай task_status с show_execution_details=true;
 при обычном вопросе о статусе — false. Это только представление уже имеющегося результата, не новое поручение.
-Для содержательного conversation/clarify можно выделить важные фрагменты answer через highlights: start/end — индексы UTF-16, kind=definition/warning/result. Не используй HTML. Это только оформление, не действие.
 Верни ровно один orchestrator_decision. conversation/clarify отвечают без Worker; delegate только для конкретного поручения пользователя.
 task_status получает реальный отчёт по task_id; cancel только для осознанной отмены конкретной задачи. Стоп озвучки/усни не означают отмену Worker.
 Если ссылка/устройство неоднозначны, clarify. Не меняй работающий Worker: объясни ограничение и предложи отменить его явно или поставить новое поручение в очередь.
@@ -176,7 +175,7 @@ def _log_failure(task_id,stage,exc):
     response=getattr(exc,"response",None)
     if isinstance(getattr(response,"status_code",None),int):record["http_status"]=response.status_code
     if hasattr(exc,"errors"):
-        safe=set(Decision.model_fields)|{"start","end","kind"}
+        safe=set(Decision.model_fields)
         record["validation_errors"]=[{"loc":[v if isinstance(v,int) or v in safe else "<extra>" for v in e["loc"]],"type":e["type"]}
             for e in exc.errors(include_input=False,include_url=False)]
     logger.error("orchestrator_failure %s",json.dumps(record,ensure_ascii=True))
@@ -285,9 +284,6 @@ async def run_turn(cmd, user, chat_id, delegate):
             answer=choice.answer.strip()
             if not answer:raise ValueError("missing_answer")
         stage="presentation"
-        if choice.intent in {"conversation", "clarify"} and answer == choice.answer:
-            length = len(answer.encode("utf-16-le")) // 2
-            task["highlights"] = [r.model_dump() for r in choice.highlights if r.start < r.end <= length]
         task["dialogue_intent"]=choice.intent
         try:
             from .voice import wants_full_speech
@@ -351,6 +347,6 @@ def restore_dialogue(task_id, owner):
         "commands":json.loads(row["commands"] or "[]"),"tasks":[],"kind":"orchestrator",
         "full_speech_requested":metadata.get("fullSpeechRequested") is True,"dialogue_intent":metadata.get("dialogueIntent"),"dialogue_spoken_response":metadata.get("spokenResponse"),
         "dialogue_speech_answer":metadata.get("spokenResponseAnswer"),
-        "highlights":metadata.get("highlights") or [],"history_metadata":metadata,"execution_details":metadata.get("executionDetails") or "",
+        "history_metadata":metadata,"execution_details":metadata.get("executionDetails") or "",
         "worker_report":metadata.get("workerReport"),"task_receipt":metadata.get("taskReceipt"),
         "current_step":metadata.get("taskTitle"),"plan_suggestion":metadata.get("planSuggestion"),"plan_original_request":metadata.get("planOriginalRequest")}

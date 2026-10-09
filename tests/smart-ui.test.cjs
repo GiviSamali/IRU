@@ -178,10 +178,12 @@ test('DIALOG file cards accept verified owned Worker artifacts, never report pro
 });
 
 
-test('semantic highlights validate finite nonoverlapping ranges and escape content/classes',()=>{
+test('retired highlights are ignored and all response text remains escaped',()=>{
  const source='<script>alert(1)</script> result';
- const rendered=ui.highlightedText(source,[{start:0,end:8,kind:'warning'},{start:1,end:7,kind:'result'},{start:NaN,end:10},{start:0,end:9999},{start:9,end:12,kind:'" onclick="bad'}]);
- assert.ok(!rendered.includes('<script>')&&!rendered.includes('onclick='));
- assert.equal((rendered.match(/<mark /g)||[]).length,2);
- assert.ok(rendered.includes('semantic-warning')&&rendered.includes('semantic-note'));
+ const view=ui.adapt({role:'assistant',content:source,highlights:[{start:0,end:8,kind:'warning'}]});
+ const rendered=ui.render(view);
+ assert.ok(!rendered.includes('<script>')&&!rendered.includes('<mark'));
+ assert.ok(rendered.includes('&lt;script&gt;'));
+ assert.equal(ui.highlightedText,undefined);
+ assert.ok(!Object.hasOwn(view.blocks[0],'highlights'));
 });
