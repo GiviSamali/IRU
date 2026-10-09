@@ -1,0 +1,209 @@
+const {test,before,after}=require('node:test');
+const assert=require('node:assert/strict');
+const path=require('node:path');
+const {chromium}=require('playwright');
+const {messages,clone,createServer}=require('./helpers/smart-ui-fixtures.cjs');
+let browser,server,origin,requests;
+before(async()=>{({server,requests}=createServer());await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin=`http://127.0.0.1:${server.address().port}`;browser=await chromium.launch({channel:'msedge',headless:true});});
+after(async()=>{await browser?.close();await new Promise(resolve=>server?.close(resolve));});
+async function open(width=1280,height=1100){
+ const page=await browser.newPage({viewport:{width,height}});page.setDefaultTimeout(8000);page.errors=[];page.on('pageerror',e=>page.errors.push(e.message));
+ await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
+ await page.addInitScript(()=>{
+  localStorage.setItem('iru_token','smart-ui-fixture');
+  window.speechCounts={instances:0,start:0,stop:0,abort:0};
+  class FakeRecognition {constructor(){speechCounts.instances++;}start(){speechCounts.start++;queueMicrotask(()=>this.onstart?.());}stop(){speechCounts.stop++;this.onend?.();}abort(){speechCounts.abort++;this.onend?.();}}
+  window.SpeechRecognition=window.webkitSpeechRecognition=FakeRecognition;
+ });
+ await page.goto(origin,{waitUntil:'networkidle'});await page.locator('#appRoot.active').waitFor();
+ return page;
+}
+async function seed(page,data=messages,pending=[]){await page.evaluate(({data,pending})=>{state.messages=data;state.pendingTasks=pending;renderMessages();}, {data:clone(data),pending});}
+const effectRequests=()=>requests.filter(r=>/^\/api\/tasks\/|\/api\/voice\/|\/command$|\/api\/download_request$|\/nl_command$/.test(r.path));
+function compactFor(width){return width<=720;}
+for(const width of [320,360,480,768,1280]){
+ test(`one renderer, safe states and actions at ${width}px`,async()=>{
+  const page=await open(width);try{
+   assert.equal(await page.locator('[data-block-type="task"]').count(),4);
+   assert.equal(await page.locator('[data-block-type="file"]').count(),1);
+   assert.equal(await page.locator('[data-block-type="action"] .btn-confirm-yes').count(),1);
+   assert.equal(await page.locator('[data-block-type="task"][data-status="blocked"]').count(),1);
+   assert.equal(await page.locator('[data-block-type="task"][data-status="success"]').count(),1);
+   assert.equal(await page.locator('[data-block-type="task"][data-status="running"]').count(),1);
+   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+   assert.ok(await page.locator('#chatMessages').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
+   const confirm=page.locator('[data-action="confirm-task"]');assert.equal(await confirm.isVisible(),true);
+   const bounds=await confirm.boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=width+1);
+   const text=page.locator('[data-message-key="smart-1-demo-completed"] .smart-text');
+   const original=messages[2].content;assert.equal(await text.locator('.smart-text-content').textContent(),original);
+   // Messages container is narrower than viewport when desktop sidebar is visible.
+   if((await page.locator('.chat-view').boundingBox()).width<=720){await text.locator('.smart-text-toggle').click();assert.equal(await text.locator('button').getAttribute('aria-expanded'),'true');await text.locator('.smart-text-toggle').click();}
+   await page.locator('#chatMessages').evaluate(el=>el.scrollTop=0);
+   if(process.env.IRU_SCREENSHOT_DIR&&[320,480,1280].includes(width)){
+    await page.screenshot({path:path.join(process.env.IRU_SCREENSHOT_DIR,`smart-ui-${width}.png`)});
+    await page.locator('#chatMessages').evaluate(el=>el.scrollTop=el.scrollHeight);
+    await page.screenshot({path:path.join(process.env.IRU_SCREENSHOT_DIR,`smart-ui-${width}-actions.png`)});
+   }
+   assert.deepEqual(page.errors,[]);
+  }finally{await page.close();}
+ });
+}
+test('container width inside wide viewport controls layout; resize keeps DOM, voice and data',async()=>{
+ const page=await open();try{
+  await seed(page,[{role:'assistant',content:'Первая строка\n'+('Длинный исходный текст.\n'.repeat(30)),taskStatus:'blocked',taskReceipt:{task_status:'partial',goal_completed:false},confirmTaskId:'demo-confirm',_taskId:'demo-confirm',commandConfirmation:messages[4].commandConfirmation}]);
+  await page.locator('#voiceBtn').click();await page.waitForFunction(()=>speechCounts.start===1);
+  const speech=await page.evaluate(()=>({...speechCounts})),baseline=effectRequests().length;
+  const saved=await page.evaluate(()=>{window.originalSmartNode=document.querySelector('.smart-text-content');window.renderCount=0;window.originalRender=renderMessages;renderMessages=(...args)=>{window.renderCount++;return window.originalRender(...args);};return JSON.stringify([state.currentChatId,state.messages]);});
+  for(const width of [320,360,480,768,1280]){
+   await page.locator('#appRoot').evaluate((el,w)=>el.style.width=w+'px',width);
+   await page.waitForTimeout(80);
+   assert.ok(await page.locator('#appRoot').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
+   assert.equal(await page.locator('.smart-text-toggle').isVisible(),(await page.locator('.chat-view').boundingBox()).width<=720);
+   assert.equal(await page.locator('[data-action="confirm-task"]').isVisible(),true);
+   assert.equal(await page.evaluate(()=>originalSmartNode===document.querySelector('.smart-text-content')),true);
+   assert.equal(await page.evaluate(()=>renderCount),0);
+   assert.equal(await page.evaluate(()=>JSON.stringify([state.currentChatId,state.messages])),saved);
+   assert.deepEqual(await page.evaluate(()=>({...speechCounts})),speech);
+  }
+  await page.locator('#appRoot').evaluate(el=>el.style.width='360px');
+  await page.locator('#mobileHeaderToggle').click();assert.equal(await page.locator('#headerActions').isVisible(),true);
+  await page.keyboard.press('Escape');assert.equal(await page.locator('#headerActions').isVisible(),false);
+  assert.equal(effectRequests().length,baseline);assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+test('text injection is inert, expansion and command details survive rerender',async()=>{
+ const page=await open(480);try{
+  const content='Первая\n\n'+('<img src=x onerror="window.bad=1">\n<script>window.bad=2</script>\n'.repeat(15));
+  await seed(page,[{role:'assistant',content,taskStatus:'blocked',commands:messages[3].commands,_taskId:'safe'}]);
+  assert.equal(await page.locator('.smart-text-content').textContent(),content);assert.equal(await page.locator('.smart-text-content img, .smart-text-content script').count(),0);
+  await page.locator('.smart-text-toggle').click();await page.locator('.smart-task-toggle').click();
+  await page.locator('.cmd-log').click();await page.locator('[data-action="toggle-cmd-entry"]').click();
+  const n=effectRequests().length;await page.evaluate(()=>renderMessages());
+  assert.equal(await page.locator('.smart-text').evaluate(el=>el.classList.contains('expanded')),true);
+  assert.equal(await page.locator('.smart-task').evaluate(el=>el.classList.contains('expanded')),true);
+  assert.equal(await page.locator('.cmd-entry').evaluate(el=>el.classList.contains('open')),true);
+  assert.equal(await page.locator('.cmd-log').evaluate(el=>el.classList.contains('expanded')),true);
+  assert.equal(await page.evaluate(()=>window.bad),undefined);assert.equal(effectRequests().length,n);
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+test('confirmation uses previous endpoint once; receipt remains blocked',async()=>{
+ const page=await open(320);try{
+  await seed(page,[messages[4]]);const before=effectRequests().length;
+  await page.evaluate(()=>{renderMessages();renderMessages();});assert.equal(effectRequests().length,before);
+  await page.locator('[data-action="confirm-task"]').click();
+  await page.waitForFunction(()=>document.querySelector('[data-block-type="task"]')?.dataset.status==='blocked');
+  const decisions=effectRequests().slice(before).filter(r=>r.path.endsWith('/command-decision'));
+  assert.equal(decisions.length,1);assert.deepEqual(JSON.parse(decisions[0].body),{confirmation_id:'demo-confirmation',accepted:true,via_voice:false});
+  assert.equal(await page.locator('[data-action="confirm-task"]').count(),0);
+  assert.equal(await page.locator('[data-block-type="task"][data-status="success"]').count(),0);
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+test('PLAN editing keeps draft across rerender and revision goes to previous API',async()=>{
+ const page=await open(360);try{
+  const m={role:'assistant',_taskId:'demo-plan',taskStatus:'confirm',content:'План\n1. Подготовить документ.',planReview:{revision:3,steps:[{title:'Подготовить документ',instruction:'Создать отчёт'}]}};
+  await seed(page,[m]);await page.locator('[data-action="edit-plan"]').click();await page.locator('#plan-changes-0').fill('Добавить Excel');
+  await page.evaluate(()=>renderMessages());assert.equal(await page.locator('#plan-changes-0').inputValue(),'Добавить Excel');assert.equal(await page.locator('#plan-changes-0').isVisible(),true);
+  await page.locator('[data-action="revise-plan"]').click();
+  await page.waitForFunction(()=>state.messages[0]?.loading);
+  const request=requests.findLast(r=>r.path==='/api/tasks/demo-plan/review-plan');assert.deepEqual(JSON.parse(request.body),{revision:3,action:'revise',changes:'Добавить Excel'});
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+test('cancel and file download keep target and use existing APIs only',async()=>{
+ const page=await open(480);try{
+  await seed(page,[messages[1]],[{task_id:'demo-running',msgIndex:0}]);
+  await page.evaluate(()=>pollTask('demo-running',0));
+  await page.locator('[data-action="cancel-smart-task"]').click();await page.waitForFunction(()=>document.querySelector('.smart-task')?.dataset.status==='cancelled');
+  assert.equal(requests.findLast(r=>r.path==='/api/tasks/demo-running/cancel').method,'POST');
+  await seed(page,[messages[2]]);await page.locator('.smart-file-toggle').click();assert.equal(await page.locator('.smart-file-path').isVisible(),true);
+  await page.locator('.smart-file [data-action="download-message-file"]').click();
+  await page.waitForFunction(()=>document.getElementById('toast').textContent.includes('mock'));
+  const request=requests.findLast(r=>r.path==='/api/download_request');assert.deepEqual(JSON.parse(request.body),{device_id:'Second',file_path:'C:\\Users\\Demo\\Desktop\\report.docx'});
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+test('initial ordinary loading placeholder renders before a task ID or pending task exists',async()=>{
+ const page=await open(360);try{
+  await seed(page,[{role:'assistant',loading:true,currentStatus:'thinking',content:''}]);
+  assert.equal(await page.locator('.smart-task[data-status="running"]').count(),1);
+  assert.equal(await page.locator('[data-action="cancel-smart-task"]').count(),0);
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+test('partial PLAN and unknown command retain their meaning in expanded legacy details',async()=>{
+ const page=await open(480);try{
+  const command={tool_name:'execute_cmd',action:'execute_cmd',step_index:0,result:{},device_id:'Second'};
+  await seed(page,[{role:'assistant',content:'Часть работы выполнена.',tasks:[{id:90,goal:'Частичный PLAN',status:'partial',steps:[{idx:0,title:'Частично выполненный шаг',status:'partial'}]}],commands:[command]}]);
+  assert.equal(await page.locator('.smart-task').getAttribute('data-status'),'partial');
+  await page.locator('.smart-task-toggle').click();
+  assert.equal(await page.locator('.pipeline-progress-head').textContent().then(t=>t.includes('частично')),true);
+  assert.equal(await page.locator('.step-status').textContent(),'частично');
+  assert.equal(await page.evaluate(()=>getStepCommandStatusIcon(getCommandStatus(state.messages[0].commands[0]))),'○');
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+
+test('medium text is not cropped without disclosure and rerender preserves reading anchor',async()=>{
+ const page=await open(320);try{
+  const content='ОченьДлинноеСлово'.repeat(10);
+  await seed(page,[{role:'assistant',id:1,content}]);
+  assert.equal(await page.locator('.smart-text-toggle').count(),0);
+  assert.equal(await page.locator('.smart-text-content').evaluate(el=>getComputedStyle(el).webkitLineClamp),'none');
+  const history=Array.from({length:24},(_,i)=>({role:'assistant',id:i+1,content:`Сообщение ${i} `+('исходный текст '.repeat(5))}));
+  await seed(page,history);
+  await page.locator('#chatMessages').evaluate(el=>{el.scrollTop=el.querySelector('[data-message-key="smart-1-12"]').offsetTop-el.offsetTop;});
+  const before=await page.locator('[data-message-key="smart-1-12"]').evaluate(el=>el.getBoundingClientRect().top);
+  await page.evaluate(()=>{state.messages[0].content+='\nБольшой новый результат.\n'.repeat(25);renderMessages();});
+  const after=await page.locator('[data-message-key="smart-1-12"]').evaluate(el=>el.getBoundingClientRect().top);
+  assert.ok(Math.abs(after-before)<2,`reading anchor moved ${after-before}px`);
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+
+test('legacy step-indexed logs do not fabricate a complete PLAN or progress',async()=>{
+ const page=await open(480);try{
+  await seed(page,[{role:'assistant',content:'История операции.',commands:[{tool_name:'execute_cmd',action:'execute_cmd',step_index:0,result:{},device_id:'Second'}]}]);
+  await page.locator('.smart-task-toggle').click();
+  assert.equal(await page.locator('.task-block, .pipeline-progress').count(),0);
+  assert.equal(await page.locator('.cmd-entry .cmd-status').textContent(),'○');
+  assert.equal(await page.locator('.smart-task[data-status="success"]').count(),0);
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+
+test('get_file_link is rendered from tool metadata and refreshes download on its exact device',async()=>{
+ const page=await open(480);try{
+  const command={action:'get_file_link',tool_name:'get_file_link',status:'success',device_id:'Second',result:{url:'/api/download/012abc',file_path:'C:\\Users\\Demo\\Desktop\\linked.docx'}};
+  const before=effectRequests().length;
+  await seed(page,[{role:'assistant',content:'Ссылка: /api/download/012abc',commands:[command]}]);
+  await page.evaluate(()=>{state.selectedDevice='givi';renderMessages();renderMessages();});
+  assert.equal(await page.locator('[data-block-type="file"]').count(),1);
+  assert.equal(await page.locator('a[href="/api/download/012abc"]').count(),0);
+  assert.equal(effectRequests().length,before);
+  await page.locator('.smart-file [data-action="download-message-file"]').click();
+  await page.waitForFunction(()=>document.getElementById('toast').textContent.includes('mock'));
+  const request=requests.findLast(r=>r.path==='/api/download_request');
+  assert.deepEqual(JSON.parse(request.body),{device_id:'Second',file_path:command.result.file_path});
+  await seed(page,[{role:'assistant',content:'Ссылка: /api/download/012abc'}]);
+  assert.equal(await page.locator('[data-block-type="file"]').count(),0);
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+test('runtime done does not paint failed/partial/blocked nested steps as completed',async()=>{
+ const page=await open(360);try{
+  for(const status of ['failed','partial','blocked']){
+   const task={id:94,status:'completed',goal:'Проверка приоритетов',steps:[{idx:0,title:'Проблемный шаг',status}]};
+   await seed(page,[{role:'assistant',content:'Ответ получен.',taskStatus:'done',tasks:[task]}]);
+   assert.equal(await page.locator('.smart-task').getAttribute('data-status'),status);
+   assert.equal(await page.locator('.smart-task[data-status="success"]').count(),0);
+   await page.locator('.smart-task-toggle').click();
+   const label={failed:'ошибка',partial:'частично',blocked:'заблокировано'}[status];
+   assert.ok((await page.locator('.pipeline-progress-head').textContent()).includes(label));
+   await seed(page,[{role:'assistant',content:'Итог подтверждён.',taskStatus:'done',tasks:[task],taskReceipt:{task_status:'completed_with_recovery',final_verification_status:'verified'}}]);
+   assert.equal(await page.locator('.smart-task').getAttribute('data-status'),'success');
+  }
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});

@@ -21,6 +21,7 @@ const state = {
   memoryFacts: [],
   pendingTasks: [],  // [{task_id, msgIndex}]
   expandedStepDetails: new Set(),
+  expandedSmartBlocks: new Set(),
   expandedStepCommands: new Set(),
   devModeOpen: false,
   userPlan: 'free',

@@ -36,7 +36,7 @@ async function createNewChat() {
 async function openChat(chatId) {
   if (typeof stopVoice === 'function') stopVoice();
   state.currentChatId = chatId;
-  if (window.innerWidth <= 768) closeMobileSidebar();
+  if (document.getElementById('appRoot').clientWidth <= 980) closeMobileSidebar();
   renderChatList();
 
   const chat = state.chats.find(c => c.id === chatId);
@@ -355,6 +355,8 @@ const SAFE_TASK_STATE_CLASSES = new Set([
   'error',
   'cancelled',
   'blocked',
+  'partial',
+  'partial_failure',
   'skipped',
 ]);
 
@@ -371,6 +373,7 @@ function normalizeTaskBadgeLabel(status) {
   if (key === 'cancelling') return 'остановка';
   if (key === 'cancelled') return 'отменено';
   if (key === 'blocked') return 'заблокировано';
+  if (key === 'partial' || key === 'partial_failure') return 'частично';
   if (key === 'skipped') return 'пропущено';
   if (key === 'pending') return 'ожидает';
   return 'выполняется';
@@ -387,55 +390,27 @@ function normalizeStepStatusLabel(status) {
   if (key === 'failed' || key === 'error') return 'ошибка';
   if (key === 'running') return 'выполняется';
   if (key === 'blocked') return 'блокировано';
+  if (key === 'partial' || key === 'partial_failure') return 'частично';
   if (key === 'skipped') return 'пропущено';
   if (key === 'cancelled') return 'отменено';
   return 'ожидает';
 }
 
-function renderMessages() {
-  const container = document.getElementById('chatMessages');
+// The existing operation and action components are reused by the four-block registry.
+function renderSmartTaskDetails(block, message, mi) {
+  const detailStatus = { success:'completed', waiting:'pending', running:'running', failed:'failed', partial:'partial', blocked:'blocked', cancelled:'cancelled' };
+  const detailTasks = block.status === 'success' ? block.tasks : block.tasks.map(task => ({
+    ...task, status:detailStatus[IRUSmartUI.taskState({}, [task])],
+  }));
+  const m = { ...message, tasks:detailTasks, commands:block.commands };
+  const liveTasksHTML = detailTasks.length ? renderTaskBlock(detailTasks, block.commands, m._taskId || `msg-${mi}`) : '';
+  const status = block.loading ? `<div class="live-status"><span class="live-text">${escapeHTML(normalizeTaskStatusLabel(m.currentStatus || 'thinking'))}</span></div>` : '';
+  return status + liveTasksHTML + renderUsedToolsLine(block.commands) + renderCommandJournal(m, mi);
+}
 
-  if (state.messages.length === 0) {
-    const hasDevices = Object.keys(state.devices).length > 0;
-    const subtitle = hasDevices
-      ? 'Опиши задачу на естественном языке — ИРУ выполнит на твоём устройстве.'
-      : 'Нет подключённых устройств. Напиши сообщение — я помогу настроить подключение.';
-    const hints = hasDevices
-      ? `<div class="hint-chip" data-action="send-hint">Открой браузер</div>
-          <div class="hint-chip" data-action="send-hint">Покажи IP адрес</div>
-          <div class="hint-chip" data-action="send-hint">Свободное место на диске</div>
-          <div class="hint-chip" data-action="send-hint">Запущенные процессы</div>`
-      : `<div class="hint-chip" data-action="download-agent">⬇ Скачать агент</div>
-          <div class="hint-chip" data-action="send-hint">Как подключить компьютер?</div>
-          <div class="hint-chip" data-action="send-hint">Что ты умеешь?</div>`;
-    container.innerHTML = `
-      <div class="chat-welcome">
-        <img src="/static/IruIcon.ico" alt="ИРУ">
-        <h2>ИРУ — Интеллектуальный Режим Управления</h2>
-        <p>${subtitle}</p>
-        <div class="hints">${hints}</div>
-      </div>`;
-    updateStopButton();
-    return;
-  }
-
-  let html = '';
-  for (let mi = 0; mi < state.messages.length; mi++) {
-    const m = state.messages[mi];
-    if (m.hideAfterPlanChoice) continue;
-    const roleLabel = m.role === 'user' ? 'вы' : 'иру';
-    const linkified = linkifyMessageContent(m.content || m.text || '', m.commands || []);
-    let bodyHTML = linkified.html;
-
-    // Блок задач (конвейер)
-    bodyHTML += renderTaskBlock(m.tasks, m.commands || [], m._taskId || `msg-${mi}`);
-
-    const commands = m.commands;
-    bodyHTML += renderUsedToolsLine(commands);
-    if (typeof renderMessageUsage === 'function') {
-      bodyHTML += renderMessageUsage(m);
-    }
-    bodyHTML += renderCommandDownloadButtons(commands, linkified.usedDownloads);
+function renderCommandJournal(m, mi) {
+  const commands = m.commands;
+  let bodyHTML = '';
     if (commands && commands.length > 0) {
       bodyHTML += `<div class="cmd-log" data-plan-outcome="${getPlanLogOutcome(m.tasks)}">`;
       if (commands.length === 1) {
@@ -446,9 +421,9 @@ function renderMessages() {
         const errMsg = c.result?.error || '';
         const output = stdout || stderr || errMsg || '(нет вывода)';
         const isBudgetStop = c.action === 'budget_guard' || stripUtfPrefix(c.command || '') === '[budget_guard]';
-        const isOk = !isBudgetStop && !errMsg && (c.result?.returncode === 0 || c.result?.returncode == null);
-        const statusCls = isBudgetStop ? 'stopped' : (isOk ? 'ok' : 'err');
-        const statusTxt = isBudgetStop ? '\u25a0' : (isOk ? '\u2713' : '\u2717');
+        const isOk = !isBudgetStop && ['success', 'terminal'].includes(getCommandStatus(c));
+        const statusCls = isBudgetStop ? 'stopped' : (isOk ? 'ok' : getCommandStatus(c) === 'error' ? 'err' : 'stopped');
+        const statusTxt = isBudgetStop ? '\u25a0' : (isOk ? '\u2713' : getCommandStatus(c) === 'error' ? '\u2717' : '\u25cb');
         const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
         const cmdText = escapeHTML(getCommandDisplayText(c));
         const detailsText = getCommandDetailsText(c, output);
@@ -470,9 +445,9 @@ function renderMessages() {
         const lastClean = getCommandDisplayText(lastCmd);
         const lastTrunc = lastClean.length > 120 ? lastClean.slice(0, 120) + '\u2026' : lastClean;
         const hasBudgetStop = commands.some((cmd) => cmd?.action === 'budget_guard' || stripUtfPrefix(cmd.command || '') === '[budget_guard]');
-        const lastIsOk = !hasBudgetStop && !(lastCmd.result?.error) && (lastCmd.result?.returncode === 0 || lastCmd.result?.returncode == null);
-        const lastStatusCls = hasBudgetStop ? 'stopped' : (lastIsOk ? 'ok' : 'err');
-        const lastStatusTxt = hasBudgetStop ? '\u25a0' : (lastIsOk ? '\u2713' : '\u2717');
+        const lastIsOk = !hasBudgetStop && ['success', 'terminal'].includes(getCommandStatus(lastCmd));
+        const lastStatusCls = hasBudgetStop ? 'stopped' : (lastIsOk ? 'ok' : getCommandStatus(lastCmd) === 'error' ? 'err' : 'stopped');
+        const lastStatusTxt = hasBudgetStop ? '\u25a0' : (lastIsOk ? '\u2713' : getCommandStatus(lastCmd) === 'error' ? '\u2717' : '\u25cb');
         const lastDevice = lastCmd.device_id ? `<span class="cmd-device">${escapeHTML(lastCmd.device_id)}</span>` : '';
         const extra = commands.length - 1;
         const groupClass = hasBudgetStop ? 'cmd-group cmd-group-budget' : 'cmd-group';
@@ -493,9 +468,9 @@ function renderMessages() {
           const errMsg = c.result?.error || '';
           const output = stdout || stderr || errMsg || '(нет вывода)';
           const isBudgetStop = c.action === 'budget_guard' || stripUtfPrefix(c.command || '') === '[budget_guard]';
-          const isOk = !isBudgetStop && !errMsg && (c.result?.returncode === 0 || c.result?.returncode == null);
-          const statusCls = isBudgetStop ? 'stopped' : (isOk ? 'ok' : 'err');
-          const statusTxt = isBudgetStop ? '\u25a0' : (isOk ? '\u2713' : '\u2717');
+          const isOk = !isBudgetStop && ['success', 'terminal'].includes(getCommandStatus(c));
+          const statusCls = isBudgetStop ? 'stopped' : (isOk ? 'ok' : getCommandStatus(c) === 'error' ? 'err' : 'stopped');
+          const statusTxt = isBudgetStop ? '\u25a0' : (isOk ? '\u2713' : getCommandStatus(c) === 'error' ? '\u2717' : '\u25cb');
           const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
           const cmdText = escapeHTML(getCommandDisplayText(c));
           const detailsText = getCommandDetailsText(c, output);
@@ -517,6 +492,10 @@ function renderMessages() {
       }
       bodyHTML += '</div>';
     }
+  return bodyHTML;
+}
+
+function renderMessageActions(m, mi) {
     // Кнопки подтверждения
     let confirmBtns = '';
     if (m.planReview) {
@@ -569,18 +548,90 @@ function renderMessages() {
       }
     }
 
-    if (m.loading) {
-      const stepText = escapeHTML(normalizeTaskStatusLabel(m.currentStatus || 'thinking'));
-      const liveTasksHTML = renderTaskBlock(m.liveTasks, m.liveCommands || [], m._taskId || `live-${mi}`);
-      const taskBlockAttr = liveTasksHTML ? '' : ' hidden';
-      html += `<div class="msg assistant msg-thinking"><div class="msg-role">иру</div><div class="msg-body"><div class="live-status"><span class="live-dot"></span><span class="live-text">${stepText}</span></div><div class="task-block-live"${taskBlockAttr}>${liveTasksHTML}</div></div></div>`;
-    } else {
-      html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}${confirmBtns}${suggestHTML}${planHTML}</div></div>`;
+  const cancel = m.cancelAvailable ? `<button type="button" class="btn-confirm-no" data-action="cancel-smart-task" data-task-id="${escapeAttr(m._taskId)}">Отменить задачу</button>` : '';
+  return confirmBtns + suggestHTML + planHTML + cancel;
+}
+
+function captureMessagePresentation(container) {
+  const snapshot = { top:container.scrollTop, bottom:container.scrollHeight-container.scrollTop-container.clientHeight < 48, open:[], edits:[], focus:document.activeElement?.id };
+  const bounds = container.getBoundingClientRect();
+  for (const message of container.querySelectorAll('[data-message-key]')) {
+    const rect = message.getBoundingClientRect();
+    if (!snapshot.anchor && rect.bottom > bounds.top) snapshot.anchor = { key:message.dataset.messageKey, offset:rect.top-bounds.top };
+    for (const selector of ['.cmd-log', '.cmd-group', '.cmd-entry', '.task-block']) {
+      message.querySelectorAll(selector).forEach((node, index) => {
+        if (node.classList.contains('open') || node.classList.contains('expanded')) snapshot.open.push({ key:message.dataset.messageKey, selector, index, open:node.classList.contains('open'), expanded:node.classList.contains('expanded') });
+      });
     }
+  }
+  container.querySelectorAll('[id^="plan-changes-"]').forEach(node => snapshot.edits.push({ id:node.id, value:node.value, hidden:node.parentElement.hidden, start:node.selectionStart, end:node.selectionEnd }));
+  return snapshot;
+}
+
+function restoreMessagePresentation(container, snapshot) {
+  const messages = [...container.querySelectorAll('[data-message-key]')];
+  for (const item of snapshot.open) {
+    const node = messages.find(message => message.dataset.messageKey === item.key)?.querySelectorAll(item.selector)[item.index];
+    if (node) { node.classList.toggle('open',item.open); node.classList.toggle('expanded',item.expanded); if (item.expanded) node.setAttribute('aria-expanded','true'); }
+  }
+  for (const edit of snapshot.edits) {
+    const node = document.getElementById(edit.id);
+    if (node) { node.value=edit.value; node.parentElement.hidden=edit.hidden; if (snapshot.focus===edit.id) { node.focus({preventScroll:true}); node.setSelectionRange(edit.start,edit.end); } }
+  }
+  if (snapshot.bottom) container.scrollTop = container.scrollHeight;
+  else {
+    const anchor = messages.find(message => message.dataset.messageKey === snapshot.anchor?.key);
+    if (anchor) container.scrollTop += anchor.getBoundingClientRect().top-container.getBoundingClientRect().top-snapshot.anchor.offset;
+    else container.scrollTop = snapshot.top;
+  }
+}
+
+function renderMessages() {
+  const container = document.getElementById('chatMessages');
+  const presentation = captureMessagePresentation(container);
+
+  if (state.messages.length === 0) {
+    const hasDevices = Object.keys(state.devices).length > 0;
+    const subtitle = hasDevices
+      ? 'Опиши задачу на естественном языке — ИРУ выполнит на твоём устройстве.'
+      : 'Нет подключённых устройств. Напиши сообщение — я помогу настроить подключение.';
+    const hints = hasDevices
+      ? `<div class="hint-chip" data-action="send-hint">Открой браузер</div>
+          <div class="hint-chip" data-action="send-hint">Покажи IP адрес</div>
+          <div class="hint-chip" data-action="send-hint">Свободное место на диске</div>
+          <div class="hint-chip" data-action="send-hint">Запущенные процессы</div>`
+      : `<div class="hint-chip" data-action="download-agent">⬇ Скачать агент</div>
+          <div class="hint-chip" data-action="send-hint">Как подключить компьютер?</div>
+          <div class="hint-chip" data-action="send-hint">Что ты умеешь?</div>`;
+    container.innerHTML = `
+      <div class="chat-welcome">
+        <img src="/static/IruIcon.ico" alt="ИРУ">
+        <h2>ИРУ — Интеллектуальный Режим Управления</h2>
+        <p>${subtitle}</p>
+        <div class="hints">${hints}</div>
+      </div>`;
+    updateStopButton();
+    return;
+  }
+
+  let html = '';
+  for (let mi = 0; mi < state.messages.length; mi++) {
+    const m = state.messages[mi];
+    if (m.hideAfterPlanChoice) continue;
+    const role = m.role === 'user' ? 'user' : 'assistant';
+    const active = getActivePendingTask();
+    const view = IRUSmartUI.adapt({ ...m, cancelAvailable:Boolean(m.loading && active && active.task_id === m._taskId && !active.cancelRequested) }, mi, state.currentChatId);
+    let bodyHTML = IRUSmartUI.render(view, {
+      expanded: state.expandedSmartBlocks,
+      taskDetails: block => renderSmartTaskDetails(block, m, mi),
+      actionDetails: renderMessageActions,
+    });
+    if (typeof renderMessageUsage === 'function') bodyHTML += renderMessageUsage(m);
+    html += `<div class="msg ${role}${m.loading ? ' msg-thinking' : ''}" data-message-key="${escapeAttr(view.key)}"><div class="msg-role">${role === 'user' ? 'вы' : 'иру'}</div><div class="msg-body">${bodyHTML}</div></div>`;
   }
 
   container.innerHTML = html;
-  container.scrollTop = container.scrollHeight;
+  restoreMessagePresentation(container, presentation);
   updateStopButton();
 }
 
@@ -593,6 +644,21 @@ function bindChatMessageActions() {
     if (!target || !container.contains(target)) return;
     const action = target.dataset.action;
 
+    if (action === 'toggle-smart-text' || action === 'toggle-smart-details' || action === 'toggle-smart-file') {
+      const block = target.closest('[data-smart-key]');
+      if (!block) return;
+      const open = !block.classList.contains('expanded');
+      block.classList.toggle('expanded', open);
+      target.setAttribute('aria-expanded', String(open));
+      target.textContent = action === 'toggle-smart-text' ? (open ? 'Свернуть текст' : 'Полный текст') : action === 'toggle-smart-file' ? (open ? 'Свернуть сведения' : 'Сведения о файле') : (open ? 'Свернуть подробности' : 'Ход выполнения');
+      if (open) state.expandedSmartBlocks.add(block.dataset.smartKey);
+      else state.expandedSmartBlocks.delete(block.dataset.smartKey);
+      return;
+    }
+    if (action === 'cancel-smart-task') {
+      if (getActivePendingTask()?.task_id === target.dataset.taskId) cancelActiveTask();
+      return;
+    }
     if (action === 'download-message-file') {
       downloadMessageFile(target.dataset.deviceId || '', target.dataset.filePath || '', target);
       return;
@@ -809,6 +875,7 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       }
       const data = await r.json();
       const task = data.task;
+      const smartTaskMetadata = { taskStatus:task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message };
       const pendingTask = state.pendingTasks.find(t => t.task_id === taskId);
       if (pendingTask && String(task.status || '').trim().toLowerCase() === 'cancelling') {
         pendingTask.cancelRequested = true;
@@ -817,7 +884,7 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       if (task.status === 'confirm') {
         if (task.plan_review) {
           stopped = true;
-          state.messages[msgIndex] = { role: 'assistant', _taskId: taskId,
+          state.messages[msgIndex] = { role: 'assistant', _taskId: taskId, ...smartTaskMetadata,
             content: `План:\n${task.plan_review.steps.map((step, i) => `${i + 1}. ${step.title}\n${step.instruction}`).join('\n')}\n\nХотите что-то изменить?`,
             planReview: task.plan_review, tasks: task.tasks || [], commands: task.commands || [] };
           renderMessages();
@@ -833,6 +900,7 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
           commands: task.commands,
           tasks: task.tasks || [],
           confirmTaskId: taskId,
+          ...smartTaskMetadata,
           commandConfirmation: cd,
           _taskId: taskId,
         };
@@ -847,6 +915,7 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
         const fallbackAnswer = isCancelled ? 'Остановлено пользователем.' : (task.plan_suggestion ? '' : 'ИРУ завершила задачу без текстового ответа.');
         const msg = {
           role: 'assistant',
+          ...smartTaskMetadata,
           content: task.answer || fallbackAnswer,
           commands: task.commands,
           tasks: task.tasks || [],
@@ -871,7 +940,9 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       // Ещё выполняется — обновить live-статус
       const msg = state.messages[msgIndex];
       if (msg && msg.loading) {
-        let needRender = false;
+        const metadataChanged = JSON.stringify([msg.taskStatus,msg.taskReceipt,msg.overallStatus,msg.taskTitle]) !== JSON.stringify(Object.values(smartTaskMetadata));
+        Object.assign(msg,smartTaskMetadata);
+        let needRender = metadataChanged;
         const liveStatus = deriveLiveTaskStatus(task, msg);
         if (msg.currentStatus !== liveStatus) {
           msg.currentStatus = liveStatus;
@@ -993,13 +1064,11 @@ function isPipelineCommandLog(commands) {
 }
 
 function getCommandStatus(command) {
-  if (command?.status) return command.status;
-  const result = command?.result || {};
   if (command?.action === 'budget_guard' || stripUtfPrefix(command?.command || '') === '[budget_guard]') return 'blocked';
-  if (result?.error) return 'error';
-  if (result?.returncode != null && result.returncode !== 0) return 'error';
-  if (command?.tool_name === 'execute_cmd' && /^\s*(NO|ERROR):/im.test(String(result?.stdout || ''))) return 'error';
-  return 'success';
+  if (command?.tool_name === 'execute_cmd' && /^\s*(NO|ERROR):/im.test(String(command?.result?.stdout || ''))) return 'error';
+  if (command?.status === 'terminal' && String(command?.tool_name || '').startsWith('answer.')) return 'terminal';
+  const status = IRUSmartUI.commandState(command);
+  return status === 'failed' ? 'error' : status === 'waiting' ? 'pending' : status;
 }
 
 function getToolEntries(commands) {
@@ -1183,10 +1252,12 @@ function renderStepDetails(step) {
 }
 
 function getStepCommandStatusIcon(status) {
-  if (status === 'error') return '\u2717';
-  if (status === 'blocked') return '\u25a0';
+  if (status === 'error' || status === 'failed') return '\u2717';
+  if (status === 'blocked' || status === 'partial') return '\u25a0';
   if (status === 'running') return '\u23f3';
-  return '\u2713';
+  if (status === 'cancelled') return '\u2014';
+  if (status === 'success' || status === 'terminal') return '\u2713';
+  return '\u25cb';
 }
 
 function getStepStatusLine(stepStatus, stepCommands, step) {
@@ -1276,9 +1347,8 @@ function renderPipelineProgress(task) {
   const progress = calculatePipelineProgress(task);
   const statusLabel = normalizeTaskBadgeLabel(progress.status);
   if (progress.total === 0) {
-    return `<div class="pipeline-progress pipeline-progress-indeterminate">
-      <div class="pipeline-progress-head"><span>Pipeline выполняется...</span><span>${escapeHTML(statusLabel)}</span></div>
-      <div class="pipeline-progress-bar"><span style="width: 38%"></span></div>
+    return `<div class="pipeline-progress">
+      <div class="pipeline-progress-head"><span>Шаги не указаны</span><span>${escapeHTML(statusLabel)}</span></div>
     </div>`;
   }
   const stepNumber = Math.min(progress.total, (progress.currentIndex ?? progress.completed) + 1);
@@ -1319,6 +1389,7 @@ function renderTaskBlock(tasks, commands = [], fallbackTaskId = '') {
         const icon = sst === 'done' ? '\u2713'
           : sst === 'recovered' ? '!'
           : sst === 'failed' ? '\u2717'
+          : (sst === 'partial' || sst === 'partial_failure') ? '!'
           : sst === 'running' ? '\u23f3'
           : sst === 'blocked' ? '\u25a0'
           : sst === 'skipped' ? '\u2014'
