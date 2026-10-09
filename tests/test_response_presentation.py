@@ -126,7 +126,7 @@ def test_tts_uses_same_worker_summary_without_summary_llm(owner,monkeypatch):
     assert asyncio.run(voice.spoken_parts(task))==[expected]
     assert task['answer'].startswith('Все 10 слайдов.')
     dialogue={'kind':'orchestrator','answer':'Подробное техническое объяснение. '*40,'message':'Объясни подробнее','status':'done'}
-    assert ' '.join(asyncio.run(voice.spoken_parts(dialogue)))==dialogue['answer'].strip()
+    assert asyncio.run(voice.spoken_parts(dialogue))==['Не удалось подготовить краткую озвучку. Полный ответ доступен в чате.']
 
 
 @pytest.mark.parametrize('question,answer',[('Привет','Привет! Я на связи.'),('Как дела?','Всё хорошо, я на связи.'),('Какие устройства подключены?','Сейчас подключён pc.')])
@@ -252,3 +252,26 @@ def test_completed_action_terminal_is_still_presented_as_short_outcome(owner,mon
     monkeypatch.setattr(voice,'shorten_answer',forbidden)
     assert asyncio.run(voice.spoken_parts(task))==['Презентация готова. Файл на рабочем столе.']
     assert task['answer']==answer
+
+
+def test_long_informational_worker_uses_brief_without_changing_grounded_answer(owner,monkeypatch):
+    task=completed(owner);answer='В config.ini задан port=8080. Подробное объяснение настроек. '*20
+    task['answer']=answer
+    task['commands']=[{'tool_name':'read_file','step_id':'step_1','status':'success','device_id':'pc','result':{'content':'port=8080'}},
+        {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':answer,'basis':['step_1'],
+         'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,'has_sufficient_evidence':True,'missing_evidence_question':''}}}]
+    seen=[]
+    async def brief(source):seen.append(source['answer']);return 'В config.ini задан port=8080.'
+    monkeypatch.setattr(voice,'shorten_answer',brief)
+    assert asyncio.run(voice.spoken_parts(task))==['В config.ini задан port=8080.']
+    assert task['answer']==answer and worker_presentation(task)['conversational_response']==answer and seen==[answer]
+
+
+@pytest.mark.parametrize('status',['partial','blocked','unknown','failed'])
+def test_worker_negative_speech_never_uses_model_or_long_claim_of_success(owner,monkeypatch,status):
+    task=completed(owner);task['status']=status
+    async def forbidden(*args):raise AssertionError('Negative structured outcome must stay deterministic')
+    monkeypatch.setattr(voice,'shorten_answer',forbidden)
+    spoken=' '.join(asyncio.run(voice.spoken_parts(task)))
+    assert len(spoken)<=420 and '10 слайдов' not in spoken and spoken!=task['answer']
+    assert any(token in spoken.casefold() for token in ['не удалось','не могу','часть','не полностью'])

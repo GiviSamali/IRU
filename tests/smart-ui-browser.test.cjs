@@ -345,13 +345,13 @@ test('OW real page: voice asks three questions during Worker; result stays bound
 test('OW SQL placeholders are restored once and queued tasks do not claim running',async()=>{
  const page=await open(400,280);try{
   await seed(page,[{role:'assistant',_taskId:'queued-A',taskKind:'worker',taskStatus:'queued',loading:true,content:''}]);
-  assert.equal(await page.locator('.smart-task').getAttribute('data-status'),'waiting');
+  assert.equal(await page.locator('.operation-reference').textContent(),'Ожидает · Операции ↗');
   await page.evaluate(()=>{sessionStorage.setItem('iru_active_tasks',JSON.stringify([{taskId:'queued-A',chatId:1}]));state.pendingTasks=[];});
   await page.route('**/api/tasks/queued-A',route=>route.fulfill({json:{status:'ok',task:{task_id:'queued-A',chat_id:1,status:'queued',kind:'worker',worker_id:'worker-1',message:'Очередь',commands:[],tasks:[],worker_report:{status:'queued'},created_at:Date.now()/1000}}}));
   await page.evaluate(()=>{restoreActiveChatTasks(1);restoreActiveChatTasks(1);});
   assert.equal(await page.evaluate(()=>state.messages.filter(m=>m._taskId==='queued-A').length),1);
   assert.equal(await page.evaluate(()=>state.pendingTasks.filter(m=>m.task_id==='queued-A').length),1);
-  await page.waitForTimeout(500);assert.equal(await page.locator('.smart-task').getAttribute('data-status'),'waiting');
+  await page.waitForTimeout(500);assert.equal(await page.locator('.operation-reference').textContent(),'Ожидает · Операции ↗');
   assert.deepEqual(page.errors,[]);
  }finally{await page.close();}
 });
@@ -423,24 +423,33 @@ for(const width of [400,1280]){
     workerReport:{schema_version:1,status:'success',target_device_ids:['Second'],artifacts:[{path:'C:\\Users\\Demo\\Desktop\\result.pptx',device_id:'Second',verified:true}]}};
    await seed(page,[message]);
    assert.equal(await page.locator('.smart-text > .smart-text-content').textContent(),message.content);
-   const report=page.locator('.smart-execution-report');assert.equal(await report.isVisible(),false);
-   await page.locator('.smart-task-toggle').click();assert.equal(await report.isVisible(),true);
-   assert.equal(await report.locator('.smart-text-content').textContent(),raw);
+   let dockStatus='success';
+   await page.route('**/api/operations',route=>route.fulfill({json:{operations:[{task_id:'dialog-worker',chat_id:1,title:'Презентация',status:dockStatus,device_ids:['Second'],can_cancel:false}]}}));
+   await page.route('**/api/tasks/dialog-worker',route=>route.fulfill({json:{task:{task_id:'dialog-worker',status:dockStatus,execution_details:raw,conversational_response:message.content,commands:[]}}}));
+   assert.equal(await page.locator('#chatMessages .smart-task').count(),0);
+   await page.locator('.operation-reference').click();
+   const report=page.locator('.operation-detail');
+   await report.locator('summary').click();
+   assert.equal(await report.locator('details .operation-prose').textContent(),raw);
    assert.equal(await report.locator('img').count(),0);assert.equal(await page.evaluate(()=>window.dialogInjected),undefined);
    assert.equal(await page.locator('.smart-file').count(),1);
    await page.route('**/api/chats/1/messages',route=>route.fulfill({json:{messages:[message]}}));
    await page.route('**/api/chats/2/messages',route=>route.fulfill({json:{messages:[{role:'assistant',content:'Другой чат'}]}}));
-   await page.evaluate(()=>openChat(2));assert.equal(await page.locator('.smart-execution-report').count(),0);
+   await page.evaluate(()=>openChat(2));assert.equal(await page.locator('#chatMessages .smart-task').count(),0);
+   assert.equal(await report.locator('details .operation-prose').textContent(),raw);
    await page.evaluate(()=>openChat(1));assert.equal(await page.locator('.smart-text > .smart-text-content').textContent(),message.content);
-   assert.equal(await page.locator('.smart-execution-report .smart-text-content').textContent(),raw);
+   assert.equal(await report.locator('details .operation-prose').textContent(),raw);
    assert.equal(await page.locator('.smart-file').count(),1);
    await page.reload({waitUntil:'networkidle'});await page.locator('#appRoot.active').waitFor();
+   await page.locator('.operation-reference').click();
    assert.equal(await page.locator('.smart-text > .smart-text-content').textContent(),message.content);
-   assert.equal(await page.locator('.smart-execution-report .smart-text-content').textContent(),raw);
+   assert.equal(await report.locator('details .operation-prose').textContent(),raw);
    assert.equal(await page.locator('.smart-file').count(),1);
    for(const status of ['partial','blocked','unknown','failed']){
     await seed(page,[{...message,taskStatus:status,workerReport:{...message.workerReport,status},taskReceipt:{task_status:status,goal_completed:false},content:'Не получилось завершить задачу.',conversationalResponse:'Не получилось завершить задачу.'}]);
-    assert.equal(await page.locator('.smart-task').getAttribute('data-status'),status);
+    dockStatus=status;await page.evaluate(()=>IRUOperations.refresh());
+    assert.equal(await page.locator('.operation-item').getAttribute('data-status'),status);
+    assert.equal(await page.locator('#chatMessages .smart-task').count(),0);
    }
    assert.deepEqual(page.errors,[]);
   }finally{await page.close();}

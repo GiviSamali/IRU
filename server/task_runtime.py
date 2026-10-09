@@ -357,8 +357,6 @@ async def send_command_to_agent(
         "type": "command",
         "payload": {"id": cmd_id, "action": action, "params": params},
     })
-    await dev["ws"].send_text(msg)
-
     wait_timeout = 60.0
     if action.startswith("file.transfer_"):
         wait_timeout = 1560.0
@@ -373,14 +371,23 @@ async def send_command_to_agent(
     elif action == "device.prepare_runtime":
         wait_timeout = 180.0
 
+    wait_started=time.monotonic()
+    wait_state="success"
     try:
+        await dev["ws"].send_text(msg)
         result = await asyncio.wait_for(future, timeout=wait_timeout)
     except asyncio.CancelledError:
+        wait_state="cancelled"
         dev["pending"].pop(cmd_id, None)
         raise
     except asyncio.TimeoutError:
+        wait_state="unknown"
         dev["pending"].pop(cmd_id, None)
         raise RuntimeError("Таймаут ожидания ответа от агента")
+    except Exception:
+        wait_state="failed";dev["pending"].pop(cmd_id,None);raise
+    finally:
+        record_lifecycle_event("device_wait",tool_name=action,status=wait_state,duration_ms=int((time.monotonic()-wait_started)*1000))
 
     if action == "device.activate" and isinstance(result, dict) and not result.get("error"):
         valid, _ = validate_activation_receipt(result)
@@ -1168,11 +1175,12 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
     if is_task_cancel_requested(task_id):
         finish_cancelled()
         return
-    if is_pipeline or plan_declined_for_request:
+    orchestrator_simple=task.get("orchestrated") and task.get("orchestrator_execution_mode")=="simple"
+    if is_pipeline or plan_declined_for_request or orchestrator_simple:
         record_lifecycle_event("classification", classification="skipped",
-            source="explicit_pipeline" if is_pipeline else "plan_declined")
+            source="explicit_pipeline" if is_pipeline else "orchestrator_decision" if orchestrator_simple else "plan_declined")
     if not is_pipeline:
-        if not plan_declined_for_request:
+        if not plan_declined_for_request and not orchestrator_simple:
             if is_task_cancel_requested(task_id):
                 finish_cancelled()
                 return

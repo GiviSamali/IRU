@@ -44,9 +44,10 @@ BRIEF_PROMPT = """Ты редактор голосового ответа ИРУ
 После действия скажи, что действительно выполнено. В разговоре сохрани суть ответа.
 Обязательно сохрани существенные ошибки, частичный успех, отсутствие проверки,
 ограничения и необходимое действие пользователя. Не превращай попытку в успех.
-Убери пути, URL, имена технических инструментов, команды, код и служебные детали.
+Убери URL, имена технических инструментов, команды и служебные детали.
+Сохрани значимые имена файлов и inline-значения (например config.ini и port=8080).
 Не перечисляй выполненные шаги. Не добавляй факты, обещания или обращение «сэр» автоматически.
-Пример: «Файл успешно создан по пути C:\\work\\report.txt» -> «Файл создан».
+Пример: «Файл успешно создан по пути C:\\work\\report.txt» -> «Файл report.txt создан».
 Пример: «Файл создан, но загрузить его не удалось» -> «Файл создан, но загрузка не удалась».
 Верни только текст для произнесения, без Markdown и пояснений редактора."""
 
@@ -74,6 +75,23 @@ async def shorten_answer(task: dict) -> str:
     except ImportError:
         from controller import load_llm_config, _chat_completion_request
     cfg = load_llm_config()
+    # One bounded editorial request; oversized answers never silently lose their ending.
+    try:
+        from .llm_usage import estimate_deepseek_cost_usd, MODEL_PRICE_ALIASES
+    except ImportError:
+        from llm_usage import estimate_deepseek_cost_usd, MODEL_PRICE_ALIASES
+    payload = json.dumps({"request": task.get("message") or "", "status": task.get("status"),
+                          "answer": task.get("answer") or ""}, ensure_ascii=False)
+    if len(payload) > 12000:
+        raise ValueError("Voice brief input budget exceeded")
+    if cfg.get("model", "deepseek-v4-flash") not in MODEL_PRICE_ALIASES:
+        raise ValueError("Voice brief price budget unavailable for model")
+    upper_tokens = len((BRIEF_PROMPT + payload).encode("utf-8")) + 128
+    estimate = estimate_deepseek_cost_usd(cfg.get("model"),
+        {"cache_miss_tokens": upper_tokens, "completion_tokens": 250}, cfg)
+    # The shared provider wrapper permits at most two HTTP attempts. Reserve both.
+    if estimate * 2 > 0.002:
+        raise ValueError("Voice brief configured-price budget exceeded")
     async with httpx.AsyncClient(timeout=8) as client:
         data = await _chat_completion_request(
             client=client, cfg=cfg, model=cfg.get("model", "deepseek-v4-flash"),
@@ -90,37 +108,44 @@ async def shorten_answer(task: dict) -> str:
         raise ValueError("Incomplete voice brief")
     text = choice["message"].get("content")
     if (not isinstance(text, str) or not any(ch.isalnum() for ch in text)
-            or len(text.strip()) > 420 or has_technical_details(text)):
+            or len(text.strip()) > 420 or re.search(r"```|https?://|[A-Za-z]:[\\/]|(?:^|\s)/[\w.-]+/", text)):
         raise ValueError("Invalid voice brief")
     return text.strip()
 
 
+def wants_full_speech(message: str) -> bool:
+    text = (message or "").casefold()
+    return bool(re.search(r"(?:озвучь|зачитай)[^.!?]{0,80}(?:полностью|целиком)|(?:прочитай|зачитай|озвучь)[^.!?]{0,80}(?:вслух[^.!?]{0,30}(?:полностью|целиком)|(?:полностью|целиком)[^.!?]{0,30}вслух)", text))
+
+
 async def spoken_parts(task: dict) -> list[str]:
-    """Cache only speech text on the owned task; never modify its chat answer."""
+    """Speech is a cached projection, never a replacement of the grounded answer."""
+    answer = task.get("answer") or ""
     if task.get("worker_id"):
         try:
             from .response_presentation import worker_presentation
         except ImportError:
             from response_presentation import worker_presentation
-        return answer_parts(worker_presentation(task,task.get("worker_report"))["conversational_response"], keep_inline=True)
-    if task.get("kind") == "orchestrator":
-        return answer_parts(task.get("answer") or "", keep_inline=True)
-    source = (task.get("answer") or "", task.get("message") or "", task.get("status"))
+        answer = worker_presentation(task, task.get("worker_report"))["conversational_response"]
+    source = (answer, task.get("message") or "", task.get("status"))
     cached = task.get("_voice_brief")
     if cached and cached["source"] == source:
         return cached["parts"]
-    answer, request, _ = source
-    if wants_spoken_details(request):
+    cleaned = " ".join(answer_parts(answer, keep_inline=True))
+    if wants_full_speech(source[1]):
         parts = answer_parts(answer, keep_inline=True)
-    elif len(answer) <= 220 and not has_technical_details(answer):
-        parts = answer_parts(answer)
+    elif len(cleaned) <= 420 and (task.get("worker_id") or task.get("kind") == "orchestrator"
+            or not has_technical_details(answer) or wants_spoken_details(source[1])):
+        parts = answer_parts(answer, keep_inline=True)
     else:
         try:
-            brief = await asyncio.wait_for(shorten_answer(task), timeout=8)
+            brief = await asyncio.wait_for(shorten_answer({**task, "answer": answer}), timeout=8)
+            if len(brief) > 420 or not brief.strip():
+                raise ValueError("Invalid voice brief")
         except Exception:
-            # Never cut off an error at the end of a long answer or invent success.
             brief = "Не удалось подготовить краткую озвучку. Полный ответ доступен в чате."
-        parts = answer_parts(brief)
+        parts = answer_parts(brief, keep_inline=True)
+    task["spoken_response"] = " ".join(parts)
     task["_voice_brief"] = {"source": source, "parts": parts}
     return parts
 

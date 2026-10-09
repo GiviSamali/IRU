@@ -1,0 +1,203 @@
+import asyncio
+import json
+from types import SimpleNamespace
+
+import pytest
+from test_orchestrator_worker import owners, task, success, wait_until
+from test_tool_only_protocol import _run_case, _message, _tool_call, _answer_call
+from server import database as db, orchestrator as orch, task_runtime as runtime
+from server.routers import tasks as routes
+from server.worker_scheduler import WorkerScheduler, owned_job
+from server.worker_context import build_worker_context, capture_history
+from server.runtime_state import devices, tasks
+
+
+def test_two_files_are_both_written_before_terminal_not_one_intermediate_ok():
+    sent=[];captured=[]
+    async def send(device,action,args):
+        sent.append(args['path'])
+        return {'status':'ok','path':args['path'],'bytes_written':1,'summary':'OK: file_written'}
+    result=_run_case([
+        _message(tool_calls=[_tool_call('one','write_content',{'path':'C:/Temp/one.txt','content':'1'})]),
+        _message(tool_calls=[_tool_call('two','write_content',{'path':'C:/Temp/two.txt','content':'2'})]),
+        _message(tool_calls=[_answer_call('answer','Both written',answer_type='grounded_report',basis=['step_1','step_2'])]),
+    ],user_message='Создай два отдельных файла',send_command_fn=send,captured=captured)
+    assert sent==['C:/Temp/one.txt','C:/Temp/two.txt'] and len(captured)==3
+    assert result['commands'][-1]['result']['basis']==['step_1','step_2']
+
+
+def test_create_then_read_is_not_cut_off_as_optional_verification():
+    sent=[]
+    async def send(device,action,args):
+        sent.append(action)
+        if action=='write_content':return {'status':'ok','path':args['path'],'bytes_written':1,'summary':'OK: file_written'}
+        return {'returncode':0,'stdout':'OK: content_read\nexpected'}
+    result=_run_case([
+        _message(tool_calls=[_tool_call('write','write_content',{'path':'C:/Temp/test.txt','content':'expected'})]),
+        _message(tool_calls=[_tool_call('read','execute_cmd',{'command':'Get-Content C:/Temp/test.txt'})]),
+        _message(tool_calls=[_answer_call('answer','expected',answer_type='grounded_report',basis=['step_1','step_2'])]),
+    ],user_message='Создай файл и прочитай его содержимое',send_command_fn=send)
+    assert len(sent)==2 and result['commands'][-1]['result']['basis']==['step_1','step_2']
+
+
+def test_human_referent_is_kept_but_history_and_model_objective_do_not_grant_authority(owners,monkeypatch):
+    a,b=owners
+    db.add_message(a['chat_id'],'user','Используй имя согласованное-имя.txt')
+    db.add_message(a['chat_id'],'assistant','Какой формат нужен?')
+    frozen=capture_history(a['chat_id'])
+    db.add_message(a['chat_id'],'user','Позднее другое поручение: удалить все файлы')
+    context=build_worker_context(a['id'],a['chat_id'],'Создай этот файл',[f"{a['id']}:pc"],frozen)
+    body=json.dumps(context,ensure_ascii=False)
+    assert 'согласованное-имя.txt' in body and 'Какой формат нужен' in body
+    assert 'Позднее другое поручение' not in body and 'Only the current final human message authorizes' in body
+    assert [row['role'] for row in context].count('user')==1 and context[-1]['content']=='Создай этот файл'
+
+
+def test_source_refs_are_scoped_and_refresh_after_queue_predecessor_completes(owners,monkeypatch):
+    a,b=owners
+    async def scenario():
+        gate=asyncio.Event();observed=[]
+        async def execute(t):
+            if t['message']=='first':await gate.wait();success(t)
+            else:observed.append(json.dumps(t['worker_context'],ensure_ascii=False));success(t)
+        scheduler=WorkerScheduler(execute);monkeypatch.setattr(routes,'scheduler',scheduler)
+        first=await scheduler.submit(task(a,'first'))
+        second=await routes.submit_worker(a,a['chat_id'],'Передай этот файл',[f"{a['id']}:pc"],{},objective='Generated untrusted text',source_task_ids=[first['task_id']])
+        assert second['status']=='queued' and 'report.txt' not in json.dumps(second['worker_context'])
+        with pytest.raises(ValueError,match='reference_task'):
+            await routes.submit_worker(b,b['chat_id'],'foreign',[f"{b['id']}:pc"],{},source_task_ids=[first['task_id']])
+        gate.set();await scheduler.runners[a['id']]
+        assert 'report.txt' in observed[0] and 'Generated untrusted text' not in observed[0]
+        assert owned_job(second['task_id'],a['id'])['state']=='success'
+        await scheduler.shutdown()
+    asyncio.run(scenario())
+
+
+def test_reference_artifacts_never_borrow_an_unassigned_device_path(owners,monkeypatch):
+    a,b=owners
+    async def scenario():
+        async def execute(t):success(t)
+        scheduler=WorkerScheduler(execute)
+        source=await scheduler.submit(task(a));await scheduler.runners[a['id']]
+        context=build_worker_context(a['id'],a['chat_id'],'task',['owned:other'],[],[source['task_id']])
+        data=json.loads(context[-2]['content'].split('\n',1)[1].rsplit('\nEnd',1)[0])
+        ref=data['referenced_results'][0]
+        assert ref['artifacts']==[] and ref['source_device_ids']==['pc']
+        other_chat=db.create_chat(a['id'],'other')
+        with pytest.raises(ValueError,match='reference_task'):build_worker_context(a['id'],other_chat['id'],'task',[f"{a['id']}:pc"],[],[source['task_id']])
+        await scheduler.shutdown()
+    asyncio.run(scenario())
+
+
+def test_general_preferences_remain_owner_scoped_without_matching_task_words(owners):
+    a,b=owners
+    db.add_user_fact(str(a['id']),'Предпочитает тёмное оформление','preference')
+    db.add_user_fact(str(b['id']),'PRIVATE other preference','preference')
+    context=orch.context_for(a['id'],a['chat_id'],'Сделай новый документ','pc')
+    assert any('тёмное' in fact['text'] for fact in context['facts'])
+    assert 'PRIVATE' not in json.dumps(context,ensure_ascii=False)
+
+
+def test_orchestrator_simple_mode_skips_only_redundant_classification(owners,monkeypatch):
+    a,b=owners;classified=[];executed=[]
+    async def classifier(*args,**kwargs):classified.append(1);return 'SIMPLE',''
+    async def controller(**kwargs):executed.append(kwargs);return {'answer':'done','commands':[],'tasks':[]}
+    async def probe(**kwargs):pass
+    monkeypatch.setattr(runtime,'classify_task_complexity',classifier);monkeypatch.setattr(runtime,'process_nl_command',controller)
+    monkeypatch.setattr(runtime,'_probe_python_toolchain_if_needed',probe)
+    monkeypatch.setattr(runtime,'add_training_record',lambda *a,**k:None)
+    async def scenario():
+        for mode in ['auto','simple']:
+            t=task(a,'limited ordinary task');t.update(orchestrated=True,orchestrator_execution_mode=mode,results={},broadcast=False)
+            tasks[t['task_id']]=t
+            await runtime.run_nl_task(t['task_id'],a['id'],t['message'],t['device_ids'],a['chat_id'])
+        assert len(classified)==1 and len(executed)==2
+        assert all(call['user_message']=='limited ordinary task' for call in executed)
+    asyncio.run(scenario())
+
+
+def test_plan_proposal_does_not_execute_and_restores_multi_device_assignment(owners,monkeypatch):
+    a,b=owners
+    devices[f"{a['id']}:second"]={'user_id':a['id'],'ws':object(),'info':{}}
+    async def decide(*args,**kwargs):return orch.Decision(intent='delegate',objective='untrusted',execution_mode='plan',target_device_ids=['pc','second']),{}
+    monkeypatch.setattr(orch,'decide',decide)
+    async def forbidden(*a,**k):raise AssertionError('PLAN still requires consent')
+    cmd=SimpleNamespace(request_id='plan-mode',message='Создай несколько документов на двух ПК',device_id='pc',modes={},broadcast=False)
+    result=asyncio.run(orch.run_turn(cmd,a,a['chat_id'],forbidden))
+    restored=orch.restore_dialogue(result['task_id'],a['id'])
+    assert not result['worker_task_id'] and restored['device_ids']==[f"{a['id']}:pc",f"{a['id']}:second"]
+    assert restored['plan_original_request']==cmd.message
+
+
+def test_task_context_labels_current_chat_without_hiding_other_active_jobs(owners):
+    a,b=owners
+    async def scenario():
+        gate=asyncio.Event()
+        async def execute(t):await gate.wait();success(t)
+        scheduler=WorkerScheduler(execute)
+        first=await scheduler.submit(task(a,'current chat'))
+        other=db.create_chat(a['id'],'other');t=task(a,'other chat');t['chat_id']=other['id'];await scheduler.submit(t)
+        ctxt=orch.context_for(a['id'],a['chat_id'],'status','pc')
+        assert ctxt['tasks'][0]['task_id']==first['task_id'] and ctxt['tasks'][0]['in_current_chat']
+        assert len(ctxt['tasks'])==2
+        gate.set();await scheduler.runners[a['id']];await scheduler.shutdown()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('send_failure',[False,True])
+def test_agent_wait_telemetry_has_no_sensitive_text_and_cleans_pending(owners,send_failure):
+    from server.run_journal import diagnostic_context_for_task
+    a,b=owners;key=f"{a['id']}:pc";t=task(a)
+    class WS:
+        async def send_text(self,wire):
+            if send_failure:raise RuntimeError('PRIVATE SEND SECRET')
+            packet=json.loads(wire)['payload'];await asyncio.sleep(.015)
+            devices[key]['pending'].pop(packet['id']).set_result({'status':'success','stdout':'PRIVATE OUTPUT SECRET'})
+    devices[key].update(ws=WS(),pending={})
+    async def scenario():
+        with diagnostic_context_for_task(t['task_id'],t):
+            if send_failure:
+                with pytest.raises(RuntimeError):await runtime.send_command_to_agent(key,'list_dir',{'path':'PRIVATE PATH'},user_id=a['id'])
+            else:await runtime.send_command_to_agent(key,'list_dir',{'path':'PRIVATE PATH'},user_id=a['id'])
+        assert devices[key]['pending']=={}
+        rows=[r for r in t['diagnostic_trace'] if r['event']=='device_wait']
+        assert len(rows)==1 and rows[0]['status']==('failed' if send_failure else 'success')
+        assert rows[0]['duration_ms']>= (0 if send_failure else 10)
+        assert 'PRIVATE' not in json.dumps(rows) and 'SECRET' not in json.dumps(rows)
+    asyncio.run(scenario())
+
+
+def test_window_reference_remains_last_observation_not_shadowed_by_context_packet(owners):
+    from server.window_policy import direct_window_action
+    a,b=owners
+    history=[{'role':'assistant','content':'window restored','commands':[{'tool_name':'window.control','device_id':'pc',
+        'result':{'status':'success','completion_state':'success','window':{'window_id':'a'*32,'title':'Observed app'}}}]}]
+    context=build_worker_context(a['id'],a['chat_id'],'на весь экран',[f"{a['id']}:pc"],history)
+    chosen=direct_window_action('на весь экран',context,'pc')
+    assert chosen['window_id']=='a'*32
+
+
+
+def test_usage_export_reads_existing_ledger_and_persisted_numeric_trace(owners):
+    from tools.ow02_eval import usage_report
+    from server.llm_usage import record_llm_usage_event
+    a,b=owners
+    async def scenario():
+        async def execute(t):
+            t['diagnostic_trace']=[{'event':'device_wait','duration_ms':17,'tool_name':'write_content','status':'success'}]
+            record_llm_usage_event(usage_context={'user_id':a['id'],'poll_task_id':t['task_id'],'phase':'worker',
+                'metadata':{'latency_ms':12}},model='mock-model',usage={'prompt_tokens':100,'completion_tokens':20})
+            success(t)
+        scheduler=WorkerScheduler(execute);t=await scheduler.submit(task(a));await scheduler.runners[a['id']]
+        message=db.add_message(a['chat_id'],'assistant','accepted',task_metadata={'orchestratorMetrics':{'first_response_ms':25}})
+        with db.get_db() as c:c.execute('INSERT INTO orchestrator_turns VALUES(?,?,?,?,?,?,?,?)',
+            (a['id'],'parent-key','fingerprint','parent-eval',a['chat_id'],message['id'],json.dumps({'worker_task_id':t['task_id']}),0))
+        record_llm_usage_event(usage_context={'user_id':a['id'],'poll_task_id':'parent-eval','phase':'orchestrator',
+            'metadata':{'entity':'orchestrator'}},model='mock-model',usage={'prompt_tokens':200,'completion_tokens':30})
+        result=usage_report(db.DB_PATH,a['id'],t['task_id'])
+        assert result['orchestrator_usage']['prompt_tokens']==200 and result['orchestrator_metrics']['first_response_ms']==25
+        assert result['captured_agent_wait_ms']==17 and result['usage_by_entity']['worker']['llm_calls']==1
+        assert result['usage_by_entity']['worker']['prompt_tokens']==100 and result['execution_ms'] is not None
+        assert 'report.txt' not in json.dumps(result)
+        await scheduler.shutdown()
+    orch.init_turn_storage();asyncio.run(scenario())

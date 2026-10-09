@@ -129,6 +129,10 @@
 
     <div class="content">
       <div class="chat-view">
+        <section class="operations-dock" id="operationsDock" aria-label="Операции">
+          <button type="button" id="operationsToggle" aria-expanded="false" aria-controls="operationsList">Операции <span id="operationsIndicator">—</span><span aria-hidden="true">⌄</span></button>
+          <div id="operationsList" hidden><div id="operationsError" role="status"></div><div id="operationsItems"></div></div>
+        </section>
         <div class="chat-messages" id="chatMessages"></div>
         <div class="chat-input-area">
           <div id="attachmentsBar" class="attachments-bar" hidden></div>
@@ -408,6 +412,8 @@
 <script src="js/devices.js" defer></script>
 <script src="js/smart-ui.js" defer></script>
 <script src="js/chat.js" defer></script>
+<script src="js/operations.js" defer></script>
+<script src="js/content-surface.js" defer></script>
 <script src="js/usage.js" defer></script>
 <script src="js/explorer.js" defer></script>
 <script src="js/shell.js" defer></script>

@@ -1,3 +1,5 @@
+import hashlib
+from pathlib import PureWindowsPath, PurePosixPath
 import asyncio
 import json
 import re
@@ -163,16 +165,29 @@ def _command_log_entry(action: str, command: str, target_device: str, device_inf
     return entry
 
 
-def _allow_followup_after_terminal_sufficient(entry: dict | None, next_tool_name: str) -> bool:
-    """Allow a created file to be run/opened, while blocking verification loops."""
+def _allow_followup_after_terminal_sufficient(entry: dict | None, next_tool_name: str, next_args: dict | None = None) -> bool:
+    """Keep goal continuations; block exact repeats and redundant native verification."""
     if not entry:
+        return False
+    result=entry.get('result') or {}
+    previous=entry.get('tool_name') or entry.get('action')
+    args=next_args or {}
+    if previous==next_tool_name=='write_content' and isinstance(args.get('path'),str) and isinstance(result.get('path'),str):
+        def normalized(path):
+            kind=PureWindowsPath if PureWindowsPath(path).drive or '\\' in path else PurePosixPath
+            value=str(kind(path));return value.casefold() if kind is PureWindowsPath else value
+        identical_content=isinstance(args.get('content'),str) and hashlib.sha256(args['content'].encode()).hexdigest()==result.get('content_sha256')
+        if normalized(args['path'])==normalized(result['path']) and identical_content and bool(args.get('append'))==bool(result.get('append')):
+            return False
+    if previous==next_tool_name=='execute_cmd' and args.get('command')==entry.get('command'):
         return False
     if (entry.get("tool_name") or entry.get("action")) in {"window_control", "window.control"}:
         return True
-    if next_tool_name == "transfer_file":
-        return True
+    # The next call is still subject to normal schemas, ownership/effect guards
+    # and command budget. A verified intermediate action does not authorize a
+    # server-generated whole-goal success. Keep distinct, model-chosen work.
+    return next_tool_name not in {"window_find","window_list","window_verify","app_verify_launch"}
 
-    return (entry.get("tool_name") or entry.get("action")) == "write_content" and next_tool_name == "execute_cmd"
 
 
 APP_WINDOW_ACTIONS = {
@@ -679,7 +694,7 @@ async def process_non_pipeline_command(
                 if (
                     terminal_sufficient_entry is not None
                     and not is_terminal_answer_tool(fn_name)
-                    and not _allow_followup_after_terminal_sufficient(terminal_sufficient_entry, fn_name)
+                    and not _allow_followup_after_terminal_sufficient(terminal_sufficient_entry, fn_name, fn_args)
                 ):
                     payload = validate_answer_text_payload(
                         synthesize_device_terminal_report(commands_log, terminal_sufficient_entry),
@@ -699,7 +714,7 @@ async def process_non_pipeline_command(
                         "tasks": [],
                         "training_context": _training_context(device_info),
                     }
-                if terminal_sufficient_entry is not None and _allow_followup_after_terminal_sufficient(terminal_sufficient_entry, fn_name):
+                if terminal_sufficient_entry is not None and _allow_followup_after_terminal_sufficient(terminal_sufficient_entry, fn_name, fn_args):
                     terminal_sufficient_entry = None
                     terminal_sufficient_extra_turn_used = False
 
@@ -1248,7 +1263,7 @@ async def process_non_pipeline_command(
                             "training_context": _training_context(device_info),
                         }
                     terminal_sufficient_extra_turn_used = True
-                    messages.append({"role": "user", "content": TERMINAL_CORRECTION})
+                    messages.append({"role": "user", "content": "The latest action is verified. Check the ORIGINAL whole human goal: if any requested action/result remains, perform the next necessary action. Otherwise call answer_text with current-run evidence. Do not repeat verification of an already proved action."})
 
     print("[tool-only] terminal answer repair" if browser_answer_phase else "[tool-only] max_iterations reached; attempting answer_text-only repair turn")
     if is_task_cancel_requested(poll_task_id):

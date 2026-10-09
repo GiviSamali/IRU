@@ -5,6 +5,7 @@ import hashlib
 import logging
 import time
 from contextvars import ContextVar
+from contextlib import contextmanager
 from functools import wraps
 from datetime import datetime, timezone
 from typing import Any
@@ -26,10 +27,23 @@ _TRACE_LABELS = frozenset({"nl", "onboarding", "pipeline", "non_pipeline", "broa
     "success", "unknown", "partial", "terminal", "pending", "server", "model", "answer_text", "answer_tool",
     "pipeline_step_report", "per_device_report", "server_fallback", "trust_guard", "plan_suggestion", "answer_auditor", "invalid_plan",
     "classification_fallback", "plan_keyword", "window_policy", "classification_model", "explicit_pipeline",
-    "plan_declined", "protocol_recovery", "ordinary_task", "other", "grounded_report", "partial_report",
+    "plan_declined", "orchestrator_decision", "protocol_recovery", "ordinary_task", "other", "grounded_report", "partial_report",
     "ask_clarification", "report_failure", "request_confirmation", "dialogue", "conversation", "factual_answer",
     "iteration_limit", "no_progress", "success_criteria", "browser_answer_unavailable", "completed_successfully"})
 
+
+
+@contextmanager
+def diagnostic_context_for_task(task_id, task):
+    """Bind only after the caller has authenticated and checked task ownership."""
+    previous=_DIAGNOSTIC_CONTEXT.get()
+    if previous is not None and previous['task_id']==str(task_id):
+        yield
+        return
+    token=_DIAGNOSTIC_CONTEXT.set({'task_id':str(task_id),'events':task.setdefault('diagnostic_trace',[]),
+                                  'seen':set(),'started':time.monotonic()})
+    try:yield
+    finally:_DIAGNOSTIC_CONTEXT.reset(token)
 
 def record_lifecycle_event(event: str, **metadata) -> None:
     """Strict metadata allowlist: never serialize a request, arguments or result text."""
@@ -37,7 +51,7 @@ def record_lifecycle_event(event: str, **metadata) -> None:
         context = _DIAGNOSTIC_CONTEXT.get()
         if context is None:
             return
-        events = {"request_started", "classification_path", "classification", "controller_selected", "tool_result", "recovery", "answer_adjusted", "request_finished"}
+        events = {"request_started", "device_wait", "classification_path", "classification", "controller_selected", "tool_result", "recovery", "answer_adjusted", "request_finished"}
         row = {"task_id":context["task_id"], "event":event if event in events else "other_event",
                "elapsed_ms":int((time.monotonic()-context["started"])*1000)}
         for key in ("controller", "mode", "classification", "source", "status", "answer_type", "terminal_reason"):
@@ -47,6 +61,8 @@ def record_lifecycle_event(event: str, **metadata) -> None:
         for key in ("tool_count", "device_count", "iteration", "step_index"):
             if type(metadata.get(key)) is int:
                 row[key] = max(0, min(metadata[key], 100000))
+        if type(metadata.get("duration_ms")) is int:
+            row["duration_ms"]=max(0,min(metadata["duration_ms"],3600000))
         if "tool_name" in metadata:
             tool = canonical_tool_name(str(metadata["tool_name"]))
             # Registry membership, not arbitrary model output or arguments.

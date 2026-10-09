@@ -413,7 +413,9 @@ def build_memory_block(machine_guid: str | None, user_id: str | None = None,
     facts = filter_memory_facts_for_device(stats.get("facts_list", []))
     if WORKER_MEMORY_QUERY.get() is not None:
         words=set(re.findall(r"[^\W_]{3,}",WORKER_MEMORY_QUERY.get().casefold()))
-        facts=[fact for fact in facts if any(word in str(fact.get("text") or fact.get("fact_text") or "").casefold() for word in words)][:6]
+        relevant=[fact for fact in facts if any(word in str(fact.get("text") or fact.get("fact_text") or "").casefold() for word in words)]
+        preferences=[fact for fact in facts if fact.get('category')=='preference'][:2]
+        facts=(relevant+[fact for fact in preferences if fact not in relevant])[:6]
     commands = db.get_recent_commands(machine_guid, user_id, 20, device_id) if machine_guid else []
     if not facts and not commands:
         return ""

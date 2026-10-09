@@ -493,14 +493,17 @@ def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
         "taskMode": "plan" if (task.get("modes") or {}).get("pipeline") or (saved_receipt or {}).get("answer_source") == "pipeline_step_report" else "conversation" if task.get("device_ids") == [] else "ordinary",
         "taskElapsedMs": elapsed, "workerReport": task.get("worker_report"), "taskKind":task.get("kind"),
         "planSuggestion":task.get("plan_suggestion"),"planOriginalRequest":task.get("plan_original_request"),
+        "highlights":task.get("highlights") or [],
         "conversationalResponse":task.get("conversational_response"),"executionDetails":task.get("execution_details"),
+        "assignmentDeviceIds":task.get("device_ids"),"sourceTaskIds":task.get("source_task_ids"),"diagnosticTrace":task.get("diagnostic_trace"),"workerStartedAt":task.get("worker_started_at"),
+        "orchestratorMetrics":{key:value for key,value in (task.get("orchestrator_metrics") or {}).items() if key in {"first_response_ms","elapsed_ms","llm_calls","snapshot_calls"} and type(value) is int},
     }
 
 
 def _message_metadata(value) -> dict:
     if not isinstance(value, dict):
         return {}
-    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs", "workerReport", "taskKind", "planSuggestion", "planOriginalRequest", "conversationalResponse", "executionDetails")
+    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs", "workerReport", "taskKind", "planSuggestion", "planOriginalRequest", "conversationalResponse", "executionDetails", "assignmentDeviceIds", "sourceTaskIds", "diagnosticTrace", "workerStartedAt", "orchestratorMetrics", "highlights")
     return {key: value[key] for key in allowed if key in value}
 
 

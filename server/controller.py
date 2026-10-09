@@ -339,6 +339,7 @@ async def _chat_completion_request(
                     break
                 except httpx.HTTPStatusError as fallback_error:
                     last_error = fallback_error
+                    usage_context["metadata"]["latency_ms"]=int((time.monotonic()-request_started)*1000)
                     record_llm_usage_event(
                         usage_context=usage_context,
                         model=model,
@@ -353,6 +354,7 @@ async def _chat_completion_request(
                 print(f"[llm] 5xx retry: {_he.response.status_code}")
                 await asyncio.sleep(2)
                 continue
+            usage_context["metadata"]["latency_ms"]=int((time.monotonic()-request_started)*1000)
             record_llm_usage_event(
                 usage_context=usage_context,
                 model=model,
@@ -369,6 +371,7 @@ async def _chat_completion_request(
                 print(f"[llm] network retry: {type(_ne).__name__}")
                 await asyncio.sleep(2)
                 continue
+            usage_context["metadata"]["latency_ms"]=int((time.monotonic()-request_started)*1000)
             record_llm_usage_event(
                 usage_context=usage_context,
                 model=model,
@@ -381,6 +384,7 @@ async def _chat_completion_request(
             raise
         except Exception as exc:
             last_error = exc
+            usage_context["metadata"]["latency_ms"]=int((time.monotonic()-request_started)*1000)
             record_llm_usage_event(
                 usage_context=usage_context,
                 model=model,

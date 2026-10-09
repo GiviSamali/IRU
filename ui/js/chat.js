@@ -623,6 +623,7 @@ function renderMessages() {
         <p>${subtitle}</p>
         <div class="hints">${hints}</div>
       </div>`;
+    window.IRUContentSurface?.enhance(container);
     updateStopButton();
     return;
   }
@@ -634,22 +635,28 @@ function renderMessages() {
     const role = m.role === 'user' ? 'user' : 'assistant';
     const active = state.pendingTasks.find(item => item.task_id === m._taskId && item.kind !== 'orchestrator');
     const view = IRUSmartUI.adapt({ ...m, cancelAvailable:Boolean(m.loading && active && active.task_id === m._taskId && !active.cancelRequested) }, mi, state.currentChatId);
+    const workerInDock = m.taskKind === 'worker';
+    if (workerInDock) view.blocks = view.blocks.filter(block => block.type !== 'task' && (block.type !== 'action' || m.planSuggestion || m.suggestedFact));
     let bodyHTML = IRUSmartUI.render(view, {
       expanded: state.expandedSmartBlocks,
       taskDetails: block => renderSmartTaskDetails(block, m, mi),
       actionDetails: renderMessageActions,
     });
+    if (workerInDock) {
+      const status = IRUSmartUI.taskState(m, m.tasks || [], m.commands || []);
+      bodyHTML += `<button type="button" class="operation-reference" data-action="show-operation" data-task-id="${escapeAttr(m._taskId)}">${escapeHTML(IRUSmartUI.LABELS[status])} · Операции ↗</button>`;
+    }
     if (typeof renderMessageUsage === 'function') bodyHTML += renderMessageUsage(m);
     html += `<div class="msg ${role}${m.loading ? ' msg-thinking' : ''}" data-message-key="${escapeAttr(view.key)}"><div class="msg-role">${role === 'user' ? 'вы' : 'иру'}</div><div class="msg-body">${bodyHTML}</div></div>`;
   }
 
   container.innerHTML = html;
+  window.IRUContentSurface?.enhance(container);
   restoreMessagePresentation(container, presentation);
   updateStopButton();
 }
 
-function bindChatMessageActions() {
-  const container = document.getElementById('chatMessages');
+function bindChatMessageActions(container = document.getElementById('chatMessages')) {
   if (!container || container.dataset.delegated === '1') return;
   container.dataset.delegated = '1';
   container.addEventListener('click', (event) => {
@@ -667,6 +674,9 @@ function bindChatMessageActions() {
       if (open) state.expandedSmartBlocks.add(block.dataset.smartKey);
       else state.expandedSmartBlocks.delete(block.dataset.smartKey);
       return;
+    }
+    if (action === 'show-operation') {
+      window.IRUOperations?.show(target.dataset.taskId).catch(error=>showToast(error.message,true)); return;
     }
     if (action === 'cancel-smart-task') {
       cancelActiveTask(target.dataset.taskId);
@@ -920,7 +930,7 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
         else setTimeout(poll,800);
         return;
       }
-      const smartTaskMetadata = { taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind,conversationalResponse:task.conversational_response,executionDetails:task.execution_details };
+      const smartTaskMetadata = { taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind,highlights:task.highlights,conversationalResponse:task.conversational_response,executionDetails:task.execution_details };
       const pendingTask = state.pendingTasks.find(t => t.task_id === taskId);
       if (pendingTask && task.kind) pendingTask.kind=task.kind;
       if (pendingTask && String(task.status || '').trim().toLowerCase() === 'cancelling') {

@@ -146,7 +146,7 @@ const IRUSmartUI = (() => {
     const id = `smart-${encodeId(chatId,'')}-${encodeId(m._taskId ?? m.id ?? index,index)}`;
     const blocks = [], content = text(m.conversationalResponse) || text(m.conversational_response) || text(m.content) || text(m.text);
     const executionDetails = text(m.executionDetails) || text(m.execution_details);
-    if (content) blocks.push({ type:'text', text:content, key:id+'-text', long:content.length > 200 || content.split('\n').length > 4 });
+    if (content) blocks.push({ type:'text', text:content, key:id+'-text', highlights:m.highlights, long:content.length > 200 || content.split('\n').length > 4 });
     if (m.role === 'user') return { key:id, blocks };
     const tasks = list(m.loading ? m.liveTasks || m.tasks : m.tasks);
     const commands = list(m.loading ? m.liveCommands || m.commands : m.commands);
@@ -188,12 +188,23 @@ const IRUSmartUI = (() => {
     return { key:id, blocks };
   }
 
+  function highlightedText(value, ranges) {
+    const source=text(value), valid=list(ranges).filter(r=>Number.isInteger(r.start)&&Number.isInteger(r.end)&&r.start>=0&&r.end>r.start&&r.end<=source.length).slice(0,20).sort((a,b)=>a.start-b.start);
+    let end=0, html='';
+    for(const r of valid) {
+      if(r.start<end)continue;
+      const kind=['definition','warning','result'].includes(r.kind)?r.kind:'note';
+      html+=esc(source.slice(end,r.start))+`<mark class="semantic-${kind}">${esc(source.slice(r.start,r.end))}</mark>`;end=r.end;
+    }
+    return html+esc(source.slice(end));
+  }
+
   const expanded = (block, context) => Boolean(context.expanded?.has(block.key));
   const REGISTRY = Object.freeze({
     text(block, context) {
       const open = expanded(block, context);
       return `<div class="smart-block smart-text${block.long ? ' collapsible' : ''}${open ? ' expanded' : ''}" data-block-type="text" data-smart-key="${esc(block.key)}">
-        <div class="smart-text-content" id="${esc(block.key)}">${esc(block.text)}</div>${block.long ? `<button type="button" class="smart-text-toggle" data-action="toggle-smart-text" aria-controls="${esc(block.key)}" aria-expanded="${open}">${open ? 'Свернуть текст' : 'Полный текст'}</button>` : ''}</div>`;
+        <div class="smart-text-content" id="${esc(block.key)}">${highlightedText(block.text,block.highlights)}</div>${block.long ? `<button type="button" class="smart-text-toggle" data-action="toggle-smart-text" aria-controls="${esc(block.key)}" aria-expanded="${open}">${open ? 'Свернуть текст' : 'Полный текст'}</button>` : ''}</div>`;
     },
     task(block, context) {
       const open = expanded(block, context), details = context.taskDetails ? context.taskDetails(block) : '';
@@ -225,6 +236,6 @@ const IRUSmartUI = (() => {
   function render(view, context = {}) {
     return `<div class="smart-blocks">${list(view?.blocks).map(block => Object.hasOwn(REGISTRY, block.type) ? REGISTRY[block.type](block, context) : REGISTRY.text({ type:'text', text:text(block.text), key:view.key+'-fallback' }, context)).join('')}</div>`;
   }
-  return Object.freeze({ STATUS, LABELS, REGISTRY, normalizeStatus, commandState, taskState, filesFromCommands, adapt, render });
+  return Object.freeze({ STATUS, LABELS, REGISTRY, normalizeStatus, commandState, taskState, filesFromCommands, highlightedText, adapt, render });
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = IRUSmartUI;

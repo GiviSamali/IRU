@@ -38,10 +38,14 @@ def owned_job(task_id, user_id):
         return dict(row) if row else None
 
 
-def list_jobs(user_id, limit=8):
+def list_jobs(user_id, limit=8, *, queue_first=False):
     init_worker_storage()
+    ordering = ("CASE WHEN state IN ('running','waiting_confirmation') THEN 0 WHEN state='queued' THEN 1 ELSE 2 END, "
+                "CASE WHEN state='queued' THEN created_at ELSE -created_at END, rowid") if queue_first else "created_at DESC"
     with db.get_db() as c:
-        return [dict(row) for row in c.execute("SELECT * FROM worker_jobs WHERE owner_user_id=? ORDER BY created_at DESC LIMIT ?",(user_id,limit))]
+        return [dict(row) for row in c.execute(
+            "SELECT * FROM worker_jobs WHERE owner_user_id=? ORDER BY " + ordering + " LIMIT ?",
+            (user_id,min(max(int(limit),1),50)))]
 
 
 def restore_task(job):
@@ -57,6 +61,8 @@ def restore_task(job):
             metadata=json.loads(row["task_metadata"] or "{}")
             payload["tasks"]=metadata.get("tasks") or [];payload["task_receipt"]=metadata.get("taskReceipt")
             payload["history_metadata"]=metadata
+            payload["diagnostic_trace"]=metadata.get("diagnosticTrace") or []
+            payload["worker_started_at"]=metadata.get("workerStartedAt")
             if metadata.get("conversationalResponse") is not None:
                 payload["conversational_response"]=metadata["conversationalResponse"]
                 payload["execution_details"]=metadata.get("executionDetails") or ""
@@ -101,7 +107,7 @@ class WorkerScheduler:
                 old=c.execute("SELECT * FROM worker_jobs WHERE owner_user_id=? AND request_key=?",(owner,request_key)).fetchone()
                 if old:
                     previous=json.loads(old["payload"])
-                    if any(previous.get(key)!=task.get(key) for key in ("chat_id","message","device_ids","modes","original_request","proposed_objective")):raise ValueError("request_id_conflict")
+                    if any(previous.get(key)!=task.get(key) for key in ("chat_id","message","device_ids","modes","original_request","proposed_objective","orchestrator_execution_mode","source_task_ids")):raise ValueError("request_id_conflict")
                     return tasks.get(old["task_id"]) or restore_task(dict(old))
             active=c.execute("SELECT task_id FROM worker_jobs WHERE owner_user_id=? AND state IN ('running','waiting_confirmation')",(owner,)).fetchone()
             waiting=c.execute("SELECT COUNT(*) FROM worker_jobs WHERE owner_user_id=? AND state='queued'",(owner,)).fetchone()[0]
@@ -154,8 +160,16 @@ class WorkerScheduler:
                         from llm_usage import LLM_ENTITY
                         from controller_shared import WORKER_MEMORY_QUERY
                         from memory_intent_guard import ORIGINAL_WORKER_REQUEST
+                    if task.get('context_history') is not None:
+                        try:
+                            from .worker_context import build_worker_context
+                        except ImportError:
+                            from worker_context import build_worker_context
+                        task['worker_context']=build_worker_context(task['user_id'],task['chat_id'],task.get('original_request') or task['message'],
+                            task['device_ids'],task['context_history'],task.get('source_task_ids') or [])
                     task["admitted_at"]=task["created_at"]
                     task["created_at"]=time.time()
+                    task["worker_started_at"]=task["created_at"]
                     role_token=LLM_ENTITY.set("worker")
                     memory_token=WORKER_MEMORY_QUERY.set(task["message"])
                     human_token=ORIGINAL_WORKER_REQUEST.set(task.get("original_request") or task["message"])

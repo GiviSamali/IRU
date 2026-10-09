@@ -96,8 +96,7 @@ function bindStaticEvents() {
   });
 }
 
-function bindProductV2ExecutionCards() {
-  const container = document.getElementById('chatMessages');
+function bindProductV2ExecutionCards(container = document.getElementById('chatMessages')) {
   if (!container || container.dataset.productV2ExecutionBound === '1') return;
   container.dataset.productV2ExecutionBound = '1';
 
