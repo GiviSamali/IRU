@@ -6,8 +6,8 @@ const {messages,clone,createServer}=require('./helpers/smart-ui-fixtures.cjs');
 let browser,server,origin,requests;
 before(async()=>{({server,requests}=createServer());await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin=`http://127.0.0.1:${server.address().port}`;browser=await chromium.launch({channel:'msedge',headless:true});});
 after(async()=>{await browser?.close();await new Promise(resolve=>server?.close(resolve));});
-async function open(width=1280,height=1100){
- const page=await browser.newPage({viewport:{width,height}});page.setDefaultTimeout(8000);page.errors=[];page.on('pageerror',e=>page.errors.push(e.message));
+async function open(width=1280,height=1100,userAgent){
+ const page=await browser.newPage({viewport:{width,height},...(userAgent?{userAgent}: {})});page.setDefaultTimeout(8000);page.errors=[];page.on('pageerror',e=>page.errors.push(e.message));
  await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
  await page.addInitScript(()=>{
   localStorage.setItem('iru_token','smart-ui-fixture');
@@ -369,3 +369,45 @@ test('OW global Stop selects running Worker by task ID ahead of queued jobs',asy
   assert.deepEqual(page.errors,[]);
  }finally{await page.close();}
 });
+
+
+for (const android of [false,true]) {
+ test(`voice on actual page survives five-minute idle and transient STT outage: ${android?'Android':'desktop'}`,async()=>{
+  const page=await open(400,600,android?'Mozilla/5.0 (Linux; Android 14) Chrome/140.0.0.0 Mobile Safari/537.36':undefined);
+  try {
+   await seed(page,[]);const commands=[];
+   await page.route('**/nl_command',route=>{
+    commands.push(JSON.parse(route.request().postData()));
+    route.fulfill({json:{status:'ok',response_type:'orchestrator',task_id:'idle-dialogue',chat_id:1,worker_task_id:null}});
+   });
+   await page.route('**/api/tasks/idle-dialogue',route=>route.fulfill({json:{status:'ok',task:{task_id:'idle-dialogue',chat_id:1,kind:'orchestrator',status:'done',answer:'Связь есть.',commands:[],tasks:[],device_ids:[]}}}));
+   await page.route('**/api/voice/tasks/**/speech?*',route=>route.fulfill({status:204}));
+   await page.clock.install();await page.locator('#voiceBtn').click();
+   await page.waitForFunction(()=>window.lastFakeRecognition && speechCounts.start===1);
+   await page.evaluate(()=>{window.oldIdleRecognition=lastFakeRecognition;lastFakeRecognition.onerror({error:'network'});});
+   assert.equal(await page.evaluate(()=>iruVoice.enabled),true);
+   assert.ok((await page.locator('#voiceStatus').textContent()).includes('Восстанавливаю'));
+   await page.clock.runFor(1100);
+   assert.equal(await page.evaluate(()=>speechCounts.start),2);
+   await page.clock.fastForward(5*60*1000);await page.clock.runFor(300);
+   assert.equal(await page.evaluate(()=>iruVoice.enabled),true);
+   assert.equal(await page.evaluate(()=>iruVoice.phase),'idle');
+   assert.ok(await page.evaluate(()=>speechCounts.start>=3));
+   const emit=async text=>page.evaluate(text=>{
+    const rec=window.lastFakeRecognition, result=[{transcript:text}];result.isFinal=true;
+    rec.testResults||=[];const index=rec.testResults.length;rec.testResults.push(result);
+    rec.onresult({resultIndex:index,results:rec.testResults});
+   },text);
+   await emit('случайный разговор');await page.clock.runFor(1100);assert.equal(commands.length,0);
+   await emit('ИРУ.');await page.clock.runFor(1100);assert.equal(commands.length,0);
+   const sent=page.waitForRequest(req=>new URL(req.url()).pathname==='/nl_command');
+   const response=page.waitForResponse(res=>new URL(res.url()).pathname==='/nl_command');
+   await emit('Иру проверка связи');await page.clock.runFor(1100);const req=await sent;await response;
+   assert.equal(JSON.parse(req.postData()).message,'проверка связи');assert.equal(commands.length,1);
+   await page.evaluate(()=>stopVoice());const started=await page.evaluate(()=>speechCounts.start);
+   await page.clock.fastForward(5*60*1000);await page.clock.runFor(300);
+   assert.equal(await page.evaluate(()=>speechCounts.start),started);
+   assert.deepEqual(page.errors,[]);
+  } finally { await page.close(); }
+ });
+}

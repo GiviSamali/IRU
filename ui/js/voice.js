@@ -5,7 +5,9 @@
   const button = document.getElementById('voiceBtn');
   const status = document.getElementById('voiceStatus');
   const stopButton = document.getElementById('voiceStopSpeech');
-  let recognition = null, wantListening = false, restartTimer = null;
+  let recognition = null, wantListening = false, restartTimer = null, healthTimer = null;
+  let retryAttempt = 0, healthDeadline = 0, reconnecting = false, voicePhase = 'off';
+  const START_TIMEOUT_MS = 10000, IDLE_RENEW_MS = 90000, MAX_RETRY_MS = 15000;
   let audioContext = null, source = null, activation = 0, starting = false;
   const labels = { off: '', idle: 'Голос включён · скажите «Иру»', listening: 'Слушаю… · «усни» — ожидание «Иру»',
     awaiting_plan: 'Запустить План? Скажите «да», «запускай» или «нет»',
@@ -33,53 +35,122 @@
   function stopAudio() {
     if (source) { try { source.stop(); } catch (_) {} source = null; }
   }
+  function renderVoiceStatus() {
+    status.textContent = reconnecting && wantListening
+      ? 'Восстанавливаю микрофон… · ожидание «Иру»'
+      : labels[voicePhase];
+    status.hidden = voicePhase === 'off';
+  }
+  function releaseRecognition(rec) {
+    if (recognition !== rec) return;
+    recognition = null; clearTimeout(healthTimer); healthTimer = null; healthDeadline = 0;
+    // Detach before abort: a late callback cannot retire the replacement run.
+    rec.onend = rec.onerror = rec.onresult = rec.onstart = rec.onaudiostart = rec.onspeechstart = rec.onspeechend = null;
+    try { rec.abort(); } catch (_) {}
+  }
+  function scheduleRestart(delay = 250) {
+    if (!wantListening || restartTimer !== null) return;
+    restartTimer = setTimeout(() => {
+      restartTimer = null;
+      if (wantListening && !recognition) startRecognition();
+    }, delay);
+  }
+  function reconnect(rec, backoff = false) {
+    if (recognition !== rec || !wantListening) return;
+    releaseRecognition(rec); reconnecting = true; renderVoiceStatus();
+    const delay = backoff ? Math.min(MAX_RETRY_MS, 1000 * 2 ** Math.min(retryAttempt++, 4)) : 250;
+    scheduleRestart(delay);
+  }
+  function armHealth(rec, delay) {
+    clearTimeout(healthTimer); healthDeadline = Date.now() + delay;
+    healthTimer = setTimeout(() => {
+      healthTimer = null;
+      // Silence is not a reason to turn voice off. Renew even if end/error was lost.
+      if (recognition === rec && wantListening) reconnect(rec, delay === START_TIMEOUT_MS);
+    }, delay);
+  }
   function listen(wanted) {
-    wantListening = wanted; clearTimeout(restartTimer);
     if (!wanted) {
-      const old = recognition; recognition = null;
-      if (old) { old.onend = null; old.onresult = null; try { old.abort(); } catch (_) {} }
-      return;
+      wantListening = false; clearTimeout(restartTimer); restartTimer = null;
+      clearTimeout(healthTimer); healthTimer = null; healthDeadline = 0;
+      retryAttempt = 0; reconnecting = false;
+      if (recognition) releaseRecognition(recognition);
+      renderVoiceStatus(); return;
     }
-    if (recognition || !SR) return;
-    const rec = new SR(); recognition = rec;
+    wantListening = true;
+    // Repeated resume/status updates must not bypass retry backoff or start twice.
+    if (recognition || restartTimer !== null || !SR) return;
+    startRecognition();
+  }
+  function startRecognition() {
+    if (!wantListening || recognition || !SR) return;
+    let rec;
+    try { rec = new SR(); } catch (_) {
+      reset(); showToast('Распознавание недоступно в этом браузере.', true); return;
+    }
+    recognition = rec;
     rec.lang = 'ru-RU'; rec.continuous = !singleUtterance; rec.interimResults = true;
-    // Result indices belong to this recognition run. A repeated final snapshot
-    // must not append the same fragment again; equal text at a NEW index is valid.
-    const deliveredFinals = new Set();
+    const startedAt = Date.now(), deliveredFinals = new Set();
+    rec.onstart = rec.onaudiostart = () => {
+      if (recognition !== rec || !wantListening) return;
+      reconnecting = false; renderVoiceStatus(); armHealth(rec, IDLE_RENEW_MS);
+    };
+    rec.onspeechstart = rec.onspeechend = () => {
+      if (recognition === rec && wantListening) armHealth(rec, IDLE_RENEW_MS);
+    };
     rec.onresult = event => {
       if (recognition !== rec || !wantListening) return;
+      retryAttempt = 0; reconnecting = false; renderVoiceStatus(); armHealth(rec, IDLE_RENEW_MS);
       for (let i = event.resultIndex; i < event.results.length; i++) {
         if (recognition !== rec) break;
         if (deliveredFinals.has(i)) continue;
         const result = event.results[i];
         if (result.isFinal) deliveredFinals.add(i);
-        // Android continuous mode can republish cumulative finals at new indices.
-        // Accept one final per cycle without filtering intentional repeated words.
+        // Android cumulative finals are accepted once per run, without deduping words.
         if (singleUtterance && result.isFinal) rec.onresult = null;
         session.transcript(result[0].transcript, result.isFinal);
         if (singleUtterance && result.isFinal) {
           if (recognition === rec) {
-            recognition = null;
-            rec.onend = null;
-            try { rec.abort(); } catch (_) {}
-            if (wantListening) restartTimer = setTimeout(() => listen(true), 250);
+            releaseRecognition(rec);
+            scheduleRestart();
           }
           break;
         }
       }
     };
     rec.onerror = event => {
-      if (recognition !== rec) return;
-      if (event.error !== 'no-speech' && event.error !== 'aborted') {
-        reset(); showToast(event.error === 'not-allowed' ? 'Разрешите доступ к микрофону.' : 'Распознавание недоступно. Голосовой режим выключен.', true);
+      if (recognition !== rec || !wantListening) return;
+      if (['no-speech', 'aborted', 'network'].includes(event.error)) {
+        // Transient provider errors do not revoke the user's enabled voice session.
+        reconnect(rec, event.error === 'network'); return;
       }
+      reset();
+      const message = {
+        'not-allowed': 'Разрешите доступ к микрофону.',
+        'service-not-allowed': 'Браузер запретил сервис распознавания речи.',
+        'audio-capture': 'Микрофон недоступен. Проверьте его подключение и разрешения.',
+        'language-not-supported': 'Сервис не поддерживает выбранный язык распознавания.',
+      }[event.error] || 'Распознавание недоступно. Голосовой режим выключен.';
+      showToast(message, true);
     };
     rec.onend = () => {
-      if (recognition !== rec) return;
-      recognition = null;
-      if (wantListening) restartTimer = setTimeout(() => listen(true), 250);
+      if (recognition !== rec || !wantListening) return;
+      if (Date.now() - startedAt >= START_TIMEOUT_MS) retryAttempt = 0;
+      reconnect(rec);
     };
-    try { rec.start(); } catch (_) { recognition = null; reset(); showToast('Не удалось включить микрофон.', true); }
+    armHealth(rec, START_TIMEOUT_MS);
+    try { rec.start(); } catch (error) {
+      if (error?.name === 'InvalidStateError' || error?.name === 'NetworkError') reconnect(rec, true);
+      else { reset(); showToast('Не удалось включить микрофон. Проверьте доступ к нему.', true); }
+    }
+  }
+  function recoverOnReturn() {
+    if (!wantListening) return;
+    if (recognition && healthDeadline && Date.now() >= healthDeadline) releaseRecognition(recognition);
+    if (!recognition) {
+      clearTimeout(restartTimer); restartTimer = null;
+      scheduleRestart(0);
+    }
   }
   async function speak(taskId, signal, onSpeaking, review) {
     let count = 1;
@@ -120,7 +191,7 @@
     submit: text => sendMessage({ voiceText: text }),
     error: error => showToast(error.message, true),
     state: phase => {
-      status.textContent = labels[phase]; status.hidden = phase === 'off';
+      voicePhase = phase; renderVoiceStatus();
       stopButton.hidden = !['speaking', 'synthesizing'].includes(phase);
       button.classList.toggle('recording', phase !== 'off');
       button.setAttribute('aria-pressed', String(phase !== 'off'));
@@ -157,5 +228,9 @@
   document.addEventListener('keydown', event => {
     if (SR && event.ctrlKey && event.shiftKey && event.code === 'KeyM') { event.preventDefault(); toggle(); }
   });
+  window.addEventListener('online', recoverOnReturn);
+  window.addEventListener('focus', recoverOnReturn);
+  document.addEventListener('resume', recoverOnReturn);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) recoverOnReturn(); });
   window.addEventListener('pagehide', reset);
 })();
