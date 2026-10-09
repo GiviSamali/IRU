@@ -18,6 +18,7 @@ try:
         PLAN_LIMITS,
         add_audit_log,
         add_message,
+        message_task_metadata,
         add_user_fact,
         check_daily_command_limit,
         check_device_limit,
@@ -58,6 +59,7 @@ except ImportError:
         PLAN_LIMITS,
         add_audit_log,
         add_message,
+        message_task_metadata,
         add_user_fact,
         check_daily_command_limit,
         check_device_limit,
@@ -448,6 +450,7 @@ async def api_get_task(task_id: str, request: Request):
         except Exception:
             pass
 
+    presentation = task.get("history_metadata") or message_task_metadata(task)
     response_task = {
         "task_id": task["task_id"],
         "chat_id": task["chat_id"],
@@ -458,6 +461,9 @@ async def api_get_task(task_id: str, request: Request):
         "commands": task.get("commands"),
         "tasks": task.get("tasks", []),
         "task_receipt": task.get("task_receipt"),
+        "presentation_status": task["status"] if task["status"] in {"error", "failed", "blocked", "cancelled"} else presentation.get("taskStatus"),
+        "task_mode": presentation["taskMode"],
+        "elapsed_ms": presentation["taskElapsedMs"],
         "diagnostic_trace": task.get("diagnostic_trace", []),
         "current_step": task.get("current_step"),
         "results": task.get("results", {}),
@@ -657,8 +663,9 @@ async def api_confirm_task(task_id: str, request: Request):
         task["task_receipt"] = {"task_status": "cancelled" if cancelled else "failed" if outcome == "failed" else "partial",
             "answer_source": "confirmation_result", "command_outcome": outcome, "goal_completed": False,
             "continuation_status": "unavailable", "terminal_reason": reason, "basis": [entry["step_id"]]}
+        task["history_metadata"] = message_task_metadata(task, task_id=task_id)
         try:
-            add_message(chat_id, "assistant", text, journal)
+            add_message(chat_id, "assistant", text, journal, task_metadata=task["history_metadata"])
         except Exception as exc:
             logger.warning("confirmation result persistence failed task_id=%s error_type=%s", task_id, type(exc).__name__)
 
@@ -790,7 +797,8 @@ async def api_deny_task(task_id: str, request: Request):
     task["status"] = "done"
     task["answer"] = "Команда отменена пользователем."
     task.pop("confirm_data", None)
-    add_message(chat_id, "assistant", task["answer"], task.get("commands", []))
+    task["history_metadata"] = message_task_metadata({**task, "status": "cancelled"}, task_id=task_id)
+    add_message(chat_id, "assistant", task["answer"], task.get("commands", []), task_metadata=task["history_metadata"])
     return {"status": "ok"}
 
 

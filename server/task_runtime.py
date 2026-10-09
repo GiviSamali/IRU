@@ -24,6 +24,7 @@ try:
     from .controller_trust import enforce_trusted_answer, has_grounded_terminal_answer
     from .database import (
         add_message,
+        message_task_metadata,
         add_training_record,
         add_user_fact,
         get_chat,
@@ -70,6 +71,7 @@ except ImportError:
     from controller_trust import enforce_trusted_answer, has_grounded_terminal_answer
     from database import (
         add_message,
+        message_task_metadata,
         add_training_record,
         add_user_fact,
         get_chat,
@@ -829,7 +831,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         task["answer"] = answer
         task["tasks"] = task.get("tasks", [])
         try:
-            add_message(chat_id, "assistant", answer, task.get("commands", []))
+            add_message(chat_id, "assistant", answer, task.get("commands", []),
+                        task_metadata=message_task_metadata(task, task_id=task_id))
         except Exception:
             pass
 
@@ -1300,7 +1303,11 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if combined_answer != before_trust_guard:
                 record_lifecycle_event("answer_adjusted", source="trust_guard")
         combined_answer = strip_markdown(combined_answer)
-        add_message(chat_id, "assistant", combined_answer, combined_commands)
+        history_metadata = message_task_metadata({**task,
+            "status": (combined_task_receipt or {}).get("task_status") or "done",
+            "task_receipt": combined_task_receipt, "tasks": combined_tasks}, task_id=task_id)
+        task["history_metadata"] = history_metadata
+        add_message(chat_id, "assistant", combined_answer, combined_commands, task_metadata=history_metadata)
 
         try:
             from .database import get_db
@@ -1352,6 +1359,10 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         task["status"] = "error"
         task["answer"] = f"Ошибка: {error_text}" if error_text else "Произошла внутренняя ошибка. Попробуйте ещё раз."
         task["commands"] = []
+        try:
+            add_message(chat_id, "assistant", task["answer"], [], task_metadata=message_task_metadata(task, task_id=task_id))
+        except Exception:
+            logger.warning("task error history persistence failed task_id=%s", task_id)
 
 
 @diagnostic_task("onboarding", lambda task_id: tasks.get(task_id))
@@ -1378,7 +1389,8 @@ async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id:
         task["status"] = "done"
         task["answer"] = answer
         task["commands"] = result.get("commands", [])
-        add_message(chat_id, "assistant", answer, task["commands"])
+        add_message(chat_id, "assistant", answer, task["commands"],
+                    task_metadata=message_task_metadata(task, task_id=task_id))
     except Exception as exc:
         task["status"] = "error"
         task["answer"] = f"Ошибка: {str(exc)}"

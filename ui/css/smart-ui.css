@@ -154,3 +154,12 @@
     .header { min-height: 48px; padding-top: 2px; padding-bottom: 2px; }
   }
 }
+
+/* A proved, short single operation has a result row; its journal remains available. */
+.smart-task.compact-result { padding: 4px 0; border: 0; background: transparent; }
+.smart-task.compact-result .smart-task-heading { flex-direction: row; align-items: center; gap: 10px; }
+.smart-task.compact-result .smart-status { max-width: none; }
+.smart-task.compact-result .smart-task-toggle { display: inline-flex; padding: 4px 8px; }
+.smart-task.compact-result .smart-task-details { display: none; }
+.smart-task.compact-result.expanded .smart-task-details { display: block; margin-top: 8px; }
+.smart-task[data-status="unknown"] .smart-status { color: var(--warning); }

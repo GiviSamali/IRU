@@ -7,13 +7,13 @@ const IRUSmartUI = (() => {
     launching_app: 'running', restoring: 'running', cancelling: 'running',
     done: 'success', completed: 'success', completed_with_recovery: 'success', recovered: 'success',
     success:'success', ok:'success', verified:'success', opened_verified:'success', focused:'success', found:'success',
-    started:'running', launch_requested:'waiting', unknown:'blocked', needs_verification:'blocked', stale_element:'blocked', disconnected:'blocked',
+    started:'running', launch_requested:'waiting', unknown:'unknown', needs_verification:'blocked', stale_element:'blocked', disconnected:'blocked',
     not_found:'failed', action_not_verified:'failed', timeout:'failed',
     partial: 'partial', partial_failure: 'partial', blocked: 'blocked', skipped: 'blocked',
     failed: 'failed', error: 'failed', cancelled: 'cancelled', canceled: 'cancelled',
   });
   const LABELS = Object.freeze({ waiting: 'Ожидает', running: 'Выполняется', success: 'Завершено',
-    partial: 'Частично выполнено', blocked: 'Заблокировано', failed: 'Ошибка', cancelled: 'Отменено' });
+    partial: 'Частично выполнено', blocked: 'Заблокировано', unknown:'Результат не подтверждён', failed: 'Ошибка', cancelled: 'Отменено' });
   const key = value => typeof value === 'string' ? value.trim().toLowerCase() : '';
   const list = value => Array.isArray(value) ? value.filter(item => item && typeof item === 'object') : [];
   const text = value => typeof value === 'string' ? value : '';
@@ -28,12 +28,12 @@ const IRUSmartUI = (() => {
       if (result.returncode !== 0) return 'failed';
     }
     const resultState = normalizeStatus(result.status);
-    if (['failed', 'blocked', 'partial', 'cancelled', 'waiting', 'running'].includes(resultState)) return resultState;
+    if (['failed', 'blocked', 'unknown', 'partial', 'cancelled', 'waiting', 'running'].includes(resultState)) return resultState;
     const explicit = normalizeStatus(command?.status || command?.tool_status);
     if (explicit) return explicit;
     if (resultState) return resultState;
     if (result.returncode === 0) return 'success'; // execution status, never goal completion
-    return 'waiting';
+    return 'unknown';
   }
 
   const ANSWER_STATUS = Object.freeze({
@@ -44,6 +44,15 @@ const IRUSmartUI = (() => {
   });
   function lastTerminal(commands) {
     return [...commands].reverse().find(command => key(command.status) === 'terminal' && key(command.tool_name || command.action).startsWith('answer'));
+  }
+  function confirmedTerminal(commands) {
+    const terminal = lastTerminal(commands), result = terminal?.result || {}, check = result.self_check || {};
+    const basis = Array.isArray(result.basis) ? result.basis : [];
+    const before = commands.slice(0, commands.indexOf(terminal));
+    if (commands.slice(commands.indexOf(terminal) + 1).some(command => !key(command.tool_name || command.action).startsWith('answer'))) return false;
+    return key(result.answer_type) === 'grounded_report' && check.has_sufficient_evidence === true
+      && basis.length > 0 && basis.every(id => before.some(command => command.step_id === id))
+      && basis.some(id => before.some(command => command.step_id === id && commandState(command) === 'success'));
   }
   function taskState(message, tasks, commands = []) {
     const receipt = message.taskReceipt || message.task_receipt || {};
@@ -69,21 +78,24 @@ const IRUSmartUI = (() => {
     if (states.includes('failed')) return 'failed';
     if (states.includes('blocked')) return 'blocked';
     if (states.includes('partial') || receipt.goal_completed === false) return 'partial';
+    if (states.includes('unknown')) return 'unknown';
     if (message.cancelRequested || message.loading || states.includes('running')) return 'running';
     if (message.confirmTaskId || message.planReview || states.includes('waiting')) return 'waiting';
     if (finalConfirmed) return 'success';
     // Runtime `done` is not sufficient to hide unfinished/failed nested tasks or steps.
     // Only the existing, verified final receipt above can supersede stale recovered details.
     const taskStates = list(tasks).flatMap(item => [
-      normalizeStatus(item.status) || 'waiting',
-      ...list(item.steps).map(step => normalizeStatus(step.status) || 'waiting'),
+      normalizeStatus(item.status) || 'unknown',
+      ...list(item.steps).map(step => normalizeStatus(step.status) || 'unknown'),
     ]);
-    for (const status of ['cancelled', 'failed', 'blocked', 'partial', 'running', 'waiting']) {
+    for (const status of ['cancelled', 'failed', 'blocked', 'partial', 'unknown', 'running', 'waiting']) {
       if (taskStates.includes(status)) return status;
     }
-    if (states.length) return states[0];
     if (taskStates.length && taskStates.every(status => status === 'success')) return 'success';
-    return 'waiting'; // neither prose nor successful intermediate calls prove the whole goal
+    if (confirmedTerminal(commands)) return 'success';
+    const outcomes = commands.filter(command => !key(command.tool_name || command.action).startsWith('answer')).map(commandState);
+    for (const status of ['failed','blocked','partial','unknown']) if (outcomes.includes(status)) return status;
+    return 'unknown'; // done or a successful intermediate call does not prove the whole goal
   }
 
   function filesFromCommands(commands) {
@@ -135,16 +147,22 @@ const IRUSmartUI = (() => {
     const tasks = list(m.loading ? m.liveTasks || m.tasks : m.tasks);
     const commands = list(m.loading ? m.liveCommands || m.commands : m.commands);
     const operations = commands.filter(command => !key(command.tool_name || command.action).startsWith('answer'));
-    const pureConversation = !tasks.length && !operations.length && key(lastTerminal(commands)?.result?.answer_type) === 'pure_text';
+    const conversationNegative = [m.taskStatus, (m.taskReceipt || m.task_receipt || {}).task_status, m.overallStatus].some(value => ['failed','blocked','partial','unknown','cancelled'].includes(normalizeStatus(value)));
+    const pureConversation = !m.loading && !m.confirmTaskId && !m.planReview && !conversationNegative && !tasks.length && !operations.length
+      && (key(lastTerminal(commands)?.result?.answer_type) === 'pure_text' || (m.taskMode === 'conversation' && normalizeStatus(m.taskStatus) === 'success'));
     const hasTask = !pureConversation && (tasks.length || operations.length || m.loading || m.taskStatus || m.taskReceipt || m.task_receipt || m.confirmTaskId || m.planReview);
     if (hasTask) {
       const status = taskState(m, tasks, commands);
       const receipt = m.taskReceipt || m.task_receipt || {};
-      blocks.push({ type:'task', key:id+'-task', status, label:LABELS[status],
+      const detailed = status !== 'success' || m.loading || m.confirmTaskId || m.planReview || m.cancelAvailable
+        || m.taskMode === 'plan' || receipt.answer_source === 'pipeline_step_report' || tasks.length > 0
+        || operations.length !== 1 || !Number.isFinite(m.taskElapsedMs) || m.taskElapsedMs >= 30000
+        || operations.some(command => command.step_index != null || commandState(command) !== 'success');
+      blocks.push({ type:'task', key:id+'-task', status, label:LABELS[status], compact:!detailed,
         title:text(m.taskTitle) || text(tasks[0]?.goal) || 'Выполнение запроса',
         summary: receipt.goal_completed === false ? 'Исходная цель не завершена.' : '',
         tasks, commands, loading:Boolean(m.loading), currentStatus:m.currentStatus,
-        unknown: !m.loading && !m.confirmTaskId && !m.planReview && !m.taskStatus && !receipt.task_status && !tasks.length });
+        unknown: status === 'unknown' });
     }
     blocks.push(...filesFromCommands(commands).map((file, i) => ({ ...file, key:id+'-file-'+i })));
     if (m.confirmTaskId || m.planReview || (m.suggestedFact?.text && !m.suggestedFactDeclined)
@@ -164,6 +182,11 @@ const IRUSmartUI = (() => {
     task(block, context) {
       const open = expanded(block, context), details = context.taskDetails ? context.taskDetails(block) : '';
       const summary = block.unknown ? 'Результат цели не подтверждён.' : block.summary;
+      if (block.compact) {
+        return `<section class="smart-block smart-task compact-result${open ? ' expanded' : ''}" data-block-type="task" data-status="${block.status}" data-smart-key="${esc(block.key)}" aria-label="Итог задачи">
+          <div class="smart-task-heading"><span class="smart-status">✓ ${esc(block.label)}</span>${details ? `<button type="button" class="smart-task-toggle" data-action="toggle-smart-details" aria-expanded="${open}" aria-controls="${esc(block.key)}">${open ? 'Свернуть подробности' : 'Подробности'}</button>` : ''}</div>
+          ${details ? `<div class="smart-task-details" id="${esc(block.key)}">${details}</div>` : ''}</section>`;
+      }
       return `<section class="smart-block smart-task${open ? ' expanded' : ''}" data-block-type="task" data-status="${block.status}" data-smart-key="${esc(block.key)}" aria-label="Состояние задачи">
         <div class="smart-task-heading"><span class="smart-task-title">${esc(block.title)}</span><span class="smart-status">${esc(block.label)}</span></div>
         ${summary ? `<p class="smart-task-summary">${esc(summary)}</p>` : ''}

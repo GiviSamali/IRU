@@ -251,3 +251,55 @@ test('widget authentication is scrollable at low height',async()=>{
   assert.equal(await page.locator('.auth-contact a').count(),2);
  }finally{await page.close();}
 });
+
+for(const width of [400,1280]){
+ test('A-FIX compact success and retained journal at '+width,async()=>{
+  const page=await open(width,600);try{
+   const m={id:901,role:'assistant',content:'Вкладка открыта.',taskStatus:'done',taskElapsedMs:1800,
+    taskReceipt:{task_status:'completed',goal_completed:true},taskMode:'ordinary',_taskId:'simple-final',tasks:[],
+    commands:[{tool_name:'app.open_url',step_id:'step_1',device_id:'Second',status:'success',result:{status:'opened_verified',url:'https://example.invalid'}}]};
+   await seed(page,[m]);const row=page.locator('.smart-task');
+   assert.equal(await row.evaluate(el=>el.classList.contains('compact-result')),true);
+   assert.equal(await row.getAttribute('data-status'),'success');
+   assert.equal(await row.locator('.smart-task-title').count(),0);
+   assert.ok((await row.boundingBox()).height<=60);
+   const before=effectRequests().length;
+   await row.locator('[data-action="toggle-smart-details"]').click();
+   assert.equal(await row.locator('.smart-task-details').isVisible(),true);
+   assert.equal(await row.locator('.cmd-log').count(),1);
+   await page.evaluate(()=>renderMessages());
+   assert.equal(await row.locator('.smart-task-details').isVisible(),true);
+   assert.equal(effectRequests().length,before);
+   await page.route('**/api/chats/1/messages',route=>route.fulfill({json:{status:'ok',messages:[m]}}));
+   await page.evaluate(async()=>{state.messages=[];await openChat(1);});
+   assert.equal(await page.locator('.smart-task').getAttribute('data-status'),'success');
+   assert.equal(await page.locator('.compact-result').count(),1);
+   for(const update of [{taskMode:'plan'},{taskElapsedMs:45000},{commands:[...m.commands,...m.commands]},
+      ...['partial','blocked','failed','unknown'].map(status=>({taskStatus:status,taskReceipt:{task_status:status}}))]){
+    await seed(page,[{...m,...update}]);assert.equal(await page.locator('.compact-result').count(),0);
+    if(update.taskStatus)assert.equal(await page.locator('.smart-task').getAttribute('data-status'),update.taskStatus);
+   }
+   assert.deepEqual(page.errors,[]);
+  }finally{await page.close();}
+ });
+}
+test('A-FIX history preserves PLAN receipt and never relabels unknown as waiting',async()=>{
+ const page=await open(400,300);try{
+  const history=[
+   {id:1,role:'assistant',content:'Итог проверен.',taskStatus:'completed_with_recovery',taskMode:'plan',taskElapsedMs:45000,
+    taskReceipt:{task_status:'completed_with_recovery',final_verification_status:'verified'},tasks:[{status:'done',steps:[{status:'failed'}]}]},
+   {id:2,role:'assistant',content:'Неподтверждённый исход.',taskStatus:'unknown'},
+   {id:3,role:'assistant',content:'Ожидание.',taskStatus:'pending'},
+   {id:4,role:'assistant',content:'Только старый журнал.',commands:[{tool_name:'execute_cmd',result:{}}]},
+  ];
+  await page.route('**/api/chats/1/messages',route=>route.fulfill({json:{status:'ok',messages:history}}));
+  for(let i=0;i<2;i++){
+   await page.evaluate(async()=>{state.messages=[];await openChat(1);});
+   assert.deepEqual(await page.locator('.smart-task').evaluateAll(nodes=>nodes.map(n=>n.dataset.status)),['success','unknown','waiting','unknown']);
+   assert.equal(await page.locator('.compact-result').count(),0);
+   assert.ok((await page.locator('.smart-task[data-status="unknown"]').first().textContent()).includes('Результат не подтверждён'));
+   assert.equal(await page.locator('[data-action="confirm-task"]').count(),0);
+  }
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});

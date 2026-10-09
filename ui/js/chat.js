@@ -355,6 +355,7 @@ const SAFE_TASK_STATE_CLASSES = new Set([
   'error',
   'cancelled',
   'blocked',
+  'unknown',
   'partial',
   'partial_failure',
   'skipped',
@@ -373,6 +374,7 @@ function normalizeTaskBadgeLabel(status) {
   if (key === 'cancelling') return 'остановка';
   if (key === 'cancelled') return 'отменено';
   if (key === 'blocked') return 'заблокировано';
+  if (key === 'unknown') return 'результат не подтверждён';
   if (key === 'partial' || key === 'partial_failure') return 'частично';
   if (key === 'skipped') return 'пропущено';
   if (key === 'pending') return 'ожидает';
@@ -380,7 +382,7 @@ function normalizeTaskBadgeLabel(status) {
 }
 
 function normalizeStepStateKey(status) {
-  return normalizeTaskStateKey(status, 'pending');
+  return normalizeTaskStateKey(status, 'unknown');
 }
 
 function normalizeStepStatusLabel(status) {
@@ -390,6 +392,7 @@ function normalizeStepStatusLabel(status) {
   if (key === 'failed' || key === 'error') return 'ошибка';
   if (key === 'running') return 'выполняется';
   if (key === 'blocked') return 'блокировано';
+  if (key === 'unknown') return 'результат не подтверждён';
   if (key === 'partial' || key === 'partial_failure') return 'частично';
   if (key === 'skipped') return 'пропущено';
   if (key === 'cancelled') return 'отменено';
@@ -398,7 +401,7 @@ function normalizeStepStatusLabel(status) {
 
 // The existing operation and action components are reused by the four-block registry.
 function renderSmartTaskDetails(block, message, mi) {
-  const detailStatus = { success:'completed', waiting:'pending', running:'running', failed:'failed', partial:'partial', blocked:'blocked', cancelled:'cancelled' };
+  const detailStatus = { success:'completed', waiting:'pending', running:'running', failed:'failed', partial:'partial', blocked:'blocked', unknown:'unknown', cancelled:'cancelled' };
   const detailTasks = block.status === 'success' ? block.tasks : block.tasks.map(task => ({
     ...task, status:detailStatus[IRUSmartUI.taskState({}, [task])],
   }));
@@ -875,7 +878,7 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       }
       const data = await r.json();
       const task = data.task;
-      const smartTaskMetadata = { taskStatus:task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message };
+      const smartTaskMetadata = { taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms };
       const pendingTask = state.pendingTasks.find(t => t.task_id === taskId);
       if (pendingTask && String(task.status || '').trim().toLowerCase() === 'cancelling') {
         pendingTask.cancelRequested = true;
@@ -940,7 +943,7 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       // Ещё выполняется — обновить live-статус
       const msg = state.messages[msgIndex];
       if (msg && msg.loading) {
-        const metadataChanged = JSON.stringify([msg.taskStatus,msg.taskReceipt,msg.overallStatus,msg.taskTitle]) !== JSON.stringify(Object.values(smartTaskMetadata));
+        const metadataChanged = JSON.stringify([msg.taskStatus,msg.taskReceipt,msg.overallStatus,msg.taskTitle,msg.taskMode]) !== JSON.stringify([smartTaskMetadata.taskStatus,smartTaskMetadata.taskReceipt,smartTaskMetadata.overallStatus,smartTaskMetadata.taskTitle,smartTaskMetadata.taskMode]);
         Object.assign(msg,smartTaskMetadata);
         let needRender = metadataChanged;
         const liveStatus = deriveLiveTaskStatus(task, msg);

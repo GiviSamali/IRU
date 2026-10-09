@@ -288,6 +288,7 @@ def init_db():
             # tier колонка убрана — используем существующий users.plan
             "ALTER TABLE device_memory ADD COLUMN user_id TEXT",
             "ALTER TABLE users ADD COLUMN plan_trial_used INTEGER DEFAULT 0",
+            "ALTER TABLE messages ADD COLUMN task_metadata TEXT",
         ]
         for sql in migrations:
             try:
@@ -477,19 +478,48 @@ def touch_chat(chat_id: int):
 
 # ── Messages ───────────────────────────────────────────────────────────────────
 
-def add_message(chat_id: int, role: str, content: str, commands: list | None = None) -> dict:
+def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
+    """Snapshot existing server outcomes for history; never infer goal success."""
+    receipt = task.get("task_receipt")
+    receipt_keys = ("task_status", "goal_completed", "final_verification_status", "answer_source",
+                    "command_outcome", "continuation_status", "terminal_reason", "basis", "warnings")
+    saved_receipt = {key: receipt[key] for key in receipt_keys if key in receipt} if isinstance(receipt, dict) else None
+    created = task.get("created_at")
+    elapsed = max(0, int((time.time() - created) * 1000)) if isinstance(created, (int, float)) else None
+    return {
+        "taskStatus": task.get("status"), "taskReceipt": saved_receipt,
+        "overallStatus": task.get("overall_status"), "taskTitle": task.get("current_step") or task.get("message"),
+        "tasks": task.get("tasks") or [], "_taskId": task_id or task.get("task_id"),
+        "taskMode": "plan" if (task.get("modes") or {}).get("pipeline") or (saved_receipt or {}).get("answer_source") == "pipeline_step_report" else "conversation" if task.get("device_ids") == [] else "ordinary",
+        "taskElapsedMs": elapsed,
+    }
+
+
+def _message_metadata(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs")
+    return {key: value[key] for key in allowed if key in value}
+
+
+def add_message(chat_id: int, role: str, content: str, commands: list | None = None,
+                *, task_metadata: dict | None = None) -> dict:
     now = time.time()
     commands_json = json.dumps(commands, ensure_ascii=False) if commands else None
+    metadata = _message_metadata(task_metadata) if role == "assistant" else {}
+    metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
     with get_db() as conn:
         cursor = conn.execute(
-            "INSERT INTO messages (chat_id, role, content, commands, created_at) VALUES (?, ?, ?, ?, ?)",
-            (chat_id, role, content, commands_json, now)
+            "INSERT INTO messages (chat_id, role, content, commands, created_at, task_metadata) VALUES (?, ?, ?, ?, ?, ?)",
+            (chat_id, role, content, commands_json, now, metadata_json)
         )
         conn.execute("UPDATE chats SET updated_at = ? WHERE id = ?", (now, chat_id))
         msg_id = cursor.lastrowid
         row = conn.execute("SELECT * FROM messages WHERE id = ?", (msg_id,)).fetchone()
         result = dict(row)
         result["commands"] = commands
+        result.pop("task_metadata", None)
+        result.update(metadata)
         return result
 
 
@@ -508,7 +538,12 @@ def get_messages(chat_id: int, limit: int = 50) -> list[dict]:
                     msg["commands"] = json.loads(msg["commands"])
                 except json.JSONDecodeError:
                     msg["commands"] = None
+            try:
+                metadata = _message_metadata(json.loads(msg.get("task_metadata") or "null"))
+            except (ValueError, TypeError):
+                metadata = {}
             messages.append({
+                **metadata,
                 "id":         msg["id"],
                 "role":       msg["role"],
                 "content":    msg["content"],

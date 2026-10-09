@@ -12,9 +12,9 @@ test('registry contains exactly four blocks, adapter is pure and keeps original 
   assert.deepEqual(blocks({content:'Я создал report.docx. /api/download/123'}).map(b=>b.type),['text']);
 });
 test('status table is explicit and never reads prose or missing errors as success',()=>{
-  for(const [source,expected] of Object.entries({running:'running',done:'success',completed_with_recovery:'success',partial:'partial',blocked:'blocked',failed:'failed',cancelled:'cancelled',confirm:'waiting'})) assert.equal(task({taskStatus:source}).status,expected);
-  assert.equal(task({commands:[{action:'execute_cmd',result:{}}],content:'Выполнено ✓'}).status,'waiting');
-  assert.equal(ui.commandState({result:{}}),'waiting');
+  for(const [source,expected] of Object.entries({running:'running',done:'unknown',completed_with_recovery:'unknown',partial:'partial',blocked:'blocked',failed:'failed',cancelled:'cancelled',confirm:'waiting'})) assert.equal(task({taskStatus:source}).status,expected);
+  assert.equal(task({commands:[{action:'execute_cmd',result:{}}],content:'Выполнено ✓'}).status,'unknown');
+  assert.equal(ui.commandState({result:{}}),'unknown');
   assert.equal(ui.commandState({result:{status:'failed'}}),'failed');
   assert.equal(ui.commandState({status:'success',result:{returncode:7}}),'failed');
   assert.equal(ui.normalizeStatus('constructor'),null);assert.equal(ui.normalizeStatus('__proto__'),null);
@@ -26,7 +26,7 @@ test('P0-02 partial/blocked and false goal completion override command success',
   assert.equal(task({...m,taskStatus:'done'}).status,'partial');
   assert.equal(task({taskStatus:'done',commands:[{status:'failed'}],tasks:[{status:'completed_with_recovery'}]}).status,'success');
   assert.equal(task({tasks:[{status:'done'},{status:'blocked'}]}).status,'blocked');
-  assert.equal(task({tasks:[{status:'done'},{}]}).status,'waiting');
+  assert.equal(task({tasks:[{status:'done'},{}]}).status,'unknown');
 });
 test('file needs structural evidence, valid source device and explicit result',()=>{
   const good={action:'write_content',status:'success',device_id:'Second',result:{path:'C:\\Users\\Demo\\Desktop\\report.docx',bytes_written:321,total_size:321}};
@@ -48,7 +48,7 @@ test('terminal partial/failure report is not successful goal even when runtime s
   assert.equal(task(m).status,'partial');
   assert.equal(task({...m,commands:[{tool_name:'answer.report_failure',status:'terminal',result:{}}]}).status,'failed');
   assert.equal(ui.commandState({status:'success',result:{status:'not_found'}}),'failed');
-  assert.equal(ui.commandState({status:'success',result:{status:'unknown'}}),'blocked');
+  assert.equal(ui.commandState({status:'success',result:{status:'unknown'}}),'unknown');
   assert.deepEqual(blocks({content:'Привет',taskStatus:'done',commands:[{tool_name:'answer.text',status:'terminal',result:{answer_type:'pure_text'}}]}).map(b=>b.type),['text']);
 });
 
@@ -65,7 +65,7 @@ test('terminal protocol/budget failures cannot become success from runtime done'
   }
   // An explicit completed receipt or validated final answer overrides old recovered failures.
   assert.equal(task({taskStatus:'done',taskReceipt:{task_status:'completed_with_recovery',final_verification_status:'verified'},commands:[{tool_name:'tool_only_protocol',status:'failed'}]}).status,'success');
-  assert.equal(task({taskStatus:'done',commands:[{tool_name:'tool_only_protocol',status:'failed'},{tool_name:'answer.text',status:'terminal',result:{answer_type:'grounded_report'}}]}).status,'success');
+  assert.equal(task({taskStatus:'done',commands:[{tool_name:'tool_only_protocol',status:'failed'},{tool_name:'app.open_url',step_id:'step_2',status:'success',result:{status:'opened_verified'}},{tool_name:'answer.text',status:'terminal',result:{answer_type:'grounded_report',basis:['step_2'],self_check:{has_sufficient_evidence:true}}}]}).status,'success');
 });
 
 test('real get_file_link normalized and legacy contracts restore File without trusting prose',()=>{
@@ -97,4 +97,56 @@ test('sufficient final receipt preserves recovered success while negative final 
   assert.equal(task({taskStatus:'done',tasks,taskReceipt:{task_status:'completed',final_verification_status:'verified',goal_completed:false}}).status,'partial');
   assert.equal(task({taskStatus:'done',tasks,taskReceipt:{task_status:'completed',final_verification_status:'failed'}}).status,'failed');
   assert.equal(task({taskStatus:'blocked',tasks,taskReceipt:{task_status:'completed',final_verification_status:'verified'}}).status,'blocked');
+});
+
+const simpleSuccess={taskStatus:'done',taskElapsedMs:2000,taskReceipt:{task_status:'completed',goal_completed:true},tasks:[],commands:[{tool_name:'app.open_url',step_id:'step_1',status:'success',result:{status:'opened_verified'}}]};
+test('unknown is distinct from waiting and unverified done never claims success',()=>{
+ for(const status of ['unknown','nonsense','done']) assert.equal(task({taskStatus:status}).status,'unknown');
+ for(const status of ['pending','waiting','queued','confirm']) assert.equal(task({taskStatus:status}).status,'waiting');
+ assert.equal(task({commands:[{tool_name:'app.launch',status:'success',result:{status:'unknown'}}]}).status,'unknown');
+ assert.equal(task({commands:[{tool_name:'app.launch',status:'failed'}]}).status,'failed');
+ assert.ok(ui.render(ui.adapt({role:'assistant',taskStatus:'unknown'})).includes('Результат не подтверждён'));
+ assert.equal(task({taskStatus:'done',commands:[{tool_name:'app.open_url',status:'success'}]}).status,'unknown');
+});
+test('one proved successful short ordinary operation renders a compact result with optional journal',()=>{
+ assert.equal(task(simpleSuccess).compact,true);
+ const html=ui.render(ui.adapt({role:'assistant',...simpleSuccess}),{taskDetails:()=>'<p>journal</p>'});
+ assert.ok(html.includes('compact-result'));assert.ok(html.includes('Подробности'));assert.ok(html.includes('journal'));
+ assert.ok(!html.includes('smart-task-title'));
+});
+test('PLAN, multiple operations, long tasks, recovery and confirmation retain detailed Task',()=>{
+ for(const m of [
+  {...simpleSuccess,taskMode:'plan'},
+  {...simpleSuccess,tasks:[{status:'done',steps:[{status:'done'}]}]},
+  {...simpleSuccess,commands:[...simpleSuccess.commands,...simpleSuccess.commands]},
+  {...simpleSuccess,taskElapsedMs:30000},
+  {...simpleSuccess,confirmTaskId:'confirmation'},
+  {...simpleSuccess,planReview:{revision:1}},
+  {...simpleSuccess,taskReceipt:{task_status:'completed',goal_completed:true,answer_source:'pipeline_step_report'}},
+  {...simpleSuccess,commands:[{tool_name:'execute_cmd',status:'failed'},...simpleSuccess.commands]},
+ ])assert.equal(task(m).compact,false);
+ for(const status of ['partial','blocked','failed','unknown','running']){
+  const m={...simpleSuccess,taskStatus:status,taskReceipt:{task_status:status}};
+  assert.equal(task(m).status,status);assert.equal(task(m).compact,false);
+ }
+});
+test('completion needs structured evidence, no inference from model prose',()=>{
+ const command={tool_name:'app.open_url',step_id:'step_1',status:'success',result:{status:'opened_verified'}};
+ const terminal={tool_name:'answer.text',status:'terminal',result:{answer_type:'grounded_report',basis:['step_1'],self_check:{has_sufficient_evidence:true}}};
+ assert.equal(task({taskStatus:'done',taskElapsedMs:2000,commands:[command,terminal]}).compact,true);
+ for(const result of [{answer_type:'grounded_report'}, {...terminal.result,basis:['old_step']}, {...terminal.result,self_check:{has_sufficient_evidence:false}}])assert.equal(task({taskStatus:'done',content:'Выполнено',commands:[command,{...terminal,result}]}).status,'unknown');
+});
+
+test('a stale terminal or unknown duration cannot compact a later/unmeasured operation',()=>{
+ const action={tool_name:'app.open_url',step_id:'step_1',status:'success'};
+ const terminal={tool_name:'answer.text',status:'terminal',result:{answer_type:'grounded_report',basis:['step_1'],self_check:{has_sufficient_evidence:true}}};
+ assert.equal(task({taskStatus:'done',taskElapsedMs:1000,commands:[action,terminal,{tool_name:'execute_cmd',status:'failed'}]}).status,'failed');
+ assert.equal(task({...simpleSuccess,taskElapsedMs:undefined}).compact,false);
+});
+
+test('conversation without operations stays text, but an explicit negative result is never hidden',()=>{
+ const m={taskStatus:'done',taskMode:'conversation',content:'Привет',commands:[]};
+ assert.deepEqual(blocks(m).map(b=>b.type),['text']);
+ for(const status of ['failed','partial','blocked','unknown']) assert.equal(task({...m,taskStatus:status}).status,status);
+ assert.equal(task({...m,loading:true}).status,'running');
 });
