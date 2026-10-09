@@ -495,7 +495,15 @@ async def api_get_task(task_id: str, request: Request):
             pass
 
     presentation = task.get("history_metadata") or message_task_metadata(task)
+    try:
+        from ..response_presentation import worker_presentation, normalized_worker_report
+    except ImportError:
+        from response_presentation import worker_presentation, normalized_worker_report
+    report = normalized_worker_report(task,task.get("worker_report")) if task.get("worker_id") else task.get("worker_report")
+    human = worker_presentation(task,report) if task.get("worker_id") else {
+        "conversational_response":task.get("answer"),"execution_details":task.get("execution_details") or ""}
     response_task = {
+        **human,
         "task_id": task["task_id"],
         "chat_id": task["chat_id"],
         "message": task["message"],
@@ -506,9 +514,9 @@ async def api_get_task(task_id: str, request: Request):
         "tasks": task.get("tasks", []),
         "task_receipt": task.get("task_receipt"),
         "worker_id":task.get("worker_id"),
-        "worker_report":task.get("worker_report") or (build_worker_report(task) if task.get("worker_id") else None),
+        "worker_report":report,
         "kind":task.get("kind"),
-        "presentation_status": task["status"] if task["status"] in {"error", "failed", "blocked", "cancelled"} else presentation.get("taskStatus"),
+        "presentation_status": report["status"] if task.get("worker_id") else task["status"] if task["status"] in {"error", "failed", "blocked", "cancelled"} else presentation.get("taskStatus"),
         "task_mode": presentation["taskMode"],
         "elapsed_ms": presentation["taskElapsedMs"],
         "diagnostic_trace": task.get("diagnostic_trace", []),

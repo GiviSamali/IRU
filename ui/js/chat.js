@@ -417,7 +417,8 @@ function renderSmartTaskDetails(block, message, mi) {
   const m = { ...message, tasks:detailTasks, commands:block.commands };
   const liveTasksHTML = detailTasks.length ? renderTaskBlock(detailTasks, block.commands, m._taskId || `msg-${mi}`) : '';
   const status = block.loading ? `<div class="live-status"><span class="live-text">${escapeHTML(normalizeTaskStatusLabel(m.currentStatus || 'thinking'))}</span></div>` : '';
-  return status + liveTasksHTML + renderUsedToolsLine(block.commands) + renderCommandJournal(m, mi);
+  const report = block.executionDetails ? `<div class="smart-execution-report"><div class="smart-task-summary">Подробности выполнения</div><div class="smart-text-content">${escapeHTML(block.executionDetails)}</div></div>` : '';
+  return status + liveTasksHTML + report + renderUsedToolsLine(block.commands) + renderCommandJournal(m, mi);
 }
 
 function renderCommandJournal(m, mi) {
@@ -919,7 +920,7 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
         else setTimeout(poll,800);
         return;
       }
-      const smartTaskMetadata = { taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind };
+      const smartTaskMetadata = { taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind,conversationalResponse:task.conversational_response,executionDetails:task.execution_details };
       const pendingTask = state.pendingTasks.find(t => t.task_id === taskId);
       if (pendingTask && task.kind) pendingTask.kind=task.kind;
       if (pendingTask && String(task.status || '').trim().toLowerCase() === 'cancelling') {
@@ -961,7 +962,7 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
         const msg = {
           role: 'assistant',
           ...smartTaskMetadata,
-          content: task.answer || fallbackAnswer,
+          content: task.conversational_response || task.answer || fallbackAnswer,
           commands: task.commands,
           tasks: task.tasks || [],
         };

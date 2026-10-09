@@ -493,13 +493,14 @@ def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
         "taskMode": "plan" if (task.get("modes") or {}).get("pipeline") or (saved_receipt or {}).get("answer_source") == "pipeline_step_report" else "conversation" if task.get("device_ids") == [] else "ordinary",
         "taskElapsedMs": elapsed, "workerReport": task.get("worker_report"), "taskKind":task.get("kind"),
         "planSuggestion":task.get("plan_suggestion"),"planOriginalRequest":task.get("plan_original_request"),
+        "conversationalResponse":task.get("conversational_response"),"executionDetails":task.get("execution_details"),
     }
 
 
 def _message_metadata(value) -> dict:
     if not isinstance(value, dict):
         return {}
-    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs", "workerReport", "taskKind", "planSuggestion", "planOriginalRequest")
+    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs", "workerReport", "taskKind", "planSuggestion", "planOriginalRequest", "conversationalResponse", "executionDetails")
     return {key: value[key] for key in allowed if key in value}
 
 

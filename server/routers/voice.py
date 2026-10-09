@@ -37,7 +37,15 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
     except ImportError:
         from window_policy import silent_window_success
         from browser_policy import silent_browser_success
-    if silent_window_success(task) or silent_browser_success(task):
+    normalized = None
+    if task.get("worker_id"):
+        try:
+            from ..response_presentation import normalized_worker_report
+        except ImportError:
+            from response_presentation import normalized_worker_report
+        normalized = normalized_worker_report(task,task.get("worker_report"))
+    silence_task = {**task,"status":"done"} if normalized and normalized["status"]=="success" else task
+    if (normalized is None or normalized["status"]=="success") and (silent_window_success(silence_task) or silent_browser_success(silence_task)):
         return Response(status_code=204)
     review = task.get("plan_review") if task.get("status") == "confirm" else None
     pending = task.get("confirm_data") or {}
@@ -53,7 +61,14 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
     offer_text = "Задача требует нескольких шагов. Предлагаю режим План: составлю план, выполню его и доложу результат. Запустить?"
     if plan_offer and not _is_admin(user) and get_user_plan(user["id"]) == "free" and get_plan_trial_used(user["id"]):
         offer_text = "Пробный запуск режима План уже использован. Для этого режима нужен тариф Про."
-    parts = voice.answer_parts(ordinary["speech"] if ordinary else review["speech"] if review else offer_text if plan_offer else task.get("answer") or "", keep_inline=True)
+    human_answer = task.get("answer") or ""
+    if task.get("worker_id") and not plan_offer and not review and not ordinary:
+        try:
+            from ..response_presentation import worker_presentation
+        except ImportError:
+            from response_presentation import worker_presentation
+        human_answer = worker_presentation(task,task.get("worker_report"))["conversational_response"]
+    parts = voice.answer_parts(ordinary["speech"] if ordinary else review["speech"] if review else offer_text if plan_offer else human_answer, keep_inline=True)
     if not parts:
         return Response(status_code=204)
     if not voice.speech_configured():

@@ -163,3 +163,8 @@
 .smart-task.compact-result .smart-task-details { display: none; }
 .smart-task.compact-result.expanded .smart-task-details { display: block; margin-top: 8px; }
 .smart-task[data-status="unknown"] .smart-status { color: var(--warning); }
+
+/* DIALOG: a raw execution report stays expandable at every container width. */
+.smart-task.with-execution-report .smart-task-toggle { display: inline-flex; }
+.smart-task.with-execution-report:not(.expanded) .smart-task-details { display: none; }
+.smart-task.with-execution-report.expanded .smart-task-details { display: block; }

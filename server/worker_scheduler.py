@@ -9,11 +9,13 @@ try:
     from .runtime_state import tasks, mark_task_cancelled, request_task_cancel
     from .api_support import ADMIN_USER_ID
     from .worker_reports import build_worker_report, TERMINAL
+    from .response_presentation import worker_presentation
 except ImportError:
     import database as db
     from runtime_state import tasks, mark_task_cancelled, request_task_cancel
     from api_support import ADMIN_USER_ID
     from worker_reports import build_worker_report, TERMINAL
+    from response_presentation import worker_presentation
 
 MAX_QUEUED = 4
 ACTIVE_STATES = ("running", "waiting_confirmation")
@@ -55,24 +57,26 @@ def restore_task(job):
             metadata=json.loads(row["task_metadata"] or "{}")
             payload["tasks"]=metadata.get("tasks") or [];payload["task_receipt"]=metadata.get("taskReceipt")
             payload["history_metadata"]=metadata
+            if metadata.get("conversationalResponse") is not None:
+                payload["conversational_response"]=metadata["conversationalResponse"]
+                payload["execution_details"]=metadata.get("executionDetails") or ""
+                payload["answer"]=payload["execution_details"] or row["content"]
     return payload
 
 
 def persist_report(task):
     report=build_worker_report(task);task["worker_report"]=report
+    task.update(worker_presentation(task,report))
     presentation={**task,"status":report["status"],"worker_report":report}
     metadata=db.message_task_metadata(presentation, task_id=task["task_id"])
     task["history_metadata"]=metadata
-    # Read-only projection prevents success prose from being presented for unknown/failure.
-    if report["status"] != "success" and not task.get("plan_suggestion") and task.get("commands"):
-        task["answer"]=report["summary"]
     message_id=task.get("history_message_id")
     if message_id:
         with db.get_db() as c:
-            c.execute("UPDATE messages SET content=?,task_metadata=? WHERE id=? AND chat_id=? AND role='assistant'",
-                (task.get("answer") or report["summary"],json.dumps(metadata,ensure_ascii=False),message_id,task["chat_id"]))
+            c.execute("UPDATE messages SET content=?,commands=?,task_metadata=? WHERE id=? AND chat_id=? AND role='assistant'",
+                (task["conversational_response"],json.dumps(task.get("commands") or [],ensure_ascii=False),json.dumps(metadata,ensure_ascii=False),message_id,task["chat_id"]))
     else:
-        saved=db.add_message(task["chat_id"],"assistant",task.get("answer") or report["summary"],task.get("commands") or [],task_metadata=metadata)
+        saved=db.add_message(task["chat_id"],"assistant",task["conversational_response"],task.get("commands") or [],task_metadata=metadata)
         message_id=saved["id"];task["history_message_id"]=message_id
     with db.get_db() as c:
         c.execute("UPDATE worker_jobs SET state=?,report=?,message_id=?,updated_at=? WHERE task_id=? AND owner_user_id=?",

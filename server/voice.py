@@ -97,6 +97,14 @@ async def shorten_answer(task: dict) -> str:
 
 async def spoken_parts(task: dict) -> list[str]:
     """Cache only speech text on the owned task; never modify its chat answer."""
+    if task.get("worker_id"):
+        try:
+            from .response_presentation import worker_presentation
+        except ImportError:
+            from response_presentation import worker_presentation
+        return answer_parts(worker_presentation(task,task.get("worker_report"))["conversational_response"], keep_inline=True)
+    if task.get("kind") == "orchestrator":
+        return answer_parts(task.get("answer") or "", keep_inline=True)
     source = (task.get("answer") or "", task.get("message") or "", task.get("status"))
     cached = task.get("_voice_brief")
     if cached and cached["source"] == source:

@@ -78,8 +78,9 @@ const IRUSmartUI = (() => {
     if (states.includes('cancelled')) return 'cancelled';
     if (states.includes('failed')) return 'failed';
     if (states.includes('blocked')) return 'blocked';
-    if (states.includes('partial') || receipt.goal_completed === false) return 'partial';
+    if (states.includes('partial')) return 'partial';
     if (states.includes('unknown')) return 'unknown';
+    if (receipt.goal_completed === false) return 'partial';
     if (report?.status === 'queued' || message.taskStatus === 'queued') return 'waiting';
     if (message.cancelRequested || message.loading || states.includes('running')) return 'running';
     if (message.confirmTaskId || message.planReview || states.includes('waiting')) return 'waiting';
@@ -143,16 +144,17 @@ const IRUSmartUI = (() => {
       try { return encodeURIComponent(String(value)); } catch { return String(fallback); }
     };
     const id = `smart-${encodeId(chatId,'')}-${encodeId(m._taskId ?? m.id ?? index,index)}`;
-    const blocks = [], content = text(m.content) || text(m.text);
+    const blocks = [], content = text(m.conversationalResponse) || text(m.conversational_response) || text(m.content) || text(m.text);
+    const executionDetails = text(m.executionDetails) || text(m.execution_details);
     if (content) blocks.push({ type:'text', text:content, key:id+'-text', long:content.length > 200 || content.split('\n').length > 4 });
     if (m.role === 'user') return { key:id, blocks };
     const tasks = list(m.loading ? m.liveTasks || m.tasks : m.tasks);
     const commands = list(m.loading ? m.liveCommands || m.commands : m.commands);
     const operations = commands.filter(command => !key(command.tool_name || command.action).startsWith('answer'));
     const conversationNegative = [m.taskStatus, (m.taskReceipt || m.task_receipt || {}).task_status, m.overallStatus].some(value => ['failed','blocked','partial','unknown','cancelled'].includes(normalizeStatus(value)));
-    const pureConversation = !m.loading && !m.confirmTaskId && !m.planReview && !conversationNegative && !tasks.length && !operations.length
+    const pureConversation = !executionDetails && !m.loading && !m.confirmTaskId && !m.planReview && !conversationNegative && !tasks.length && !operations.length
       && (key(lastTerminal(commands)?.result?.answer_type) === 'pure_text' || (m.taskMode === 'conversation' && normalizeStatus(m.taskStatus) === 'success'));
-    const hasTask = !pureConversation && (tasks.length || operations.length || m.loading || m.taskStatus || m.taskReceipt || m.task_receipt || m.confirmTaskId || m.planReview);
+    const hasTask = !pureConversation && (tasks.length || operations.length || m.loading || m.taskStatus || m.taskReceipt || m.task_receipt || m.confirmTaskId || m.planReview || executionDetails);
     if (hasTask) {
       const status = taskState(m, tasks, commands);
       const receipt = m.taskReceipt || m.task_receipt || {};
@@ -163,10 +165,22 @@ const IRUSmartUI = (() => {
       blocks.push({ type:'task', key:id+'-task', status, label:LABELS[status], compact:!detailed,
         title:text(m.taskTitle) || text(tasks[0]?.goal) || 'Выполнение запроса',
         summary: receipt.goal_completed === false ? 'Исходная цель не завершена.' : '',
-        tasks, commands, loading:Boolean(m.loading), currentStatus:m.currentStatus,
+        tasks, commands, executionDetails, loading:Boolean(m.loading), currentStatus:m.currentStatus,
         unknown: status === 'unknown' });
     }
-    blocks.push(...filesFromCommands(commands).map((file, i) => ({ ...file, key:id+'-file-'+i })));
+    const files=filesFromCommands(commands);
+    const report=m.workerReport || m.worker_report;
+    if(report?.schema_version===1 && Array.isArray(report.artifacts) && Array.isArray(report.target_device_ids)) {
+      for(const artifact of report.artifacts) {
+        if(!artifact || artifact.verified!==true || !report.target_device_ids.includes(artifact.device_id))continue;
+        const path=text(artifact.path), device=text(artifact.device_id), name=path.split(/[\\/]/).pop();
+        if(!path || !device || !name || /[\x00-\x1f]/.test(path+device))continue;
+        try {encodeURIComponent(path);encodeURIComponent(device);} catch {continue;}
+        if(!files.some(file=>file.path===path && file.device===device))files.push({type:'file',path,device,name,
+          extension:name.includes('.')?name.split('.').pop().toLowerCase():'',size:null});
+      }
+    }
+    blocks.push(...files.map((file,i)=>({...file,key:id+'-file-'+i})));
     if (m.confirmTaskId || m.planReview || (m.suggestedFact?.text && !m.suggestedFactDeclined)
       || (m.planSuggestion && !m.planDismissed && !m.planDeclined) || m.cancelAvailable) {
       blocks.push({ type:'action', key:id+'-action', index, critical:Boolean(m.confirmTaskId), message:m });
@@ -183,13 +197,14 @@ const IRUSmartUI = (() => {
     },
     task(block, context) {
       const open = expanded(block, context), details = context.taskDetails ? context.taskDetails(block) : '';
+      const reportClass = block.executionDetails ? ' with-execution-report' : '';
       const summary = block.unknown ? 'Результат цели не подтверждён.' : block.summary;
       if (block.compact) {
-        return `<section class="smart-block smart-task compact-result${open ? ' expanded' : ''}" data-block-type="task" data-status="${block.status}" data-smart-key="${esc(block.key)}" aria-label="Итог задачи">
+        return `<section class="smart-block smart-task compact-result${reportClass}${open ? ' expanded' : ''}" data-block-type="task" data-status="${block.status}" data-smart-key="${esc(block.key)}" aria-label="Итог задачи">
           <div class="smart-task-heading"><span class="smart-status">✓ ${esc(block.label)}</span>${details ? `<button type="button" class="smart-task-toggle" data-action="toggle-smart-details" aria-expanded="${open}" aria-controls="${esc(block.key)}">${open ? 'Свернуть подробности' : 'Подробности'}</button>` : ''}</div>
           ${details ? `<div class="smart-task-details" id="${esc(block.key)}">${details}</div>` : ''}</section>`;
       }
-      return `<section class="smart-block smart-task${open ? ' expanded' : ''}" data-block-type="task" data-status="${block.status}" data-smart-key="${esc(block.key)}" aria-label="Состояние задачи">
+      return `<section class="smart-block smart-task${reportClass}${open ? ' expanded' : ''}" data-block-type="task" data-status="${block.status}" data-smart-key="${esc(block.key)}" aria-label="Состояние задачи">
         <div class="smart-task-heading"><span class="smart-task-title">${esc(block.title)}</span><span class="smart-status">${esc(block.label)}</span></div>
         ${summary ? `<p class="smart-task-summary">${esc(summary)}</p>` : ''}
         ${details ? `<button type="button" class="smart-task-toggle" data-action="toggle-smart-details" aria-expanded="${open}" aria-controls="${esc(block.key)}">${open ? 'Свернуть подробности' : 'Ход выполнения'}</button><div class="smart-task-details" id="${esc(block.key)}">${details}</div>` : ''}

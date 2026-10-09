@@ -150,3 +150,29 @@ test('conversation without operations stays text, but an explicit negative resul
  for(const status of ['failed','partial','blocked','unknown']) assert.equal(task({...m,taskStatus:status}).status,status);
  assert.equal(task({...m,loading:true}).status,'running');
 });
+
+
+test('DIALOG conversational text and raw execution details remain separate without a fifth block',()=>{
+ const raw='10 slide structures. C:\\private\\build.py <script>bad()</script>';
+ const m={content:raw,conversationalResponse:'Презентация готова.',executionDetails:raw,taskStatus:'success',
+  taskReceipt:{task_status:'completed',goal_completed:true,final_verification_status:'verified'},taskElapsedMs:1000,
+  commands:[{tool_name:'write_content',status:'success',device_id:'pc',result:{path:'C:\\Desktop\\result.pptx',bytes_written:500}}]};
+ const view=ui.adapt({role:'assistant',...m});
+ assert.equal(view.blocks.find(b=>b.type==='text').text,'Презентация готова.');
+ assert.equal(view.blocks.find(b=>b.type==='task').executionDetails,raw);
+ assert.equal(view.blocks.find(b=>b.type==='task').compact,true);
+ assert.deepEqual(Object.keys(ui.REGISTRY),['text','task','file','action']);
+ for(const status of ['unknown','partial','failed','blocked']){
+  const state=task({...m,taskStatus:status,taskReceipt:{task_status:status,goal_completed:false}});
+  assert.equal(state.status,status);assert.equal(state.compact,false);
+ }
+});
+
+test('DIALOG file cards accept verified owned Worker artifacts, never report prose or invented download URLs',()=>{
+ const report={schema_version:1,target_device_ids:['pc'],artifacts:[{path:'C:\\Desktop\\result.pptx',device_id:'pc',verified:true}]};
+ const good=blocks({content:'Result',workerReport:report}).filter(b=>b.type==='file');
+ assert.equal(good.length,1);assert.equal(good[0].name,'result.pptx');
+ for(const artifact of [{path:report.artifacts[0].path,device_id:'other',verified:true},{path:report.artifacts[0].path,device_id:'pc',verified:false},{path:'',device_id:'pc',verified:true}])
+  assert.equal(blocks({workerReport:{...report,artifacts:[artifact]}}).filter(b=>b.type==='file').length,0);
+ assert.equal(blocks({content:'Presentation ready at C:\\Desktop\\fake.pptx'}).filter(b=>b.type==='file').length,0);
+});

@@ -202,7 +202,7 @@ def test_real_intake_delegation_conversation_status_and_ownership(owners,monkeyp
         assert result['answer']=='Independent answer' and not result['worker_task_id'] and len(executed)==1
         choice=orch.Decision(intent='task_status',task_id=worker['task_id'],reference='explicit')
         result=await routes.nl_command(routes.NLCommand(orchestrate=True,request_id='status',chat_id=a['chat_id'],message='status'),request)
-        assert 'выполняется' in result['answer'] and len(executed)==1
+        assert result['answer']=='Работа ещё идёт.' and len(executed)==1
         choice=orch.Decision(intent='delegate',objective='unsafe scope',target_device_ids=[str(b['id'])+':pc'])
         result=await routes.nl_command(routes.NLCommand(orchestrate=True,request_id='foreign',chat_id=a['chat_id'],message='foreign target'),request)
         assert not result['worker_task_id'] and len(executed)==1
@@ -374,7 +374,8 @@ def test_conversation_status_and_retry_do_not_consume_exhausted_command_quota(ow
         assert one==two and one['answer']=='Как дела? Хорошо.' and len(decisions)==1 and used_commands(a)==30
         selected=orch.Decision(intent='task_status',task_id=job['task_id'],reference='explicit')
         answer=await routes.nl_command(routes.NLCommand(orchestrate=True,request_id='status-free',message='Что мы делали?',chat_id=a['chat_id']),request)
-        assert 'подтверждённым' in answer['answer'] and used_commands(a)==30
+        assert answer['answer']=='Файл готов.' and used_commands(a)==30
+        assert owned_job(job['task_id'],a['id'])['state']=='success'
         selected=orch.Decision(intent='delegate',objective='Посмотри файлы',target_device_ids=['pc'])
         rejected=await routes.nl_command(routes.NLCommand(orchestrate=True,request_id='over-quota',message='Посмотри файлы',chat_id=a['chat_id']),request)
         assert rejected['worker_task_id'] is None and 'Дневной лимит' in rejected['answer'] and used_commands(a)==30

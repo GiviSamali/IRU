@@ -35,10 +35,20 @@ class Decision(BaseModel):
     task_id: str | None = Field(default=None, max_length=64)
     reference_quote: str = Field(default="",max_length=200)
     reference: Literal["explicit","unique","latest","active"] = "unique"
+    show_execution_details: bool = False
 
 
 TOOL = {"type":"function", "function":{"name":"orchestrator_decision", "description":"One bounded dialogue or routing decision; never executes a device action.", "parameters":Decision.model_json_schema()}}
 SYSTEM = """Ты ИРУ: единственный пользовательский Оркестратор. Веди краткий естественный разговор.
+Подача: обычные приветствия, вопросы и обсуждения — естественный разговор, без отчёта о конфигурации.
+Не перечисляй устройства, текущие задачи или ограничения, когда они не нужны для ответа.
+Не произноси Worker, scheduler, receipt, tool calls и другие внутренние термины, если пользователь не спрашивает о них.
+Не заканчивай каждую реплику предложением дать команду и не уточняй понятный смысл. Краткость зависит от ситуации:
+технический вопрос можно объяснить подробно; не ограничивай содержательный ответ шаблоном приветствия.
+Список устройств и сведения о подключении уместны по запросу. Наблюдаемое подключение можно назвать подключением,
+а предупреждение о непроверенном исполнении нужно только при обсуждении исполнения, не при «привет, проверка связи».
+При просьбе показать полный отчёт выполнения выбирай task_status с show_execution_details=true;
+при обычном вопросе о статусе — false. Это только представление уже имеющегося результата, не новое поручение.
 Верни ровно один orchestrator_decision. conversation/clarify отвечают без Worker; delegate только для конкретного поручения пользователя.
 task_status получает реальный отчёт по task_id; cancel только для осознанной отмены конкретной задачи. Стоп озвучки/усни не означают отмену Worker.
 Если ссылка/устройство неоднозначны, clarify. Не меняй работающий Worker: объясни ограничение и предложи отменить его явно или поставить новое поручение в очередь.
@@ -154,10 +164,10 @@ async def run_turn(cmd, user, chat_id, delegate):
                 if cmd.broadcast:chosen=list(eligible)
                 if not chosen or any(d not in eligible for d in chosen):raise ValueError("target_device_required")
                 task.update(plan_suggestion="selected_plan",plan_original_request=cmd.message,proposed_objective=choice.objective,device_ids=chosen,orchestrated=True,broadcast=cmd.broadcast)
-                answer="Предлагаю запустить режим План через подтверждение в чате."
+                answer="Предлагаю составить план. Запустить?"
             else:
                 worker=await delegate(choice,request_key="turn:"+key)
-                answer="Поручение добавлено в очередь. Оно начнётся после текущей задачи." if worker["status"]=="queued" else "Поручение принято. Обработка началась."
+                answer="Записала поручение. Начну, когда закончу текущее." if worker["status"]=="queued" else "Хорошо, займусь."
         elif choice.intent in {"task_status","cancel"}:
             jobs=routing_context["tasks"]
             if choice.reference=="latest" and jobs and not choice.task_id:choice.task_id=jobs[0]["task_id"]
@@ -177,12 +187,23 @@ async def run_turn(cmd, user, chat_id, delegate):
                     result=await scheduler.cancel(choice.task_id,owner)
                     answer="Ожидающая задача отменена." if result["status"]=="cancelled" else "Отмена запрошена для выбранной задачи. Текущий инструмент может завершиться с задержкой."
             else:
-                live=tasks.get(choice.task_id)
-                report=(live or {}).get("worker_report") or (json.loads(job["report"]) if job.get("report") else None)
-                state="waiting_confirmation" if (live or {}).get("status")=="confirm" else job["state"]
-                answer=(report or {}).get("summary") or {"queued":"Задача ожидает освобождения Worker.","waiting_confirmation":"Задача ожидает вашего подтверждения."}.get(state,"Задача выполняется.")
-                if not report and (live or {}).get("current_step"):answer+="\n"+str(live["current_step"])[:400]
-                if report and report.get("artifacts"):answer+="\n"+"\n".join(a["name"]+" — "+a["device_id"] for a in report["artifacts"][:4])
+                source=tasks.get(choice.task_id) or restore_task(job)
+                try:
+                    from .response_presentation import worker_presentation, normalized_worker_report
+                except ImportError:
+                    from response_presentation import worker_presentation, normalized_worker_report
+                view=worker_presentation(source,source.get("worker_report"))
+                answer=view["conversational_response"]
+                if choice.show_execution_details:
+                    answer="Подробности выполнения — ниже. "+answer
+                    source_report=normalized_worker_report(source,source.get("worker_report"))
+                    details=view["execution_details"] or source.get("answer") or ""
+                    details+="\n\nЭтапы и результаты:\n"+json.dumps({"steps":source.get("tasks") or [],
+                        "tools":source.get("commands") or [],"receipt":source.get("task_receipt"),
+                        "worker_report":source_report},ensure_ascii=False,indent=2)
+                    task.update(execution_details=details,
+                        worker_report=source_report,task_receipt=source.get("task_receipt"),
+                        current_step=source.get("message"),execution_source_task_id=choice.task_id)
         else:
             answer=choice.answer.strip()
             if not answer:raise ValueError("missing_answer")
@@ -225,4 +246,6 @@ def restore_dialogue(task_id, owner):
     return {"task_id":task_id,"user_id":owner,"chat_id":row["chat_id"],"message":"Диалог", "device_ids":[],
         "status":metadata.get("taskStatus") or "unknown", "created_at":row["created_at"],"results":{},
         "answer":row["content"],"commands":json.loads(row["commands"] or "[]"),"tasks":[],"kind":"orchestrator",
-        "history_metadata":metadata,"plan_suggestion":metadata.get("planSuggestion"),"plan_original_request":metadata.get("planOriginalRequest")}
+        "history_metadata":metadata,"execution_details":metadata.get("executionDetails") or "",
+        "worker_report":metadata.get("workerReport"),"task_receipt":metadata.get("taskReceipt"),
+        "current_step":metadata.get("taskTitle"),"plan_suggestion":metadata.get("planSuggestion"),"plan_original_request":metadata.get("planOriginalRequest")}

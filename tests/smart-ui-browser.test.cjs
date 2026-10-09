@@ -411,3 +411,38 @@ for (const android of [false,true]) {
   } finally { await page.close(); }
  });
 }
+
+
+for(const width of [400,1280]){
+ test(`DIALOG one concise result with preserved expandable report after chat switch/history: ${width}`,async()=>{
+  const page=await open(width,700);try{
+   const raw='Слайды 1–10, скрипт и проверки. '+('Технические подробности. '.repeat(60))+'<img src=x onerror="window.dialogInjected=true">';
+   const message={role:'assistant',_taskId:'dialog-worker',taskKind:'worker',taskStatus:'success',taskMode:'plan',
+    content:'Презентация готова. Файл на рабочем столе.',conversationalResponse:'Презентация готова. Файл на рабочем столе.',executionDetails:raw,
+    taskReceipt:{task_status:'completed',goal_completed:true,final_verification_status:'verified'},commands:[],tasks:[],
+    workerReport:{schema_version:1,status:'success',target_device_ids:['Second'],artifacts:[{path:'C:\\Users\\Demo\\Desktop\\result.pptx',device_id:'Second',verified:true}]}};
+   await seed(page,[message]);
+   assert.equal(await page.locator('.smart-text > .smart-text-content').textContent(),message.content);
+   const report=page.locator('.smart-execution-report');assert.equal(await report.isVisible(),false);
+   await page.locator('.smart-task-toggle').click();assert.equal(await report.isVisible(),true);
+   assert.equal(await report.locator('.smart-text-content').textContent(),raw);
+   assert.equal(await report.locator('img').count(),0);assert.equal(await page.evaluate(()=>window.dialogInjected),undefined);
+   assert.equal(await page.locator('.smart-file').count(),1);
+   await page.route('**/api/chats/1/messages',route=>route.fulfill({json:{messages:[message]}}));
+   await page.route('**/api/chats/2/messages',route=>route.fulfill({json:{messages:[{role:'assistant',content:'Другой чат'}]}}));
+   await page.evaluate(()=>openChat(2));assert.equal(await page.locator('.smart-execution-report').count(),0);
+   await page.evaluate(()=>openChat(1));assert.equal(await page.locator('.smart-text > .smart-text-content').textContent(),message.content);
+   assert.equal(await page.locator('.smart-execution-report .smart-text-content').textContent(),raw);
+   assert.equal(await page.locator('.smart-file').count(),1);
+   await page.reload({waitUntil:'networkidle'});await page.locator('#appRoot.active').waitFor();
+   assert.equal(await page.locator('.smart-text > .smart-text-content').textContent(),message.content);
+   assert.equal(await page.locator('.smart-execution-report .smart-text-content').textContent(),raw);
+   assert.equal(await page.locator('.smart-file').count(),1);
+   for(const status of ['partial','blocked','unknown','failed']){
+    await seed(page,[{...message,taskStatus:status,workerReport:{...message.workerReport,status},taskReceipt:{task_status:status,goal_completed:false},content:'Не получилось завершить задачу.',conversationalResponse:'Не получилось завершить задачу.'}]);
+    assert.equal(await page.locator('.smart-task').getAttribute('data-status'),status);
+   }
+   assert.deepEqual(page.errors,[]);
+  }finally{await page.close();}
+ });
+}
