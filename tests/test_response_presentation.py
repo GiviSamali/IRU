@@ -126,7 +126,7 @@ def test_tts_uses_same_worker_summary_without_summary_llm(owner,monkeypatch):
     assert asyncio.run(voice.spoken_parts(task))==[expected]
     assert task['answer'].startswith('Все 10 слайдов.')
     dialogue={'kind':'orchestrator','answer':'Подробное техническое объяснение. '*40,'message':'Объясни подробнее','status':'done'}
-    assert asyncio.run(voice.spoken_parts(dialogue))==['Не удалось подготовить краткую озвучку. Полный ответ доступен в чате.']
+    assert asyncio.run(voice.spoken_parts(dialogue))==['Коротко пересказать сейчас не получилось. Полный ответ оставила в чате.']
 
 
 @pytest.mark.parametrize('question,answer',[('Привет','Привет! Я на связи.'),('Как дела?','Всё хорошо, я на связи.'),('Какие устройства подключены?','Сейчас подключён pc.')])

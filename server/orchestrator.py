@@ -1,5 +1,7 @@
 """A bounded dialogue/routing call. No device-execution tools are exposed here."""
 import json
+import logging
+import traceback
 import re
 import time
 import uuid
@@ -8,7 +10,7 @@ from datetime import datetime,timezone,timedelta
 from typing import Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 try:
     from . import database as db
@@ -35,6 +37,14 @@ class Decision(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     intent: Literal["conversation","delegate","task_status","cancel","clarify"]
     answer: str = Field(default="", max_length=2000)
+    spoken_response: str = Field(default="", max_length=420)
+
+    @field_validator("spoken_response", mode="before")
+    @classmethod
+    def optional_speech(cls, value):
+        # A malformed optional projection must not lose a valid answer/routing decision.
+        return value.strip() if isinstance(value,str) and len(value.strip())<=420 else ""
+
     highlights: list[HighlightRange] = Field(default_factory=list, max_length=5)
     scope: Literal["device","server"] = "device"
     objective: str = Field(default="", max_length=2000)
@@ -50,6 +60,15 @@ class Decision(BaseModel):
 
 TOOL = {"type":"function", "function":{"name":"orchestrator_decision", "description":"One bounded dialogue or routing decision; never executes a device action.", "parameters":Decision.model_json_schema()}}
 SYSTEM = """Ты ИРУ: единственный пользовательский Оркестратор. Веди краткий естественный разговор.
+Для conversation/clarify сформируй также spoken_response в этом же decision: отдельную устную реплику
+к текущей реплике человека и истории разговора. answer остаётся полноценным письменным ответом.
+Говори по-русски, понятно, короткими полноценными предложениями. Для простого вопроса достаточно пары слов;
+420 символов — предел, не цель заполнения. Не пересказывай экран, не читай списки, не повторяй обязательно начало answer.
+Устная реплика должна сохранять смысл, важные значения, ограничения и вопрос уточнения из answer, без новых фактов.
+Не придумывай выполненные действия, события, устройства, эмоции или биографию. Не добавляй автоматически
+«ну», «ага», «слушай», «сэр», «Чем ещё могу помочь?» или «Поручение принято». Связки уместны только по контексту.
+Не используй Markdown, кодовые блоки, URL и длинные перечисления в spoken_response.
+Для delegate/task_status/cancel не формируй собственный голосовой итог: его определит сервер по реальному результату.
 Подача: обычные приветствия, вопросы и обсуждения — естественный разговор, без отчёта о конфигурации.
 Не перечисляй устройства, текущие задачи или ограничения, когда они не нужны для ответа.
 Не произноси Worker, scheduler, receipt, tool calls и другие внутренние термины, если пользователь не спрашивает о них.
@@ -141,20 +160,51 @@ def context_for(user_id, chat_id, message, selected):
     return result
 
 
-async def decide(message, context, *, user_id, chat_id, task_id):
-    cfg=load_llm_config();started=time.monotonic()
-    async with httpx.AsyncClient(timeout=httpx.Timeout(60,connect=10)) as client:
-        data=await _chat_completion_request(client,cfg,cfg["model"],
-            [{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps({"untrusted_context":context},ensure_ascii=False)},
-             {"role":"user","content":message}],tools=[TOOL],tool_choice="required",max_tokens=1200,
-            usage_context={"user_id":user_id,"chat_id":chat_id,"poll_task_id":task_id,"route":"orchestrator","phase":"orchestrator","metadata":{"entity":"orchestrator","context_chars":len(json.dumps(context,ensure_ascii=False))}},phase="orchestrator")
-    item=data["choices"][0]
-    if item.get("finish_reason")=="length":raise ValueError("orchestrator_response_truncated")
-    calls=item["message"].get("tool_calls") or []
-    if len(calls)!=1 or calls[0].get("function",{}).get("name")!="orchestrator_decision":raise ValueError("invalid_orchestrator_decision")
-    decision=Decision.model_validate_json(calls[0]["function"].get("arguments") or "{}")
-    return decision,{"entity":"orchestrator","elapsed_ms":int((time.monotonic()-started)*1000),"llm_calls":1,"usage":data.get("usage") or {},"snapshot_calls":0}
 
+logger=logging.getLogger("iru.orchestrator")
+
+
+def _log_failure(task_id,stage,exc):
+    """Protected diagnostics: frame coordinates/types only, no message, inputs or locals."""
+    record={"task_id":task_id,"stage":stage,"error_type":type(exc).__name__,
+        "traceback":[{"file":f.filename.replace("\\","/").rsplit("/",1)[-1],"line":f.lineno,"function":f.name}
+                     for f in traceback.extract_tb(exc.__traceback__)]}
+    code=str(exc)
+    if code in {"invalid_orchestrator_decision","orchestrator_response_truncated","missing_objective","target_device_required","task_not_found","ambiguous_task_reference","missing_answer"}:record["error_code"]=code
+    shape=getattr(exc,"orchestrator_response_shape",None)
+    if isinstance(shape,dict):record["response_shape"]=shape
+    response=getattr(exc,"response",None)
+    if isinstance(getattr(response,"status_code",None),int):record["http_status"]=response.status_code
+    if hasattr(exc,"errors"):
+        safe=set(Decision.model_fields)|{"start","end","kind"}
+        record["validation_errors"]=[{"loc":[v if isinstance(v,int) or v in safe else "<extra>" for v in e["loc"]],"type":e["type"]}
+            for e in exc.errors(include_input=False,include_url=False)]
+    logger.error("orchestrator_failure %s",json.dumps(record,ensure_ascii=True))
+
+
+async def decide(message, context, *, user_id, chat_id, task_id):
+    stage="llm_config";shape=None
+    try:
+        cfg=load_llm_config();started=time.monotonic()
+        stage="llm_request"
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60,connect=10)) as client:
+            data=await _chat_completion_request(client,cfg,cfg["model"],
+                [{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps({"untrusted_context":context},ensure_ascii=False)},
+                 {"role":"user","content":message}],tools=[TOOL],tool_choice="required",max_tokens=1200,
+                usage_context={"user_id":user_id,"chat_id":chat_id,"poll_task_id":task_id,"route":"orchestrator","phase":"orchestrator","metadata":{"entity":"orchestrator","context_chars":len(json.dumps(context,ensure_ascii=False))}},phase="orchestrator")
+        stage="llm_response"
+        item=data["choices"][0]
+        if item.get("finish_reason")=="length":raise ValueError("orchestrator_response_truncated")
+        calls=item["message"].get("tool_calls") or []
+        shape={"tool_call_count":len(calls),"expected_function":len(calls)==1 and calls[0].get("function",{}).get("name")=="orchestrator_decision"}
+        if len(calls)!=1 or calls[0].get("function",{}).get("name")!="orchestrator_decision":raise ValueError("invalid_orchestrator_decision")
+        stage="decision_validation"
+        decision=Decision.model_validate_json(calls[0]["function"].get("arguments") or "{}")
+        return decision,{"entity":"orchestrator","elapsed_ms":int((time.monotonic()-started)*1000),"llm_calls":1,"usage":data.get("usage") or {},"snapshot_calls":0}
+    except Exception as exc:
+        exc.orchestrator_stage=stage
+        if shape is not None:exc.orchestrator_response_shape=shape
+        raise
 
 async def run_turn(cmd, user, chat_id, delegate):
     turn_started=time.monotonic()
@@ -176,10 +226,13 @@ async def run_turn(cmd, user, chat_id, delegate):
         c.execute("INSERT INTO orchestrator_turns VALUES(?,?,?,?,?,?,?,?)",(owner,key,fingerprint,tid,chat_id,message_id,None,now))
     task={"task_id":tid,"user_id":owner,"chat_id":chat_id,"message":cmd.message,"device_ids":[],"status":"running","created_at":now,"results":{},"kind":"orchestrator"}
     tasks[tid]=task;worker=None;stats={}
+    stage="context_for"
     try:
         routing_context=context_for(owner,chat_id,cmd.message,cmd.device_id)
+        stage="decide"
         choice,stats=await decide(cmd.message,routing_context,user_id=owner,chat_id=chat_id,task_id=tid)
         if choice.intent=="delegate":
+            stage="handoff"
             if not choice.objective.strip():raise ValueError("missing_objective")
             if cmd.modes.get("pipeline") or choice.execution_mode=="plan":
                 eligible=get_user_devices(owner)
@@ -192,6 +245,7 @@ async def run_turn(cmd, user, chat_id, delegate):
                 worker=await delegate(choice,request_key="turn:"+key)
                 answer="Записала поручение. Начну, когда закончу текущее." if worker["status"]=="queued" else "Хорошо, займусь."
         elif choice.intent in {"task_status","cancel"}:
+            stage="task_reference"
             jobs=routing_context["tasks"]
             if choice.reference=="latest" and jobs and not choice.task_id:choice.task_id=jobs[0]["task_id"]
             if choice.reference in {"unique","active"}:
@@ -230,11 +284,32 @@ async def run_turn(cmd, user, chat_id, delegate):
         else:
             answer=choice.answer.strip()
             if not answer:raise ValueError("missing_answer")
+        stage="presentation"
         if choice.intent in {"conversation", "clarify"} and answer == choice.answer:
             length = len(answer.encode("utf-16-le")) // 2
             task["highlights"] = [r.model_dump() for r in choice.highlights if r.start < r.end <= length]
+        task["dialogue_intent"]=choice.intent
+        try:
+            from .voice import wants_full_speech
+        except ImportError:
+            from voice import wants_full_speech
+        task["full_speech_requested"]=wants_full_speech(cmd.message)
+        if choice.intent in {"conversation", "clarify"}:
+            try:
+                from .voice import conversational_speech
+            except ImportError:
+                from voice import conversational_speech
+            speech=conversational_speech(choice.spoken_response, answer)
+            if speech:
+                task.update(dialogue_spoken_response=speech,dialogue_speech_answer=answer)
+        elif worker:
+            # Admission is observed; a model cannot turn it into completion.
+            task.update(dialogue_spoken_response="Сделаю следом." if worker["status"]=="queued" else "Хорошо, займусь.",dialogue_speech_answer=answer)
         task.update(status="done",answer=answer,commands=[{"tool_name":"answer.text","status":"terminal","result":{"answer_type":"pure_text","text":answer}}],tasks=[],orchestrator_metrics=stats)
     except Exception as exc:
+        failure_stage=getattr(exc,"orchestrator_stage",stage)
+        _log_failure(tid,failure_stage,exc)
+        task["orchestrator_error_stage"]=failure_stage
         error_message={"worker_queue_full":"Очередь заполнена: максимум четыре ожидающих поручения. Новая задача не принята.",
             "daily_command_limit_exceeded":"Дневной лимит исполнительных задач исчерпан. Общение и просмотр статуса остаются доступны.",
             "ambiguous_task_reference":"Уточните, о какой задаче идёт речь. Действие не выполнено."}.get(str(exc),"Не удалось обработать реплику безопасно. Уточните поручение, устройство или ID задачи; новое выполнение не начато.")
@@ -274,6 +349,8 @@ def restore_dialogue(task_id, owner):
         "status":metadata.get("taskStatus") or "unknown", "created_at":row["created_at"],"results":{},
         "answer":row["content"],"device_ids":metadata.get("assignmentDeviceIds") or [],"source_task_ids":metadata.get("sourceTaskIds") or [],
         "commands":json.loads(row["commands"] or "[]"),"tasks":[],"kind":"orchestrator",
+        "full_speech_requested":metadata.get("fullSpeechRequested") is True,"dialogue_intent":metadata.get("dialogueIntent"),"dialogue_spoken_response":metadata.get("spokenResponse"),
+        "dialogue_speech_answer":metadata.get("spokenResponseAnswer"),
         "highlights":metadata.get("highlights") or [],"history_metadata":metadata,"execution_details":metadata.get("executionDetails") or "",
         "worker_report":metadata.get("workerReport"),"task_receipt":metadata.get("taskReceipt"),
         "current_step":metadata.get("taskTitle"),"plan_suggestion":metadata.get("planSuggestion"),"plan_original_request":metadata.get("planOriginalRequest")}

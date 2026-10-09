@@ -51,7 +51,7 @@ def test_summary_failure_never_reads_a_long_answer_or_claims_success(monkeypatch
     monkeypatch.setattr(voice, "shorten_answer", fail)
     task = {"answer": "Подготовка началась. " * 50 + "Выполнение не удалось.", "status": "error"}
     parts = asyncio.run(voice.spoken_parts(task))
-    assert parts == ["Не удалось подготовить краткую озвучку. Полный ответ доступен в чате."]
+    assert parts == ["Коротко пересказать сейчас не получилось. Полный ответ оставила в чате."]
 
 
 @pytest.mark.parametrize("content,finish", [
@@ -130,7 +130,7 @@ def test_brief_preserves_inline_values_and_underscored_filename(monkeypatch):
     async def completion(**kwargs):
         return {'choices':[{'finish_reason':'stop','message':{'content':'В `my_config.ini` указано `port=8080`.'}}]}
     monkeypatch.setattr(controller,'_chat_completion_request',completion)
-    assert 'my_config.ini' in asyncio.run(voice.shorten_answer({'answer':'Настройки прочитаны.'}))
+    assert 'my_config.ini' in asyncio.run(voice.shorten_answer({'answer':'В my_config.ini указано port=8080.'}))
 
 
 def test_configured_cost_cap_prevents_paid_request(monkeypatch):

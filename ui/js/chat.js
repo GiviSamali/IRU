@@ -623,7 +623,6 @@ function renderMessages() {
         <p>${subtitle}</p>
         <div class="hints">${hints}</div>
       </div>`;
-    window.IRUContentSurface?.enhance(container);
     updateStopButton();
     return;
   }
@@ -651,7 +650,6 @@ function renderMessages() {
   }
 
   container.innerHTML = html;
-  window.IRUContentSurface?.enhance(container);
   restoreMessagePresentation(container, presentation);
   updateStopButton();
 }

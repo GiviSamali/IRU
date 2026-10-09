@@ -150,3 +150,32 @@ def worker_presentation(task, report=None):
         reason=_reason(task,report)
         if reason:human+=" "+reason
     return {"conversational_response":human,"execution_details":answer if answer!=human else ""}
+
+
+
+def worker_spoken_response(task, report=None):
+    """Compose from verified structured outcomes; never rewrite model prose by replacements."""
+    report=normalized_worker_report(task,report)
+    human=worker_presentation(task,report)["conversational_response"]
+    # Incomplete/permission-sensitive results stay protected; informational answers stay intact.
+    if report["status"]!="success":return human
+    commands=[c for c in task.get("commands") or [] if isinstance(c,dict)]
+    operations=[c for c in commands if not _tool(c).startswith("answer.")]
+    terminal=next((c for c in reversed(commands) if _tool(c)=="answer.text" and c.get("status")=="terminal"),{})
+    payload=terminal.get("result") if isinstance(terminal.get("result"),dict) else {}
+    check=payload.get("self_check") if isinstance(payload.get("self_check"),dict) else {}
+    informational=check.get("claims_completed_action") is False
+    if operations and has_grounded_terminal_answer(task.get("answer") or "",commands) and (informational or all(_tool(c) in OBSERVATION_TOOLS for c in operations)):
+        return human
+    artifacts=_artifacts(task,report)
+    if any(isinstance(c,dict) and _tool(c)=="transfer_file" and positive_evidence(c) and c["result"].get("sha256_verified") is True for c in task.get("commands") or []):
+        return "Передала файл. "+(_desktop_location(task,artifacts) or "Копия проверена.")
+    if artifacts:
+        # Location is only the owner-scoped, verified location. Do not infer a write from existence.
+        return human
+    actions=[_tool(c) for c in task.get("commands") or [] if isinstance(c,dict) and positive_evidence(c) and _tool(c) not in OBSERVATION_TOOLS]
+    if len(actions)==1 and actions[0]=="app.launch":return "Открыла приложение."
+    if len(actions)==1 and actions[0]=="app.open_url":return "Открыла страницу."
+    if len(actions)==1 and actions[0]=="web.focus":return "Переключила вкладку."
+    if len(actions)==1 and actions[0]=="remember_fact":return "Запомнила."
+    return "Готово, всё сделала."

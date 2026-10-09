@@ -38,42 +38,22 @@ for(const width of [360,1280])test(`dock independent, own queue, exact decisions
   assert.equal(requests.filter(r=>r.method==='POST'&&r.path.startsWith('/api/tasks/')).length,effects);assert.deepEqual(page.errors,[]);
  }finally{await page.close();}
 });
-for(const width of [360,1280])test(`surface selection, bounded handle, scale, draft isolation and XSS ${width}`,async()=>{
+for(const width of [360,1280])test(`ordinary reply has no card editing controls and remains selectable at ${width}`,async()=>{
  const page=await open(width);try{
   const original='LAN соединяет устройства рядом. WAN объединяет удалённые сети.\n'.repeat(5)+'<img src=x onerror="window.injected=1">';
-  await page.evaluate(text=>{state.messages=[{role:'assistant',id:700,content:text,highlights:[{start:0,end:3,kind:'definition'},{start:-1,end:999999,kind:'<script>'}]}];renderMessages();},original);
-  const surface=page.locator('.content-surface'),text=surface.locator('.smart-text-content');assert.equal(await text.textContent(),original);
+  await page.evaluate(text=>{state.messages=[{role:'assistant',id:700,content:text,highlights:[{start:0,end:3,kind:'definition'}]}];renderMessages();},original);
+  const text=page.locator('.smart-text-content');assert.equal(await text.textContent(),original);
+  assert.equal(await page.locator('.content-surface, .surface-toolbar, #surfaceEditor, [data-surface-action]').count(),0);
+  assert.equal(await page.evaluate(()=>typeof IRUContentSurface),'undefined');
   assert.equal(await text.locator('mark').count(),1);assert.equal(await text.locator('img').count(),0);
   assert.equal(await text.evaluate(el=>getComputedStyle(el).userSelect),'text');
-  await text.evaluate(el=>{const r=document.createRange();r.selectNodeContents(el);const s=getSelection();s.removeAllRanges();s.addRange(r);});
-  assert.equal(await page.evaluate(()=>getSelection().toString()),original);
-  await page.context().grantPermissions(['clipboard-read','clipboard-write']);await page.keyboard.press('Control+c');assert.equal(await page.evaluate(()=>navigator.clipboard.readText().then(t=>t.replace(/\r\n/g,'\n'))),original);
-  const before=await text.evaluate(el=>parseFloat(getComputedStyle(el).fontSize));await surface.locator('[data-surface-action="zoom-in"]').click();assert.ok(await text.evaluate(el=>parseFloat(getComputedStyle(el).fontSize))>before);
-  // Drag begins only on the handle; dragging text must not move the workspace.
-  const start=await surface.locator('.surface-object').evaluate(el=>el.style.transform);
-  await text.evaluate(el=>{el.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:20,clientY:20}));el.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:120,clientY:120}));});
-  assert.equal(await surface.locator('.surface-object').evaluate(el=>el.style.transform),start);
-  const handle=await surface.locator('.surface-handle').boundingBox();await page.mouse.move(handle.x+8,handle.y+8);await page.mouse.down();await page.mouse.move(handle.x+100,handle.y+70);await page.mouse.up();
-  assert.match(await surface.locator('.surface-object').evaluate(el=>el.style.transform),/32px/);
-  await surface.locator('[data-surface-action="expand"]').click();await page.evaluate(()=>renderMessages());assert.equal(await surface.locator('[data-surface-action="expand"]').getAttribute('aria-expanded'),'true');assert.equal(await surface.locator('[data-surface-action="zoom-reset"]').textContent(),'110%');
-  await surface.locator('[data-surface-action="edit"]').click();const editor=page.locator('#surfaceEditor'),area=editor.locator('textarea');
-  await area.fill('Версия пользователя <script>window.injected=2</script>');await editor.locator('[data-surface-action="undo"]').click();assert.equal(await area.inputValue(),original);await editor.locator('[data-surface-action="redo"]').click();assert.ok((await area.inputValue()).startsWith('Версия пользователя'));
-  const editorBounds=await editor.boundingBox(),inputBounds=await page.locator('.chat-input-area').boundingBox();assert.ok(editorBounds.y+editorBounds.height<=inputBounds.y);
-  await page.evaluate(()=>{state.messages[0].content+=' Поздний update';renderMessages();});assert.ok((await area.inputValue()).startsWith('Версия пользователя'));
-  await editor.locator('[data-surface-action="save"]').click();assert.ok((await surface.locator('.surface-version-text').textContent()).includes('<script>'));assert.equal(await surface.locator('.surface-version-text script').count(),0);assert.equal(await page.evaluate(()=>window.injected),undefined);
-  assert.equal(await page.evaluate(()=>state.messages[0].content),original+' Поздний update');
-  await area.fill('Несохранённый черновик');page.once('dialog',d=>d.dismiss());await editor.locator('[data-surface-action="discard"]').click();assert.equal(await area.inputValue(),'Несохранённый черновик');page.once('dialog',d=>d.accept());await editor.locator('[data-surface-action="discard"]').click();assert.ok((await area.inputValue()).startsWith('Версия пользователя'));
-  await page.evaluate(()=>{state.currentChatId=9;state.messages=[];renderMessages();});assert.equal(await editor.isVisible(),false);
-  await page.evaluate(text=>{state.currentChatId=1;state.messages=[{role:'assistant',id:700,content:text}];renderMessages();},original);assert.equal(await editor.isVisible(),true);
-  // The reusable wrapper also scales a trusted fixture graphic; no model HTML path.
-  await page.evaluate(()=>{const div=document.createElement('div');const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 100 50');const rect=document.createElementNS(svg.namespaceURI,'rect');rect.setAttribute('width','100');rect.setAttribute('height','50');rect.setAttribute('fill','#3ac2dc');svg.append(rect);div.append(svg);document.getElementById('chatMessages').append(div);IRUContentSurface.mount(div,'fixture-chart');});
-  const graphic=page.locator('[data-surface-id="fixture-chart"]'),w=await graphic.locator('svg').evaluate(el=>el.getBoundingClientRect().width);await graphic.locator('[data-surface-action="zoom-out"]').click();assert.ok(await graphic.locator('svg').evaluate(el=>el.getBoundingClientRect().width)<w);
-  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-  if(process.env.IRU_SCREENSHOT_DIR)await page.screenshot({path:require('node:path').join(process.env.IRU_SCREENSHOT_DIR,`general-ui-${width}.png`)});
+  await text.evaluate(el=>{const range=document.createRange();range.selectNodeContents(el);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);});
+  await page.context().grantPermissions(['clipboard-read','clipboard-write']);await page.keyboard.press('Control+c');
+  assert.equal(await page.evaluate(()=>navigator.clipboard.readText().then(t=>t.replace(/\r\n/g,'\n'))),original);
+  await page.evaluate(()=>renderMessages());assert.equal(await page.locator('[data-surface-action], #surfaceEditor').count(),0);
   assert.deepEqual(page.errors,[]);
  }finally{await page.close();}
 });
-
 
 test('dock PLAN revision is exact, authenticated and never re-executes on refresh',async()=>{
  const page=await open();try{
@@ -94,8 +74,8 @@ for(const width of [390,1280])test(`clean working UI preview ${width}`,async()=>
  const page=await open(width);try{
   await page.evaluate(()=>{state.messages=[{role:'user',id:800,content:'А пока объясни разницу между LAN и WAN.'},{role:'assistant',id:801,content:'LAN — локальная сеть\n\nСоединяет устройства дома или в офисе. Например, ноутбук и принтер через домашний роутер.\n\nWAN — сеть на больших расстояниях\n\nСвязывает отдельные локальные сети между городами и странами. Интернет — самый знакомый пример.\n\nОсновная разница — масштаб и расстояние между устройствами.',highlights:[{start:0,end:20,kind:'definition'}]}];renderMessages();});
   await page.locator('#operationsToggle').click();
-  if(process.env.IRU_SCREENSHOT_DIR)await page.screenshot({path:require('node:path').join(process.env.IRU_SCREENSHOT_DIR,`general-ui-preview-${width}.png`)});
-  assert.equal(await page.locator('.content-surface').count(),1);assert.deepEqual(page.errors,[]);
+  if(process.env.IRU_SCREENSHOT_DIR)await page.screenshot({path:require('node:path').join(process.env.IRU_SCREENSHOT_DIR,`voice-conversation-ui-${width}.png`)});
+  assert.equal(await page.locator('.content-surface, .surface-toolbar, #surfaceEditor').count(),0);assert.deepEqual(page.errors,[]);
  }finally{await page.close();}
 });
 
