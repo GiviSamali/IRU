@@ -46,7 +46,7 @@ def test_filename_claims_without_artifact_evidence_cannot_create_presentation_fa
     task=completed(owner)
     task['commands']=[{'tool_name':'execute_cmd','step_id':'step_1','status':'success','result':{'returncode':0,'stdout':'OK: action_verified'}}]
     task['answer']='Создана презентация на 100 слайдов на рабочем столе'
-    assert worker_presentation(task)['conversational_response']=='Готово. Задача выполнена.'
+    assert worker_presentation(task)['conversational_response']==build_worker_report(task)['summary']
     task['commands'][0]['result']['stdout']='process started'
     assert 'Не могу подтвердить' in worker_presentation(task)['conversational_response']
 

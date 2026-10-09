@@ -62,6 +62,9 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
     if plan_offer and not _is_admin(user) and get_user_plan(user["id"]) == "free" and get_plan_trial_used(user["id"]):
         offer_text = "Пробный запуск режима План уже использован. Для этого режима нужен тариф Про."
     human_answer = task.get("answer") or ""
+    # An empty written handoff can still have optional context-bound speech.
+    if task.get("kind")=="orchestrator" and task.get("dialogue_speech_answer")==task.get("answer"):
+        human_answer = task.get("dialogue_spoken_response") or human_answer
     if task.get("worker_id") and not plan_offer and not review and not ordinary:
         try:
             from ..response_presentation import worker_presentation

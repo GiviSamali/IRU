@@ -133,7 +133,9 @@ def worker_presentation(task, report=None):
         else:
             actions=[_tool(c) for c in operations if positive_evidence(c) and _tool(c) not in OBSERVATION_TOOLS]
             human={"app.launch":"Приложение открыто.","app.open_url":"Страница открыта.",
-                   "web.focus":"Вкладка выбрана.","remember_fact":"Запомнила."}.get(actions[-1] if actions else "","Готово. Задача выполнена.")
+                   "web.focus":"Вкладка выбрана.","remember_fact":"Запомнила."}.get(actions[-1] if actions else "")
+            if not human:
+                human=answer if has_grounded_terminal_answer(answer,commands) else report["summary"]
     elif status=="partial":
         if result:human=result+" Но задача выполнена не полностью."
         elif any(positive_evidence(c) for c in commands):human="Получилось выполнить только часть задачи."
@@ -178,4 +180,4 @@ def worker_spoken_response(task, report=None):
     if len(actions)==1 and actions[0]=="app.open_url":return "Открыла страницу."
     if len(actions)==1 and actions[0]=="web.focus":return "Переключила вкладку."
     if len(actions)==1 and actions[0]=="remember_fact":return "Запомнила."
-    return "Готово, всё сделала."
+    return human

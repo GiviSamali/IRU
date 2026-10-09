@@ -68,7 +68,11 @@ SYSTEM = """Ты ИРУ: единственный пользовательски
 Не придумывай выполненные действия, события, устройства, эмоции или биографию. Не добавляй автоматически
 «ну», «ага», «слушай», «сэр», «Чем ещё могу помочь?» или «Поручение принято». Связки уместны только по контексту.
 Не используй Markdown, кодовые блоки, URL и длинные перечисления в spoken_response.
-Для delegate/task_status/cancel не формируй собственный голосовой итог: его определит сервер по реальному результату.
+Для delegate оставь answer пустым: принятие подтверждается состоянием Worker и UI.
+spoken_response для delegate необязателен: используй его только для уместной краткой
+контекстной обратной связи; иначе оставь пустым. Не выдавай ритуальные ACK.
+Не утверждай, что задача принята, запущена или завершена, пока нет проверенного результата.
+Для task_status/cancel голосовой итог сформирует сервер по реальному результату.
 Подача: обычные приветствия, вопросы и обсуждения — естественный разговор, без отчёта о конфигурации.
 Не перечисляй устройства, текущие задачи или ограничения, когда они не нужны для ответа.
 Не произноси Worker, scheduler, receipt, tool calls и другие внутренние термины, если пользователь не спрашивает о них.
@@ -242,7 +246,8 @@ async def run_turn(cmd, user, chat_id, delegate):
                 answer="Предлагаю составить план. Запустить?"
             else:
                 worker=await delegate(choice,request_key="turn:"+key)
-                answer="Записала поручение. Начну, когда закончу текущее." if worker["status"]=="queued" else "Хорошо, займусь."
+                # Admission is acknowledged by the actual Worker and existing UI.
+                answer=""
         elif choice.intent in {"task_status","cancel"}:
             stage="task_reference"
             jobs=routing_context["tasks"]
@@ -298,10 +303,14 @@ async def run_turn(cmd, user, chat_id, delegate):
             speech=conversational_speech(choice.spoken_response, answer)
             if speech:
                 task.update(dialogue_spoken_response=speech,dialogue_speech_answer=answer)
-        elif worker:
-            # Admission is observed; a model cannot turn it into completion.
-            task.update(dialogue_spoken_response="Сделаю следом." if worker["status"]=="queued" else "Хорошо, займусь.",dialogue_speech_answer=answer)
-        task.update(status="done",answer=answer,commands=[{"tool_name":"answer.text","status":"terminal","result":{"answer_type":"pure_text","text":answer}}],tasks=[],orchestrator_metrics=stats)
+        elif worker and worker["status"]=="running":
+            # Optional speech reuses the existing routing decision, never another model call.
+            speech=choice.spoken_response.strip()
+            # There is no completion evidence in a newly admitted handoff.
+            if speech and not re.search(r"(?i)\b(?:готово|сдела\w*|выполн\w*|заверш\w*|успешно|созда\w*|откры\w*|переда\w*|отправ\w*|сохрани\w*|наш[её]л\w*|подтверждено|задача\s+принята)\b",speech):
+                task.update(dialogue_spoken_response=speech,dialogue_speech_answer=answer)
+        commands=[] if worker and not answer else [{"tool_name":"answer.text","status":"terminal","result":{"answer_type":"pure_text","text":answer}}]
+        task.update(status="done",answer=answer,commands=commands,tasks=[],orchestrator_metrics=stats)
     except Exception as exc:
         failure_stage=getattr(exc,"orchestrator_stage",stage)
         _log_failure(tid,failure_stage,exc)

@@ -631,6 +631,10 @@ function renderMessages() {
   for (let mi = 0; mi < state.messages.length; mi++) {
     const m = state.messages[mi];
     if (m.hideAfterPlanChoice) continue;
+    // The admitted delegation already has its own Worker UI status.
+    if (m.role === 'assistant' && m.taskKind === 'orchestrator' && !m.loading &&
+        !String(m.content || m.text || m.conversationalResponse || m.conversational_response || '').trim() &&
+        !m.planSuggestion && !m.confirmTaskId) continue;
     const role = m.role === 'user' ? 'user' : 'assistant';
     const active = state.pendingTasks.find(item => item.task_id === m._taskId && item.kind !== 'orchestrator');
     const view = IRUSmartUI.adapt({ ...m, cancelAvailable:Boolean(m.loading && active && active.task_id === m._taskId && !active.cancelRequested) }, mi, state.currentChatId);
@@ -966,7 +970,7 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
         window.iruVoice?.taskFinished(taskId, task);
         stopped = true; taskPollLoops.delete(taskId);
         const isCancelled = String(task.status || '').trim().toLowerCase() === 'cancelled';
-        const fallbackAnswer = isCancelled ? 'Остановлено пользователем.' : (task.plan_suggestion ? '' : 'ИРУ завершила задачу без текстового ответа.');
+        const fallbackAnswer = isCancelled ? 'Остановлено пользователем.' : ((task.kind === 'orchestrator' || task.plan_suggestion) ? '' : 'ИРУ завершила задачу без текстового ответа.');
         const msg = {
           role: 'assistant',
           ...smartTaskMetadata,
