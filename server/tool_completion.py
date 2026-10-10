@@ -50,13 +50,13 @@ def execute_cmd_result_is_negative(result: dict[str, Any] | None) -> bool:
         return True
     if result.get("returncode") not in (None, 0, "0"):
         return True
-    return result.get("status") in {"failed", "error", "blocked", "cancelled"} or result.get("completion_state") in {"failed", "error"}
+    return result.get("status") in ("failed", "error", "blocked", "cancelled") or result.get("completion_state") in ("failed", "error")
 
 
 def write_content_result_is_ok(result: dict[str, Any] | None) -> bool:
     if not isinstance(result, dict):
         return False
-    if result.get("error") or result.get("status") in {"failed", "error"}:
+    if result.get("error") or result.get("status") in ("failed", "error"):
         return False
     return (result.get("status") in (None, "", "ok", "success")
             and bool(result.get("path"))
@@ -66,9 +66,9 @@ def write_content_result_is_ok(result: dict[str, Any] | None) -> bool:
 def write_content_result_is_negative(result: dict[str, Any] | None) -> bool:
     if not isinstance(result, dict):
         return False
-    if result.get("error") or result.get("status") in {"failed", "error"}:
+    if result.get("error") or result.get("status") in ("failed", "error"):
         return True
-    return result.get("status") in {"missing", "not_found", "blocked", "cancelled"}
+    return result.get("status") in ("missing", "not_found", "blocked", "cancelled")
 
 
 def tool_result_terminal_sufficient(entry: dict[str, Any] | None) -> bool:
@@ -79,12 +79,16 @@ def tool_result_terminal_sufficient(entry: dict[str, Any] | None) -> bool:
     # Operation receipts cannot end a potentially multi-step user goal.
     if tool_name in {"execute_cmd", "write_content"}:
         return False
-    if result.get("terminal_sufficient"):
-        return True
+    if result.get("error") or (entry or {}).get("status") in ("failed", "error", "blocked", "cancelled"):
+        return False
+    if result.get("status") in ("failed", "error", "blocked", "cancelled", "unknown", "pending", "started", "launch_requested") or result.get("completion_state") in ("failed", "error"):
+        return False
     if tool_name in {"window_control", "window.control"}:
         return result.get("status") == "success" and result.get("completion_state") == "success"
     if tool_name == "transfer_file":
         return result.get("status") == "success" and result.get("sha256_verified") is True
+    if result.get("terminal_sufficient") is True:
+        return True
     if tool_name in {"app.open_url", "app_open_url"}:
         return bool(result.get("launched")) and str(result.get("status") or "") in {
             "opened_verified",

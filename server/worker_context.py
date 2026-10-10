@@ -39,12 +39,15 @@ def source_references(owner, chat_id, source_ids, allowed_devices):
     for source_id in dict.fromkeys(source_ids):
         row=owned_job(source_id,owner)
         if not row or row['chat_id']!=chat_id:raise ValueError('reference_task_not_owned_or_in_chat')
-        report=json.loads(row['report']) if row.get('report') else {}
+        restored=json.loads(row['payload'])
+        snapshot=restored.get('worker_report')
+        report=(snapshot if isinstance(snapshot,dict) and snapshot.get('status')==row['state']
+            and snapshot.get('task_id')==row['task_id'] else json.loads(row['report']) if row.get('report') else {})
         artifacts=[a for a in report.get('artifacts') or [] if isinstance(a,dict) and a.get('verified') is True
                    and a.get('device_id') in allowed_devices]
         with db.get_db() as c:
             message=c.execute('SELECT content FROM messages WHERE id=? AND chat_id=?',(row.get('message_id'),chat_id)).fetchone()
-        summary=message['content'] if (message and report.get('status') in {'success','partial'}
+        summary=(message['content'] if message else restored.get('conversational_response') or restored.get('answer') or report.get('summary') or '') if (report.get('status') in {'success','partial'}
             and bool(report.get('target_device_ids'))
             and set(report['target_device_ids']).issubset(allowed_devices)) else ''
         references.append({'task_id':source_id,'status':row['state'],'observed_at':row['updated_at'],

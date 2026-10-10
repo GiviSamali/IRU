@@ -242,7 +242,7 @@ async def run_turn(cmd, user, chat_id, delegate):
                 chosen=[f"{owner}:{d}" for d in choice.target_device_ids]
                 if cmd.broadcast:chosen=list(eligible)
                 if not chosen or any(d not in eligible for d in chosen):raise ValueError("target_device_required")
-                task.update(plan_suggestion="selected_plan",plan_original_request=cmd.message,proposed_objective=choice.objective,device_ids=chosen,orchestrated=True,broadcast=cmd.broadcast,source_task_ids=choice.source_task_ids)
+                task.update(plan_suggestion="selected_plan",plan_original_request=cmd.message,proposed_objective=choice.objective,proposed_context_summary=choice.context_summary,device_ids=chosen,orchestrated=True,broadcast=cmd.broadcast,source_task_ids=choice.source_task_ids)
                 answer="Предлагаю составить план. Запустить?"
             else:
                 worker=await delegate(choice,request_key="turn:"+key)
@@ -363,4 +363,6 @@ def restore_dialogue(task_id, owner):
         "dialogue_speech_answer":metadata.get("spokenResponseAnswer"),
         "history_metadata":metadata,"execution_details":metadata.get("executionDetails") or "",
         "worker_report":metadata.get("workerReport"),"task_receipt":metadata.get("taskReceipt"),
-        "current_step":metadata.get("taskTitle"),"plan_suggestion":metadata.get("planSuggestion"),"plan_original_request":metadata.get("planOriginalRequest")}
+        "current_step":metadata.get("taskTitle"),"plan_suggestion":metadata.get("planSuggestion"),"plan_original_request":metadata.get("planOriginalRequest"),
+        "orchestrated":metadata.get("orchestrated") is True,"proposed_objective":metadata.get("proposedObjective") or "",
+        "proposed_context_summary":metadata.get("proposedContextSummary") or ""}

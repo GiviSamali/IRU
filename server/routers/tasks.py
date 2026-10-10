@@ -656,12 +656,12 @@ async def api_command_decision(task_id: str, body: CommandDecisionBody, request:
     if body.via_voice and (not data.get("voice_allowed") or data.get("kind") != "command"):
         raise HTTPException(403, "Удаление и опасные команды подтверждаются только кнопкой в чате.")
     if body.accepted:
-        return await api_confirm_task(task_id, request)
+        return await api_confirm_task(task_id, request, confirmation_id=body.confirmation_id)
     return await api_deny_task(task_id, request)
 
 
 @router.post("/api/tasks/{task_id}/confirm")
-async def api_confirm_task(task_id: str, request: Request):
+async def api_confirm_task(task_id: str, request: Request, confirmation_id: str | None = None):
     user = get_current_user(request)
     task = tasks.get(task_id)
     if not task or task["user_id"] != user["id"]:
@@ -674,6 +674,8 @@ async def api_confirm_task(task_id: str, request: Request):
 
     decision = task.get("_pipeline_confirm_future")
     if decision is not None:
+        if not confirmation_id or (task.get("confirm_data") or {}).get("confirmation_id") != confirmation_id:
+            raise HTTPException(409, "Подтвердите именно текущую команду через command-decision.")
         if decision.done():
             raise HTTPException(409, detail="Подтверждение уже обработано")
         task["status"] = "running"
@@ -964,7 +966,8 @@ async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
     try:
         task=await submit_worker(user,chat_id,body.original_request,target_ids,{"pipeline":True,"autonomous":False},
             request_key="plan:"+body.voice_source_task_id if body.voice_source_task_id else None,
-            objective=body.original_request if source_task and source_task.get("orchestrated") else "",broadcast=bool(source_task and source_task.get("broadcast")),
+            objective=(source_task.get("proposed_objective") or body.original_request) if source_task and source_task.get("orchestrated") else "",
+            context_summary=(source_task.get("proposed_context_summary") or "") if source_task else "",broadcast=bool(source_task and source_task.get("broadcast")),
             source_task_ids=source_task.get("source_task_ids") or [] if source_task else ())
     except ValueError as exc:
         return {"status":"error","error":str(exc)}

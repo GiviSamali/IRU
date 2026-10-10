@@ -79,9 +79,10 @@ def build_worker_report(task):
                 and receipt.get("goal_completed") is True
                 and receipt.get("final_verification_status") == "verified"
                 and all(positive_evidence(c) for c in observations))
-    native_evidence = bool(evidence) and all(
-        (c.get("tool_name") or c.get("action")) not in {"execute_cmd", "write_content"}
-        and tool_result_terminal_sufficient(c) for c in evidence)
+    native_basis = observations if grounded else evidence
+    native_evidence = bool(native_basis) and all(
+        positive_evidence(c) and (c.get("tool_name") or c.get("action")) not in {"execute_cmd", "write_content"}
+        and tool_result_terminal_sufficient(c) for c in native_basis)
     confirmed = confirmed or (native_evidence and (
         (receipt.get("answer_source") != "audited_terminal"
          and receipt.get("task_status") in {"completed", "completed_with_recovery"}

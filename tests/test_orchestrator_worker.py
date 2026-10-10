@@ -282,7 +282,8 @@ def test_server_worker_search_has_current_journal_and_validated_terminal(owners,
     answer={'answer_type':'grounded_report','text':'Forecast based on tool data','basis':['step_1'],
         'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,'has_sufficient_evidence':True,'missing_evidence_question':''}}
     messages=[{'tool_calls':[{'id':'search','function':{'name':'web_search','arguments':json.dumps({'query':'weather'})}}]},
-        {'tool_calls':[{'id':'answer','function':{'name':'answer_text','arguments':json.dumps(answer)}}]}]
+        {'tool_calls':[{'id':'answer','function':{'name':'answer_text','arguments':json.dumps(answer)}}]},
+        {'content':json.dumps({'valid':True,'reason':'Original informational goal supported by search evidence'})}]
     requested=[]
     class Response:
         def __init__(self,data):self.data=data
@@ -298,11 +299,11 @@ def test_server_worker_search_has_current_journal_and_validated_terminal(owners,
     async def search(*a,**kw):return {'status':'success','results':[{'title':'Forecast','url':'https://example.invalid','snippet':'tool evidence'}]}
     monkeypatch.setattr(onboarding.httpx,'AsyncClient',Client);monkeypatch.setattr(onboarding,'run_web_search',search)
     result=asyncio.run(onboarding.process_onboarding_message('weather',usage_context={'user_id':a['id'],'worker_execution':True},
-        load_llm_config_fn=lambda:{'model':'mock-model','api_key':'fake-test','base_url':'https://example.invalid'},current_datetime_msk_fn=lambda:'2026-10-09'))
+        load_llm_config_fn=lambda:{'model':'mock-model','api_key':'fake-test','base_url':'https://example.invalid','answer_auditor_enabled':True},current_datetime_msk_fn=lambda:'2026-10-09'))
     assert has_grounded_terminal_answer(result['answer'],result['commands'])
-    assert len(requested)==2 and len(requested[0]['messages'][0]['content'])<10000
+    assert len(requested)==3 and len(requested[0]['messages'][0]['content'])<10000
     assert set(t['function']['name'] for t in requested[0]['tools']) <= {'web_search','remember_fact','forget_fact','memory_list_facts','memory_get_stats','answer_text'}
-    t=task(a);t.update(status='done',answer=result['answer'],commands=result['commands'],device_ids=[])
+    t=task(a);t.update(status='done',answer=result['answer'],commands=result['commands'],task_receipt=result['task_receipt'],device_ids=[])
     assert build_worker_report(t)['status']=='success'
 
 

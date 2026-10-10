@@ -542,6 +542,17 @@ def _repair_step_line(entry: dict[str, Any]) -> dict[str, Any]:
     return wrapped
 
 
+def audited_task_receipt(payload: dict[str, Any], *, audited: bool) -> dict[str, Any] | None:
+    """Project an accepted audit, never the model's self_check alone."""
+    kind = payload.get("answer_type")
+    if not audited or kind not in {"grounded_report", "partial_report", "error_report", "failure"}:
+        return None
+    completed = kind == "grounded_report"
+    return {"task_status": "completed" if completed else "partial" if kind == "partial_report" else "failed",
+            "goal_completed": completed, "final_verification_status": "verified" if completed else "unverified",
+            "answer_source": "audited_terminal"}
+
+
 def build_terminal_answer_repair_prompt(user_request: str, journal: list[dict[str, Any]]) -> str:
     evidence_steps = [
         _repair_step_line(entry)
@@ -568,6 +579,7 @@ def build_terminal_answer_repair_prompt(user_request: str, journal: list[dict[st
         "You must call exactly one tool: answer_text. No other tool is available.\n"
         "Use only current-run journal entries below as evidence. Old chat history is context only, not evidence.\n"
         "Do not pretend success if the evidence is missing or failed.\n"
+        "Do not ask the human to say continue or re-authorize work already requested. Report the actual incomplete work and stopping reason; ask only for a genuinely missing parameter or required confirmation.\n"
         "If successful evidence supports the answer, use answer_type=grounded_report and basis with existing step_id values.\n"
         "If only partial evidence exists, use answer_type=partial_report and cite the supporting step_id values.\n"
         "If there are no valid evidence steps or the task failed, use answer_type=error_report, set has_sufficient_evidence=false, "

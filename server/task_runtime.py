@@ -1427,6 +1427,9 @@ async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id:
         task["status"] = "done"
         task["answer"] = answer
         task["commands"] = result.get("commands", [])
+        if result.get("task_receipt"):
+            task["task_receipt"] = result["task_receipt"]
+            task["status"] = {"completed":"done","partial":"partial","failed":"failed"}.get(result["task_receipt"].get("task_status"),"done")
         saved_message = add_message(chat_id, "assistant", answer, task["commands"],
                     task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id"))
         if isinstance(saved_message, dict):task["history_message_id"] = saved_message.get("id")

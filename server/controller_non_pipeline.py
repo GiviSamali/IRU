@@ -49,6 +49,7 @@ try:
         duplicate_read_only_tool_message,
         find_prior_successful_read_only_tool_step,
         mark_read_only_tool_step,
+        repeated_command_observation,
     )
     from .run_journal import (  # type: ignore
         GROUNDED_CORRECTION,
@@ -58,6 +59,7 @@ try:
         record_lifecycle_event,
         ProtocolValidationError,
         append_answer_step,
+        audited_task_receipt,
         append_tool_step,
         compact_write_content_result,
         is_answer_clarification_tool,
@@ -115,6 +117,7 @@ except ImportError:
         duplicate_read_only_tool_message,
         find_prior_successful_read_only_tool_step,
         mark_read_only_tool_step,
+        repeated_command_observation,
     )
     from run_journal import (  # type: ignore
         GROUNDED_CORRECTION,
@@ -124,6 +127,7 @@ except ImportError:
         record_lifecycle_event,
         ProtocolValidationError,
         append_answer_step,
+        audited_task_receipt,
         append_tool_step,
         compact_write_content_result,
         is_answer_clarification_tool,
@@ -305,8 +309,22 @@ async def process_non_pipeline_command(
             })
 
     def add_correction(correction: str):
+        # Keep thinking history even when an attempted call was rejected. Invalid
+        # tool calls are not replayed or added as executed evidence.
+        if assistant_msg.get("reasoning_content") and not any(m is assistant_msg for m in messages):
+            messages.append({"role": "assistant", "content": assistant_msg.get("content") or "",
+                             "reasoning_content": assistant_msg["reasoning_content"]})
         record_lifecycle_event("recovery", source="protocol_recovery")
         messages.append({"role": "user", "content": correction})
+
+    def provider_failure(code: str, iteration: int) -> dict:
+        had_results = any(entry.get("tool_type") != "answer" for entry in commands_log)
+        append_entry(make_run_step(journal=commands_log,tool_name="llm_request",tool_type="system",
+            result={"error":code},status="failed",target_device_id=device_id,iteration=iteration))
+        return {"answer":"Связь с моделью прервана. Полученные результаты сохранены; завершение цели не подтверждено.",
+            "commands":commands_log,"tasks":[],"training_context":_training_context(device_info),
+            "task_receipt":{"task_status":"partial" if had_results else "failed","goal_completed":False,
+                "final_verification_status":"unverified","answer_source":"server_fallback","terminal_reason":code}}
 
     def append_entry(entry: dict) -> dict:
         return append_tool_step(commands_log, entry)
@@ -408,13 +426,13 @@ async def process_non_pipeline_command(
                 )
             except httpx.HTTPStatusError as exc:
                 print(f"[llm] HTTP error: {exc.response.status_code}")
-                raise
+                return provider_failure("llm_http_error_" + str(exc.response.status_code), iteration + 1)
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
                 print(f"[llm] network error: {type(exc).__name__}")
-                raise RuntimeError("Сервис ИИ временно недоступен. Попробуйте через минуту.")
+                return provider_failure("llm_transport_error", iteration + 1)
             except Exception as exc:
                 print(f"[llm] request error: {type(exc).__name__}")
-                raise
+                return provider_failure("llm_request_error", iteration + 1)
 
             choice = data["choices"][0]
             finish_reason = choice.get("finish_reason", "?")
@@ -568,12 +586,8 @@ async def process_non_pipeline_command(
                             hostname=device_info.get("hostname") or target_device,
                             iteration=iteration + 1,
                         )
-                        audited_receipt={}
-                        if answer_auditor_enabled(cfg) and answer_payload["answer_type"] in {"grounded_report","partial_report","error_report","failure"}:
-                            goal_completed=answer_payload["answer_type"]=="grounded_report"
-                            audited_receipt={"task_receipt":{"task_status":"completed" if goal_completed else "partial" if answer_payload["answer_type"]=="partial_report" else "failed",
-                                "goal_completed":goal_completed,"final_verification_status":"verified" if goal_completed else "unverified",
-                                "answer_source":"audited_terminal"}}
+                        receipt = audited_task_receipt(answer_payload, audited=answer_auditor_enabled(cfg))
+                        audited_receipt = {"task_receipt": receipt} if receipt else {}
                         return {
                             **audited_receipt,
                             "answer": answer_payload["text"],
@@ -783,7 +797,7 @@ async def process_non_pipeline_command(
                     previous_step_id = duplicate_message["previous_step_id"]
                     add_correction(
                         f"You already have current-run evidence from {previous_step_id}. "
-                        "Do not call the same read-only tool again. Call answer_text."
+                        "Do not repeat the same read-only tool. Perform the next necessary action if the original goal remains; answer only when the whole goal is supported."
                     )
                     continue
 
@@ -1169,6 +1183,14 @@ async def process_non_pipeline_command(
                     commands_log[-1]["result"]["arg_warnings"] = existing_warnings + arg_warnings
                 mark_read_only_tool_step(commands_log[-1], fn_name, repeat_guard_args)
                 append_tool_message(tool_call["id"], commands_log[-1])
+                repeated = repeated_command_observation(commands_log)
+                if repeated:
+                    add_correction(
+                        f"The executed command and its nonempty observation repeat {repeated['count']} times; "
+                        f"the same observation is already in {repeated['step_id']}. No new observable information was obtained. "
+                        "Do not repeat this command without a concrete reason. Use current-run facts to perform the next necessary part of the ORIGINAL human goal and verify it. "
+                        "Do not ask for continue or new permission for an already authorized action. If a real boundary or missing fact prevents progress, report that precise limitation."
+                    )
                 if isinstance(commands_log[-1].get("result"), dict) and commands_log[-1]["result"].get("error") == "memory_write_requires_explicit_user_intent":
                     add_correction(MEMORY_WRITE_CORRECTION)
                 if fn_name in BROWSER_TOOL_NAMES:
@@ -1251,7 +1273,7 @@ async def process_non_pipeline_command(
                             hostname=device_info.get("hostname") or target_device, iteration=iteration + 1)
                         return {"answer": payload["text"], "commands": commands_log, "tasks": [],
                                 "training_context": _training_context(device_info)}
-                if tool_result_terminal_sufficient(commands_log[-1]):
+                if window_only and tool_result_terminal_sufficient(commands_log[-1]):
                     terminal_sufficient_entry = commands_log[-1]
                     if terminal_sufficient_extra_turn_used:
                         payload = validate_answer_text_payload(
@@ -1293,8 +1315,12 @@ async def process_non_pipeline_command(
             usage_context={**(usage_context or {}), "phase": "browser_bridge.answer_repair" if browser_answer_phase else "answer_repair"},
         )
     if repair_result.get("ok"):
+        receipt = repair_result.get("task_receipt")
+        if receipt and receipt.get("goal_completed") is False:
+            receipt["terminal_reason"] = "browser_answer_unavailable" if browser_answer_phase else "iteration_limit"
         return {
             "answer": repair_result["answer"],
+            **({"task_receipt": repair_result["task_receipt"]} if repair_result.get("task_receipt") else {}),
             "commands": commands_log,
             "training_context": _training_context(device_info),
             "tasks": [],

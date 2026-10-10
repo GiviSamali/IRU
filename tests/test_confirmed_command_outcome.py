@@ -93,7 +93,6 @@ def test_verified_command_success_is_not_success_of_the_whole_goal(scenario,code
     {'status':'failed','returncode':0,'stdout':'OK: optimistic'},
     {'status':'error'},
     {'completion_state':'failed','returncode':0,'stdout':'OK: optimistic'},
-    {'returncode':0,'stdout':'NO: effect_missing'},
 ])
 def test_failed_result_never_becomes_done(scenario,result):
     scenario.agent.result=result;approve(scenario);task=finished(scenario)
@@ -105,7 +104,7 @@ def test_failed_result_never_becomes_done(scenario,result):
 
 
 @pytest.mark.parametrize('result',[
-    None,{},[],{'returncode':0,'stdout':''},
+    None,{},[],
     {'status':'unknown','returncode':0,'stdout':'OK: optimistic'},
     {'status':'unknown','error':'PRIVATE_TIMEOUT'},
     {'status':'started','returncode':0,'stdout':'OK: optimistic'},
@@ -116,7 +115,7 @@ def test_failed_result_never_becomes_done(scenario,result):
     {'returncode':0.0,'stdout':'OK: optimistic'},
     {'status':[],'returncode':0,'stdout':'OK: optimistic'},
     {'returncode':0,'completion_state':'partial_success','stdout':'OK: optimistic'},
-    {'returncode':0,'stdout':'OK: launch_requested long_running'},
+    {'returncode':0,'stdout':'OK: launch_requested long_running','status':'launch_requested'},
 ])
 def test_unknown_or_launch_only_result_never_claims_proven_success(scenario,result):
     scenario.agent.result=result;approve(scenario);task=finished(scenario)
@@ -266,10 +265,19 @@ def test_cancel_after_dispatch_does_not_get_overwritten_by_completion(scenario):
  {'returncode':0.0,'stdout':'OK: effect_verified'},
  {'returncode':0,'stdout':'OK: effect_verified','status':'unknown'},
  {'returncode':0,'stdout':'OK: effect_verified','completion_state':'pending'},
- {'returncode':0,'stdout':'OK: launch_requested'},
+ {'returncode':0,'stdout':'OK: launch_requested','status':'launch_requested'},
 ])
 def test_terminal_sufficiency_agrees_with_uncertain_command_outcome(result):
  from server.tool_completion import execute_cmd_result_is_ok,tool_result_terminal_sufficient
  assert confirmed_command_outcome(result)=='unknown'
  assert not execute_cmd_result_is_ok(result)
  assert not tool_result_terminal_sufficient({'tool_name':'execute_cmd','result':result})
+
+
+@pytest.mark.parametrize('stdout',['','NO: missing','OK: claimed','WorkerDoIt'])
+def test_stdout_is_data_not_command_authority(scenario,stdout):
+    scenario.agent.result={'returncode':0,'stdout':stdout,'stderr':''}
+    approve(scenario);task=finished(scenario)
+    assert task['task_receipt']['command_outcome']=='success'
+    assert task['task_receipt']['goal_completed'] is False
+    assert len(scenario.agent.calls)==1

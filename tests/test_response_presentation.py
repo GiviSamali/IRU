@@ -23,12 +23,18 @@ def owner(tmp_path, monkeypatch):
 
 
 def completed(owner, suffix="pptx"):
-    return {"task_id":"presentation-task","user_id":owner["id"],"chat_id":owner["chat_id"],
+    result = {"task_id":"presentation-task","user_id":owner["id"],"chat_id":owner["chat_id"],
         "kind":"worker","worker_id":"worker-1","message":"Создай презентацию","device_ids":[f"{owner['id']}:pc"],
         "modes":{},"created_at":time.time(),"status":"done","answer":"Все 10 слайдов. "*80+r" C:\private\build.py",
         "commands":[{"tool_name":"write_content","step_id":"step_1","status":"success","device_id":"pc",
             "result":{"path":r"C:\Users\Owner\Desktop\result."+suffix,"bytes_written":500}}],
-        "tasks":[],"task_receipt":{"task_status":"completed","goal_completed":True,"final_verification_status":"verified"}}
+        "tasks":[],"task_receipt":{"task_status":"completed","goal_completed":True,"final_verification_status":"verified","answer_source":"audited_terminal"}}
+
+    result['commands'].append({'tool_name':'answer.text','status':'terminal','result':{
+        'answer_type':'grounded_report','text':result['answer'],'basis':['step_1'],
+        'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,
+            'has_sufficient_evidence':True,'missing_evidence_question':''}}})
+    return result
 
 
 def test_presentation_is_based_on_artifact_evidence_not_report_prose(owner):
@@ -46,7 +52,7 @@ def test_filename_claims_without_artifact_evidence_cannot_create_presentation_fa
     task=completed(owner)
     task['commands']=[{'tool_name':'execute_cmd','step_id':'step_1','status':'success','result':{'returncode':0,'stdout':'OK: action_verified'}}]
     task['answer']='Создана презентация на 100 слайдов на рабочем столе'
-    assert worker_presentation(task)['conversational_response']==build_worker_report(task)['summary']
+    assert 'Не могу подтвердить' in worker_presentation(task)['conversational_response']
     task['commands'][0]['result']['stdout']='process started'
     assert 'Не могу подтвердить' in worker_presentation(task)['conversational_response']
 
@@ -204,6 +210,7 @@ def test_silent_success_policy_never_hides_partial_worker_outcome(client,monkeyp
     response=client.post('/api/voice/tasks/'+task['task_id']+'/speech',headers=headers)
     assert response.status_code==200 and 'часть задачи' in spoken[0]
     task['task_receipt']['goal_completed']=True
+    task['commands'].append(completed(user)['commands'][-1])
     assert client.post('/api/voice/tasks/'+task['task_id']+'/speech',headers=headers).status_code==204
 
 
@@ -331,6 +338,7 @@ def test_shell_observation_lifecycle_without_action_marker(owner, monkeypatch, s
         await scheduler.shutdown()
     asyncio.run(scenario())
     task['commands'][-1]['result']['self_check']['claims_completed_action']=True
+    task.pop('task_receipt')  # A changed self-check alone cannot grant completion.
     assert build_worker_report(task)['status']=='unknown'  # rc=0 does not prove an action.
     task['commands'][-1]['result']['self_check']['claims_completed_action']=False
     task['answer']=text+' Неподтверждённое дополнение.'
@@ -521,4 +529,4 @@ def test_report_agrees_with_confirmed_zero_code_contract(owner,code):
  task['commands']=[{'tool_name':'execute_cmd','step_id':'step_1','status':'success','result':result},
  {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':task['answer'],'basis':['step_1'],
  'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,'has_sufficient_evidence':True,'missing_evidence_question':''}}}]
- assert build_worker_report(task)['status']=='success'
+ assert build_worker_report(task)['status']=='unknown'

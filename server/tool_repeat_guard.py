@@ -87,6 +87,34 @@ def find_prior_successful_read_only_tool_step(
     return None
 
 
+def repeated_command_observation(journal: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Feedback only: identical execution is never assumed safe to skip."""
+    if not journal:
+        return None
+    latest = journal[-1]
+    result = latest.get("result")
+    if canonical_tool_name(latest.get("tool_name") or latest.get("action", "")) != "execute_cmd":
+        return None
+    if not isinstance(result, dict) or result.get("error") or result.get("returncode") not in (0, "0"):
+        return None
+    observation = (result.get("stdout"), result.get("stderr"))
+    if not any(isinstance(text, str) and text.strip() for text in observation):
+        return None
+    count = 1
+    first = latest
+    for entry in reversed(journal[:-1]):
+        previous = entry.get("result")
+        if (entry.get("command") != latest.get("command") or entry.get("target_device_id") != latest.get("target_device_id")
+                or entry.get("device_id") != latest.get("device_id") or entry.get("tool_name") != latest.get("tool_name")
+                or not isinstance(previous, dict) or previous.get("error")
+                or previous.get("returncode") not in (0, "0")
+                or (previous.get("stdout"), previous.get("stderr")) != observation):
+            break
+        count += 1
+        first = entry
+    return {"count": count, "step_id": first.get("step_id")} if count >= 2 else None
+
+
 def duplicate_read_only_tool_message(tool_name: str, prior_step: dict[str, Any]) -> dict[str, Any]:
     previous_step_id = str(prior_step.get("step_id") or "")
     return {
@@ -96,6 +124,6 @@ def duplicate_read_only_tool_message(tool_name: str, prior_step: dict[str, Any])
         "previous_summary": prior_step.get("summary") or "",
         "instruction": (
             "This read-only tool was already called with the same arguments in the current run. "
-            f"Use answer_text now and cite {previous_step_id} in basis if the answer depends on it."
+            f"Reuse {previous_step_id}. Answer only if the whole human goal is supported; otherwise perform the next necessary action."
         ),
     }

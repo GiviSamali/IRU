@@ -56,6 +56,7 @@ try:
         record_lifecycle_event,
         ProtocolValidationError,
         append_answer_step,
+        audited_task_receipt,
         append_tool_step,
         compact_write_content_result,
         is_answer_failure_tool,
@@ -116,6 +117,7 @@ except ImportError:
         record_lifecycle_event,
         ProtocolValidationError,
         append_answer_step,
+        audited_task_receipt,
         append_tool_step,
         compact_write_content_result,
         is_answer_failure_tool,
@@ -1295,7 +1297,8 @@ async def run_pipeline_worker(
                         client=client,
                         cfg=cfg,
                         chat_completion_request_fn=chat_completion_request_fn,
-                        user_request=f"{overall_goal}\n{step_title}\n{step.get('instruction', '')}\nSuccess criteria: {step.get('success_criteria', '')}",
+                        user_request=overall_goal,
+                        completion_scope=f"{step_title}\n{step.get('instruction', '')}\nSuccess criteria: {step.get('success_criteria', '')}",
                         current_run_journal=commands_log,
                         answer_payload=payload,
                         usage_context={**(usage_context or {}), "phase": f"browser_bridge.step_{step_index + 1}.answer_auditor" if browser_policy.browser_only else f"pipeline.worker.step_{step_index + 1}.answer_auditor"},
@@ -1434,7 +1437,7 @@ async def run_pipeline_worker(
                     "role": "user",
                     "content": (
                         f"You already have current-run evidence from {previous_step_id}. "
-                        "Do not call the same read-only tool again. Call answer_text."
+                        "Do not repeat the same read-only tool. Perform the next necessary action of the assigned step; answer only when that step is supported."
                     ),
                 })
                 continue
@@ -1820,10 +1823,7 @@ async def run_pipeline_worker(
             if fn_name == "transfer_file" and tool_result.get("status") != "success":
                 return {"status": "error", "answer": "Передача файла не выполнена: " + str(tool_result.get("error", "transfer_failed")), "commands": commands_log}
             if completion_matches(step, commands_log[-1]):
-                payload = validate_answer_text_payload(synthesize_terminal_answer_payload(commands_log[-1]), commands_log)
-                append_answer_step(commands_log, "answer_text", payload, target_device_id=target_device,
-                                   hostname=shared.get("current_hostname") or target_device, iteration=iteration + 1)
-                return {"status": "ok", "answer": payload["text"], "commands": commands_log}
+                messages.append({"role":"user","content":"The latest operation is verified. Check the WHOLE assigned step: perform remaining requested work, or call answer_text with current-run evidence if that step is complete. Do not repeat an already proved observation."})
 
     if is_task_cancel_requested(poll_task_id):
         return {"status": "cancelled", "answer": "Остановлено пользователем.", "commands": commands_log}
@@ -1844,7 +1844,8 @@ async def run_pipeline_worker(
         cfg=cfg,
         model=model,
         messages=messages,
-        user_request=f"{overall_goal}\n{step_title}\n{step.get('instruction', '')}\nSuccess criteria: {step.get('success_criteria', '')}",
+        user_request=overall_goal,
+        completion_scope=f"{step_title}\n{step.get('instruction', '')}\nSuccess criteria: {step.get('success_criteria', '')}",
         journal=commands_log,
         chat_completion_request_fn=chat_completion_request_fn,
         target_device_id=step_device_id,
@@ -2272,13 +2273,6 @@ async def process_pipeline_subagents(
                 "task_receipt": receipt,
             }
 
-        if task_status in {"completed", "completed_with_recovery"} and step_results and all(
-            item.get("validated_answer") and item.get("status") in {"done", "recovered"} for item in step_results
-        ):
-            receipt["answer_source"] = "pipeline_step_report"
-            return {"answer": format_pipeline_step_report(step_results, task_status),
-                    "commands": all_commands, "tasks": collect_tasks(created_task_ids), "task_receipt": receipt}
-
         summary_payload = {
             "original_request": user_message,
             "approved_plan": normalized_plan,
@@ -2331,7 +2325,7 @@ async def process_pipeline_subagents(
                             client=client,
                             cfg=cfg,
                             chat_completion_request_fn=chat_completion_request_fn,
-                            user_request=execution_goal,
+                            user_request=user_message,
                             current_run_journal=all_commands,
                             answer_payload=payload,
                             usage_context={**(usage_context or {}), "phase": "pipeline.final.answer_auditor"},
@@ -2350,10 +2344,11 @@ async def process_pipeline_subagents(
                             target_device_id=device_id,
                             hostname=device_info.get("hostname") or device_id,
                         )
-                        if answer_auditor_enabled(cfg):
-                            receipt["answer_source"] = "audited_terminal"
-                            receipt["goal_completed"] = payload["answer_type"] == "grounded_report"
-                            receipt["final_verification_status"] = "verified" if receipt["goal_completed"] else "unverified"
+                        audited = audited_task_receipt(payload, audited=answer_auditor_enabled(cfg))
+                        if audited:
+                            if receipt["task_status"] == "completed_with_recovery" and audited["goal_completed"]:
+                                audited["task_status"] = "completed_with_recovery"
+                            receipt.update(audited)
                         final_answer = payload["text"]
                         final_answer_from_answer_text = True
                         break

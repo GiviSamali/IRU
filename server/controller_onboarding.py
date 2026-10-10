@@ -3,9 +3,9 @@ import re
 
 import httpx
 try:
-    from .run_journal import append_answer_step, append_tool_step, validate_answer_text_payload
+    from .run_journal import append_answer_step, append_tool_step, audited_task_receipt, validate_answer_text_payload
 except ImportError:
-    from run_journal import append_answer_step, append_tool_step, validate_answer_text_payload
+    from run_journal import append_answer_step, append_tool_step, audited_task_receipt, validate_answer_text_payload
 
 try:
     from .web_search import run_web_search
@@ -75,44 +75,17 @@ async def process_onboarding_message(
     }
 
     for iteration in range(4):
+        # Import lazily: controller initialization also loads worker modules.
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
-                resp = await client.post(
-                    f"{cfg['base_url']}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {cfg['api_key']}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": cfg["model"],
-                        "messages": messages,
-                        "max_tokens": cfg.get("max_tokens", 4096),
-                        "temperature": cfg.get("temperature", 0.0),
-                        "tools": search_tools,
-                        "tool_choice": "auto",
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                record_llm_usage_event(
-                    usage_context=usage_ctx,
-                    model=cfg.get("model"),
-                    usage=extract_usage(data),
-                    cfg=cfg,
-                    request_ok=True,
-                    phase="onboarding",
-                )
-        except Exception as exc:
-            record_llm_usage_event(
-                usage_context=usage_ctx,
-                model=cfg.get("model"),
-                cfg=cfg,
-                request_ok=False,
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-                phase="onboarding",
-            )
-            raise
+            from .controller import _chat_completion_request
+            from .answer_auditor import answer_auditor_enabled, audit_answer_payload
+        except ImportError:
+            from controller import _chat_completion_request
+            from answer_auditor import answer_auditor_enabled, audit_answer_payload
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+            data = await _chat_completion_request(client=client, cfg=cfg, model=cfg['model'],
+                messages=messages, tools=search_tools, max_tokens=cfg.get('max_tokens',4096),
+                tool_choice='required' if strict_worker else 'auto', usage_context=usage_ctx, phase='onboarding')
 
         message = data["choices"][0]["message"]
         calls = message.get("tool_calls")
@@ -133,8 +106,19 @@ async def process_onboarding_message(
             if strict_worker and fn.get("name")=="answer_text":
                 try:
                     payload=validate_answer_text_payload(json.loads(fn.get("arguments") or "{}"),commands)
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0,connect=10.0)) as audit_client:
+                        valid, reason, infra_error = await audit_answer_payload(client=audit_client,cfg=cfg,
+                            chat_completion_request_fn=_chat_completion_request,user_request=user_message,
+                            current_run_journal=commands,answer_payload=payload,
+                            usage_context={**usage_ctx,'phase':'onboarding.answer_auditor'})
+                    if infra_error:
+                        return {"answer":"Не удалось проверить конечный ответ Worker.","commands":commands}
+                    if not valid:
+                        raise ValueError(reason)
                     append_answer_step(commands,"answer_text",payload,target_device_id="server")
-                    return {"answer":payload["text"],"commands":commands}
+                    receipt=audited_task_receipt(payload,audited=answer_auditor_enabled(cfg))
+                    return {"answer":payload["text"],"commands":commands,
+                            **({"task_receipt":receipt} if receipt else {})}
                 except (ValueError,TypeError):
                     messages.append({"role":"tool","tool_call_id":call["id"],"content":"Invalid terminal evidence/basis; call answer_text with actual current step_id."})
                     continue

@@ -46,7 +46,7 @@ try:
     )
     from .controller_tools import TOOLSET_REGISTRY  # type: ignore
     from .device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
-    from .llm_usage import extract_usage, record_llm_usage_event  # type: ignore
+    from .llm_usage import LLM_ENTITY, extract_usage, record_llm_usage_event  # type: ignore
     from .python_toolchain import build_python_toolchain_block, get_cached_python_toolchain  # type: ignore
 except ImportError:
     from controller_non_pipeline import process_non_pipeline_command as _process_non_pipeline_command  # type: ignore
@@ -73,7 +73,7 @@ except ImportError:
     )
     from controller_tools import TOOLSET_REGISTRY  # type: ignore
     from device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
-    from llm_usage import extract_usage, record_llm_usage_event  # type: ignore
+    from llm_usage import LLM_ENTITY, extract_usage, record_llm_usage_event  # type: ignore
     from python_toolchain import build_python_toolchain_block, get_cached_python_toolchain  # type: ignore
 import asyncio
 import httpx
@@ -246,6 +246,9 @@ def _thinking_request_fields(
         # Planning and ordinary window selection reserve output for structured calls.
         return {"thinking": {"type": "disabled"}}
 
+    if (request_phase or "").endswith(("answer_auditor", ".auditor")):
+        # The auditor has a small strict-JSON output budget, not a worker's CoT budget.
+        return {"thinking": {"type": "disabled"}}
     base_model = cfg.get("model", "deepseek-v4-flash")
     reasoner_model = cfg.get("model_reasoner", "deepseek-v4-pro")
 
@@ -256,6 +259,8 @@ def _thinking_request_fields(
             fields["reasoning_effort"] = reasoning_effort
         return fields
 
+    if LLM_ENTITY.get() == "worker" and model.startswith("deepseek-") and ((request_phase or "").startswith("non_pipeline.") or request_phase == "onboarding"):
+        return {"thinking": {"type": "enabled"}, "reasoning_effort": cfg.get("reasoning_effort") or "low"}
     return {"thinking": {"type": "disabled"}}
 
 
@@ -295,8 +300,18 @@ async def _chat_completion_request(
         )
     )
 
+    # DeepSeek thinking tool calls require preserved reasoning history and omit
+    # tool_choice. Server-side cardinality/terminal validation remains mandatory.
+    thinking = request_json.get("thinking", {}).get("type") == "enabled"
+    if thinking and model.startswith("deepseek-"):
+        request_json.pop("tool_choice", None)
+        # Synthetic/history context has no prior model reasoning. Preserve actual
+        # returned CoT unchanged, and explicitly mark absent context CoT empty.
+        request_json["messages"] = [
+            {**message, "reasoning_content": message.get("reasoning_content") or ""}
+            if message.get("role") == "assistant" else message for message in messages]
     base_model = cfg.get("model", "deepseek-v4-flash")
-    if model == base_model:
+    if model == base_model and not thinking:
         request_json["temperature"] = cfg.get("temperature", 0.0)
 
     resp = None

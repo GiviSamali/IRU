@@ -4,10 +4,11 @@ import json
 from typing import Any
 
 try:
-    from .answer_auditor import audit_answer_payload  # type: ignore
+    from .answer_auditor import answer_auditor_enabled, audit_answer_payload  # type: ignore
     from .run_journal import (  # type: ignore
         ProtocolValidationError,
         append_answer_step,
+        audited_task_receipt,
         build_terminal_answer_repair_prompt,
         is_answer_text_tool,
         make_run_step,
@@ -16,10 +17,11 @@ try:
     )
     from .tool_registry import DEVICE_TOOL_SCHEMAS  # type: ignore
 except ImportError:
-    from answer_auditor import audit_answer_payload  # type: ignore
+    from answer_auditor import answer_auditor_enabled, audit_answer_payload  # type: ignore
     from run_journal import (  # type: ignore
         ProtocolValidationError,
         append_answer_step,
+        audited_task_receipt,
         build_terminal_answer_repair_prompt,
         is_answer_text_tool,
         make_run_step,
@@ -49,8 +51,11 @@ async def run_answer_only_repair_turn(
     hostname: str | None = None,
     iteration: int | None = None,
     usage_context: dict[str, Any] | None = None,
+    completion_scope: str | None = None,
 ) -> dict[str, Any]:
     repair_prompt = build_terminal_answer_repair_prompt(user_request, journal)
+    if completion_scope:
+        repair_prompt += "\nAssigned step to report within the original authorization:\n" + completion_scope
     repair_messages = list(messages) + [{"role": "user", "content": repair_prompt}]
     try:
         data = await chat_completion_request_fn(
@@ -87,6 +92,7 @@ async def run_answer_only_repair_turn(
         user_request=user_request,
         current_run_journal=journal,
         answer_payload=answer_payload,
+        completion_scope=completion_scope,
         usage_context={**(usage_context or {}), "phase": f"{(usage_context or {}).get('phase') or 'answer_repair'}.auditor"},
     )
     if audit_infra_error:
@@ -114,4 +120,5 @@ async def run_answer_only_repair_turn(
         hostname=hostname,
         iteration=iteration,
     )
-    return {"ok": True, "answer": answer_payload["text"], "entry": entry}
+    return {"ok": True, "answer": answer_payload["text"], "entry": entry,
+            "task_receipt": audited_task_receipt(answer_payload, audited=answer_auditor_enabled(cfg))}
