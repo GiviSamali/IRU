@@ -425,15 +425,105 @@ def wrap_tool_result_for_llm(entry: dict[str, Any]) -> dict[str, Any]:
 
 
 def serialize_tool_result_for_llm(entry: dict[str, Any]) -> str:
-    """Keep bounded Browser Bridge JSON intact, including escaping and trust markers.
-
-    Browser transport already caps result bytes at 128 KiB and semantic text at
-    24,000 characters. Slicing serialized JSON would corrupt quote-rich content.
-    Other tools retain their established compact result behavior.
-    """
+    """Bound the model's projection without slicing JSON or changing evidence."""
     wrapped = wrap_tool_result_for_llm(entry)
     payload = json.dumps(wrapped, ensure_ascii=False)
-    return payload if canonical_tool_name(str(wrapped["tool_name"])).startswith("web.") else payload[:4000]
+    if canonical_tool_name(str(wrapped["tool_name"])).startswith("web.") or len(payload) <= 4000:
+        return payload
+
+    # JSON round-trip detaches all nested fields from the original journal.
+    compact = json.loads(payload)
+    fields = {}
+    compact["truncation"] = {"truncated": True, "fields": fields}
+    protected = {"step_id", "tool_name", "status", "trust_level", "authority", "instruction_boundary"}
+    outcome_fields = {"status", "completion_state", "returncode", "error_code", "confirmation_outcome"}
+
+    def text_fields(value, path=()):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if not path and key in protected | {"truncation"}:
+                    continue
+                if path and key in outcome_fields:
+                    continue
+                yield from text_fields(child, path + (key,))
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                yield from text_fields(child, path + (index,))
+        elif isinstance(value, str) and len(value) > 64:
+            yield path, value
+
+    # Bound reduction work too; a wide/large structure can use the fallback.
+    for _ in range(24):
+        candidates = list(text_fields(compact))
+        if not candidates:
+            break
+        path, text = max(candidates, key=lambda item: len(json.dumps(item[1], ensure_ascii=False)))
+        parent = compact
+        for key in path[:-1]:
+            parent = parent[key]
+        shown = max(64, len(text) // 2)
+        parent[path[-1]] = text[:shown]
+        pointer = "/" + "/".join(str(key).replace("~", "~0").replace("/", "~1") for key in path)
+        original = fields.get(pointer, {}).get("original_chars", len(text))
+        fields[pointer] = {"original_chars": original, "shown_chars": shown, "portion": "prefix"}
+        candidate = json.dumps(compact, ensure_ascii=False)
+        if len(candidate) <= 4000:
+            return candidate
+
+    # No list/dict prefix is represented as a complete tool result. Keep outcomes
+    # where possible and report uncertainty in the projection, never new success.
+    minimal = {key: wrapped[key] for key in ("trust_level", "authority", "instruction_boundary")}
+    changes = {}
+    for key in ("step_id", "tool_name", "status", "summary"):
+        value = wrapped[key]
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False)
+        if isinstance(value, str) and len(value) > 32:
+            changes["/" + key] = {"original_chars": len(value), "shown_chars": 32, "portion": "prefix"}
+            value = value[:32]
+        minimal[key] = value
+    original_result = wrapped["result"]
+    result = {}
+    if isinstance(original_result, dict):
+        for key in ("status", "completion_state", "returncode", "error", "error_code", "confirmation_outcome"):
+            if key not in original_result:
+                continue
+            value = original_result[key]
+            if isinstance(value, str):
+                if len(value) > 32:
+                    changes["/result/" + key] = {"original_chars": len(value), "shown_chars": 32, "portion": "prefix"}
+                result[key] = value[:32]
+            elif value is None or isinstance(value, (bool, int, float)):
+                # Avoid an arbitrarily large number defeating the message budget.
+                if len(json.dumps(value)) <= 32:
+                    result[key] = value
+            elif key == "error" and value:
+                result[key] = {"present": True, "details_omitted": True}
+    minimal["result"] = result
+    minimal["truncation"] = {
+        "truncated": True, "representation": "minimal_projection", "fields": changes,
+        "original_message_chars": len(payload),
+        "original_result_json_chars": len(json.dumps(original_result, ensure_ascii=False)),
+        "result_details_omitted": True,
+        "notice": "Only selected outcome fields remain. Missing data is not an empty result; no continuation offset is implied.",
+    }
+    if "/step_id" in changes:
+        minimal["step_id"] = None
+        minimal["truncation"]["fields"]["/step_id"]["shown_chars"] = 0
+        minimal["truncation"]["fields"]["/step_id"]["portion"] = "omitted"
+    if not isinstance(minimal["status"], str) or minimal["status"] not in {"failed", "error", "blocked", "cancelled", "unknown"}:
+        minimal["truncation"]["original_status"] = minimal["status"]
+        minimal["status"] = "unknown"
+    projected = json.dumps(minimal, ensure_ascii=False)
+    # Enforce the budget even for nonstandard service values supplied by a caller.
+    if len(projected) > 4000:
+        minimal["step_id"] = None
+        minimal["tool_name"] = str(wrapped["tool_name"])[:32]
+        minimal["summary"] = "Tool result details omitted; consult original evidence."
+        minimal["truncation"]["service_fields_omitted"] = True
+        minimal["truncation"]["original_status"] = str(wrapped["status"])[:32]
+        projected = json.dumps(minimal, ensure_ascii=False)
+    return projected
 
 
 def _repair_step_line(entry: dict[str, Any]) -> dict[str, Any]:
