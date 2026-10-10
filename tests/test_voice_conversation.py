@@ -72,7 +72,7 @@ def test_delegation_speech_uses_actual_admission_not_model_completion(client,mon
  cmd=SimpleNamespace(message='Проверь данные',request_id='admission',device_id='',modes={},broadcast=False)
  reply=asyncio.run(orch.run_turn(cmd,user,chat,delegate));task=tasks[reply['task_id']]
  assert reply['answer']=='' and task['commands']==[]
-  assert asyncio.run(voice.spoken_parts(task))==[]
+ assert asyncio.run(voice.spoken_parts(task))==[]
  assert reply['worker_task_id']=='fake-worker'
 
 

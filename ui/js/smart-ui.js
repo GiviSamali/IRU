@@ -57,6 +57,9 @@ const IRUSmartUI = (() => {
   function taskState(message, tasks, commands = []) {
     const receipt = message.taskReceipt || message.task_receipt || {};
     const report=message.workerReport || message.worker_report;
+    // WorkerReport is the server's validated outcome. Legacy step snapshots are
+    // details and cannot re-decide it in the presentation layer.
+    if (report?.schema_version === 1 && ['queued','running','waiting_confirmation','success','partial','blocked','failed','cancelled','unknown'].includes(report.status)) return normalizeStatus(report.status);
     const explicit = [report?.status,message.taskStatus,message.task_status,receipt.task_status,message.overallStatus];
     const states = explicit.map(normalizeStatus).filter(Boolean);
     const finalConfirmed = normalizeStatus(receipt.task_status) === 'success'

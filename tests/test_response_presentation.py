@@ -275,3 +275,250 @@ def test_worker_negative_speech_never_uses_model_or_long_claim_of_success(owner,
     spoken=' '.join(asyncio.run(voice.spoken_parts(task)))
     assert len(spoken)<=420 and '10 слайдов' not in spoken and spoken!=task['answer']
     assert any(token in spoken.casefold() for token in ['не удалось','не могу','часть','не полностью'])
+
+@pytest.mark.parametrize('stdout,text', [
+    ('IRU\nNotes', '**На рабочем столе:** IRU и Notes.'),
+    ('Текст заметки', 'В заметке: Текст заметки.'),
+    ('FreeSpace=123456', 'Свободно 123456 байт.'),
+    ('Notepad hwnd=42', 'Открыт Notepad.'),
+])
+def test_shell_observation_lifecycle_without_action_marker(owner, monkeypatch, stdout, text):
+    task=completed(owner)
+    task.pop('task_receipt')
+    task.update(answer=text, message='Получить информацию')
+    task['commands']=[{'tool_name':'execute_cmd','step_id':'step_1','status':'success',
+        'result':{'returncode':0,'stdout':stdout,'stderr':''}},
+        {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':text,'basis':['step_1'],
+        'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,'has_sufficient_evidence':True,'missing_evidence_question':''}}}]
+    # Actual controller loop with a controlled device transport and model responses.
+    # Exercise the enabled audit with a controlled provider verdict for the original goal.
+    from test_tool_only_protocol import _run_case, _message, _execute_call, _tool_call
+    sent=[]
+    async def transport(device,action,params):
+        sent.append((device,action,params))
+        return {'returncode':0,'stdout':stdout,'stderr':''}
+    payload=task['commands'][-1]['result']
+    payload['basis']=['step_1','step_2']
+    result=_run_case([
+        _message(tool_calls=[_execute_call('read-1','Get-ChildItem -LiteralPath C:/Users/Owner/Desktop')]),
+        _message(tool_calls=[_execute_call('read-2','Get-ChildItem -LiteralPath C:/Users/Owner/Desktop/IRU')]),
+        _message(tool_calls=[_tool_call('final','answer_text',payload)]),
+        _message(content='{"valid":true,"reason":"Original informational goal is supported by both observations"}',finish_reason='stop'),
+    ],user_message='Inspect the desktop folders',send_command_fn=transport,device_id='pc',cfg={'model':'mock-model','answer_auditor_enabled':True})
+    assert len(sent)==2 and all(action=='execute_cmd' for _,action,_ in sent)
+    assert result['answer']==text
+    task.update(answer=result['answer'],commands=result['commands'],task_receipt=result['task_receipt'])
+    async def scenario():
+        async def execute(t): t['status']='done'
+        scheduler=WorkerScheduler(execute)
+        await scheduler.submit(task)
+        await scheduler.runners[owner['id']]
+        assert task['worker_report']['status']=='success'
+        assert task['conversational_response']==text
+        assert task['answer']==text
+        message=db.get_messages(owner['chat_id'])[0]
+        assert message['content']==text and message['commands']==task['commands']
+        assert message['workerReport']['status']=='success'
+        tasks.clear()  # Reconnect/server-memory loss, retain SQLite.
+        restored=restore_task(owned_job(task['task_id'],owner['id']))
+        assert restored['answer']==text and restored['commands']==task['commands']
+        monkeypatch.setattr(routes,'get_current_user',lambda request:owner)
+        reply=(await routes.api_get_task(task['task_id'],SimpleNamespace()))['task']
+        assert reply['conversational_response']==text and reply['presentation_status']=='success'
+        assert reply['worker_report']==task['worker_report']
+        assert await voice.spoken_parts(restored)
+        assert restored['answer']==text
+        await scheduler.shutdown()
+    asyncio.run(scenario())
+    task['commands'][-1]['result']['self_check']['claims_completed_action']=True
+    assert build_worker_report(task)['status']=='unknown'  # rc=0 does not prove an action.
+    task['commands'][-1]['result']['self_check']['claims_completed_action']=False
+    task['answer']=text+' Неподтверждённое дополнение.'
+    assert build_worker_report(task)['status']=='unknown'
+
+
+def test_optional_history_presentation_fields_do_not_break_task_api(owner,monkeypatch):
+    task=completed(owner);task['worker_id']='worker-1'
+    task['history_metadata']={'workerReport':build_worker_report(task),'executionDetails':{'corrupt':True}}
+    tasks[task['task_id']]=task
+    monkeypatch.setattr(routes,'get_current_user',lambda request:owner)
+    reply=asyncio.run(routes.api_get_task(task['task_id'],SimpleNamespace()))['task']
+    assert reply['worker_report']['status']=='success'
+    assert isinstance(reply['conversational_response'],str)
+
+@pytest.mark.parametrize('result',[
+ {'returncode':0,'stdout':'data','completion_state':'unknown'},
+ {'returncode':0,'stdout':'data','completion_state':{}},
+ {'returncode':0,'stdout':'OK: launch_requested'},
+ {'returncode':0,'stdout':'data','status':'launch_requested'},
+ {'returncode':0,'stdout':'data','status':'unexpected'},
+ {'returncode':1,'stdout':'data'},
+ {'returncode':0,'stdout':'ERROR: failed'},
+ {'returncode':0,'stdout':'data','error':'permission_denied'},
+])
+def test_informational_terminal_cannot_promote_uncertain_execution(owner,result):
+ task=completed(owner);task.pop('task_receipt');task['answer']='Observed data'
+ task['commands']=[{'tool_name':'execute_cmd','step_id':'step_1','status':'success','result':result},
+ {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':task['answer'],'basis':['step_1'],
+ 'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,'has_sufficient_evidence':True,'missing_evidence_question':''}}}]
+ assert build_worker_report(task)['status']!='success'
+
+
+def test_unrelated_ok_marker_cannot_confirm_uncertain_terminal_basis(owner):
+ task=completed(owner);task.pop('task_receipt');task['answer']='Action completed'
+ task['commands']=[{'tool_name':'execute_cmd','step_id':'step_1','status':'success','result':{'returncode':0,'stdout':'OK: unrelated'}},
+ {'tool_name':'execute_cmd','step_id':'step_2','status':'success','result':{'returncode':0,'stdout':'process started'}},
+ {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':task['answer'],'basis':['step_2'],
+ 'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,'has_sufficient_evidence':True,'missing_evidence_question':''}}}]
+ assert build_worker_report(task)['status']=='unknown'
+
+
+def test_partial_terminal_keeps_verified_information_in_visible_response(owner):
+ task=completed(owner)
+ task.update(status='partial',answer='**Created first file.** Second file was denied.')
+ task['task_receipt']={'task_status':'partial','goal_completed':False}
+ task['commands'].append({'tool_name':'answer.text','status':'terminal','result':{'answer_type':'partial_report','text':task['answer'],'basis':['step_1'],
+ 'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,'has_sufficient_evidence':False,'missing_evidence_question':''}}})
+ assert build_worker_report(task)['status']=='partial'
+ assert worker_presentation(task)['conversational_response']==task['answer']
+ task['answer']+=' Unsupported extra claim.'
+ assert worker_presentation(task)['conversational_response']!=task['answer']
+
+
+def test_optional_desktop_profile_failure_keeps_verified_result(owner,monkeypatch):
+ task=completed(owner)
+ def unavailable(*args,**kwargs):raise RuntimeError('optional profile unavailable')
+ monkeypatch.setattr(db,'get_device_profile',unavailable)
+ assert build_worker_report(task)['status']=='success'
+ assert worker_presentation(task)['conversational_response']=='Презентация готова.'
+
+
+def test_final_job_snapshot_retains_evidence_if_history_row_is_unavailable(owner):
+ task=completed(owner)
+ async def scenario():
+  async def execute(t):t['status']='done'
+  scheduler=WorkerScheduler(execute)
+  await scheduler.submit(task);await scheduler.runners[owner['id']]
+  job=owned_job(task['task_id'],owner['id'])
+  with db.get_db() as c:c.execute('DELETE FROM messages WHERE id=?',(job['message_id'],))
+  restored=restore_task(owned_job(task['task_id'],owner['id']))
+  assert restored['answer']==task['answer']
+  assert restored['commands']==task['commands']
+  assert restored['task_receipt']==task['task_receipt']
+  assert restored['worker_report']==task['worker_report']
+  assert worker_presentation(restored)['conversational_response']==task['conversational_response']
+  await scheduler.shutdown()
+ asyncio.run(scenario())
+
+
+def test_report_and_history_update_roll_back_together(owner):
+ import sqlite3
+ from server.worker_scheduler import persist_report
+ task=completed(owner)
+ async def scenario():
+  async def execute(t):t['status']='done'
+  scheduler=WorkerScheduler(execute)
+  await scheduler.submit(task);await scheduler.runners[owner['id']]
+  before_job=owned_job(task['task_id'],owner['id'])
+  before_message=db.get_messages(owner['chat_id'])[0]
+  task['answer']='New raw execution details'
+  with db.get_db() as c:
+   c.execute("CREATE TRIGGER reject_report BEFORE UPDATE OF report ON worker_jobs BEGIN SELECT RAISE(ABORT,'simulated persistence failure'); END")
+  with pytest.raises(sqlite3.DatabaseError):persist_report(task)
+  assert owned_job(task['task_id'],owner['id'])==before_job
+  assert db.get_messages(owner['chat_id'])[0]==before_message
+  await scheduler.shutdown()
+ asyncio.run(scenario())
+
+
+def test_fresh_server_process_restores_same_report_and_api_response(owner):
+ import os
+ import subprocess
+ import sys
+ task=completed(owner)
+ async def scenario():
+  async def execute(t):t['status']='done'
+  scheduler=WorkerScheduler(execute)
+  await scheduler.submit(task);await scheduler.runners[owner['id']]
+  await scheduler.shutdown()
+ asyncio.run(scenario())
+ script='''import json,sys
+from fastapi.testclient import TestClient
+from server.main import app
+request=json.loads(sys.stdin.read())
+with TestClient(app) as client:
+ response=client.get('/api/tasks/'+request['task_id'],headers={'X-Token':request['token']})
+ assert response.status_code==200,response.status_code
+ print('P0_RESULT='+json.dumps(response.json()['task'],ensure_ascii=True))
+'''
+ env={**os.environ,'IRU_DB_PATH':str(db.DB_PATH),'PYTHONIOENCODING':'utf-8'}
+ result=subprocess.run([sys.executable,'-c',script],input=json.dumps({'task_id':task['task_id'],'token':owner['token']}),
+    text=True,capture_output=True,encoding='utf-8',env=env,timeout=30)
+ assert result.returncode==0,result.stderr
+ reply=json.loads(next(line.removeprefix('P0_RESULT=') for line in result.stdout.splitlines() if line.startswith('P0_RESULT=')))
+ assert reply['answer']==task['answer']
+ assert reply['commands']==task['commands']
+ assert reply['task_receipt']==task['task_receipt']
+ assert reply['worker_report']==task['worker_report']
+ assert reply['conversational_response']==task['conversational_response']
+ assert reply['presentation_status']=='success'
+
+@pytest.mark.parametrize('field',['report_summary','diagnostic_metrics','error_code'])
+def test_optional_report_formatting_cannot_block_task_read(owner,monkeypatch,field):
+ task=completed(owner)
+ expected='unknown' if field=='error_code' else 'success'
+ if field=='error_code':
+  task['status']='unknown';task['worker_error_code']={'invalid':'diagnostic'}
+ else:
+  task['worker_report']=build_worker_report(task)
+  if field=='report_summary':task['worker_report']['summary']={'invalid':'summary'}
+  else:task['orchestrator_metrics']='invalid metrics'
+ tasks[task['task_id']]=task
+ monkeypatch.setattr(routes,'get_current_user',lambda request:owner)
+ reply=asyncio.run(routes.api_get_task(task['task_id'],SimpleNamespace()))['task']
+ assert reply['worker_report']['status']==expected
+ assert reply['worker_report']['goal_completed']==(expected=='success')
+ assert reply['answer']==task['answer'] and isinstance(reply['conversational_response'],str)
+ assert reply['commands']==task['commands']
+
+
+def test_cached_report_from_another_task_cannot_confirm_current_goal(owner,monkeypatch):
+ task=completed(owner);cached=build_worker_report(task)
+ cached['task_id']='another-task'
+ task.update(answer='Unverified answer',commands=[],task_receipt=None,worker_report=cached)
+ tasks[task['task_id']]=task
+ monkeypatch.setattr(routes,'get_current_user',lambda request:owner)
+ reply=asyncio.run(routes.api_get_task(task['task_id'],SimpleNamespace()))['task']
+ assert reply['worker_report']['status']=='unknown'
+ assert reply['worker_report']['task_id']==task['task_id']
+ assert not reply['worker_report']['goal_completed'] and not reply['worker_report']['artifacts']
+
+
+def test_empty_shell_observation_is_preserved_without_forcing_markers(owner):
+ task=completed(owner);task.pop('task_receipt');text='Папка IRU существует и пуста.'
+ from server.run_journal import make_run_step,append_tool_step,append_answer_step
+ journal=[]
+ for output in ('IRU',''):
+  append_tool_step(journal,make_run_step(journal=journal,tool_name='execute_cmd',result={'returncode':0,'stdout':output,'stderr':''},target_device_id='pc'))
+ payload={'answer_type':'grounded_report','text':text,'basis':['step_1','step_2'],
+ 'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,'has_sufficient_evidence':True,'missing_evidence_question':''}}
+ append_answer_step(journal,'answer_text',payload,target_device_id='pc')
+ task.update(answer=text,commands=journal)
+ assert build_worker_report(task)['status']=='unknown'
+ task['task_receipt']={'answer_source':'audited_terminal','task_status':'completed','goal_completed':True,'final_verification_status':'verified'}
+ assert build_worker_report(task)['status']=='success'
+ assert worker_presentation(task)['conversational_response']==text
+ task['commands'][1]['result'].pop('stdout')
+ assert build_worker_report(task)['status']=='unknown'
+
+
+@pytest.mark.parametrize('code',[0,'0'])
+def test_report_agrees_with_confirmed_zero_code_contract(owner,code):
+ from server.command_confirmation import confirmed_command_outcome
+ task=completed(owner);task.pop('task_receipt');task['answer']='Действие проверено.'
+ result={'returncode':code,'stdout':'OK: effect_verified'}
+ assert confirmed_command_outcome(result)=='success'
+ task['commands']=[{'tool_name':'execute_cmd','step_id':'step_1','status':'success','result':result},
+ {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':task['answer'],'basis':['step_1'],
+ 'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,'has_sufficient_evidence':True,'missing_evidence_question':''}}}]
+ assert build_worker_report(task)['status']=='success'

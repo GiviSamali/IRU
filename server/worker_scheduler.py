@@ -3,6 +3,8 @@ import asyncio
 import json
 import time
 import sys
+import logging
+import sqlite3
 
 try:
     from . import database as db
@@ -29,6 +31,10 @@ def init_worker_storage():
             created_at REAL NOT NULL, updated_at REAL NOT NULL, request_key TEXT,
             UNIQUE(owner_user_id, request_key))""")
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS worker_one_active_owner ON worker_jobs(owner_user_id) WHERE state IN ('running','waiting_confirmation')")
+        connection.execute("CREATE INDEX IF NOT EXISTS worker_owner_recent ON worker_jobs(owner_user_id,created_at DESC)")
+        connection.execute("""CREATE INDEX IF NOT EXISTS worker_owner_queue ON worker_jobs(owner_user_id,
+            CASE WHEN state IN ('running','waiting_confirmation') THEN 0 WHEN state='queued' THEN 1 ELSE 2 END,
+            CASE WHEN state='queued' THEN created_at ELSE -created_at END)""")
 
 
 def owned_job(task_id, user_id):
@@ -50,10 +56,17 @@ def list_jobs(user_id, limit=8, *, queue_first=False):
 
 def restore_task(job):
     payload = json.loads(job["payload"])
-    if job.get("report"):
-        report=json.loads(job["report"])
-        payload.update(status=report["status"], worker_report=report, answer=report["summary"], commands=[], tasks=[], worker_id="worker-1")
-        # Restore evidence from the same persisted message, never from another user/chat.
+    snapshot_report=payload.get("worker_report")
+    report=(snapshot_report if isinstance(snapshot_report,dict) and snapshot_report.get("status")==job["state"]
+            and snapshot_report.get("task_id")==job["task_id"] else json.loads(job["report"]) if job.get("report") else None)
+    if report:
+        final_snapshot=payload.get("worker_report")==report and isinstance(payload.get("answer"),str)
+        payload.update(status=report["status"], worker_report=report,
+            answer=payload.get("answer") or report["summary"], commands=payload.get("commands") or [],
+            tasks=payload.get("tasks") or [], worker_id="worker-1")
+        if final_snapshot:
+            return payload
+        # Legacy jobs restore evidence from the same persisted message, never another user/chat.
         with db.get_db() as c:
             row=c.execute("SELECT content,commands,task_metadata FROM messages WHERE id=? AND chat_id=?",(job.get("message_id"),job["chat_id"])).fetchone()
         if row:
@@ -70,24 +83,93 @@ def restore_task(job):
     return payload
 
 
-def persist_report(task):
+def _persistence_failure(task, event, exc):
+    # Protected metadata only; preserve execution status and evidence.
+    logging.getLogger("iru.worker").warning("%s task_id=%s type=%s",event,task["task_id"],type(exc).__name__)
+    trace=task.setdefault("diagnostic_trace",[])
+    if isinstance(trace,list) and len(trace)<256:
+        trace.append({"task_id":task["task_id"],"event":event,"error_type":type(exc).__name__})
+
+
+def _final_snapshot(task, report, previous):
+    snapshot=dict(previous)
+    # Never serialize transient controller locks/events or transport objects.
+    for key in ("answer","commands","tasks","task_receipt","diagnostic_trace","worker_started_at",
+                "conversational_response","execution_details","cancel_requested","worker_error_code",
+                "history_message_id","history_metadata"):
+        if key in task:snapshot[key]=task[key]
+    snapshot.update(status=report["status"],worker_report=report)
+    return snapshot
+
+
+def persist_report(task, *, include_report_column=True):
     report=build_worker_report(task);task["worker_report"]=report
     task.update(worker_presentation(task,report))
-    presentation={**task,"status":report["status"],"worker_report":report}
-    metadata=db.message_task_metadata(presentation, task_id=task["task_id"])
+    metadata=db.message_task_metadata({**task,"status":report["status"],"worker_report":report},task_id=task["task_id"])
     task["history_metadata"]=metadata
     message_id=task.get("history_message_id")
-    if message_id:
-        with db.get_db() as c:
-            c.execute("UPDATE messages SET content=?,commands=?,task_metadata=? WHERE id=? AND chat_id=? AND role='assistant'",
-                (task["conversational_response"],json.dumps(task.get("commands") or [],ensure_ascii=False),json.dumps(metadata,ensure_ascii=False),message_id,task["chat_id"]))
-    else:
-        saved=db.add_message(task["chat_id"],"assistant",task["conversational_response"],task.get("commands") or [],task_metadata=metadata)
-        message_id=saved["id"];task["history_message_id"]=message_id
     with db.get_db() as c:
-        c.execute("UPDATE worker_jobs SET state=?,report=?,message_id=?,updated_at=? WHERE task_id=? AND owner_user_id=?",
-            (report["status"],json.dumps(report,ensure_ascii=False),message_id,time.time(),task["task_id"],task["user_id"]))
+        c.execute("BEGIN IMMEDIATE")
+        row=c.execute("SELECT payload FROM worker_jobs WHERE task_id=? AND owner_user_id=?",(task["task_id"],task["user_id"])).fetchone()
+        if row is None:raise ValueError("worker_job_identity_mismatch")
+        c.execute("SAVEPOINT worker_history")
+        try:
+            chat=c.execute("SELECT 1 FROM chats WHERE id=? AND user_id=?",(task["chat_id"],task["user_id"])).fetchone()
+            if chat is None:raise ValueError("chat_not_owned_or_deleted")
+            if message_id:
+                updated=c.execute("UPDATE messages SET content=?,commands=?,task_metadata=? WHERE id=? AND chat_id=? AND role='assistant'",
+                    (task["conversational_response"],json.dumps(task.get("commands") or [],ensure_ascii=False),json.dumps(metadata,ensure_ascii=False),message_id,task["chat_id"]))
+                if updated.rowcount!=1:
+                    # A deleted row can be rebuilt only in the still-owned chat.
+                    if c.execute("SELECT 1 FROM messages WHERE id=?",(message_id,)).fetchone():
+                        raise ValueError("message_identity_mismatch")
+                    message_id=None
+            if not message_id:
+                saved=c.execute("INSERT INTO messages(chat_id,role,content,commands,task_metadata,created_at) VALUES(?,?,?,?,?,?)",
+                    (task["chat_id"],"assistant",task["conversational_response"],json.dumps(task.get("commands") or [],ensure_ascii=False),json.dumps(metadata,ensure_ascii=False),time.time()))
+                message_id=saved.lastrowid
+                c.execute("UPDATE chats SET updated_at=? WHERE id=? AND user_id=?",(time.time(),task["chat_id"],task["user_id"]))
+        except (sqlite3.Error, ValueError) as exc:
+            c.execute("ROLLBACK TO worker_history")
+            _persistence_failure(task,"history_persistence_failed",exc)
+            message_id=None
+        finally:
+            c.execute("RELEASE worker_history")
+        # History may be unavailable; the job still owns the durable result and slot.
+        snapshot=_final_snapshot(task,report,json.loads(row["payload"]))
+        snapshot["history_message_id"]=message_id
+        if include_report_column:
+            c.execute("UPDATE worker_jobs SET state=?,report=?,payload=?,message_id=?,updated_at=? WHERE task_id=? AND owner_user_id=?",
+                (report["status"],json.dumps(report,ensure_ascii=False),json.dumps(snapshot,ensure_ascii=False),message_id,time.time(),task["task_id"],task["user_id"]))
+        else:
+            c.execute("UPDATE worker_jobs SET state=?,payload=?,message_id=?,updated_at=? WHERE task_id=? AND owner_user_id=?",
+                (report["status"],json.dumps(snapshot,ensure_ascii=False),message_id,time.time(),task["task_id"],task["user_id"]))
+    # Do not publish an uncommitted replacement ID if the job update rolls back.
+    task["history_message_id"]=message_id
     return report
+
+
+def _finalize_report(task):
+    try:
+        return persist_report(task)
+    except Exception as exc:
+        _persistence_failure(task,"report_persistence_failed",exc)
+        if isinstance(exc,sqlite3.Error):
+            # The first transaction rolled back. Retry the same snapshot/history
+            # without the optional report column; the payload retains its report.
+            return persist_report(task,include_report_column=False)
+        # Retain the normal evidence-derived outcome in the existing job payload.
+        # Avoid the failed report/history projection; do not replay execution.
+        report=build_worker_report(task)
+        task["worker_report"]=report
+        with db.get_db() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row=c.execute("SELECT payload FROM worker_jobs WHERE task_id=? AND owner_user_id=?",(task["task_id"],task["user_id"])).fetchone()
+            if row is None:raise ValueError("worker_job_identity_mismatch")
+            snapshot=_final_snapshot(task,report,json.loads(row["payload"]))
+            c.execute("UPDATE worker_jobs SET state=?,payload=?,updated_at=? WHERE task_id=? AND owner_user_id=?",
+                (report["status"],json.dumps(snapshot,ensure_ascii=False),time.time(),task["task_id"],task["user_id"]))
+        return report
 
 
 class WorkerScheduler:
@@ -188,12 +270,12 @@ class WorkerScheduler:
                     if self.closing: return
                 except asyncio.CancelledError:
                     task.update(status="unknown",worker_error_code="server_interrupted")
-                    persist_report(task);raise
+                    _finalize_report(task);raise
                 except asyncio.TimeoutError:
                     task.update(status="unknown",worker_error_code="worker_deadline_outcome_unknown")
                 except Exception:
                     task.update(status="failed",worker_error_code="worker_exception")
-                persist_report(task)
+                _finalize_report(task)
                 with db.get_db() as c:
                     c.execute("BEGIN IMMEDIATE")
                     next_row=c.execute("SELECT * FROM worker_jobs WHERE owner_user_id=? AND state='queued' ORDER BY created_at, rowid LIMIT 1",(owner,)).fetchone()
@@ -213,7 +295,7 @@ class WorkerScheduler:
         task=tasks.get(task_id) or restore_task(job);tasks[task_id]=task
         if job["state"]=="queued":
             mark_task_cancelled(task_id,answer="Ожидающая задача отменена до исполнения.",commands=[])
-            task["worker_error_code"]="cancelled_before_execution";persist_report(task)
+            task["worker_error_code"]="cancelled_before_execution";_finalize_report(task)
         elif job["state"] in ACTIVE_STATES:
             request_task_cancel(task_id,owner)
             for field,decision in [("_pipeline_plan_future",{"action":"cancel"}),("_pipeline_confirm_future",False)]:
@@ -253,7 +335,7 @@ class WorkerScheduler:
             task=restore_task(row);tasks[task["task_id"]]=task
             task.update(status="cancelled" if row["state"]=="queued" else "unknown",
                 worker_error_code="server_restarted_not_executed" if row["state"]=="queued" else "server_restarted_outcome_unknown")
-            persist_report(task)
+            _finalize_report(task)
 
     async def shutdown(self):
         self.closing=True

@@ -9,7 +9,7 @@ import httpx
 
 try:
     from . import database as db  # type: ignore
-    from .answer_auditor import audit_answer_payload  # type: ignore
+    from .answer_auditor import audit_answer_payload, answer_auditor_enabled  # type: ignore
     from .answer_repair import run_answer_only_repair_turn  # type: ignore
     from .controller_budget import BUDGET_GUARD_ERROR, CommandBudget, budget_guard_entry  # type: ignore
     from .controller_tools import TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
@@ -75,7 +75,7 @@ try:
     )
 except ImportError:
     import database as db  # type: ignore
-    from answer_auditor import audit_answer_payload  # type: ignore
+    from answer_auditor import audit_answer_payload, answer_auditor_enabled  # type: ignore
     from answer_repair import run_answer_only_repair_turn  # type: ignore
     from controller_budget import BUDGET_GUARD_ERROR, CommandBudget, budget_guard_entry  # type: ignore
     from controller_tools import TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
@@ -568,7 +568,14 @@ async def process_non_pipeline_command(
                             hostname=device_info.get("hostname") or target_device,
                             iteration=iteration + 1,
                         )
+                        audited_receipt={}
+                        if answer_auditor_enabled(cfg) and answer_payload["answer_type"] in {"grounded_report","partial_report","error_report","failure"}:
+                            goal_completed=answer_payload["answer_type"]=="grounded_report"
+                            audited_receipt={"task_receipt":{"task_status":"completed" if goal_completed else "partial" if answer_payload["answer_type"]=="partial_report" else "failed",
+                                "goal_completed":goal_completed,"final_verification_status":"verified" if goal_completed else "unverified",
+                                "answer_source":"audited_terminal"}}
                         return {
+                            **audited_receipt,
                             "answer": answer_payload["text"],
                             "commands": commands_log,
                             "tasks": [],
@@ -950,7 +957,10 @@ async def process_non_pipeline_command(
                                     tool_result = {
                                         "stdout": "OK: launch_requested long_running",
                                         "stderr": "",
-                                        "returncode": 0,
+                                        "returncode": None,
+                                        "status": "launch_requested",
+                                        # Enough to report uncertainty, not to confirm execution.
+                                        "terminal_sufficient": True,
                                         "error": None,
                                     }
                                 else:

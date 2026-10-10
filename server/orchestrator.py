@@ -290,25 +290,30 @@ async def run_turn(cmd, user, chat_id, delegate):
             if not answer:raise ValueError("missing_answer")
         stage="presentation"
         task["dialogue_intent"]=choice.intent
+        # Voice decoration is optional after a routing/admission decision.
         try:
-            from .voice import wants_full_speech
-        except ImportError:
-            from voice import wants_full_speech
-        task["full_speech_requested"]=wants_full_speech(cmd.message)
-        if choice.intent in {"conversation", "clarify"}:
             try:
-                from .voice import conversational_speech
+                from .voice import wants_full_speech
             except ImportError:
-                from voice import conversational_speech
-            speech=conversational_speech(choice.spoken_response, answer)
-            if speech:
-                task.update(dialogue_spoken_response=speech,dialogue_speech_answer=answer)
-        elif worker and worker["status"]=="running":
-            # Optional speech reuses the existing routing decision, never another model call.
-            speech=choice.spoken_response.strip()
-            # There is no completion evidence in a newly admitted handoff.
-            if speech and not re.search(r"(?i)\b(?:готово|сдела\w*|выполн\w*|заверш\w*|успешно|созда\w*|откры\w*|переда\w*|отправ\w*|сохрани\w*|наш[её]л\w*|подтверждено|задача\s+принята)\b",speech):
-                task.update(dialogue_spoken_response=speech,dialogue_speech_answer=answer)
+                from voice import wants_full_speech
+            task["full_speech_requested"]=wants_full_speech(cmd.message)
+            if choice.intent in {"conversation", "clarify"}:
+                try:
+                    from .voice import conversational_speech
+                except ImportError:
+                    from voice import conversational_speech
+                speech=conversational_speech(choice.spoken_response, answer)
+                if speech:
+                    task.update(dialogue_spoken_response=speech,dialogue_speech_answer=answer)
+            elif worker and worker["status"]=="running":
+                # Optional speech reuses the existing routing decision, never another model call.
+                speech=choice.spoken_response.strip()
+                # There is no completion evidence in a newly admitted handoff.
+                if speech and not re.search(r"(?i)\b(?:готово|сдела\w*|выполн\w*|заверш\w*|успешно|созда\w*|откры\w*|переда\w*|отправ\w*|сохрани\w*|наш[её]л\w*|подтверждено|задача\s+принята)\b",speech):
+                    task.update(dialogue_spoken_response=speech,dialogue_speech_answer=answer)
+        except Exception as exc:
+            _log_failure(tid,"voice_presentation",exc)
+            task["voice_error_code"]="voice_presentation_unavailable"
         commands=[] if worker and not answer else [{"tool_name":"answer.text","status":"terminal","result":{"answer_type":"pure_text","text":answer}}]
         task.update(status="done",answer=answer,commands=commands,tasks=[],orchestrator_metrics=stats)
     except Exception as exc:

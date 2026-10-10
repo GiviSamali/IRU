@@ -153,3 +153,49 @@ test('dock binds exact multiline command before HTML normalizes CRLF',async()=>{
   assert.deepEqual(effects,[{confirmation_id:'multiline-nonce',accepted:true,via_voice:false}]);assert.deepEqual(page.errors,[]);
  }finally{await page.close();}
 });
+
+test('P0 informational terminal remains visible with one result after reload and chat switch',async()=>{
+ const page=await open();try{
+  const text='**Observed desktop folders:** IRU, Notes.';
+  const report={schema_version:1,task_id:'p0-info',worker_id:'worker-1',status:'success',goal_completed:true,summary:'Confirmed observation',target_device_ids:['Second'],artifacts:[],evidence_refs:['step_1'],requires_user_action:false,error_code:null};
+  const commands=[{tool_name:'execute_cmd',step_id:'step_1',status:'success',result:{returncode:0,stdout:'IRU\nNotes'}},{tool_name:'answer.text',status:'terminal',result:{answer_type:'grounded_report',text,basis:['step_1'],self_check:{claims_completed_action:false,has_sufficient_evidence:true,depends_on_current_external_state:true,missing_evidence_question:''}}}];
+  const message={id:990,role:'assistant',_taskId:'p0-info',taskKind:'worker',taskStatus:'done',workerReport:report,content:text,conversationalResponse:text,commands,tasks:[]};
+  await page.route('**/api/chats/1/messages',r=>r.fulfill({json:{status:'ok',messages:[message]}}));
+  await page.route('**/api/operations',r=>r.fulfill({json:{status:'ok',operations:[{task_id:'p0-info',chat_id:1,title:'Desktop folders',status:report.status,summary:report.summary,device_ids:['Second'],can_cancel:false}]}}));
+  await page.route('**/api/tasks/p0-info',r=>r.fulfill({json:{status:'ok',task:{task_id:'p0-info',status:'done',answer:text,conversational_response:text,worker_report:report,commands,tasks:[]}}}));
+  for(let i=0;i<2;i++){
+   if(i)await page.reload({waitUntil:'networkidle'});
+   await page.evaluate(message=>{state.currentChatId=1;state.messages=[message];renderMessages();return IRUOperations.refresh();},message);
+   assert.equal(await page.locator('#chatMessages .smart-text-content').count(),1);
+   assert.equal(await page.locator('#chatMessages .smart-text-content').textContent(),text);
+   if(await page.locator('#operationsToggle').getAttribute('aria-expanded')!=='true')await page.locator('#operationsToggle').click();
+   assert.equal(await page.locator('[data-task-id="p0-info"] .smart-status').textContent(),'Завершено');
+   await page.locator('[data-task-id="p0-info"] [data-operation="details"]').click();
+   assert.equal(await page.locator('[data-task-id="p0-info"] .operation-prose').first().textContent(),text);
+   await page.evaluate(()=>{state.currentChatId=2;state.messages=[];renderMessages();});
+   assert.equal(await page.locator('[data-task-id="p0-info"] .smart-status').textContent(),'Завершено');
+  }
+  assert.deepEqual(page.errors,[]);
+ }finally{await page.close();}
+});
+
+test('refresh requested during an in-flight read awaits a newer server snapshot',async()=>{
+ const page=await open();let release,arrived;
+ const held=new Promise(resolve=>release=resolve),entered=new Promise(resolve=>arrived=resolve);let calls=0;
+ try{
+  await page.route('**/api/operations',async route=>{
+   const index=++calls;
+   if(index===1){arrived();await held;}
+   await route.fulfill({json:{status:'ok',operations:operations.map(item=>item.task_id==='own-confirm'?{...item,status:index===1?'waiting_confirmation':'cancelled'}:item)}});
+  });
+  await page.evaluate(()=>{window.firstRefresh=IRUOperations.refresh();});await entered;
+  await page.evaluate(()=>{window.secondDone=false;window.secondRefresh=IRUOperations.refresh().then(()=>secondDone=true);});
+  assert.equal(await page.evaluate(()=>secondDone),false,'A refresh must not silently finish while the previous read is still pending');
+  assert.equal(calls,1);
+  release();await page.evaluate(()=>Promise.all([firstRefresh,secondRefresh]));
+  assert.ok(calls>=2,'The overlapping caller needs a fresh read after the older snapshot');
+  if(await page.locator('#operationsToggle').getAttribute('aria-expanded')!=='true')await page.locator('#operationsToggle').click();
+  assert.equal(await page.locator('[data-task-id="own-confirm"] .smart-status').textContent(),'Отменено');
+  assert.deepEqual(page.errors,[]);
+ }finally{release();await page.evaluate(()=>window.firstRefresh?.catch(()=>{})).catch(()=>{});await page.close();}
+});

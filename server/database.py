@@ -484,6 +484,8 @@ def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
     receipt_keys = ("task_status", "goal_completed", "final_verification_status", "answer_source",
                     "command_outcome", "continuation_status", "terminal_reason", "basis", "warnings")
     saved_receipt = {key: receipt[key] for key in receipt_keys if key in receipt} if isinstance(receipt, dict) else None
+    metrics = task.get("orchestrator_metrics")
+    if not isinstance(metrics, dict):metrics = {}
     created = task.get("created_at")
     elapsed = max(0, int((time.time() - created) * 1000)) if isinstance(created, (int, float)) else None
     return {
@@ -497,7 +499,7 @@ def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
         "spokenResponseAnswer":task.get("dialogue_speech_answer"),
         "conversationalResponse":task.get("conversational_response"),"executionDetails":task.get("execution_details"),
         "assignmentDeviceIds":task.get("device_ids"),"sourceTaskIds":task.get("source_task_ids"),"diagnosticTrace":task.get("diagnostic_trace"),"workerStartedAt":task.get("worker_started_at"),
-        "orchestratorMetrics":{key:value for key,value in (task.get("orchestrator_metrics") or {}).items() if key in {"first_response_ms","elapsed_ms","llm_calls","snapshot_calls"} and type(value) is int},
+        "orchestratorMetrics":{key:value for key,value in metrics.items() if key in {"first_response_ms","elapsed_ms","llm_calls","snapshot_calls"} and type(value) is int},
     }
 
 

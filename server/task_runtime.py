@@ -21,7 +21,7 @@ try:
         process_onboarding_message,
         strip_markdown,
     )
-    from .controller_trust import enforce_trusted_answer, has_grounded_terminal_answer
+    from .controller_trust import enforce_trusted_answer, has_grounded_terminal_answer, has_validated_terminal_answer
     from .database import (
         add_message,
         message_task_metadata,
@@ -68,7 +68,7 @@ except ImportError:
         process_onboarding_message,
         strip_markdown,
     )
-    from controller_trust import enforce_trusted_answer, has_grounded_terminal_answer
+    from controller_trust import enforce_trusted_answer, has_grounded_terminal_answer, has_validated_terminal_answer
     from database import (
         add_message,
         message_task_metadata,
@@ -1317,18 +1317,32 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         if is_task_cancel_requested(task_id):
             finish_cancelled(combined_commands)
             return
-        if not ("combined_task_receipt" in locals() and (combined_task_receipt or {}).get("answer_source") in {"pipeline_step_report", "per_device_report"}):
+        validated_terminal = has_validated_terminal_answer(combined_answer, combined_commands)
+        if validated_terminal or not ("combined_task_receipt" in locals() and (combined_task_receipt or {}).get("answer_source") in {"pipeline_step_report", "per_device_report"}):
             before_trust_guard = combined_answer
             combined_answer = enforce_trusted_answer(combined_answer, combined_commands)
             if combined_answer != before_trust_guard:
                 record_lifecycle_event("answer_adjusted", source="trust_guard")
-        combined_answer = strip_markdown(combined_answer)
+                if validated_terminal:
+                    # The journal retains the original answer and basis. A content
+                    # rejection is not a formatting change or proof of goal success.
+                    combined_task_receipt={**(combined_task_receipt or {}),"task_status":"blocked",
+                        "goal_completed":False,"final_verification_status":"unverified",
+                        "answer_source":"trust_guard","terminal_reason":"untrusted_terminal_content"}
+        # Preserve the exact audited answer; speech/UI formatting is a projection.
+        if not validated_terminal:
+            combined_answer = strip_markdown(combined_answer)
         history_metadata = message_task_metadata({**task,
             "status": (combined_task_receipt or {}).get("task_status") or "done",
             "task_receipt": combined_task_receipt, "tasks": combined_tasks}, task_id=task_id)
         task["history_metadata"] = history_metadata
-        saved_message = add_message(chat_id, "assistant", combined_answer, combined_commands, task_metadata=history_metadata,message_id=task.get("history_message_id"))
-        if isinstance(saved_message, dict):task["history_message_id"] = saved_message.get("id")
+        try:
+            saved_message = add_message(chat_id, "assistant", combined_answer, combined_commands, task_metadata=history_metadata,message_id=task.get("history_message_id"))
+            if isinstance(saved_message, dict):task["history_message_id"] = saved_message.get("id")
+        except Exception as exc:
+            # A secondary chat projection cannot erase the completed execution.
+            logger.warning("history_persistence_failed task_id=%s type=%s",task_id,type(exc).__name__)
+            record_lifecycle_event("history_persistence_failed",source="history",status="failed")
 
         try:
             from .database import get_db
@@ -1364,7 +1378,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             return
         if receipt_status == "completed_with_recovery":
             task["status"] = "completed_with_recovery"
-        elif receipt_status in {"failed", "blocked"}:
+        elif receipt_status in {"failed", "blocked", "partial", "unknown"}:
             task["status"] = receipt_status
         else:
             task["status"] = "done"

@@ -24,12 +24,12 @@ _DIAGNOSTIC_CONTEXT = ContextVar("iru_diagnostic_context", default=None)
 _TRACE_LOGGER = logging.getLogger("uvicorn.error.iru.lifecycle")
 _TRACE_LABELS = frozenset({"nl", "onboarding", "pipeline", "non_pipeline", "broadcast", "PLAN", "SIMPLE", "skipped",
     "running", "done", "completed", "completed_with_recovery", "failed", "error", "blocked", "cancelled", "confirm",
-    "success", "unknown", "partial", "terminal", "pending", "server", "model", "answer_text", "answer_tool",
+    "success", "unknown", "partial", "terminal", "pending", "server", "model", "answer_text", "answer_tool", "audited_terminal",
     "pipeline_step_report", "per_device_report", "server_fallback", "trust_guard", "plan_suggestion", "answer_auditor", "invalid_plan",
     "classification_fallback", "plan_keyword", "window_policy", "classification_model", "explicit_pipeline",
     "plan_declined", "orchestrator_decision", "protocol_recovery", "ordinary_task", "other", "grounded_report", "partial_report",
     "ask_clarification", "report_failure", "request_confirmation", "dialogue", "conversation", "factual_answer",
-    "iteration_limit", "no_progress", "success_criteria", "browser_answer_unavailable", "completed_successfully"})
+    "history", "iteration_limit", "no_progress", "success_criteria", "browser_answer_unavailable", "completed_successfully"})
 
 
 
@@ -51,7 +51,7 @@ def record_lifecycle_event(event: str, **metadata) -> None:
         context = _DIAGNOSTIC_CONTEXT.get()
         if context is None:
             return
-        events = {"request_started", "device_wait", "classification_path", "classification", "controller_selected", "tool_result", "recovery", "answer_adjusted", "request_finished"}
+        events = {"request_started", "device_wait", "classification_path", "classification", "controller_selected", "tool_result", "recovery", "answer_adjusted", "history_persistence_failed", "request_finished"}
         row = {"task_id":context["task_id"], "event":event if event in events else "other_event",
                "elapsed_ms":int((time.monotonic()-context["started"])*1000)}
         for key in ("controller", "mode", "classification", "source", "status", "answer_type", "terminal_reason"):

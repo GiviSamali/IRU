@@ -1032,6 +1032,10 @@ def test_execute_cmd_long_running_timeout_synthesizes_ok_and_fast_exits():
     assert result["commands"][0]["result"]["stdout"] == "OK: launch_requested long_running"
     assert result["commands"][0]["summary"] == "OK: launch_requested long_running"
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text"]
+    assert result["commands"][0]["result"]["returncode"] is None
+    assert result["commands"][-1]["result"]["answer_type"] == "partial_report"
+    assert result["commands"][-1]["result"]["self_check"]["claims_completed_action"] is False
+    assert "не подтверждён" in result["answer"]
 
 
 def test_execute_cmd_no_stdout_rejects_completed_action_claim():

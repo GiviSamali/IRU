@@ -1,6 +1,6 @@
 /* Own SQLite jobs are the source of truth. Polling here never starts a Worker. */
 window.IRUOperations = (() => {
-  let owner=null, items=[], selected=null, detail=null, inFlight=false, busy=false, timer=null, open=false;
+  let owner=null, items=[], selected=null, detail=null, inFlight=null, followUp=null, busy=false, timer=null, open=false;
   const e=escapeHTML, a=escapeAttr, terminal=s=>['success','partial','failed','blocked','unknown','cancelled'].includes(s);
   const key=()=>`iru-operations-open:${state.user?.id}`;
   const renderedRows=new Map(), presentedCommands=new WeakMap();let renderedOwner=null;
@@ -71,8 +71,16 @@ window.IRUOperations = (() => {
     if(!state.user) {owner=null;items=[];selected=null;detail=null;render();return;}
     const id=state.user.id;
     if(owner!==id){owner=id;items=[];selected=null;detail=null;setOpen(sessionStorage.getItem(key())==='true');render();}
-    if(inFlight)return;
-    inFlight=true;
+    if(inFlight) {
+      // A caller after a decision needs a read newer than the current request.
+      // Coalesce overlapping callers without discarding their refresh promise.
+      if(!followUp)followUp=inFlight.then(()=>{followUp=null;return refresh();});
+      return followUp;
+    }
+    inFlight=readSnapshot(id).finally(()=>{inFlight=null;});
+    return inFlight;
+  }
+  async function readSnapshot(id) {
     try {
       const r=await apiFetch(`${API}/api/operations`);if(!r.ok)throw Error('Не удалось обновить операции.');
       const data=await r.json();if(state.user?.id!==id)return;
@@ -85,7 +93,6 @@ window.IRUOperations = (() => {
       if(state.user?.id!==id)return;
       document.getElementById('operationsError').textContent='';render();
     } catch(err) {if(state.user?.id===id)document.getElementById('operationsError').textContent='Соединение потеряно. Показано последнее состояние.';}
-    finally{inFlight=false;}
   }
   async function show(id) {
     await refresh();

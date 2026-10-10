@@ -187,3 +187,10 @@ test('retired highlights are ignored and all response text remains escaped',()=>
  assert.equal(ui.highlightedText,undefined);
  assert.ok(!Object.hasOwn(view.blocks[0],'highlights'));
 });
+
+test('WorkerReport outcome remains authoritative over legacy nested step snapshots',()=>{
+ const report={schema_version:1,status:'success',goal_completed:true,evidence_refs:['step_1'],artifacts:[],target_device_ids:['pc']};
+ const message={taskStatus:'done',workerReport:report,content:'Observed IRU',tasks:[{status:'failed',steps:[{status:'failed'}]}]};
+ assert.equal(task(message).status,'success');
+ for(const status of ['unknown','partial','failed','blocked','cancelled'])assert.equal(task({...message,workerReport:{...report,status,goal_completed:false}}).status,status);
+});

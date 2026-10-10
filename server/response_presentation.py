@@ -1,16 +1,18 @@
 """Human presentation of an existing Worker Report; no execution or model calls."""
 import ntpath
 import posixpath
+import logging
+from pydantic import ValidationError
 
 try:
     from . import database as db
     from .worker_reports import build_worker_report, positive_evidence, WorkerReport
-    from .controller_trust import has_grounded_terminal_answer
+    from .controller_trust import has_grounded_terminal_answer, has_validated_terminal_answer
     from .tool_registry import CANONICAL_TOOL_NAMES
 except ImportError:
     import database as db
     from worker_reports import build_worker_report, positive_evidence, WorkerReport
-    from controller_trust import has_grounded_terminal_answer
+    from controller_trust import has_grounded_terminal_answer, has_validated_terminal_answer
     from tool_registry import CANONICAL_TOOL_NAMES
 
 # These are tool contracts, not a classifier of the user's words.
@@ -48,7 +50,11 @@ def _desktop_location(task, artifacts):
     if not artifacts or not task.get("user_id"):return ""
     nested=False
     for artifact in artifacts:
-        profile=db.get_device_profile(artifact["device_id"],user_id=task["user_id"]) or {}
+        try:
+            profile=db.get_device_profile(artifact["device_id"],user_id=task["user_id"]) or {}
+        except Exception as exc:
+            logging.getLogger("iru.presentation").warning("desktop_location_unavailable type=%s",type(exc).__name__)
+            return ""
         desktop=profile.get("desktop_path")
         if not isinstance(desktop,str) or not desktop:return ""
         path=artifact["path"]
@@ -85,11 +91,21 @@ def _reason(task, report):
 
 
 def normalized_worker_report(task, report=None):
-    report=WorkerReport.model_validate(report or build_worker_report(task)).model_dump()
+    try:
+        report=WorkerReport.model_validate(report or build_worker_report(task)).model_dump()
+    except ValidationError:
+        # Invalid cached presentation cannot replace the current journal/receipt.
+        logging.getLogger("iru.presentation").warning("worker_report_cache_invalid")
+        report=build_worker_report(task)
+    if report["task_id"]!=task["task_id"]:
+        logging.getLogger("iru.presentation").warning("worker_report_cache_task_mismatch")
+        report=build_worker_report(task)
     raw_negative={"error":"failed","failed":"failed","partial":"partial","blocked":"blocked","unknown":"unknown","cancelled":"cancelled","interrupted":"unknown"}
     status_changed=task.get("status") in raw_negative and report["status"]!=raw_negative[task["status"]]
     incomplete=report["status"]=="success" and (task.get("task_receipt") or {}).get("goal_completed") is False
-    if status_changed or task.get("cancel_requested") or incomplete:
+    if report["status"]=="success" or status_changed or task.get("cancel_requested") or incomplete:
+        # A cache cannot grant completion after the authoritative journal/receipt
+        # changed or an older validation contract was replaced.
         report=build_worker_report(task)
     return report
 
@@ -148,7 +164,18 @@ def worker_presentation(task, report=None):
         else:human="Не могу продолжить без твоего решения."
     elif status=="cancelled":human="Задача отменена."
     else:human="Не могу подтвердить результат. Подробности сохранены в ходе выполнения."
+    if status=="blocked" and (task.get("task_receipt") or {}).get("answer_source")=="trust_guard":
+        return {"conversational_response":answer,"execution_details":""}
     if status in {"partial","failed","blocked"}:
+        terminal=next((c for c in reversed(commands) if _tool(c)=="answer.text" and c.get("status")=="terminal"),{})
+        payload=terminal.get("result") if isinstance(terminal.get("result"),dict) else {}
+        terminal_status={"partial_report":"partial","error_report":"failed","failure":"failed","clarification":"blocked"}.get(payload.get("answer_type"))
+        receipt=task.get("task_receipt") or {}
+        continuation_partial=(status=="blocked" and terminal_status=="partial"
+            and receipt.get("answer_source")=="confirmation_result"
+            and receipt.get("task_status")=="partial" and receipt.get("continuation_status")=="unavailable")
+        if (terminal_status==status or continuation_partial) and has_validated_terminal_answer(answer,commands):
+            return {"conversational_response":answer,"execution_details":""}
         reason=_reason(task,report)
         if reason:human+=" "+reason
     return {"conversational_response":human,"execution_details":answer if answer!=human else ""}
@@ -160,7 +187,12 @@ def worker_spoken_response(task, report=None):
     report=normalized_worker_report(task,report)
     human=worker_presentation(task,report)["conversational_response"]
     # Incomplete/permission-sensitive results stay protected; informational answers stay intact.
-    if report["status"]!="success":return human
+    if report["status"]!="success":
+        if len(human)>420:
+            # Reuse the existing structured negative summary for concise speech.
+            # The canonical terminal text stays intact in chat and storage.
+            return worker_presentation({**task,"answer":""},report)["conversational_response"]
+        return human
     commands=[c for c in task.get("commands") or [] if isinstance(c,dict)]
     operations=[c for c in commands if not _tool(c).startswith("answer.")]
     terminal=next((c for c in reversed(commands) if _tool(c)=="answer.text" and c.get("status")=="terminal"),{})

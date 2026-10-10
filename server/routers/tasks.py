@@ -521,7 +521,13 @@ async def api_get_task(task_id: str, request: Request):
         except Exception:
             pass
 
-    presentation = task.get("history_metadata") or message_task_metadata(task)
+    presentation = message_task_metadata(task)
+    saved_presentation = task.get("history_metadata")
+    if isinstance(saved_presentation, dict):
+        for key in ("taskMode", "taskElapsedMs", "taskStatus"):
+            value = saved_presentation.get(key)
+            if (key in {"taskMode", "taskStatus"} and isinstance(value, str)) or (key == "taskElapsedMs" and type(value) is int and value >= 0):
+                presentation[key] = value
     try:
         from ..response_presentation import worker_presentation, normalized_worker_report
     except ImportError:
@@ -883,6 +889,11 @@ async def api_deny_task(task_id: str, request: Request):
     chat_id = task.get("confirm_data", {}).get("chat_id", task.get("chat_id"))
     task["status"] = "done"
     task["answer"] = "Команда отменена пользователем."
+    if task.get("worker_id"):
+        # Denial is a known cancellation, not an unverified completed Worker.
+        mark_task_cancelled(task_id, answer=task["answer"], commands=task.get("commands") or [])
+        task["task_receipt"] = {"task_status":"cancelled", "goal_completed":False,
+            "command_outcome":"not_executed", "terminal_reason":"confirmation_denied"}
     task.pop("confirm_data", None)
     task["history_metadata"] = message_task_metadata({**task, "status": "cancelled"}, task_id=task_id)
     add_message(chat_id, "assistant", task["answer"], task.get("commands", []), task_metadata=task["history_metadata"],message_id=task.get("history_message_id"))

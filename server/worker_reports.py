@@ -27,25 +27,28 @@ class WorkerReport(BaseModel):
 try:
     from .controller_trust import has_grounded_terminal_answer
     from .runtime_state import _short_did
-    from .tool_completion import execute_cmd_result_is_negative
+    from .tool_completion import execute_cmd_result_is_negative, execute_cmd_result_is_complete, execute_cmd_returncode_is_zero
     from .command_confirmation import confirmed_command_outcome
 except ImportError:
     from controller_trust import has_grounded_terminal_answer
     from runtime_state import _short_did
-    from tool_completion import execute_cmd_result_is_negative
+    from tool_completion import execute_cmd_result_is_negative, execute_cmd_result_is_complete, execute_cmd_returncode_is_zero
     from command_confirmation import confirmed_command_outcome
 
 TERMINAL = {"done", "completed", "completed_with_recovery", "failed", "error", "cancelled", "blocked", "partial", "unknown", "interrupted", "success"}
 
 
-def positive_evidence(command):
+def positive_evidence(command, *, observation=False):
     result=command.get("result")
     if command.get("status")!="success" or not isinstance(result,dict) or result.get("error"):return False
     status=result.get("status")
     if status is not None and (not isinstance(status,str) or status in {"unknown","started","launch_requested","pending","not_found","failed","error","blocked","partial","disconnected"}):return False
-    if result.get("returncode") is not None and (type(result["returncode"]) is not int or result["returncode"]!=0):return False
+    if result.get("returncode") is not None and not execute_cmd_returncode_is_zero(result["returncode"]):return False
     if command.get("tool_name") == "execute_cmd" or command.get("action") == "execute_cmd":
-        return confirmed_command_outcome(result)=="success"
+        if confirmed_command_outcome(result)=="success":return True
+        # A successful observation is usable by an already validated informational
+        # terminal answer. It does not establish that an action achieved its goal.
+        return observation and execute_cmd_result_is_complete(result) and not execute_cmd_result_is_negative(result)
     return not execute_cmd_result_is_negative(result)
 
 
@@ -56,9 +59,21 @@ def build_worker_report(task):
     negative = {"error":"failed", "failed":"failed", "cancelled":"cancelled", "blocked":"blocked", "partial":"partial", "unknown":"unknown", "interrupted":"unknown"}
     refs = [c["step_id"] for c in commands if isinstance(c.get("step_id"), str)]
     evidence=[c for c in commands if positive_evidence(c)]
-    confirmed = bool(evidence) and ((receipt.get("task_status") in {"completed", "completed_with_recovery"}
+    grounded = has_grounded_terminal_answer(task.get("answer") or "", commands)
+    terminal_answer = next((c for c in reversed(commands) if c.get("tool_name")=="answer.text" and c.get("status")=="terminal"), {})
+    answer_payload = terminal_answer.get("result") if isinstance(terminal_answer.get("result"), dict) else {}
+    check = answer_payload.get("self_check") if isinstance(answer_payload.get("self_check"), dict) else {}
+    basis = answer_payload.get("basis") if isinstance(answer_payload.get("basis"), list) else []
+    observations = [c for c in commands if c.get("step_id") in basis]
+    informational = (grounded and check.get("claims_completed_action") is False and bool(observations)
+                     and receipt.get("answer_source")=="audited_terminal"
+                     and receipt.get("goal_completed") is True and receipt.get("final_verification_status")=="verified"
+                     and receipt.get("task_status")=="completed"
+                     and all(positive_evidence(c, observation=True) for c in observations))
+    # An answer audit is not an execution verification receipt for an action.
+    confirmed = informational or (bool(evidence) and ((receipt.get("answer_source")!="audited_terminal" and receipt.get("task_status") in {"completed", "completed_with_recovery"}
                 and (receipt.get("goal_completed") is True or receipt.get("final_verification_status") == "verified"))
-                or has_grounded_terminal_answer(task.get("answer") or "", commands))
+                or (grounded and bool(observations) and all(positive_evidence(c) for c in observations))))
     terminal=next((c for c in reversed(commands) if c.get("status")=="terminal"),{})
     payload=terminal.get("result") if isinstance(terminal.get("result"),dict) else {}
     terminal_negative={"partial_report":"partial","error_report":"failed","failure":"failed","clarification":"blocked"}.get(payload.get("answer_type"))
@@ -93,9 +108,11 @@ def build_worker_report(task):
         "blocked":"Выполнение заблокировано.", "failed":"Задача завершилась с ошибкой.", "cancelled":"Задача отменена.",
         "unknown":"Исход задачи не подтверждён; автоматически её не повторяю.", "queued":"Задача ожидает освобождения Worker.",
         "running":"Задача выполняется.", "waiting_confirmation":"Задача ожидает решения пользователя."}
+    error_code=(task.get("worker_error_code") or receipt.get("terminal_reason")) if status!="success" else None
+    if not isinstance(error_code, str):error_code=None
     report = {"schema_version":1, "task_id":task["task_id"], "worker_id":"worker-1", "status":status,
         "goal_completed":status == "success", "summary":payload["text"][:600] if terminal_negative and isinstance(payload.get("text"),str) else summaries[status],
         "target_device_ids":[_short_did(d) for d in task.get("device_ids") or []], "artifacts":artifacts,
         "evidence_refs":refs, "requires_user_action":status in {"waiting_confirmation","blocked"},
-        "error_code":task.get("worker_error_code") or receipt.get("terminal_reason") if status != "success" else None}
+        "error_code":error_code}
     return WorkerReport.model_validate(report).model_dump()

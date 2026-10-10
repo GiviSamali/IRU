@@ -260,3 +260,16 @@ def test_cancel_after_dispatch_does_not_get_overwritten_by_completion(scenario):
     assert task['status']=='cancelled'
     assert task['task_receipt']['goal_completed'] is False
     assert task['answer']!='Выполнено.'
+
+@pytest.mark.parametrize('result',[
+ {'returncode':False,'stdout':'OK: effect_verified'},
+ {'returncode':0.0,'stdout':'OK: effect_verified'},
+ {'returncode':0,'stdout':'OK: effect_verified','status':'unknown'},
+ {'returncode':0,'stdout':'OK: effect_verified','completion_state':'pending'},
+ {'returncode':0,'stdout':'OK: launch_requested'},
+])
+def test_terminal_sufficiency_agrees_with_uncertain_command_outcome(result):
+ from server.tool_completion import execute_cmd_result_is_ok,tool_result_terminal_sufficient
+ assert confirmed_command_outcome(result)=='unknown'
+ assert not execute_cmd_result_is_ok(result)
+ assert not tool_result_terminal_sufficient({'tool_name':'execute_cmd','result':result})

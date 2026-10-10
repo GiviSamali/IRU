@@ -22,14 +22,26 @@ def execute_cmd_outcome_marker(result: dict[str, Any] | None) -> str | None:
     return match.group(1).upper() if match else None
 
 
-def execute_cmd_result_is_ok(result: dict[str, Any] | None) -> bool:
-    if not isinstance(result, dict):
+def execute_cmd_returncode_is_zero(code: Any) -> bool:
+    """Keep the existing legacy string zero; bool/float are not exit codes."""
+    return (type(code) is int and code == 0) or (type(code) is str and code == "0")
+
+
+def execute_cmd_result_is_complete(result: dict[str, Any] | None) -> bool:
+    """A completed receipt/observation, never proof of the user's whole goal."""
+    if not isinstance(result, dict) or not execute_cmd_returncode_is_zero(result.get("returncode")) or result.get("error"):
         return False
-    return (
-        result.get("returncode") in (0, "0")
-        and not result.get("error")
-        and execute_cmd_outcome_marker(result) == "OK"
-    )
+    if result.get("status") not in (None, "", "ok", "success", "done", "completed", "executed", "finished"):
+        return False
+    if result.get("completion_state") not in (None, "", "success"):
+        return False
+    stdout = result.get("stdout")
+    return isinstance(stdout, str) and not any(
+        line.lstrip().lower().startswith("ok: launch_requested") for line in stdout.splitlines())
+
+
+def execute_cmd_result_is_ok(result: dict[str, Any] | None) -> bool:
+    return execute_cmd_result_is_complete(result) and execute_cmd_outcome_marker(result) == "OK"
 
 
 def execute_cmd_result_is_negative(result: dict[str, Any] | None) -> bool:
@@ -96,6 +108,8 @@ def synthesize_terminal_answer_payload(entry: dict[str, Any]) -> dict[str, Any]:
         text = next((line.strip() for line in stdout.splitlines() if line.strip()), "")
         if not text:
             text = str(entry.get("summary") or "Command completed.")
+        if status == "launch_requested":
+            text = "Запуск запрошен. Результат выполнения пока не подтверждён."
     elif tool_name == "write_content":
         text = str(result.get("summary") or entry.get("summary") or "OK: file_written")
     elif tool_name in {"app_launch", "app.launch"}:

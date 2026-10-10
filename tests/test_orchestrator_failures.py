@@ -74,3 +74,19 @@ def test_extra_field_validation_log_hides_even_a_secret_field_name(client,monkey
  cmd=SimpleNamespace(message='Привет',request_id='p0-extra',device_id='',modes={},broadcast=False)
  with caplog.at_level('ERROR',logger='iru.orchestrator'):asyncio.run(orch.run_turn(cmd,user,user['chat_id'],forbidden))
  assert secret not in caplog.text and 'PRIVATEVALUE' not in caplog.text and 'extra_forbidden' in caplog.text and '<extra>' in caplog.text
+
+@pytest.mark.parametrize('helper',['wants_full_speech','conversational_speech'])
+def test_optional_voice_presentation_failure_keeps_dialogue_decision(client,monkeypatch,helper):
+ from server import voice
+ user=owner()
+ async def completion(*args,**kwargs):return payload({'intent':'conversation','answer':'LAN links nearby devices.','spoken_response':'LAN links nearby devices.'})
+ async def forbidden(*args,**kwargs):raise AssertionError('No Worker')
+ def broken(*args,**kwargs):raise RuntimeError('optional voice decoration unavailable')
+ monkeypatch.setattr(orch,'_chat_completion_request',completion)
+ monkeypatch.setattr(orch,'load_llm_config',lambda:{'model':'mock'})
+ monkeypatch.setattr(voice,helper,broken)
+ cmd=SimpleNamespace(message='I mean the network',request_id='p0-voice-decoration',device_id='',modes={},broadcast=False)
+ reply=asyncio.run(orch.run_turn(cmd,user,user['chat_id'],forbidden))
+ assert reply['answer']=='LAN links nearby devices.'
+ assert tasks[reply['task_id']]['status']=='done'
+ assert db.get_messages(user['chat_id'])[-1]['content']==reply['answer']

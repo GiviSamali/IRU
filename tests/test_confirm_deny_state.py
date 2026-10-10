@@ -100,9 +100,11 @@ def test_deny_is_bound_only_to_original_task_and_new_request_requires_confirm_ag
     assert deny_response.status_code == 200
     assert deny_response.json()["status"] == "ok"
 
-    denied_task = _wait_for_task_status(client, headers, first_task_id, "done")
+    denied_task = _wait_for_task_status(client, headers, first_task_id, "cancelled")
     assert denied_task["answer"] == "Команда отменена пользователем."
     assert denied_task["confirm_data"] is None
+    assert denied_task["worker_report"]["status"] == "cancelled"
+    assert denied_task["task_receipt"]["command_outcome"] == "not_executed"
 
     second_response = client.post(
         "/api/chat",
