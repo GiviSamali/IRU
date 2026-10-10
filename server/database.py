@@ -535,7 +535,7 @@ def add_message(chat_id: int, role: str, content: str, commands: list | None = N
         return result
 
 
-def get_messages(chat_id: int, limit: int = 50) -> list[dict]:
+def get_messages(chat_id: int, limit: int = 50, *, include_worker_commands: bool = True) -> list[dict]:
     with get_db() as conn:
         rows = conn.execute(
             """SELECT * FROM messages WHERE chat_id = ?
@@ -545,15 +545,18 @@ def get_messages(chat_id: int, limit: int = 50) -> list[dict]:
         messages = []
         for row in reversed(rows):
             msg = dict(row)
-            if msg["commands"]:
-                try:
-                    msg["commands"] = json.loads(msg["commands"])
-                except json.JSONDecodeError:
-                    msg["commands"] = None
             try:
                 metadata = _message_metadata(json.loads(msg.get("task_metadata") or "null"))
             except (ValueError, TypeError):
                 metadata = {}
+            # Worker journals are fetched through the existing Operations panel.
+            if not include_worker_commands and metadata.get("taskKind") == "worker":
+                msg["commands"] = None
+            elif msg["commands"]:
+                try:
+                    msg["commands"] = json.loads(msg["commands"])
+                except json.JSONDecodeError:
+                    msg["commands"] = None
             messages.append({
                 **metadata,
                 "id":         msg["id"],

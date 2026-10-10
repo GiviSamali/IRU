@@ -790,7 +790,7 @@ function bindChatMessageActions(container = document.getElementById('chatMessage
   });
 }
 
-const MAX_INPUT_LENGTH = 500;
+const MAX_INPUT_LENGTH = 4000;
 let chatCreationPromise = null;
 const taskPollLoops = new Map();
 async function ensureSendChat() {
@@ -827,6 +827,7 @@ async function sendMessage(options = {}) {
   if (!fromVoice) {
     input.value = '';
     autoGrow(input);
+    updateCharCount();
     clearAttachments();
   }
 
