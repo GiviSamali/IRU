@@ -191,12 +191,37 @@ const IRUSmartUI = (() => {
     return { key:id, blocks };
   }
 
+  function formattedText(value) {
+    const lines = String(value ?? '').replace(/\r\n?/g, '\n').split('\n');
+    const output = [];
+    let paragraph = [], code = null;
+    const inline = line => line.split(/(`[^`]*`)/g).map((part, index) => index % 2
+      ? esc(part) : esc(part).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')).join('');
+    const flush = () => { if (paragraph.length) { output.push(`<p>${paragraph.map(inline).join('<br>')}</p>`); paragraph = []; } };
+    for (const line of lines) {
+      if (/^\s*```/.test(line)) {
+        flush();
+        if (code !== null) { output.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`); code = null; }
+        else code = [];
+      } else if (code !== null) code.push(line);
+      else {
+        const heading = line.match(/^ {0,3}(#{1,3}) +(.+?)\s*#*$/);
+        if (heading) { flush(); output.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`); }
+        else if (!line.trim()) flush();
+        else paragraph.push(line);
+      }
+    }
+    flush();
+    if (code !== null) output.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+    return output.join('');
+  }
+
   const expanded = (block, context) => Boolean(context.expanded?.has(block.key));
   const REGISTRY = Object.freeze({
     text(block, context) {
       const open = expanded(block, context);
       return `<div class="smart-block smart-text${block.long ? ' collapsible' : ''}${open ? ' expanded' : ''}" data-block-type="text" data-smart-key="${esc(block.key)}">
-        <div class="smart-text-content" id="${esc(block.key)}">${esc(block.text)}</div>${block.long ? `<button type="button" class="smart-text-toggle" data-action="toggle-smart-text" aria-controls="${esc(block.key)}" aria-expanded="${open}">${open ? 'Свернуть текст' : 'Полный текст'}</button>` : ''}</div>`;
+        <div class="smart-text-content${context.formatAssistantText ? ' formatted' : ''}" id="${esc(block.key)}">${context.formatAssistantText ? formattedText(block.text) : esc(block.text)}</div>${block.long ? `<button type="button" class="smart-text-toggle" data-action="toggle-smart-text" aria-controls="${esc(block.key)}" aria-expanded="${open}">${open ? 'Свернуть текст' : 'Полный текст'}</button>` : ''}</div>`;
     },
     task(block, context) {
       const open = expanded(block, context), details = context.taskDetails ? context.taskDetails(block) : '';

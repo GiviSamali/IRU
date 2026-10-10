@@ -194,3 +194,24 @@ test('WorkerReport outcome remains authoritative over legacy nested step snapsho
  assert.equal(task(message).status,'success');
  for(const status of ['unknown','partial','failed','blocked','cancelled'])assert.equal(task({...message,workerReport:{...report,status,goal_completed:false}}).status,status);
 });
+
+
+test('assistant formatting uses only escaped text and fixed tags',()=>{
+  const source='# Result\n\n**Important** <img src=x onerror=alert(1)>\n<script>alert(2)</script>';
+  const block={key:'format',text:source,long:false};
+  const html=ui.REGISTRY.text(block,{formatAssistantText:true});
+  assert.ok(html.includes('<h1>Result</h1>'));
+  assert.ok(html.includes('<strong>Important</strong>'));
+  assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
+  assert.ok(!html.includes('<img') && !html.includes('<script'));
+  assert.equal(block.text,source);
+  assert.ok(ui.REGISTRY.text(block,{}).includes('# Result'));
+  assert.ok(!ui.REGISTRY.text(block,{}).includes('<h1>'));
+});
+
+test('code and incomplete model markup remain safe and readable',()=>{
+  const html=ui.REGISTRY.text({key:'code',long:false,text:'# Heading\n\n`**literal**`\n\n```html\n<b onclick="bad()">**literal**</b>'},{formatAssistantText:true});
+  assert.ok(html.includes('`**literal**`'));
+  assert.ok(html.includes('<pre><code>&lt;b onclick=&quot;bad()&quot;&gt;**literal**&lt;/b&gt;</code></pre>'));
+  assert.ok(!html.includes('<b onclick'));
+});
