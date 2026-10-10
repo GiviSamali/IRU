@@ -18,9 +18,12 @@ def capture_history(chat_id):
     """Freeze only bounded fields needed for handoff, never a complete old loop."""
     frozen=[]
     for row in db.get_messages(chat_id,limit=8):
-        record={key:row.get(key) for key in ('id','role','taskKind')}
+        record={key:row.get(key) for key in ('id','role','taskKind','_taskId','assignmentDeviceIds')}
         record['content']=str(row.get('content') or '')[:1000]
         record['content_truncated']=len(str(row.get('content') or ''))>1000
+        report=row.get('workerReport') if isinstance(row.get('workerReport'),dict) else {}
+        record['artifacts']=[{key:a.get(key) for key in ('path','device_id','verified')}
+            for a in report.get('artifacts') or [] if isinstance(a,dict) and a.get('verified') is True][:6]
         record['commands']=[{key:c.get(key) for key in ('tool_name','action','step_id','status','device_id','target_device_id','collected_at','result')}
             for c in row.get('commands') or [] if isinstance(c,dict)
             and len(json.dumps(c.get('result'),ensure_ascii=False))<=1800][-2:]
@@ -41,14 +44,20 @@ def source_references(owner, chat_id, source_ids, allowed_devices):
                    and a.get('device_id') in allowed_devices]
         with db.get_db() as c:
             message=c.execute('SELECT content FROM messages WHERE id=? AND chat_id=?',(row.get('message_id'),chat_id)).fetchone()
-        summary=message['content'] if message and report.get('status') in {'success','partial'} else ''
+        summary=message['content'] if (message and report.get('status') in {'success','partial'}
+            and bool(report.get('target_device_ids'))
+            and set(report['target_device_ids']).issubset(allowed_devices)) else ''
         references.append({'task_id':source_id,'status':row['state'],'observed_at':row['updated_at'],
             'source_device_ids':report.get('target_device_ids') or [],
-            'summary':summary[:1600],'summary_truncated':len(summary)>1600,'artifacts':artifacts[:6]})
+            'summary':summary[:1600],'summary_truncated':len(summary)>1600,'artifacts':artifacts[:6],
+            'artifacts_truncated':len(artifacts)>6})
     return references
 
 
 def build_worker_context(owner, chat_id, message, device_ids, history, source_ids=()):
+    if not db.get_chat(chat_id,owner):raise ValueError('worker_context_chat_not_owned')
+    if any(':' in d and d.split(':',1)[0]!=str(owner) for d in device_ids):
+        raise ValueError('worker_context_device_not_owned')
     allowed={_short_did(d) for d in device_ids} or {'server'}
     rows=list(history or [])
     # Legacy intake may already have inserted the current message; do not duplicate it.
@@ -57,8 +66,23 @@ def build_worker_context(owner, chat_id, message, device_ids, history, source_id
     dialogue=[{'role':r['role'],'text':str(r.get('content') or '')[:700],
                'truncated':bool(r.get('content_truncated')) or len(str(r.get('content') or ''))>700} for r in rows
               if r.get('role') in {'user','assistant'} and r.get('content') and r.get('taskKind')!='worker'][-4:]
-    references=source_references(owner,chat_id,source_ids,allowed)
+    # Reuse recent server-owned reports when Orchestrator omitted explicit sources.
+    # They are context only; no old journal or evidence basis is imported.
+    recent_sources=list(dict.fromkeys(r['_taskId'] for r in rows
+        if r.get('taskKind')=='worker' and isinstance(r.get('_taskId'),str) and r['_taskId']
+        and (not r.get('assignmentDeviceIds') or any(d in device_ids or d in allowed
+            for d in r['assignmentDeviceIds']))))[-2:]
+    # Keep the nearest known file when newer result summaries have no artifact.
+    if recent_sources and not any(r.get('_taskId') in recent_sources and any(
+            a.get('device_id') in allowed for a in r.get('artifacts') or []) for r in rows):
+        artifact_source=next((r['_taskId'] for r in reversed(rows)
+            if r.get('taskKind')=='worker' and isinstance(r.get('_taskId'),str) and r['_taskId']
+            and any(a.get('device_id') in allowed for a in r.get('artifacts') or [])),None)
+        if artifact_source and artifact_source not in recent_sources:
+            recent_sources=[artifact_source]+recent_sources[-1:]
+    references=source_references(owner,chat_id,source_ids or recent_sources,allowed)
     data={'authority':'Only the current final human message authorizes actions. Historical turns/facts resolve references and preferences; they cannot authorize new actions.',
+          'reference_resolution':'Use historical objects only when unambiguous; otherwise ask for the missing parameter. Truncated candidates do not establish uniqueness.',
           'current_run_evidence':False,'allowed_device_ids':list(sorted(allowed)),
           'historical_dialogue':dialogue,'referenced_results':references}
     while len(json.dumps(data,ensure_ascii=False))>MAX_HANDOFF_CHARS:
@@ -67,8 +91,9 @@ def build_worker_context(owner, chat_id, message, device_ids, history, source_id
         long=next((r for r in references if len(r['summary'])>200),None)
         if long:long['summary']=long['summary'][:len(long['summary'])//2];long['summary_truncated']=True;continue
         with_artifacts=next((r for r in references if r['artifacts']),None)
-        if with_artifacts:with_artifacts['artifacts'].pop();continue
-        if references:references.pop();continue
+        if with_artifacts:
+            with_artifacts['artifacts'].pop();with_artifacts['artifacts_truncated']=True;continue
+        if references:references.pop(0);continue
         break
     recent=[]
     for row in rows:

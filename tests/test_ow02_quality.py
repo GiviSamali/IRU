@@ -79,7 +79,7 @@ def test_reference_artifacts_never_borrow_an_unassigned_device_path(owners,monke
         async def execute(t):success(t)
         scheduler=WorkerScheduler(execute)
         source=await scheduler.submit(task(a));await scheduler.runners[a['id']]
-        context=build_worker_context(a['id'],a['chat_id'],'task',['owned:other'],[],[source['task_id']])
+        context=build_worker_context(a['id'],a['chat_id'],'task',[f"{a['id']}:other"],[],[source['task_id']])
         data=json.loads(context[-2]['content'].split('\n',1)[1].rsplit('\nEnd',1)[0])
         ref=data['referenced_results'][0]
         assert ref['artifacts']==[] and ref['source_device_ids']==['pc']
@@ -201,3 +201,76 @@ def test_usage_export_reads_existing_ledger_and_persisted_numeric_trace(owners):
         assert 'report.txt' not in json.dumps(result)
         await scheduler.shutdown()
     orch.init_turn_storage();asyncio.run(scenario())
+
+
+def test_p002_recent_worker_artifact_survives_handoff_without_becoming_basis(owners):
+    from server.run_journal import ProtocolValidationError, validate_answer_text_payload
+    a, _ = owners
+    source_id = 'p002-previous-worker'
+    path = r'C:\Users\Demo\Desktop\layout.svg'
+    report = {'status': 'success', 'target_device_ids': ['pc'], 'evidence_refs': ['old_step'],
+        'artifacts': [{'type': 'file', 'path': path, 'device_id': 'pc', 'verified': True}]}
+    saved = db.add_message(a['chat_id'], 'assistant', 'Предыдущее изменение записано.',
+        commands=[{'tool_name': 'execute_cmd', 'step_id': 'old_step', 'device_id': 'pc',
+            'result': {'stdout': 'LARGE_OLD_OUTPUT' * 500}}],
+        task_metadata={'taskKind': 'worker', '_taskId': source_id,
+            'assignmentDeviceIds': [f"{a['id']}:pc"], 'workerReport': report})
+    with db.get_db() as c:
+        c.execute('INSERT INTO worker_jobs(task_id,owner_user_id,chat_id,state,payload,report,message_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
+            (source_id, a['id'], a['chat_id'], 'success', '{}', json.dumps(report), saved['id'], 1, 2))
+    # Newer summaries must not displace the only known artifact in this snapshot.
+    for i in range(2):
+        recent_id = f'p002-intermediate-{i}'
+        recent_report = {'status': 'success', 'target_device_ids': ['pc'], 'artifacts': []}
+        recent_message = db.add_message(a['chat_id'], 'assistant', 'Последнее изменение сохранено.',
+            task_metadata={'taskKind': 'worker', '_taskId': recent_id,
+                'assignmentDeviceIds': [f"{a['id']}:pc"], 'workerReport': recent_report})
+        with db.get_db() as c:
+            c.execute('INSERT INTO worker_jobs(task_id,owner_user_id,chat_id,state,payload,report,message_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
+                (recent_id, a['id'], a['chat_id'], 'success', '{}', json.dumps(recent_report), recent_message['id'], 3+i, 4+i))
+    context = build_worker_context(a['id'], a['chat_id'], 'Теперь сделай линии тоньше',
+        [f"{a['id']}:pc"], capture_history(a['chat_id']))
+    data = json.loads(context[0]['content'].split('\n', 1)[1].rsplit('\nEnd', 1)[0])
+    assert data['referenced_results'][0]['artifacts'][0]['path'] == path
+    assert data['referenced_results'][0]['source_device_ids'] == ['pc']
+    assert data['referenced_results'][0]['summary'] == 'Предыдущее изменение записано.'
+    assert data['referenced_results'][-1]['summary'] == 'Последнее изменение сохранено.'
+    assert data['current_run_evidence'] is False and len(json.dumps(data, ensure_ascii=False)) <= 4000
+    assert 'LARGE_OLD_OUTPUT' not in json.dumps(context) and 'old_step' not in json.dumps(context)
+    assert context[-1] == {'role': 'user', 'content': 'Теперь сделай линии тоньше'}
+    payload = {'answer_type': 'grounded_report', 'text': 'Новое изменение выполнено.', 'basis': ['old_step'],
+        'self_check': {'depends_on_current_external_state': True, 'claims_completed_action': True,
+            'has_sufficient_evidence': True, 'missing_evidence_question': ''}}
+    with pytest.raises(ProtocolValidationError):
+        validate_answer_text_payload(payload, [])
+
+
+def test_p002_implicit_sources_keep_ambiguity_and_owner_chat_device_boundaries(owners):
+    a, b = owners
+    other_chat = db.create_chat(a['id'], 'other')['id']
+    for source_id, owner, chat_id in [('p002-own', a, a['chat_id']),
+            ('p002-foreign', b, b['chat_id']), ('p002-other-chat', a, other_chat)]:
+        report = {'status': 'success', 'target_device_ids': ['pc', 'other'],
+            'artifacts': [{'path': 'C:/Temp/first.html', 'device_id': 'pc', 'verified': True},
+                {'path': 'C:/Temp/second.html', 'device_id': 'pc', 'verified': True},
+                {'path': 'PRIVATE_OTHER_DEVICE', 'device_id': 'other', 'verified': True}]}
+        saved = db.add_message(chat_id, 'assistant', 'PRIVATE_MIXED_DEVICE_SUMMARY',
+            task_metadata={'taskKind': 'worker', '_taskId': source_id,
+                'assignmentDeviceIds': [f"{owner['id']}:pc"]})
+        with db.get_db() as c:
+            c.execute('INSERT INTO worker_jobs(task_id,owner_user_id,chat_id,state,payload,report,message_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
+                (source_id, owner['id'], chat_id, 'success', '{}', json.dumps(report), saved['id'], 1, 2))
+    context = build_worker_context(a['id'], a['chat_id'], 'Измени этот файл',
+        [f"{a['id']}:pc"], capture_history(a['chat_id']))
+    data = json.loads(context[0]['content'].split('\n', 1)[1].rsplit('\nEnd', 1)[0])
+    assert [v['path'] for v in data['referenced_results'][0]['artifacts']] == ['C:/Temp/first.html', 'C:/Temp/second.html']
+    assert 'PRIVATE_OTHER_DEVICE' not in json.dumps(context) and 'PRIVATE_MIXED_DEVICE_SUMMARY' not in json.dumps(context)
+    for foreign_history in (capture_history(b['chat_id']), capture_history(other_chat)):
+        # Even an otherwise matching short device ID cannot bypass job ownership.
+        for row in foreign_history:row['assignmentDeviceIds'] = ['pc']
+        with pytest.raises(ValueError, match='reference_task'):
+            build_worker_context(a['id'], a['chat_id'], 'task', [f"{a['id']}:pc"], foreign_history)
+    with pytest.raises(ValueError, match='worker_context_chat_not_owned'):
+        build_worker_context(a['id'], b['chat_id'], 'task', [f"{a['id']}:pc"], [])
+    with pytest.raises(ValueError, match='worker_context_device_not_owned'):
+        build_worker_context(a['id'], a['chat_id'], 'task', [f"{b['id']}:pc"], [])
