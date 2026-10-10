@@ -101,10 +101,10 @@ def test_long_primary_is_brief_and_chat_is_unchanged(monkeypatch):
 
 
 def test_read_file_is_not_full_read_aloud(monkeypatch):
-    async def brief(task):return 'В config.ini указан port=8080.'
+    async def brief(task):return 'В настройках указан порт 8080.'
     monkeypatch.setattr(voice,'shorten_answer',brief)
     task={'kind':'orchestrator','answer':'Содержимое config.ini. '*100,'message':'Прочитай файл config.ini'}
-    assert asyncio.run(voice.spoken_parts(task))==['В config.ini указан port=8080.']
+    assert asyncio.run(voice.spoken_parts(task))==['В настройках указан порт 8080.']
     task['message']='Прочитай ответ вслух полностью'
     assert len(' '.join(asyncio.run(voice.spoken_parts(task))))>420
 
@@ -140,3 +140,24 @@ def test_configured_cost_cap_prevents_paid_request(monkeypatch):
     monkeypatch.setattr(controller,'_chat_completion_request',forbidden)
     with pytest.raises(ValueError,match='budget'):
         asyncio.run(voice.shorten_answer({'answer':'Ответ'}))
+
+
+def test_short_worker_file_name_uses_existing_brief_instead_of_direct_tts(monkeypatch):
+    from server import response_presentation
+    raw='Открыта презентация slides.pptx в редакторе.'
+    task={'kind':'worker','worker_id':'worker-1','status':'done','answer':raw,'message':'Открой презентацию'}
+    monkeypatch.setattr(response_presentation,'worker_presentation',lambda *args:{'conversational_response':raw})
+    monkeypatch.setattr(response_presentation,'worker_spoken_response',lambda *args:raw)
+    calls=[]
+    async def brief(t):calls.append(t);return 'Открыла презентацию.'
+    monkeypatch.setattr(voice,'shorten_answer',brief)
+    assert asyncio.run(voice.spoken_parts(task))==['Открыла презентацию.']
+    assert len(calls)==1 and task['answer']==raw
+    assert asyncio.run(voice.spoken_parts(task))==['Открыла презентацию.'] and len(calls)==1
+
+
+def test_technical_brief_cannot_reintroduce_file_extension(monkeypatch):
+    task={'kind':'orchestrator','status':'done','answer':'Открыта slides.pptx.','message':'Открой презентацию'}
+    async def brief(t):return 'Открыта slides.pptx.'
+    monkeypatch.setattr(voice,'shorten_answer',brief)
+    assert asyncio.run(voice.spoken_parts(task))==['Коротко пересказать сейчас не получилось. Полный ответ оставила в чате.']

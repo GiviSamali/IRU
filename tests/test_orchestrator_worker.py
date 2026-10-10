@@ -585,3 +585,31 @@ def test_p001_partial_and_unknown_release_fifo_without_reexecution(owners):
         assert started == ['partial', 'unknown', 'unknown']
         await scheduler.shutdown()
     asyncio.run(scenario())
+
+
+def test_server_worker_reserves_existing_last_turn_for_honest_partial_answer(owners,monkeypatch):
+    from server import controller, controller_onboarding as onboarding
+    a,_=owners
+    def call(name,args,ident):
+        return {'tool_calls':[{'id':ident,'function':{'name':name,'arguments':json.dumps(args)}}]}
+    def payload(kind,basis):
+        return {'answer_type':kind,'text':'Поиск нашёл страницы, но нужных значений в выдержках нет.',
+            'basis':basis,'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,
+                'has_sufficient_evidence':False,'missing_evidence_question':'В выдержках нет нужных значений.'}}
+    responses=[call('web_search',{'query':'current facts'},'s1'),call('web_search',{'query':'specific facts'},'s2'),
+        call('answer_text',payload('grounded_report',['nonexistent']),'bad'),
+        call('answer_text',payload('partial_report',['step_1','step_2']),'final'),
+        {'content':json.dumps({'valid':True,'reason':'Missing data acknowledged without inventing facts'})}]
+    captured=[]
+    async def completion(*args,**kwargs):
+        captured.append(kwargs)
+        return {'choices':[{'message':responses.pop(0),'finish_reason':'tool_calls'}]}
+    async def search(*args):return {'answer':None,'results':[{'title':'Source','url':'https://example.invalid','content':'No requested values'}]}
+    monkeypatch.setattr(controller,'_chat_completion_request',completion)
+    monkeypatch.setattr(onboarding,'run_web_search',search)
+    result=asyncio.run(onboarding.process_onboarding_message('Find current facts',usage_context={'user_id':a['id'],'worker_execution':True},
+        load_llm_config_fn=lambda:{'model':'mock-model','answer_auditor_enabled':True},current_datetime_msk_fn=lambda:'2026-10-10'))
+    assert [t['function']['name'] for t in captured[3]['tools']]==['answer_text']
+    assert result['task_receipt']['goal_completed'] is False and result['task_receipt']['task_status']=='partial'
+    assert [c['tool_name'] for c in result['commands']]==['web_search','web_search','answer.text']
+    assert not responses

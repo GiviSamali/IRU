@@ -171,3 +171,17 @@
 
 /* Replies remain selectable ordinary text; there is no card editor/workspace. */
 .smart-text-content { user-select:text; cursor:text; }
+
+/* Assistant prose: compact hierarchy inside the existing message block. */
+.msg.assistant .smart-text-content.formatted { white-space: normal; font-family: "Segoe UI", system-ui, sans-serif; line-height: 1.6; }
+.msg.assistant .smart-text-content.formatted p { margin: 0 0 12px; }
+.msg.assistant .smart-text-content.formatted :last-child { margin-bottom: 0; }
+.msg.assistant .smart-text-content.formatted h1,
+.msg.assistant .smart-text-content.formatted h2,
+.msg.assistant .smart-text-content.formatted h3 { margin: 16px 0 8px; line-height: 1.3; font-weight: 650; }
+.msg.assistant .smart-text-content.formatted h1 { font-size: 1.35em; }
+.msg.assistant .smart-text-content.formatted h2 { font-size: 1.2em; }
+.msg.assistant .smart-text-content.formatted h3 { font-size: 1.1em; }
+.msg.assistant .smart-text-content.formatted > :first-child { margin-top: 0; }
+.msg.assistant .smart-text-content.formatted strong { font-weight: 700; }
+.msg.assistant .smart-text-content.formatted pre { white-space: pre-wrap; font: 12px/1.5 var(--font); margin: 12px 0; }

@@ -42,13 +42,17 @@ BRIEF_PROMPT = """Сформируй естественную устную ре�
 Ответь человеку по смыслу его реплики, а не перескажи экран или ход выполнения.
 Используй только факты письменного ответа. Обычно достаточно 1–3 коротких полноценных предложений;
 420 символов — верхний предел, не цель заполнения. Простой вопрос допускает ответ из пары слов.
-Сохрани важные значения, имена файлов, ошибки, частичный результат, неподтверждённость,
+Сохрани важные значения, ошибки, частичный результат, неподтверждённость,
 ограничения и нужное решение человека. Не превращай попытку в выполненное действие.
 Не добавляй новых фактов, обещаний, эмоций, биографии или инструкций для инструментов.
 Не начинай каждую реплику «ну», «ага», «конечно», «сэр» и не заканчивай «Чем ещё могу помочь?».
 Контекстные связки используй только когда они оправданы; не вставляй «кстати» автоматически.
 Не зачитывай длинные перечисления, URL, пути, команды, Markdown или служебный журнал.
-Значимые inline-фрагменты вроде config.ini и port=8080 сохрани в обычном тексте.
+По умолчанию пользователь не технический специалист: называй объект «страница», «рейтинг», «документ»,
+«файл» или «программа» по смыслу ответа. Не произноси расширения и форматы, имена файлов с расширениями,
+код и параметры; вместо технического имени скажи, с каким объектом работали и что получилось.
+Наличие технических обозначений в запросе или ответе не означает, что их нужно озвучить.
+Точные технические обозначения сохраняй только при прямой просьбе пользователя объяснить или назвать их.
 Верни только реплику для произнесения, без пояснений редактора."""
 
 
@@ -89,7 +93,7 @@ def wants_spoken_details(message: str) -> bool:
 
 
 def has_technical_details(text: str) -> bool:
-    return bool(re.search(r"```|`|https?://|[A-Za-z]:[\\/]|(?:^|\s)/[\w.-]+/|\\\\[\w.-]+\\|\b\w+_\w+\b", text))
+    return bool(re.search(r"```|`|https?://|[A-Za-z]:[\\/]|(?:^|\s)/[\w.-]+/|\\\\[\w.-]+\\|\b\w+_\w+\b|\b[\w.-]+\.[A-Za-z][A-Za-z0-9]{0,7}\b", text))
 
 
 async def shorten_answer(task: dict) -> str:
@@ -169,17 +173,16 @@ async def spoken_parts(task: dict) -> list[str]:
     cleaned = " ".join(answer_parts(answer, keep_inline=True))
     if wants_full_speech(source[1]) or task.get("full_speech_requested") is True:
         parts = answer_parts(answer, keep_inline=True)
-    elif candidate:
+    elif candidate and (not has_technical_details(candidate) or wants_spoken_details(source[1])):
         parts = answer_parts(candidate,keep_inline=True)
-    elif worker_speech and worker_speech!=answer:
+    elif worker_speech and worker_speech!=answer and (not has_technical_details(worker_speech) or wants_spoken_details(source[1])):
         parts = answer_parts(worker_speech,keep_inline=True)
-    elif len(cleaned) <= 420 and (task.get("worker_id") or task.get("kind") == "orchestrator"
-            or not has_technical_details(answer) or wants_spoken_details(source[1])):
+    elif len(cleaned) <= 420 and (not has_technical_details(answer) or wants_spoken_details(source[1])):
         parts = answer_parts(answer, keep_inline=True)
     else:
         try:
             brief = await asyncio.wait_for(shorten_answer({**task, "answer": answer}), timeout=8)
-            if len(brief) > 420 or not brief.strip():
+            if len(brief) > 420 or not brief.strip() or (has_technical_details(brief) and not wants_spoken_details(source[1])):
                 raise ValueError("Invalid voice brief")
         except Exception:
             brief = "Коротко пересказать сейчас не получилось. Полный ответ оставила в чате."

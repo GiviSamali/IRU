@@ -642,6 +642,7 @@ function renderMessages() {
     if (workerInDock) view.blocks = view.blocks.filter(block => block.type !== 'task' && (block.type !== 'action' || m.planSuggestion || m.suggestedFact));
     let bodyHTML = IRUSmartUI.render(view, {
       expanded: state.expandedSmartBlocks,
+      formatAssistantText: role === 'assistant',
       taskDetails: block => renderSmartTaskDetails(block, m, mi),
       actionDetails: renderMessageActions,
     });
