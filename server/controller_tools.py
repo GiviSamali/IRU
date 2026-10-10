@@ -12,12 +12,17 @@ EXECUTE_CMD_DESCRIPTION = (
     "Return the actual observation; no success marker is required. Exit code zero proves command execution only. "
     "Confirm the original goal from actual final content or native/API evidence, using evidence already available when sufficient. "
     "Visual/window verification is only needed when the user asks for visible/focused verification, the next step requires window interaction, the command result is ambiguous/noisy, or the task is about window state. "
-    "Keep commands short. Use write_content instead of execute_cmd for long, multiline, or generated file content."
+    "For search/analysis, prefer local search or extraction and return only relevant facts; reuse current-run observations instead of overlapping rereads without a new need. "
+    "For limited edits, reliably transform the current original data on the device, preserving untouched elements, and verify the requested change and preservation against the original. "
+    "Do not reconstruct untouched content from LLM memory or infer duplicates from historical claims. Existing permissions, device scope, and confirmations still apply. "
+    "Keep commands short. Use write_content for new generated content or a requested full replacement; content length alone does not justify rewriting an existing file."
 )
 
 WRITE_CONTENT_DESCRIPTION = (
-    "Canonical tool for writing text content to a file. Use for long, multiline, or generated text content "
-    "instead of execute_cmd/Set-Content/echo/heredoc. Suitable for scripts, HTML, JSON, TXT, CSV, Markdown, "
+    "Canonical tool for creating text content or performing an explicitly requested full replacement. Prefer it for long, multiline, or generated new content. "
+    "For a limited edit, prefer a reliable local transformation of the current original using existing tools; do not reconstruct unchanged elements in the LLM. "
+    "Overwrite replaces the entire file; neither overwrite nor append guarantees preservation. Verify the requested change and preservation against the original before claiming success. "
+    "Suitable for scripts, HTML, JSON, TXT, CSV, Markdown, "
     "and source code. For binary or Office documents, future dedicated office tools should be used. "
     "Returns compact evidence only: path, append mode, encoding, chars_written, bytes_written, content_sha256, "
     "content_preview, and an OK/NO/ERROR-style summary."
@@ -75,7 +80,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "write_content",
-            "description": "Напрямую записать текст в файл без шелла. Используй для длинных и/или многострочных текстов (>200 символов) вместо Set-Content/echo/heredoc. Поддерживает append для добавления частей по сегментам.",
+            "description": "Записать новое содержимое или выполнить запрошенную полную замену файла. Для ограниченного изменения предпочитай надёжное локальное преобразование оригинала существующими средствами; длина текста сама по себе не требует полной перезаписи. append добавляет текст, но не гарантирует сохранность исходных элементов.",
             "parameters": {
                 "type": "object",
                 "properties": {
