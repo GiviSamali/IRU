@@ -38,7 +38,7 @@ def confirmed_command_outcome(result):
         return "unknown"
     if status in {"failed", "error", "blocked", "cancelled"} or completion in {"failed", "error"}:
         return "failed"
-    # Explicit uncertainty/launch-only receipts cannot override an optimistic marker.
+    # Explicit uncertainty/launch-only receipts cannot prove execution.
     if status not in {None, "", "ok", "success", "done", "completed", "executed", "finished"}:
         return "unknown"
     if completion not in {None, "", "success"}:
@@ -54,7 +54,5 @@ def confirmed_command_outcome(result):
         return "unknown"
     stdout = result.get("stdout")
     if not isinstance(stdout, str):
-        return "unknown"
-    if any(line.lstrip().lower().startswith("ok: launch_requested") for line in stdout.splitlines()):
         return "unknown"
     return "success" if execute_cmd_result_is_ok(result) else "unknown"

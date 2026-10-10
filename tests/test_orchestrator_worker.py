@@ -30,7 +30,12 @@ def task(owner, goal='goal'):
 def success(t):
     t.update(status='done',answer='verified',commands=[{'tool_name':'write_content','step_id':'step_1','status':'success',
         'device_id':'pc','result':{'path':r'C:\Users\Demo\Desktop\report.txt','bytes_written':2}}],
-        tasks=[],task_receipt={'task_status':'completed','final_verification_status':'verified'})
+        tasks=[],task_receipt={'task_status':'completed','final_verification_status':'verified',
+            'goal_completed':True,'answer_source':'audited_terminal'})
+    t['commands'].append({'tool_name':'answer.text','status':'terminal','result':{
+        'answer_type':'grounded_report','text':'verified','basis':['step_1'],
+        'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,
+            'has_sufficient_evidence':True,'missing_evidence_question':''}}})
 
 
 async def wait_until(predicate):
@@ -495,3 +500,87 @@ def test_context_hard_cap_with_oversized_devices_and_no_tasks(owners,monkeypatch
     result=orch.context_for(a['id'],a['chat_id'],'question','pc')
     assert len(json.dumps(result,ensure_ascii=False))<=700 and result['context_truncated'] is True
     assert all(len(d.get('name',''))<=80 for d in result['devices'])
+
+
+def test_p001_information_without_marker_preserves_verified_answer(owners):
+    from server.run_journal import make_run_step, append_tool_step, append_answer_step
+    a, _ = owners
+    t = task(a)
+    journal = []
+    append_tool_step(journal, make_run_step(journal=journal, tool_name='execute_cmd',
+        result={'returncode': 0, 'stdout': 'background: black', 'stderr': ''}, target_device_id='pc'))
+    payload = {'answer_type': 'grounded_report', 'text': 'Текущий фон: чёрный.', 'basis': ['step_1'],
+        'self_check': {'depends_on_current_external_state': True, 'claims_completed_action': False,
+            'has_sufficient_evidence': True, 'missing_evidence_question': ''}}
+    append_answer_step(journal, 'answer_text', payload, target_device_id='pc')
+    t.update(status='done', answer=payload['text'], commands=journal,
+        task_receipt={'task_status': 'completed', 'answer_source': 'audited_terminal',
+            'goal_completed': True, 'final_verification_status': 'verified'})
+    report = build_worker_report(t)
+    assert report['status'] == 'success' and report['summary'] == payload['text']
+    assert 'step_1' in report['evidence_refs']
+
+
+def test_p001_stdout_markers_and_model_flags_cannot_confirm_goal(owners):
+    from server.command_confirmation import confirmed_command_outcome
+    from server.tool_completion import tool_result_terminal_sufficient
+    from server.pipeline_step_control import completion_matches
+    a, _ = owners
+    for output in ('OK: effect_verified', 'WorkerDoIt', 'SUCCESS', 'DONE', 'NO: absent'):
+        result = {'returncode': 0, 'stdout': output, 'terminal_sufficient': True}
+        entry = {'tool_name': 'execute_cmd', 'step_id': 'step_1', 'status': 'success', 'result': result}
+        assert confirmed_command_outcome(result) == 'success'  # Execution only.
+        assert not tool_result_terminal_sufficient(entry)
+        assert not completion_matches({'completion_check': {'tool': 'execute_cmd', 'stdout_contains': output}}, entry)
+        t = task(a)
+        t.update(status='done', answer='Всё выполнено.', commands=[entry,
+            {'tool_name': 'answer.text', 'status': 'terminal', 'result': {
+                'answer_type': 'grounded_report', 'text': 'Всё выполнено.', 'basis': ['step_1'],
+                'self_check': {'depends_on_current_external_state': True, 'claims_completed_action': True,
+                    'has_sufficient_evidence': True, 'missing_evidence_question': ''}}}])
+        assert not build_worker_report(t)['goal_completed']
+
+
+def test_p001_intermediate_write_keeps_artifact_without_confirming_whole_goal(owners):
+    from server.run_journal import compact_write_content_result
+    from server.tool_completion import write_content_result_is_ok, tool_result_terminal_sufficient
+    a, _ = owners
+    args = {'path': 'C:/Temp/grid.html', 'content': '<body style="background:black">'}
+    missing = compact_write_content_result(args, {})
+    assert missing['bytes_written'] is None and missing['content_sha256'] is None
+    assert not write_content_result_is_ok(missing)
+    result = compact_write_content_result(args, {'path': args['path'], 'bytes_written': 30})
+    entry = {'tool_name': 'write_content', 'status': 'success', 'step_id': 'step_1',
+        'device_id': 'pc', 'result': result}
+    assert write_content_result_is_ok(result) and not tool_result_terminal_sufficient(entry)
+    t = task(a)
+    t.update(status='done', commands=[entry], task_receipt={'task_status': 'completed', 'final_verification_status': 'verified'})
+    report = build_worker_report(t)
+    assert report['status'] == 'unknown' and not report['goal_completed']
+    assert report['artifacts'][0]['path'] == args['path']
+
+
+def test_p001_partial_and_unknown_release_fifo_without_reexecution(owners):
+    a, _ = owners
+    async def scenario():
+        gate = asyncio.Event()
+        started = []
+        async def execute(t):
+            started.append(t['message'])
+            await gate.wait()
+            t.update(status=t['message'], commands=[], answer='Подтверждена только часть результата.')
+        scheduler = WorkerScheduler(execute)
+        first = await scheduler.submit(task(a, 'partial'))
+        second = await scheduler.submit(task(a, 'unknown'))
+        assert second['status'] == 'queued'
+        gate.set()
+        await scheduler.runners[a['id']]
+        assert started == ['partial', 'unknown']
+        assert owned_job(first['task_id'], a['id'])['state'] == 'partial'
+        assert owned_job(second['task_id'], a['id'])['state'] == 'unknown'
+        third = await scheduler.submit(task(a, 'unknown'))
+        await scheduler.runners[a['id']]
+        assert owned_job(third['task_id'], a['id'])['state'] == 'unknown'
+        assert started == ['partial', 'unknown', 'unknown']
+        await scheduler.shutdown()
+    asyncio.run(scenario())

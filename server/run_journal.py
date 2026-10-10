@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import logging
 import time
 from contextvars import ContextVar
@@ -192,19 +191,22 @@ def compact_write_content_result(args: dict[str, Any] | None, result: Any = None
     original = result if isinstance(result, dict) else {}
     content = _coerce_text(args.get("content"))
     encoding = _coerce_text(args.get("encoding") or original.get("encoding") or "utf-8")
-    encoded = content.encode(encoding, errors="replace")
     path = original.get("path") or original.get("file_path") or args.get("path") or ""
     append = bool(args.get("append") or original.get("append") or original.get("mode") == "append")
     error = original.get("error")
     status = original.get("status")
     if not status:
-        status = "error" if error else "ok"
+        status = "error" if error else "ok" if (
+            type(original.get("bytes_written")) is int and original["bytes_written"] >= 0
+            and (original.get("path") or original.get("file_path"))) else "unknown"
     summary = original.get("summary")
     if not summary:
         if error:
             summary = f"ERROR: {error}"
         elif status in {"failed", "error"}:
             summary = f"ERROR: write_failed {path}".strip()
+        elif status == "unknown":
+            summary = "write_result_unconfirmed"
         elif status in {"missing", "not_found"}:
             summary = f"NO: file_missing_after_write {path}".strip()
         else:
@@ -214,9 +216,10 @@ def compact_write_content_result(args: dict[str, Any] | None, result: Any = None
         "path": str(path),
         "append": append,
         "encoding": encoding,
-        "chars_written": _coerce_int(original.get("chars_written"), len(content)),
-        "bytes_written": _coerce_int(original.get("bytes_written"), len(encoded)),
-        "content_sha256": original.get("content_sha256") or hashlib.sha256(encoded).hexdigest(),
+        # Evidence must come from the executor, never from requested content.
+        "chars_written": original.get("chars_written"),
+        "bytes_written": original.get("bytes_written"),
+        "content_sha256": original.get("content_sha256"),
         "content_preview": content[:WRITE_CONTENT_PREVIEW_CHARS],
         "summary": summary,
     }
@@ -270,10 +273,6 @@ def _status_for_result(result: Any, terminal: bool = False, tool_name: str | Non
     if isinstance(result, dict):
         if canonical_tool_name(tool_name or "") == "execute_cmd" and execute_cmd_result_is_negative(result):
             return "failed"
-        if canonical_tool_name(tool_name or "") == "write_content":
-            summary = str(result.get("summary") or "").lstrip().upper()
-            if summary.startswith("NO:") or summary.startswith("ERROR:"):
-                return "failed"
         if result.get("error"):
             return "failed"
         if result.get("status") in {"failed", "error"}:

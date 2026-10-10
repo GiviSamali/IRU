@@ -85,7 +85,7 @@ Tool selection policy:
 1. Use typed tools for specialized structured operations where they provide the needed evidence.
 2. Use playbooks/scenarios second if available.
 3. Use execute_cmd / PowerShell as the first-class generic control surface for ordinary shell/system actions.
-4. For execute_cmd, combine action plus cheapest sufficient verification in one short command and print OK:, NO:, or ERROR:.
+4. For execute_cmd, combine action plus one sufficient final observation in a short command when possible. No success marker is required; exit code zero alone does not prove the user goal. Reuse sufficient current-run evidence.
 5. For explicit live state/check/refresh/status-now requests, call device_refresh_state directly. This includes: "Проверь состояние", "проверь состояние устройства", "что сейчас с ПК", "сделай свежий снимок", "есть ли проблемы с устройством".
 6. Do not call only device_get_passport for explicit check/refresh/status-now requests.
 7. Use device_get_passport for passive/status-known/passport queries: "покажи паспорт устройства", "что известно об устройстве", "какой статус активации", "какие возможности устройства".

@@ -13,7 +13,7 @@ try:
     from .pipeline_plan_review import review_pipeline_plan
     from .pipeline_step_control import StepProgress, completion_matches, step_handoff
     from . import database as db  # type: ignore
-    from .answer_auditor import audit_answer_payload  # type: ignore
+    from .answer_auditor import answer_auditor_enabled, audit_answer_payload  # type: ignore
     from .answer_repair import run_answer_only_repair_turn  # type: ignore
     from .controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from .controller_tools import TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
@@ -73,7 +73,7 @@ except ImportError:
     from pipeline_plan_review import review_pipeline_plan
     from pipeline_step_control import StepProgress, completion_matches, step_handoff
     import database as db  # type: ignore
-    from answer_auditor import audit_answer_payload  # type: ignore
+    from answer_auditor import answer_auditor_enabled, audit_answer_payload  # type: ignore
     from answer_repair import run_answer_only_repair_turn  # type: ignore
     from controller_budget import CommandBudget, budget_guard_entry  # type: ignore
     from controller_tools import TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
@@ -239,7 +239,7 @@ def _result_has_validated_answer_text(commands: list[dict] | None) -> bool:
 
 def format_pipeline_step_report(steps: list[dict], task_status: str) -> str:
     completed = task_status in {"completed", "completed_with_recovery"}
-    lines = ["План выполнен." if completed else "План выполнен не полностью."]
+    lines = ["Результаты выполнения шагов:" if completed else "План выполнен не полностью."]
     labels = {"done": "выполнено", "recovered": "выполнено после исправления",
               "failed": "не выполнено", "blocked": "не выполнялось", "cancelled": "отменено"}
     for step in steps:
@@ -399,8 +399,7 @@ def pipeline_plan_prompt(shared: dict, user_message: str) -> str:
 Не включай в план тексты документов, код, команды или повтор общего контекста в каждом шаге.
 Общий запрос и результаты предыдущих шагов будут переданы исполнителям отдельно.
 Необязательное completion_check описывает ТОЛЬКО достаточное доказательство ВСЕГО шага:
-для записи единственного итогового файла: {{"tool":"write_content","path":"точный путь"}};
-для финальной команды: {{"tool":"execute_cmd","stdout_contains":"OK: точный финальный результат"}}.
+Для файловых и shell-задач завершай шаг через grounded answer с фактическими наблюдениями; stdout_contains не подтверждает цель.
 Не указывай completion_check для промежуточной подготовки, первого из нескольких файлов или проверки
 среды. Если достаточность нельзя выразить точно, опусти поле: исполнитель даст grounded answer.
 Не создавай лишних микро-шагов. Не используй маркеры [[SUGGEST_PLAN]].
@@ -890,8 +889,7 @@ def _verification_command_succeeded(command: dict) -> bool:
         return True
     if result.get("exists") is True or result.get("verified") is True:
         return True
-    output = f"{result.get('stdout') or ''}\n{result.get('stderr') or ''}".upper()
-    return any(marker in output for marker in ("IRU_VERIFIED", "IRU_CHECK_OK", "IRU_ARTIFACT_EXISTS"))
+    return False
 
 
 def _step_has_failed_command(commands: list[dict], step_index: int) -> bool:
@@ -1018,9 +1016,8 @@ def build_pipeline_task_receipt(
     warnings = list(recovery_warnings)
     if len({item["path"].lower() for item in python_interpreters}) > 1:
         warnings.append("multiple_python_interpreters_used")
-    final_verification_status = "verified" if files_verified or any(
-        step.get("status") in {"done", "recovered"} for step in step_results[-1:]
-    ) else "unverified"
+    # Artifact existence and completion of a step do not verify the original goal.
+    final_verification_status = "unverified"
     if any(step.get("status") in {"failed", "blocked"} for step in step_results):
         final_verification_status = "failed"
 
@@ -1569,7 +1566,8 @@ async def run_pipeline_worker(
                                 tool_result = {
                                     "stdout": "OK: launch_requested long_running",
                                     "stderr": "",
-                                    "returncode": 0,
+                                    "returncode": None,
+                                    "status": "launch_requested",
                                     "error": None,
                                 }
                             else:
@@ -2352,6 +2350,10 @@ async def process_pipeline_subagents(
                             target_device_id=device_id,
                             hostname=device_info.get("hostname") or device_id,
                         )
+                        if answer_auditor_enabled(cfg):
+                            receipt["answer_source"] = "audited_terminal"
+                            receipt["goal_completed"] = payload["answer_type"] == "grounded_report"
+                            receipt["final_verification_status"] = "verified" if receipt["goal_completed"] else "unverified"
                         final_answer = payload["text"]
                         final_answer_from_answer_text = True
                         break

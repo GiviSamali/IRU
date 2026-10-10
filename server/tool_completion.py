@@ -36,12 +36,11 @@ def execute_cmd_result_is_complete(result: dict[str, Any] | None) -> bool:
     if result.get("completion_state") not in (None, "", "success"):
         return False
     stdout = result.get("stdout")
-    return isinstance(stdout, str) and not any(
-        line.lstrip().lower().startswith("ok: launch_requested") for line in stdout.splitlines())
+    return isinstance(stdout, str)
 
 
 def execute_cmd_result_is_ok(result: dict[str, Any] | None) -> bool:
-    return execute_cmd_result_is_complete(result) and execute_cmd_outcome_marker(result) == "OK"
+    return execute_cmd_result_is_complete(result)
 
 
 def execute_cmd_result_is_negative(result: dict[str, Any] | None) -> bool:
@@ -51,7 +50,7 @@ def execute_cmd_result_is_negative(result: dict[str, Any] | None) -> bool:
         return True
     if result.get("returncode") not in (None, 0, "0"):
         return True
-    return execute_cmd_outcome_marker(result) in {"NO", "ERROR"}
+    return result.get("status") in {"failed", "error", "blocked", "cancelled"} or result.get("completion_state") in {"failed", "error"}
 
 
 def write_content_result_is_ok(result: dict[str, Any] | None) -> bool:
@@ -59,8 +58,9 @@ def write_content_result_is_ok(result: dict[str, Any] | None) -> bool:
         return False
     if result.get("error") or result.get("status") in {"failed", "error"}:
         return False
-    summary = str(result.get("summary") or "").lstrip().upper()
-    return summary.startswith("OK:") and bool(result.get("path"))
+    return (result.get("status") in (None, "", "ok", "success")
+            and bool(result.get("path"))
+            and type(result.get("bytes_written")) is int and result["bytes_written"] >= 0)
 
 
 def write_content_result_is_negative(result: dict[str, Any] | None) -> bool:
@@ -68,25 +68,23 @@ def write_content_result_is_negative(result: dict[str, Any] | None) -> bool:
         return False
     if result.get("error") or result.get("status") in {"failed", "error"}:
         return True
-    summary = str(result.get("summary") or "").lstrip().upper()
-    return summary.startswith("NO:") or summary.startswith("ERROR:")
+    return result.get("status") in {"missing", "not_found", "blocked", "cancelled"}
 
 
 def tool_result_terminal_sufficient(entry: dict[str, Any] | None) -> bool:
     result = (entry or {}).get("result")
     if not isinstance(result, dict):
         return False
+    tool_name = (entry or {}).get("tool_name") or (entry or {}).get("action")
+    # Operation receipts cannot end a potentially multi-step user goal.
+    if tool_name in {"execute_cmd", "write_content"}:
+        return False
     if result.get("terminal_sufficient"):
         return True
-    tool_name = (entry or {}).get("tool_name") or (entry or {}).get("action")
     if tool_name in {"window_control", "window.control"}:
         return result.get("status") == "success" and result.get("completion_state") == "success"
     if tool_name == "transfer_file":
         return result.get("status") == "success" and result.get("sha256_verified") is True
-    if tool_name == "execute_cmd":
-        return execute_cmd_result_is_ok(result)
-    if tool_name == "write_content":
-        return write_content_result_is_ok(result)
     if tool_name in {"app.open_url", "app_open_url"}:
         return bool(result.get("launched")) and str(result.get("status") or "") in {
             "opened_verified",

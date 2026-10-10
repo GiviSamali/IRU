@@ -9,8 +9,8 @@ EXECUTE_CMD_DESCRIPTION = (
     "First-class generic control surface for normal system actions through PowerShell/cmd/bash. "
     "Existing window actions must use window_control, never shell code or synthetic keyboard/mouse input. "
     "Use it to perform the requested action and include the cheapest sufficient verification in the same short command when possible. "
-    "Print a machine-readable outcome line: OK: <confirmed or accepted result>, NO: <expected state missing or not confirmed>, or ERROR: <reason>. "
-    "For ordinary open/launch URL/folder/app commands, command-level acceptance such as OK: open_requested is usually sufficient. "
+    "Return the actual observation; no success marker is required. Exit code zero proves command execution only. "
+    "Confirm the original goal from actual final content or native/API evidence, using evidence already available when sufficient. "
     "Visual/window verification is only needed when the user asks for visible/focused verification, the next step requires window interaction, the command result is ambiguous/noisy, or the task is about window state. "
     "Keep commands short. Use write_content instead of execute_cmd for long, multiline, or generated file content."
 )
