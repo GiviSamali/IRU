@@ -17,8 +17,8 @@ TOKEN_TTL = 1800  # 30 minutes
 tasks: dict = {}
 TASK_TTL = 3600  # 1 hour
 
-RUNNING_TASK_STATUSES = {"running", "pending", "confirm", "cancelling"}
-TERMINAL_TASK_STATUSES = {"done", "error", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}
+RUNNING_TASK_STATUSES = {"running", "pending", "confirm", "cancelling", "queued"}
+TERMINAL_TASK_STATUSES = {"done", "error", "completed", "completed_with_recovery", "failed", "cancelled", "blocked", "partial", "unknown", "interrupted", "success"}
 
 
 # Declined plan suggestions keyed by chat_id + request hash
@@ -119,7 +119,7 @@ def is_suggested_fact_declined(user_id: int, chat_id: int, text: str, category: 
 def cleanup_old_tasks() -> None:
     """Remove tasks older than TASK_TTL."""
     now = time.time()
-    expired = [tid for tid, task in tasks.items() if now - task["created_at"] > TASK_TTL]
+    expired = [tid for tid, task in tasks.items() if now - task["created_at"] > TASK_TTL and not (task.get("worker_id") and task.get("status") not in TERMINAL_TASK_STATUSES)]
     for task_id in expired:
         plan_decision = tasks[task_id].get("_pipeline_plan_future")
         if plan_decision is not None and not plan_decision.done():

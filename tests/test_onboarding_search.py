@@ -83,7 +83,7 @@ def test_search_receipt_is_saved_for_ui_and_history(monkeypatch):
     saved = []
     monkeypatch.setattr(runtime, "process_onboarding_message", process)
     monkeypatch.setattr(runtime, "get_messages", lambda *args, **kwargs: [])
-    monkeypatch.setattr(runtime, "add_message", lambda *args: saved.append(args))
+    monkeypatch.setattr(runtime, "add_message", lambda *args, **kwargs: saved.append(args))
     tasks["search"] = {}
     asyncio.run(runtime.run_onboarding_task("search", 1, "Погода", 1))
     assert tasks["search"]["commands"] == [receipt]

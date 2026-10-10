@@ -1,5 +1,7 @@
 import asyncio
 import base64
+import json
+from copy import deepcopy
 import logging
 import time
 import uuid
@@ -17,6 +19,8 @@ try:
         PLAN_LIMITS,
         add_audit_log,
         add_message,
+        message_task_metadata,
+        get_messages,
         add_user_fact,
         check_daily_command_limit,
         check_device_limit,
@@ -41,6 +45,8 @@ try:
         download_tokens,
         get_user_devices,
         mark_task_cancelled,
+        is_task_cancel_requested,
+        TASK_TTL,
         mark_suggested_fact_declined,
         mark_plan_declined,
         request_task_cancel,
@@ -55,6 +61,8 @@ except ImportError:
         PLAN_LIMITS,
         add_audit_log,
         add_message,
+        message_task_metadata,
+        get_messages,
         add_user_fact,
         check_daily_command_limit,
         check_device_limit,
@@ -79,6 +87,8 @@ except ImportError:
         download_tokens,
         get_user_devices,
         mark_task_cancelled,
+        is_task_cancel_requested,
+        TASK_TTL,
         mark_suggested_fact_declined,
         mark_plan_declined,
         request_task_cancel,
@@ -87,6 +97,57 @@ except ImportError:
     )
     from python_toolchain import PythonToolchainReceipt, validate_toolchain_fact_against_receipt
     from task_runtime import run_nl_task, run_onboarding_task, send_command_to_agent
+
+
+try:
+    from ..command_confirmation import confirmed_command_outcome
+    from ..tool_completion import execute_cmd_outcome_marker
+    from ..run_journal import make_run_step, append_tool_step, append_answer_step, validate_answer_text_payload, diagnostic_context_for_task
+except ImportError:
+    from command_confirmation import confirmed_command_outcome
+    from tool_completion import execute_cmd_outcome_marker
+    from run_journal import make_run_step, append_tool_step, append_answer_step, validate_answer_text_payload, diagnostic_context_for_task
+
+try:
+    from ..worker_scheduler import scheduler, owned_job, restore_task
+    from ..worker_reports import build_worker_report
+    from ..orchestrator import run_turn, restore_dialogue
+except ImportError:
+    from worker_scheduler import scheduler, owned_job, restore_task
+    from worker_reports import build_worker_report
+    from orchestrator import run_turn, restore_dialogue
+
+
+async def execute_worker(task):
+    if task["device_ids"]:
+        await run_nl_task(task["task_id"],task["user_id"],task["message"],task["device_ids"],task["chat_id"])
+    else:
+        await run_onboarding_task(task["task_id"],task["user_id"],task["message"],task["chat_id"])
+
+scheduler.execute = execute_worker
+
+
+async def submit_worker(user, chat_id, message, target_ids, modes, *, request_key=None, context_summary="", objective="", broadcast=False, execution_mode="auto", source_task_ids=(), history_snapshot=None):
+    if len(target_ids) != len(set(target_ids)):
+        raise ValueError("duplicate_target_device")
+    for did in target_ids:
+        dev = devices.get(did)
+        if not dev or dev.get("user_id") != user["id"]:
+            raise ValueError("device_not_owned_or_unavailable")
+    task_id = str(uuid.uuid4())
+    task = {"task_id":task_id,"user_id":user["id"],"chat_id":chat_id,"message":message,"original_request":message,"proposed_objective":objective,"proposed_context_summary":context_summary,"orchestrated":bool(objective),"broadcast":broadcast,
+        "device_ids":target_ids,"status":"running","results":{},"answer":None,"commands":None,
+        "modes":modes,"created_at":time.time(),"kind":"worker"}
+    try:
+        from ..worker_context import build_worker_context, capture_history
+    except ImportError:
+        from worker_context import build_worker_context, capture_history
+    task['orchestrator_execution_mode']=execution_mode if objective else 'auto'
+    task['source_task_ids']=list(source_task_ids)
+    task['context_history']=history_snapshot if history_snapshot is not None else capture_history(chat_id)
+    task['worker_context']=build_worker_context(user['id'],chat_id,message,target_ids,task['context_history'],source_task_ids,
+        objective=task['proposed_objective'],context_summary=task['proposed_context_summary'])
+    return await scheduler.submit(task, request_key=request_key)
 
 
 router = APIRouter()
@@ -106,6 +167,8 @@ class NLCommand(BaseModel):
     broadcast: bool = False
     device_ids: list[str] = []
     modes: dict = {}
+    orchestrate: bool = False
+    request_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class RunPlanBody(BaseModel):
@@ -174,7 +237,8 @@ def _owned_device_profile(user: dict, device_id: str | None = None, machine_guid
 
 def _memory_stats_for_profile(user: dict, profile: dict | None) -> dict:
     machine_guid = profile.get("machine_guid") if profile else None
-    return get_memory_stats(machine_guid, str(user["id"]) if user.get("id") else None)
+    return get_memory_stats(machine_guid, str(user["id"]) if user.get("id") else None,
+                            profile.get("device_id") if profile else None)
 
 
 class RawCommand(BaseModel):
@@ -233,15 +297,6 @@ async def nl_command(cmd: NLCommand, request: Request):
     if not check_rate_limit(str(user["id"])):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
-    if not _is_admin(user):
-        cmd_limit = check_daily_command_limit(user["id"])
-        if not cmd_limit["allowed"]:
-            return {
-                "status": "error",
-                "error": f"Дневной лимит команд исчерпан ({cmd_limit['used']}/{cmd_limit['limit']}). Обновите тариф для снятия ограничений.",
-            }
-        increment_daily_commands(user["id"])
-
     user_devs = get_user_devices(user["id"])
     print(
         f"[nl_command] user_id={user['id']}, user='{user['name']}', "
@@ -259,24 +314,40 @@ async def nl_command(cmd: NLCommand, request: Request):
         if not chat:
             return {"status": "error", "error": "Чат не найден"}
 
+    if cmd.orchestrate:
+        try:
+            from ..worker_context import capture_history
+        except ImportError:
+            from worker_context import capture_history
+        history_snapshot=capture_history(chat_id)
+        async def delegate(choice, request_key):
+            if choice.scope=="device" and cmd.device_id and _dk(user["id"],cmd.device_id) not in user_devs:
+                raise ValueError("selected_device_not_owned_or_connected")
+            if cmd.modes.get("pipeline"):
+                raise ValueError("plan_requires_existing_review_flow")
+            targets=[_dk(user["id"],did) for did in choice.target_device_ids]
+            if cmd.broadcast:
+                targets=list(user_devs)
+            if choice.scope=="server":
+                if targets:raise ValueError("server_scope_has_device_targets")
+            elif not targets:
+                raise ValueError("target_device_required")
+            return await submit_worker(user,chat_id,cmd.message,targets,cmd.modes,request_key=request_key,
+                context_summary=choice.context_summary,objective=choice.objective,broadcast=cmd.broadcast,
+                execution_mode=choice.execution_mode,source_task_ids=choice.source_task_ids,history_snapshot=history_snapshot)
+        try:
+            return await run_turn(cmd,user,chat_id,delegate)
+        except ValueError:
+            return {"status":"error","error":"Повтор запроса изменён или состояние недоступно. Новое выполнение не начато."}
+
     add_message(chat_id, "user", cmd.message)
 
     if not user_devs and not cmd.device_id:
-        task_id = str(uuid.uuid4())[:12]
-        tasks[task_id] = {
-            "task_id": task_id,
-            "user_id": user["id"],
-            "chat_id": chat_id,
-            "message": cmd.message,
-            "device_ids": [],
-            "status": "running",
-            "results": {},
-            "answer": None,
-            "commands": None,
-            "created_at": time.time(),
-        }
-        asyncio.create_task(run_onboarding_task(task_id, user["id"], cmd.message, chat_id))
-        return {"status": "ok", "task_id": task_id, "chat_id": chat_id, "device_ids": []}
+        try:
+            task=await submit_worker(user,chat_id,cmd.message,[],cmd.modes or {},request_key=cmd.request_id)
+        except ValueError as exc:
+            return {"status":"error","error":str(exc)}
+        return {"status":"ok","task_id":task["task_id"],"chat_id":chat_id,"device_ids":[],"worker_id":"worker-1"}
 
     if cmd.broadcast:
         target_ids = list(user_devs.keys())
@@ -291,23 +362,36 @@ async def nl_command(cmd: NLCommand, request: Request):
     if not target_ids:
         return {"status": "error", "error": "Нет доступных устройств"}
 
-    task_id = str(uuid.uuid4())[:12]
-    tasks[task_id] = {
-        "task_id": task_id,
-        "user_id": user["id"],
-        "chat_id": chat_id,
-        "message": cmd.message,
-        "device_ids": target_ids,
-        "status": "running",
-        "results": {},
-        "answer": None,
-        "commands": None,
-        "modes": cmd.modes or {},
-        "created_at": time.time(),
-    }
-    asyncio.create_task(run_nl_task(task_id, user["id"], cmd.message, target_ids, chat_id))
+    try:
+        task = await submit_worker(user,chat_id,cmd.message,target_ids,cmd.modes or {},request_key=cmd.request_id,broadcast=cmd.broadcast)
+    except ValueError as exc:
+        return {"status":"error","error":str(exc)}
+    return {"status":"ok","task_id":task["task_id"],"chat_id":chat_id,"device_ids":target_ids,"worker_id":"worker-1","worker_status":task["status"]}
 
-    return {"status": "ok", "task_id": task_id, "chat_id": chat_id, "device_ids": target_ids}
+
+@router.get("/api/operations")
+async def api_operations(request: Request):
+    """Read-only owner-scoped FIFO snapshot; no execution or queue reconstruction."""
+    user = get_current_user(request)
+    try:
+        from ..worker_scheduler import list_jobs
+        from ..response_presentation import normalized_worker_report
+    except ImportError:
+        from worker_scheduler import list_jobs
+        from response_presentation import normalized_worker_report
+    items = []
+    for job in list_jobs(user["id"], limit=20, queue_first=True):
+        live = tasks.get(job["task_id"])
+        task = live if live and live.get("user_id") == user["id"] else restore_task(job)
+        report = normalized_worker_report(task, task.get("worker_report"))
+        items.append({"task_id": job["task_id"], "chat_id": job["chat_id"],
+            "title": (task.get("message") or "Задача")[:160],
+            "status": report["status"], "device_ids": report["target_device_ids"],
+            "summary": report["summary"],
+            "created_at": job["created_at"], "updated_at": job["updated_at"],
+            "can_cancel": report["status"] in {"queued", "running", "waiting_confirmation"},
+            "waiting_confirmation": report["status"] == "waiting_confirmation"})
+    return {"status": "ok", "operations": items}
 
 
 @router.get("/api/tasks")
@@ -387,7 +471,8 @@ async def api_delete_memory_fact_v1(
     if source == "device" and not machine_guid:
         raise HTTPException(status_code=404, detail="Device memory source not found")
 
-    ok = delete_memory_fact(str(user["id"]), fact_id, source, machine_guid)
+    ok = delete_memory_fact(str(user["id"]), fact_id, source, machine_guid,
+                            profile.get("device_id") if profile else None)
     if not ok:
         raise HTTPException(status_code=404, detail="Memory fact not found")
     return {"status": "ok", "facts": _memory_facts_for_profile(user, profile)}
@@ -407,7 +492,8 @@ async def api_delete_memory_fact(body: MemoryFactDeleteBody, request: Request):
     if source == "device" and not machine_guid:
         raise HTTPException(status_code=404, detail="Device memory source not found")
 
-    ok = delete_memory_fact(str(user["id"]), body.id, source, machine_guid)
+    ok = delete_memory_fact(str(user["id"]), body.id, source, machine_guid,
+                            profile.get("device_id") if profile else None)
     if not ok:
         raise HTTPException(status_code=404, detail="Memory fact not found")
 
@@ -418,20 +504,40 @@ async def api_delete_memory_fact(body: MemoryFactDeleteBody, request: Request):
 async def api_get_task(task_id: str, request: Request):
     user = get_current_user(request)
     task = tasks.get(task_id)
+    if task is None:
+        job = owned_job(task_id,user["id"])
+        if job:task=restore_task(job)
+        else:task=restore_dialogue(task_id,user["id"])
+        if task:tasks[task_id]=task
     if not task or task["user_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
-    memory_stats = None
+    memory_stats = get_memory_stats(None, str(user["id"]))
     if task.get("device_ids"):
         try:
             first_did = _short_did(task["device_ids"][0])
             profile = get_device_profile(first_did, user_id=user["id"])
             if profile and profile.get("machine_guid"):
-                memory_stats = get_memory_stats(profile["machine_guid"], str(user["id"]) if user.get("id") else None)
+                memory_stats = get_memory_stats(profile["machine_guid"], str(user["id"]) if user.get("id") else None, profile["device_id"])
         except Exception:
             pass
 
+    presentation = message_task_metadata(task)
+    saved_presentation = task.get("history_metadata")
+    if isinstance(saved_presentation, dict):
+        for key in ("taskMode", "taskElapsedMs", "taskStatus"):
+            value = saved_presentation.get(key)
+            if (key in {"taskMode", "taskStatus"} and isinstance(value, str)) or (key == "taskElapsedMs" and type(value) is int and value >= 0):
+                presentation[key] = value
+    try:
+        from ..response_presentation import worker_presentation, normalized_worker_report
+    except ImportError:
+        from response_presentation import worker_presentation, normalized_worker_report
+    report = normalized_worker_report(task,task.get("worker_report")) if task.get("worker_id") else task.get("worker_report")
+    human = worker_presentation(task,report) if task.get("worker_id") else {
+        "conversational_response":task.get("answer"),"execution_details":task.get("execution_details") or ""}
     response_task = {
+        **human,
         "task_id": task["task_id"],
         "chat_id": task["chat_id"],
         "message": task["message"],
@@ -441,6 +547,13 @@ async def api_get_task(task_id: str, request: Request):
         "commands": task.get("commands"),
         "tasks": task.get("tasks", []),
         "task_receipt": task.get("task_receipt"),
+        "worker_id":task.get("worker_id"),
+        "worker_report":report,
+        "kind":task.get("kind"),
+        "presentation_status": report["status"] if task.get("worker_id") else task["status"] if task["status"] in {"error", "failed", "blocked", "cancelled"} else presentation.get("taskStatus"),
+        "task_mode": presentation["taskMode"],
+        "elapsed_ms": presentation["taskElapsedMs"],
+        "diagnostic_trace": task.get("diagnostic_trace", []),
         "current_step": task.get("current_step"),
         "results": task.get("results", {}),
         "overall_status": task.get("overall_status"),
@@ -468,6 +581,9 @@ async def api_cancel_task(task_id: str, request: Request):
     task = tasks.get(task_id)
     if not task or task["user_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Задача не найдена")
+    if task.get("worker_id") and task.get("status") == "queued":
+        await scheduler.cancel(task_id,user["id"])
+        return {"status":"ok","task_status":"cancelled","cancel_requested":True,"message":"Ожидающая задача отменена."}
     previous_status = task.get("status")
     if previous_status in {"done", "error", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}:
         return {"status": "ok", "task_status": previous_status, "cancel_requested": bool(task.get("cancel_requested"))}
@@ -540,12 +656,12 @@ async def api_command_decision(task_id: str, body: CommandDecisionBody, request:
     if body.via_voice and (not data.get("voice_allowed") or data.get("kind") != "command"):
         raise HTTPException(403, "Удаление и опасные команды подтверждаются только кнопкой в чате.")
     if body.accepted:
-        return await api_confirm_task(task_id, request)
+        return await api_confirm_task(task_id, request, confirmation_id=body.confirmation_id)
     return await api_deny_task(task_id, request)
 
 
 @router.post("/api/tasks/{task_id}/confirm")
-async def api_confirm_task(task_id: str, request: Request):
+async def api_confirm_task(task_id: str, request: Request, confirmation_id: str | None = None):
     user = get_current_user(request)
     task = tasks.get(task_id)
     if not task or task["user_id"] != user["id"]:
@@ -558,6 +674,8 @@ async def api_confirm_task(task_id: str, request: Request):
 
     decision = task.get("_pipeline_confirm_future")
     if decision is not None:
+        if not confirmation_id or (task.get("confirm_data") or {}).get("confirmation_id") != confirmation_id:
+            raise HTTPException(409, "Подтвердите именно текущую команду через command-decision.")
         if decision.done():
             raise HTTPException(409, detail="Подтверждение уже обработано")
         task["status"] = "running"
@@ -568,29 +686,115 @@ async def api_confirm_task(task_id: str, request: Request):
         # Never use the single-command completion path for an orphaned PLAN.
         raise HTTPException(409, detail="Продолжение PLAN недоступно. Запустите исходную задачу заново.")
 
-    confirm_data = task.get("confirm_data", {})
-    short_did = confirm_data.get("device_id", "")
-    params = confirm_data.get("params", {})
-    chat_id = confirm_data.get("chat_id", task.get("chat_id"))
-    confirm_dk = _dk(task["user_id"], short_did) if ":" not in short_did else short_did
+    # Legacy ordinary confirmation: the controller frame has already unwound.
+    # Never restart it, replay old actions, or equate one command with the whole goal.
+    if is_task_cancel_requested(task_id):
+        raise HTTPException(409, detail="Задача отменена; команда не будет выполнена.")
+    created = task.get("created_at")
+    if type(created) not in (int, float) or not 0 <= time.time() - created <= TASK_TTL:
+        raise HTTPException(409, detail="Подтверждение устарело. Запустите исходную задачу заново.")
+    confirm_data = deepcopy(task.get("confirm_data") or {})
+    short_did = confirm_data.get("device_id")
+    params = confirm_data.get("params")
+    if (not isinstance(short_did, str) or not short_did or not isinstance(params, dict)
+            or not isinstance(params.get("command"), str) or not params["command"].strip()
+            or confirm_data.get("command") != params["command"]
+            or set(params) - {"command", "timeout", "shell"}):
+        raise HTTPException(409, detail="Нет точной исполняемой команды. Продолжение исходной задачи недоступно.")
+    chat_id = task.get("chat_id")
+    confirm_dk = _dk(user["id"], short_did) if ":" not in short_did else short_did
+    execution_token = object()
+    # Claim synchronously, before scheduling or any await: approval is one-shot.
     task["status"] = "running"
+    task["_confirmed_execution_token"] = execution_token
     task.pop("confirm_data", None)
+
+    def active():
+        return tasks.get(task_id) is task and task.get("_confirmed_execution_token") is execution_token
+
+    def finish(result, outcome, reason):
+        if not active():
+            return
+        journal = list(task.get("commands") or [])
+        # Keep evidence metadata, not literal commands, stdout/stderr or exceptions.
+        evidence = {"status": outcome, "confirmation_outcome": outcome, "reason": reason}
+        if isinstance(result, dict):
+            code = result.get("returncode")
+            if type(code) is int or code == "0":
+                evidence["returncode"] = code
+            evidence["outcome_marker"] = execute_cmd_outcome_marker(result)
+            for name in ("stdout", "stderr"):
+                if isinstance(result.get(name), str):
+                    evidence[name + "_chars"] = len(result[name])
+        if outcome == "failed":
+            evidence["error"] = reason
+        entry = append_tool_step(journal, make_run_step(journal=journal, tool_name="execute_cmd",
+            command="[tool] execute_cmd (confirmed)", target_device_id=short_did,
+            result=evidence, status=outcome, summary=f"confirmed_execution={outcome}; original_goal=not_verified"))
+        if outcome == "success":
+            text = "Подтверждённая команда выполнена по проверенному результату. "
+        elif reason == "device_unavailable":
+            text = "Устройство отключено или недоступно. Подтверждённая команда не выполнялась. "
+        elif outcome == "failed":
+            code = evidence.get("returncode")
+            text = "Подтверждённая команда завершилась с ошибкой" + (f" (код {code})" if code is not None else "") + ". "
+        else:
+            text = "Исход выполнения подтверждённой команды не подтверждён. Команда могла выполниться; автоматически её не повторяю. "
+        text += "Продолжение исходной задачи недоступно: дальнейшие шаги не выполнялись, завершение всей задачи не подтверждено."
+        cancelled = is_task_cancel_requested(task_id)
+        if cancelled:
+            text = "Задача остановлена пользователем. " + text
+        payload = {"answer_type": "error_report" if outcome == "failed" else "partial_report",
+            "text": text, "basis": [entry["step_id"]], "self_check": {
+                "depends_on_current_external_state": True, "claims_completed_action": outcome == "success",
+                "has_sufficient_evidence": outcome != "unknown", "missing_evidence_question":
+                    "Продолжение controller loop и выполнение всей исходной цели не подтверждены."}}
+        append_answer_step(journal, "answer_text", validate_answer_text_payload(payload, journal), target_device_id=short_did)
+        task["commands"] = journal
+        task["answer"] = text
+        task["status"] = "cancelled" if cancelled else "failed" if outcome == "failed" else "blocked"
+        task["overall_status"] = "cancelled" if cancelled else "failed" if outcome == "failed" else "partial_failure"
+        task["task_receipt"] = {"task_status": "cancelled" if cancelled else "failed" if outcome == "failed" else "partial",
+            "answer_source": "confirmation_result", "command_outcome": outcome, "goal_completed": False,
+            "continuation_status": "unavailable", "terminal_reason": reason, "basis": [entry["step_id"]]}
+        task["history_metadata"] = message_task_metadata(task, task_id=task_id)
+        try:
+            saved_message=add_message(chat_id, "assistant", text, journal, task_metadata=task["history_metadata"],message_id=task.get("history_message_id"))
+            if isinstance(saved_message,dict):task["history_message_id"]=saved_message.get("id")
+        except Exception as exc:
+            logger.warning("confirmation result persistence failed task_id=%s error_type=%s", task_id, type(exc).__name__)
 
     async def execute_confirmed():
         try:
-            result = await send_command_to_agent(confirm_dk, "execute_cmd", params, skip_confirm=True)
-            cmd_entry = {"command": confirm_data.get("command", ""), "device_id": short_did, "result": result}
-            existing_cmds = task.get("commands", []) or []
-            existing_cmds.append(cmd_entry)
-            task["commands"] = existing_cmds
-            ok = not result.get("error")
-            task["answer"] = "Выполнено." if ok else f"Ошибка: {result.get('error', '')}"
-            task["status"] = "done"
-            add_message(chat_id, "assistant", task["answer"], task["commands"])
-        except Exception as exc:
-            task["status"] = "error"
-            task["answer"] = f"Ошибка: {str(exc)}"
-            add_message(chat_id, "assistant", task["answer"])
+            if not active():
+                return
+            if is_task_cancel_requested(task_id):
+                mark_task_cancelled(task_id, answer="Остановлено пользователем.", commands=task.get("commands") or [])
+                return
+            if task.get("status") != "running" or time.time() - created > TASK_TTL:
+                task["status"] = "blocked"
+                task["answer"] = "Подтверждение устарело. Команда не выполнялась; исходная задача не завершена."
+                task["task_receipt"] = {"task_status":"blocked", "command_outcome":"not_executed",
+                    "goal_completed":False, "continuation_status":"unavailable", "terminal_reason":"confirmation_expired"}
+                return
+            dev = devices.get(confirm_dk)
+            if not dev or dev.get("user_id") != user["id"] or not dev.get("ws"):
+                finish(None, "failed", "device_unavailable")
+                return
+            try:
+                with diagnostic_context_for_task(task_id,task):
+                    result = await send_command_to_agent(confirm_dk, "execute_cmd", params,
+                                                         user_id=user["id"], skip_confirm=True)
+            except Exception:
+                # A transport exception can occur after dispatch. Never retry blindly.
+                finish(None, "unknown", "confirmed_transport_outcome_unknown")
+                return
+            outcome = confirmed_command_outcome(result)
+            finish(result, outcome, "confirmation_continuation_unavailable" if outcome == "success"
+                   else "confirmed_execution_failed" if outcome == "failed" else "confirmed_execution_unknown")
+        finally:
+            if active():
+                task.pop("_confirmed_execution_token", None)
 
     asyncio.create_task(execute_confirmed())
     return {"status": "ok"}
@@ -688,8 +892,14 @@ async def api_deny_task(task_id: str, request: Request):
     chat_id = task.get("confirm_data", {}).get("chat_id", task.get("chat_id"))
     task["status"] = "done"
     task["answer"] = "Команда отменена пользователем."
+    if task.get("worker_id"):
+        # Denial is a known cancellation, not an unverified completed Worker.
+        mark_task_cancelled(task_id, answer=task["answer"], commands=task.get("commands") or [])
+        task["task_receipt"] = {"task_status":"cancelled", "goal_completed":False,
+            "command_outcome":"not_executed", "terminal_reason":"confirmation_denied"}
     task.pop("confirm_data", None)
-    add_message(chat_id, "assistant", task["answer"], task.get("commands", []))
+    task["history_metadata"] = message_task_metadata({**task, "status": "cancelled"}, task_id=task_id)
+    add_message(chat_id, "assistant", task["answer"], task.get("commands", []), task_metadata=task["history_metadata"],message_id=task.get("history_message_id"))
     return {"status": "ok"}
 
 
@@ -743,29 +953,27 @@ async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
     if not user_devs:
         return {"status": "error", "error": "Нет подключённых устройств"}
 
-    if body.device_id:
+    if body.device_id and _dk(user["id"], body.device_id) not in user_devs:
+        return {"status":"error","error":"device_not_owned_or_unavailable"}
+
+    if source_task is not None and source_task.get("device_ids"):
+        target_ids=list(source_task["device_ids"])
+    elif body.device_id:
         target_ids = [_dk(user["id"], body.device_id)]
     else:
         target_ids = [list(user_devs.keys())[0]]
 
-    task_id = str(uuid.uuid4())[:12]
-    tasks[task_id] = {
-        "task_id": task_id,
-        "user_id": user["id"],
-        "chat_id": chat_id,
-        "message": body.original_request,
-        "device_ids": target_ids,
-        "status": "running",
-        "results": {},
-        "answer": None,
-        "commands": None,
-        "modes": {"pipeline": True, "autonomous": False},
-        "created_at": time.time(),
-    }
-    if source_task is not None:
-        source_task["voice_plan_started"] = task_id
-    asyncio.create_task(run_nl_task(task_id, user["id"], body.original_request, target_ids, chat_id))
-    return {"status": "ok", "task_id": task_id, "chat_id": chat_id}
+    try:
+        task=await submit_worker(user,chat_id,body.original_request,target_ids,{"pipeline":True,"autonomous":False},
+            request_key="plan:"+body.voice_source_task_id if body.voice_source_task_id else None,
+            objective=(source_task.get("proposed_objective") or body.original_request) if source_task and source_task.get("orchestrated") else "",
+            context_summary=(source_task.get("proposed_context_summary") or "") if source_task else "",broadcast=bool(source_task and source_task.get("broadcast")),
+            source_task_ids=source_task.get("source_task_ids") or [] if source_task else ())
+    except ValueError as exc:
+        return {"status":"error","error":str(exc)}
+    task_id=task["task_id"]
+    if source_task is not None:source_task["voice_plan_started"]=task_id
+    return {"status":"ok","task_id":task_id,"chat_id":chat_id,"worker_id":"worker-1","worker_status":task["status"]}
 
 
 @router.get("/api/download/{token}")

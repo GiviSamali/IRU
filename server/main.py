@@ -13,6 +13,8 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 try:
+    from .browser_bridge import init_browser_bridge
+    from .routers.browser import router as browser_router
     from .file_transfer import router as transfer_router, init_transfers, cleanup_transfers, cleanup_loop
     from .database import cleanup_expired_refresh_tokens, init_db
     from .routers.admin import router as admin_router
@@ -26,6 +28,8 @@ try:
     from .routers.voice import router as voice_router
     from .routers.ws import router as ws_router
 except ImportError:
+    from browser_bridge import init_browser_bridge
+    from routers.browser import router as browser_router
     from file_transfer import router as transfer_router, init_transfers, cleanup_transfers, cleanup_loop
     from database import cleanup_expired_refresh_tokens, init_db
     from routers.admin import router as admin_router
@@ -59,7 +63,17 @@ async def _cleanup_tokens_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    try:
+        from .worker_scheduler import scheduler
+        from .orchestrator import recover_turns
+    except ImportError:
+        from worker_scheduler import scheduler
+        from orchestrator import recover_turns
+    scheduler.closing = False
+    await scheduler.recover()
+    recover_turns()
     init_transfers()
+    init_browser_bridge(restart=True)
     await asyncio.to_thread(cleanup_transfers, True)
     transfer_cleanup = asyncio.create_task(cleanup_loop())
     cleanup_expired_refresh_tokens()
@@ -68,6 +82,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await scheduler.shutdown()
         transfer_cleanup.cancel()
         task.cancel()
         print("[server] ИРУ v3.5 остановлен")
@@ -88,6 +103,7 @@ def create_app() -> FastAPI:
     app.include_router(usage_router)
     app.include_router(voice_router)
     app.include_router(create_agent_update_router(UPDATES_DIR))
+    app.include_router(browser_router)  # /ws/browser precedes the generic agent WS route.
     app.include_router(ws_router)
     app.include_router(transfer_router)
 

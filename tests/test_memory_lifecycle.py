@@ -141,9 +141,9 @@ def test_legacy_device_memory_fact_delete_unpins_from_memory_stats(client):
 
     user, headers = _create_and_login_user(client)
     _register_profile(user, machine_guid="legacy-machine")
-    fact_id = add_fact("legacy-machine", "device-1", "legacy pinned fact", "config")
+    fact_id = add_fact("legacy-machine", "device-1", "legacy pinned fact", "config", user_id=str(user["id"]))
 
-    before = get_memory_stats("legacy-machine", str(user["id"]))
+    before = get_memory_stats("legacy-machine", str(user["id"]), "device-1")
     assert before["facts_list"] == [
         {"id": fact_id, "text": "legacy pinned fact", "category": "config", "source": "device"}
     ]
@@ -155,7 +155,7 @@ def test_legacy_device_memory_fact_delete_unpins_from_memory_stats(client):
     )
     assert deleted.status_code == 200
     assert deleted.json()["memory_stats"]["facts_list"] == []
-    assert get_memory_stats("legacy-machine", str(user["id"]))["facts_list"] == []
+    assert get_memory_stats("legacy-machine", str(user["id"]), "device-1")["facts_list"] == []
 
 
 def test_device_memory_fact_delete_requires_explicit_device_id(client):
@@ -163,7 +163,7 @@ def test_device_memory_fact_delete_requires_explicit_device_id(client):
 
     user, headers = _create_and_login_user(client)
     _register_profile(user, machine_guid="legacy-machine")
-    fact_id = add_fact("legacy-machine", "device-1", "legacy pinned fact", "config")
+    fact_id = add_fact("legacy-machine", "device-1", "legacy pinned fact", "config", user_id=str(user["id"]))
 
     deleted = client.post(
         "/api/memory/facts/delete",

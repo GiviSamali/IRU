@@ -86,6 +86,20 @@ const assert = require('node:assert/strict');
     await page.locator('#chatInput').fill('Черновик не отправлять');
     await page.locator('#voiceBtn').click();
     await page.waitForFunction(() => iruVoice.phase === 'idle');
+    // Real adapter -> session -> chat -> HTTP: Edge's punctuated wake is silent.
+    await page.evaluate(() => testRecognition.emit('ИРУ.'));
+    await page.waitForTimeout(1300);
+    assert.equal(await page.evaluate(() => iruVoice.phase), 'listening');
+    await page.evaluate(() => { testRecognition.emit('.'); testRecognition.replay(); });
+    await page.waitForTimeout(1300);
+    assert.equal(requests.filter(r => r.path === '/nl_command').length, 0);
+    assert.equal(await page.evaluate(() => state.messages.some(m => m.role === 'user')), false);
+    // A stale adapter or another caller cannot bypass the submission boundary.
+    await page.evaluate(async () => {
+      for (const text of ['.', '...', '!', '?!', '…']) await sendMessage({ voiceText: text });
+    });
+    assert.equal(requests.filter(r => r.path === '/nl_command').length, 0);
+    assert.equal(await page.locator('#chatInput').inputValue(), 'Черновик не отправлять');
     await page.evaluate(() => { testRecognition.interim('Иру открой'); testRecognition.emit('Иру открой блокнот'); testRecognition.replay(); testRecognition.replay(); });
     await page.waitForFunction(() => iruVoice.phase === 'working');
     await page.waitForFunction(() => state.pendingTasks.length === 1);
@@ -226,6 +240,12 @@ const assert = require('node:assert/strict');
     await card.press('Enter'); assert.equal(await card.getAttribute('aria-expanded'), 'false');
     assert.ok(await page.evaluate(() => testCues.some(cue => cue.start < cue.end)));
     assert.ok(await page.evaluate(() => testCues.some(cue => cue.start > cue.end)));
+    // Punctuation typed deliberately in the normal composer is still valid.
+    const typedPunctuation = page.waitForRequest(request =>
+      new URL(request.url()).pathname === '/nl_command' && request.method() === 'POST');
+    await page.locator('#chatInput').fill('.');
+    await page.locator('#btnSend').click();
+    assert.equal((await typedPunctuation).postDataJSON().message, '.');
     assert.deepEqual(errors, []);
     console.log('PASS: browser voice cycle, primary-answer endpoint, stop-only audio, draft preservation, mobile controls, chat reset, typed chat, voice Plan accept/refuse, updated expandable plan cards');
   } finally { await browser.close(); }

@@ -1,0 +1,8 @@
+{
+  ".gitattributes": "907a5d0157af85ee29a9b50c2174f7a249d1a0754660907e26812a1d0ff4c259",
+  "baseline_checks.py": "760cb9987e6b09eec537c8c621b609b35ec18b23cd82009b7c583281f53028c0",
+  "IRU-P0-03-metrics.json": "a555e4a4ed0d75a1f5b41df74e23669c20f4660c3df4a45d620b3a3d981aeb15",
+  "IRU-P0-03-proposed-instrumentation.diff": "c519be2e699095d06088e4f75ed094ee9973e7a9f44b00b442ec6b2b70948d79",
+  "iru_p0_03_baseline.py": "a06537add4da5fbc0a36a4be96410c01d9c9ae5d75990c5ad24e338125a38c59",
+  "README.md": "06c76367357cb04d78a28339c4621c1f4701baf8ff1cfe42032eedff7868cde5"
+}

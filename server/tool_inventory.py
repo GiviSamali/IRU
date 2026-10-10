@@ -62,6 +62,13 @@ LEGACY_OR_INTERNAL_ACTIONS: dict[str, dict[str, Any]] = {
 }
 
 CONTROLLER_EXECUTABLE_TOOL_NAMES = {
+    "web.tabs",
+    "web.read",
+    "web.elements",
+    "web.fill",
+    "web.activate",
+    "web.wait",
+    "web.focus",
     "window.control",
     "transfer_file",
     "system.list_tools",
@@ -219,6 +226,8 @@ def _notes_for(name: str) -> str:
         return LEGACY_OR_INTERNAL_ACTIONS[name]["notes"]
     if name == "get_file_link":
         return "internal download link tool; callable by controller loop but hidden from system.list_tools"
+    if name.startswith("web."):
+        return "server-dispatched owned Browser Bridge capability; not an agent filesystem action"
     if name == "web_search":
         return "implemented through configured Yandex Search API integration"
     if name in {"remember_fact", "forget_fact"}:

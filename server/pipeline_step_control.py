@@ -63,7 +63,7 @@ class StepProgress:
 def completion_matches(step, entry):
     """Only an explicit final-step check can trigger deterministic completion.
 
-    Generic OK markers are tool success, not proof of completing the whole step.
+    Shell output and a file-write receipt cannot prove the whole step.
     Plans without a check finish through the existing grounded answer contract.
     """
     check = step.get("completion_check")
@@ -88,15 +88,7 @@ def completion_matches(step, entry):
     if tool == "transfer_file":
         return (result.get("status") == "success" and result.get("sha256_verified") is True
                 and bool(check.get("target_device_id")) and result.get("target_device") == check["target_device_id"])
-    path = check.get("path")
-    if tool == "write_content":
-        return (isinstance(path, str) and bool(path) and result.get("path") == path
-                and str(result.get("summary") or "").startswith("OK:"))
-    if tool == "execute_cmd":
-        marker = check.get("stdout_contains")
-        if not isinstance(marker, str) or len(marker.strip()) < 8 or not marker.startswith("OK: "):
-            return False
-        return any(line.strip() == marker.strip() for line in str(result.get("stdout") or "").splitlines())
+    # File/shell goals finish through the existing grounded answer contract.
     return False
 
 

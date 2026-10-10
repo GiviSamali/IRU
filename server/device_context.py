@@ -12,7 +12,7 @@ try:
         parse_activation_summary,
         runtime_status_from_summary,
     )
-    from .python_runtime import parse_python_runtime_summary, python_runtime_context_markers, python_runtime_status_from_summary
+    from .python_runtime import current_runtime_summary, parse_python_runtime_summary, python_runtime_context_markers, python_runtime_status_from_summary
 except ImportError:
     import database as db  # type: ignore
     from device_activation import (
@@ -21,7 +21,7 @@ except ImportError:
         parse_activation_summary,
         runtime_status_from_summary,
     )
-    from python_runtime import parse_python_runtime_summary, python_runtime_context_markers, python_runtime_status_from_summary
+    from python_runtime import current_runtime_summary, parse_python_runtime_summary, python_runtime_context_markers, python_runtime_status_from_summary
 
 
 HANDLE_RE = re.compile(r"^ctx://device/([^/]+)/([^/]+)$")
@@ -45,14 +45,7 @@ def _summary_from(dev: dict | None, profile: dict | None) -> dict:
 
 
 def _runtime_summary_from(dev: dict | None, profile: dict | None) -> dict:
-    if isinstance(dev, dict) and isinstance(dev.get("python_runtime_summary"), dict):
-        return dict(dev["python_runtime_summary"])
-    cached = dev.get("agent_cached_passport") if isinstance(dev, dict) and isinstance(dev.get("agent_cached_passport"), dict) else {}
-    if isinstance(cached.get("runtime_summary"), dict):
-        return dict(cached["runtime_summary"])
-    if isinstance(profile, dict):
-        return parse_python_runtime_summary(profile.get("python_runtime_summary"))
-    return {}
+    return current_runtime_summary(dev, profile)
 
 
 def _handles(device_id: str) -> dict:
@@ -126,8 +119,8 @@ def _device_manifest(device_id: str, dev: dict | None, profile: dict | None, *, 
     if isinstance(dev, dict) and isinstance(dev.get("activation_receipt"), dict):
         activation_health = (dev["activation_receipt"].get("health") or {}).get("agent") or "unknown"
         health = activation_health if health == "unknown" else health
-    runtime_status = python_runtime_status_from_summary(runtime_summary) if runtime_summary else runtime_status_from_summary(summary)
-    caps = _capability_list(summary)
+    runtime_status = python_runtime_status_from_summary(runtime_summary)
+    caps = [name for name in _capability_list(summary) if name != "python"]
     if runtime_status == "ok" and "python" not in caps:
         caps.append("python")
     item = {
@@ -140,6 +133,11 @@ def _device_manifest(device_id: str, dev: dict | None, profile: dict | None, *, 
         "python_runtime_status": python_runtime_status_from_summary(runtime_summary),
         "python_version": runtime_summary.get("python_version"),
         "pip_status": runtime_summary.get("pip_status"),
+        "pip_version": runtime_summary.get("pip_version"),
+        "venv_python": runtime_summary.get("venv_python"),
+        "runtime_source": runtime_summary.get("runtime_source"),
+        "runtime_fresh": runtime_summary.get("runtime_fresh", False),
+        "last_runtime_check": runtime_summary.get("last_runtime_check"),
         "runtime_handle": _handles(device_id)["python_runtime"],
         "capabilities_summary": sorted(caps),
         "state_summary": state_summary,
@@ -197,20 +195,16 @@ def get_context_handle(handle: str, *, all_devices: dict | None = None) -> dict:
     receipt = dev.get("activation_receipt") if isinstance(dev, dict) else None
     if kind == "activation":
         if isinstance(receipt, dict):
-            return {"status": "ok" if live else "stale", "source": "agent_live" if live else "server_cache", "data": receipt}
+            return {"status": "ok" if live else "stale", "source": "agent_live" if live else "server_cache", "data": receipt, "runtime_authority": "historical_only"}
         summary = _summary_from(dev, profile)
         if summary:
             return {"status": "stale", "source": "server_cache", "data": summary}
         return {"status": "not_found", "source": "missing", "data": None}
     if kind == "python":
         runtime_summary = _runtime_summary_from(dev, profile)
-        if runtime_summary:
-            return {"status": "ok" if live else "stale", "source": "server_cache", "data": runtime_summary}
-        if isinstance(receipt, dict):
-            return {"status": "ok" if live else "stale", "source": "agent_live" if live else "server_cache", "data": receipt.get("runtime")}
-        summary = _summary_from(dev, profile)
-        if summary:
-            return {"status": "stale", "source": "server_cache", "data": {"runtime_status": runtime_status_from_summary(summary)}}
+        if runtime_summary.get("runtime_source") != "missing":
+            return {"status": "ok" if live and runtime_summary.get("runtime_fresh") else "stale",
+                    "source": runtime_summary.get("runtime_source") or "server_cache", "data": runtime_summary}
         return {"status": "not_found", "source": "missing", "data": None}
     if kind == "state":
         record = dev.get("last_state_snapshot") if isinstance(dev, dict) else None

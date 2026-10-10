@@ -74,6 +74,7 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
                     "target_device_id": device_id,
                     "registered_hostname": payload.get("hostname"),
                     "registered_machine_guid": payload.get("machine_guid"),
+                    "machine_guid_type": payload.get("machine_guid_type"),
                 }
                 try:
                     upsert_device_profile(device_id, user["id"], payload)

@@ -36,7 +36,7 @@ async function createNewChat() {
 async function openChat(chatId) {
   if (typeof stopVoice === 'function') stopVoice();
   state.currentChatId = chatId;
-  if (window.innerWidth <= 768) closeMobileSidebar();
+  if (document.getElementById('appRoot').clientWidth <= 980) closeMobileSidebar();
   renderChatList();
 
   const chat = state.chats.find(c => c.id === chatId);
@@ -221,6 +221,7 @@ const SAFE_TASK_STATUS_LABELS = Object.freeze({
   writing_file: 'Создаю файл...',
   launching_app: 'Запускаю приложение...',
   restoring: 'Восстанавливаю статус операции...',
+  queued: 'В очереди...',
   cancelling: 'Остановка запрошена...',
   cancelled: 'Остановлено пользователем',
   done: 'Готово',
@@ -245,6 +246,7 @@ function deriveLiveTaskStatus(task, currentMessage) {
   }
 
   const taskStatus = String(task?.status || '').trim().toLowerCase();
+  if (taskStatus === 'queued') return 'queued';
   if (taskStatus === 'done' || taskStatus === 'completed' || taskStatus === 'completed_with_recovery') return 'done';
   if (taskStatus === 'cancelling') return 'cancelling';
   if (taskStatus === 'cancelled') return 'cancelled';
@@ -270,6 +272,10 @@ const TERMINAL_TASK_STATUSES = new Set([
   'failed',
   'cancelled',
   'blocked',
+  'partial',
+  'unknown',
+  'interrupted',
+  'success',
 ]);
 
 function isTaskTerminalStatus(status) {
@@ -278,14 +284,16 @@ function isTaskTerminalStatus(status) {
 
 function getActivePendingTask() {
   if (!Array.isArray(state.pendingTasks) || state.pendingTasks.length === 0) return null;
+  let queued = null;
   for (let i = state.pendingTasks.length - 1; i >= 0; i--) {
     const pending = state.pendingTasks[i];
-    if (!pending?.task_id) continue;
-    const msg = state.messages[pending.msgIndex];
-    if (msg && msg.currentStatus === 'cancelled') continue;
+    if (!pending?.task_id || pending.kind === 'orchestrator' || (pending.chatId && pending.chatId !== state.currentChatId)) continue;
+    const msg = state.messages.find(item => item._taskId === pending.task_id);
+    if (msg && isTaskTerminalStatus(msg.currentStatus || msg.taskStatus)) continue;
+    if ((msg?.currentStatus || msg?.taskStatus) === 'queued') { queued = pending; continue; }
     return pending;
   }
-  return null;
+  return queued;
 }
 
 function updateStopButton() {
@@ -303,11 +311,11 @@ function updateStopButton() {
   btn.textContent = active.cancelRequested ? 'Остановка...' : 'Стоп';
 }
 
-async function cancelActiveTask() {
-  const active = getActivePendingTask();
+async function cancelActiveTask(taskId = null) {
+  const active = taskId ? state.pendingTasks.find(item => item.task_id === taskId) : getActivePendingTask();
   if (!active?.task_id || active.cancelRequested) return;
   active.cancelRequested = true;
-  const msg = state.messages[active.msgIndex];
+  const msg = state.messages.find(item => item._taskId === active.task_id);
   const wasConfirm = Boolean(msg?.confirmTaskId || msg?.planReview);
   if (msg) {
     msg.loading = true;
@@ -345,6 +353,7 @@ async function cancelActiveTask() {
 
 const SAFE_TASK_STATE_CLASSES = new Set([
   'pending',
+  'queued',
   'running',
   'cancelling',
   'completed',
@@ -355,6 +364,9 @@ const SAFE_TASK_STATE_CLASSES = new Set([
   'error',
   'cancelled',
   'blocked',
+  'unknown',
+  'partial',
+  'partial_failure',
   'skipped',
 ]);
 
@@ -371,13 +383,15 @@ function normalizeTaskBadgeLabel(status) {
   if (key === 'cancelling') return 'остановка';
   if (key === 'cancelled') return 'отменено';
   if (key === 'blocked') return 'заблокировано';
+  if (key === 'unknown') return 'результат не подтверждён';
+  if (key === 'partial' || key === 'partial_failure') return 'частично';
   if (key === 'skipped') return 'пропущено';
   if (key === 'pending') return 'ожидает';
   return 'выполняется';
 }
 
 function normalizeStepStateKey(status) {
-  return normalizeTaskStateKey(status, 'pending');
+  return normalizeTaskStateKey(status, 'unknown');
 }
 
 function normalizeStepStatusLabel(status) {
@@ -387,55 +401,29 @@ function normalizeStepStatusLabel(status) {
   if (key === 'failed' || key === 'error') return 'ошибка';
   if (key === 'running') return 'выполняется';
   if (key === 'blocked') return 'блокировано';
+  if (key === 'unknown') return 'результат не подтверждён';
+  if (key === 'partial' || key === 'partial_failure') return 'частично';
   if (key === 'skipped') return 'пропущено';
   if (key === 'cancelled') return 'отменено';
   return 'ожидает';
 }
 
-function renderMessages() {
-  const container = document.getElementById('chatMessages');
+// The existing operation and action components are reused by the four-block registry.
+function renderSmartTaskDetails(block, message, mi) {
+  const detailStatus = { success:'completed', waiting:'pending', running:'running', failed:'failed', partial:'partial', blocked:'blocked', unknown:'unknown', cancelled:'cancelled' };
+  const detailTasks = block.status === 'success' ? block.tasks : block.tasks.map(task => ({
+    ...task, status:detailStatus[IRUSmartUI.taskState({}, [task])],
+  }));
+  const m = { ...message, tasks:detailTasks, commands:block.commands };
+  const liveTasksHTML = detailTasks.length ? renderTaskBlock(detailTasks, block.commands, m._taskId || `msg-${mi}`) : '';
+  const status = block.loading ? `<div class="live-status"><span class="live-text">${escapeHTML(normalizeTaskStatusLabel(m.currentStatus || 'thinking'))}</span></div>` : '';
+  const report = block.executionDetails ? `<div class="smart-execution-report"><div class="smart-task-summary">Подробности выполнения</div><div class="smart-text-content">${escapeHTML(block.executionDetails)}</div></div>` : '';
+  return status + liveTasksHTML + report + renderUsedToolsLine(block.commands) + renderCommandJournal(m, mi);
+}
 
-  if (state.messages.length === 0) {
-    const hasDevices = Object.keys(state.devices).length > 0;
-    const subtitle = hasDevices
-      ? 'Опиши задачу на естественном языке — ИРУ выполнит на твоём устройстве.'
-      : 'Нет подключённых устройств. Напиши сообщение — я помогу настроить подключение.';
-    const hints = hasDevices
-      ? `<div class="hint-chip" data-action="send-hint">Открой браузер</div>
-          <div class="hint-chip" data-action="send-hint">Покажи IP адрес</div>
-          <div class="hint-chip" data-action="send-hint">Свободное место на диске</div>
-          <div class="hint-chip" data-action="send-hint">Запущенные процессы</div>`
-      : `<div class="hint-chip" data-action="download-agent">⬇ Скачать агент</div>
-          <div class="hint-chip" data-action="send-hint">Как подключить компьютер?</div>
-          <div class="hint-chip" data-action="send-hint">Что ты умеешь?</div>`;
-    container.innerHTML = `
-      <div class="chat-welcome">
-        <img src="/static/IruIcon.ico" alt="ИРУ">
-        <h2>ИРУ — Интеллектуальный Режим Управления</h2>
-        <p>${subtitle}</p>
-        <div class="hints">${hints}</div>
-      </div>`;
-    updateStopButton();
-    return;
-  }
-
-  let html = '';
-  for (let mi = 0; mi < state.messages.length; mi++) {
-    const m = state.messages[mi];
-    if (m.hideAfterPlanChoice) continue;
-    const roleLabel = m.role === 'user' ? 'вы' : 'иру';
-    const linkified = linkifyMessageContent(m.content || m.text || '', m.commands || []);
-    let bodyHTML = linkified.html;
-
-    // Блок задач (конвейер)
-    bodyHTML += renderTaskBlock(m.tasks, m.commands || [], m._taskId || `msg-${mi}`);
-
-    const commands = m.commands;
-    bodyHTML += renderUsedToolsLine(commands);
-    if (typeof renderMessageUsage === 'function') {
-      bodyHTML += renderMessageUsage(m);
-    }
-    bodyHTML += renderCommandDownloadButtons(commands, linkified.usedDownloads);
+function renderCommandJournal(m, mi) {
+  const commands = m.commands;
+  let bodyHTML = '';
     if (commands && commands.length > 0) {
       bodyHTML += `<div class="cmd-log" data-plan-outcome="${getPlanLogOutcome(m.tasks)}">`;
       if (commands.length === 1) {
@@ -446,9 +434,9 @@ function renderMessages() {
         const errMsg = c.result?.error || '';
         const output = stdout || stderr || errMsg || '(нет вывода)';
         const isBudgetStop = c.action === 'budget_guard' || stripUtfPrefix(c.command || '') === '[budget_guard]';
-        const isOk = !isBudgetStop && !errMsg && (c.result?.returncode === 0 || c.result?.returncode == null);
-        const statusCls = isBudgetStop ? 'stopped' : (isOk ? 'ok' : 'err');
-        const statusTxt = isBudgetStop ? '\u25a0' : (isOk ? '\u2713' : '\u2717');
+        const isOk = !isBudgetStop && ['success', 'terminal'].includes(getCommandStatus(c));
+        const statusCls = isBudgetStop ? 'stopped' : (isOk ? 'ok' : getCommandStatus(c) === 'error' ? 'err' : 'stopped');
+        const statusTxt = isBudgetStop ? '\u25a0' : (isOk ? '\u2713' : getCommandStatus(c) === 'error' ? '\u2717' : '\u25cb');
         const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
         const cmdText = escapeHTML(getCommandDisplayText(c));
         const detailsText = getCommandDetailsText(c, output);
@@ -470,9 +458,9 @@ function renderMessages() {
         const lastClean = getCommandDisplayText(lastCmd);
         const lastTrunc = lastClean.length > 120 ? lastClean.slice(0, 120) + '\u2026' : lastClean;
         const hasBudgetStop = commands.some((cmd) => cmd?.action === 'budget_guard' || stripUtfPrefix(cmd.command || '') === '[budget_guard]');
-        const lastIsOk = !hasBudgetStop && !(lastCmd.result?.error) && (lastCmd.result?.returncode === 0 || lastCmd.result?.returncode == null);
-        const lastStatusCls = hasBudgetStop ? 'stopped' : (lastIsOk ? 'ok' : 'err');
-        const lastStatusTxt = hasBudgetStop ? '\u25a0' : (lastIsOk ? '\u2713' : '\u2717');
+        const lastIsOk = !hasBudgetStop && ['success', 'terminal'].includes(getCommandStatus(lastCmd));
+        const lastStatusCls = hasBudgetStop ? 'stopped' : (lastIsOk ? 'ok' : getCommandStatus(lastCmd) === 'error' ? 'err' : 'stopped');
+        const lastStatusTxt = hasBudgetStop ? '\u25a0' : (lastIsOk ? '\u2713' : getCommandStatus(lastCmd) === 'error' ? '\u2717' : '\u25cb');
         const lastDevice = lastCmd.device_id ? `<span class="cmd-device">${escapeHTML(lastCmd.device_id)}</span>` : '';
         const extra = commands.length - 1;
         const groupClass = hasBudgetStop ? 'cmd-group cmd-group-budget' : 'cmd-group';
@@ -493,9 +481,9 @@ function renderMessages() {
           const errMsg = c.result?.error || '';
           const output = stdout || stderr || errMsg || '(нет вывода)';
           const isBudgetStop = c.action === 'budget_guard' || stripUtfPrefix(c.command || '') === '[budget_guard]';
-          const isOk = !isBudgetStop && !errMsg && (c.result?.returncode === 0 || c.result?.returncode == null);
-          const statusCls = isBudgetStop ? 'stopped' : (isOk ? 'ok' : 'err');
-          const statusTxt = isBudgetStop ? '\u25a0' : (isOk ? '\u2713' : '\u2717');
+          const isOk = !isBudgetStop && ['success', 'terminal'].includes(getCommandStatus(c));
+          const statusCls = isBudgetStop ? 'stopped' : (isOk ? 'ok' : getCommandStatus(c) === 'error' ? 'err' : 'stopped');
+          const statusTxt = isBudgetStop ? '\u25a0' : (isOk ? '\u2713' : getCommandStatus(c) === 'error' ? '\u2717' : '\u25cb');
           const deviceTag = c.device_id ? `<span class="cmd-device">${escapeHTML(c.device_id)}</span>` : '';
           const cmdText = escapeHTML(getCommandDisplayText(c));
           const detailsText = getCommandDetailsText(c, output);
@@ -517,6 +505,10 @@ function renderMessages() {
       }
       bodyHTML += '</div>';
     }
+  return bodyHTML;
+}
+
+function renderMessageActions(m, mi) {
     // Кнопки подтверждения
     let confirmBtns = '';
     if (m.planReview) {
@@ -569,23 +561,104 @@ function renderMessages() {
       }
     }
 
-    if (m.loading) {
-      const stepText = escapeHTML(normalizeTaskStatusLabel(m.currentStatus || 'thinking'));
-      const liveTasksHTML = renderTaskBlock(m.liveTasks, m.liveCommands || [], m._taskId || `live-${mi}`);
-      const taskBlockAttr = liveTasksHTML ? '' : ' hidden';
-      html += `<div class="msg assistant msg-thinking"><div class="msg-role">иру</div><div class="msg-body"><div class="live-status"><span class="live-dot"></span><span class="live-text">${stepText}</span></div><div class="task-block-live"${taskBlockAttr}>${liveTasksHTML}</div></div></div>`;
-    } else {
-      html += `<div class="msg ${m.role}"><div class="msg-role">${roleLabel}</div><div class="msg-body">${bodyHTML}${confirmBtns}${suggestHTML}${planHTML}</div></div>`;
+  const cancel = m.cancelAvailable ? `<button type="button" class="btn-confirm-no" data-action="cancel-smart-task" data-task-id="${escapeAttr(m._taskId)}">Отменить задачу</button>` : '';
+  return confirmBtns + suggestHTML + planHTML + cancel;
+}
+
+function captureMessagePresentation(container) {
+  const snapshot = { top:container.scrollTop, bottom:container.scrollHeight-container.scrollTop-container.clientHeight < 48, open:[], edits:[], focus:document.activeElement?.id };
+  const bounds = container.getBoundingClientRect();
+  for (const message of container.querySelectorAll('[data-message-key]')) {
+    const rect = message.getBoundingClientRect();
+    if (!snapshot.anchor && rect.bottom > bounds.top) snapshot.anchor = { key:message.dataset.messageKey, offset:rect.top-bounds.top };
+    for (const selector of ['.cmd-log', '.cmd-group', '.cmd-entry', '.task-block']) {
+      message.querySelectorAll(selector).forEach((node, index) => {
+        if (node.classList.contains('open') || node.classList.contains('expanded')) snapshot.open.push({ key:message.dataset.messageKey, selector, index, open:node.classList.contains('open'), expanded:node.classList.contains('expanded') });
+      });
     }
+  }
+  container.querySelectorAll('[id^="plan-changes-"]').forEach(node => snapshot.edits.push({ id:node.id, value:node.value, hidden:node.parentElement.hidden, start:node.selectionStart, end:node.selectionEnd }));
+  return snapshot;
+}
+
+function restoreMessagePresentation(container, snapshot) {
+  const messages = [...container.querySelectorAll('[data-message-key]')];
+  for (const item of snapshot.open) {
+    const node = messages.find(message => message.dataset.messageKey === item.key)?.querySelectorAll(item.selector)[item.index];
+    if (node) { node.classList.toggle('open',item.open); node.classList.toggle('expanded',item.expanded); if (item.expanded) node.setAttribute('aria-expanded','true'); }
+  }
+  for (const edit of snapshot.edits) {
+    const node = document.getElementById(edit.id);
+    if (node) { node.value=edit.value; node.parentElement.hidden=edit.hidden; if (snapshot.focus===edit.id) { node.focus({preventScroll:true}); node.setSelectionRange(edit.start,edit.end); } }
+  }
+  if (snapshot.bottom) container.scrollTop = container.scrollHeight;
+  else {
+    const anchor = messages.find(message => message.dataset.messageKey === snapshot.anchor?.key);
+    if (anchor) container.scrollTop += anchor.getBoundingClientRect().top-container.getBoundingClientRect().top-snapshot.anchor.offset;
+    else container.scrollTop = snapshot.top;
+  }
+}
+
+function renderMessages() {
+  const container = document.getElementById('chatMessages');
+  const presentation = captureMessagePresentation(container);
+
+  if (state.messages.length === 0) {
+    const hasDevices = Object.keys(state.devices).length > 0;
+    const subtitle = hasDevices
+      ? 'Опиши задачу на естественном языке — ИРУ выполнит на твоём устройстве.'
+      : 'Нет подключённых устройств. Напиши сообщение — я помогу настроить подключение.';
+    const hints = hasDevices
+      ? `<div class="hint-chip" data-action="send-hint">Открой браузер</div>
+          <div class="hint-chip" data-action="send-hint">Покажи IP адрес</div>
+          <div class="hint-chip" data-action="send-hint">Свободное место на диске</div>
+          <div class="hint-chip" data-action="send-hint">Запущенные процессы</div>`
+      : `<div class="hint-chip" data-action="download-agent">⬇ Скачать агент</div>
+          <div class="hint-chip" data-action="send-hint">Как подключить компьютер?</div>
+          <div class="hint-chip" data-action="send-hint">Что ты умеешь?</div>`;
+    container.innerHTML = `
+      <div class="chat-welcome">
+        <img src="/static/IruIcon.ico" alt="ИРУ">
+        <h2>ИРУ — Интеллектуальный Режим Управления</h2>
+        <p>${subtitle}</p>
+        <div class="hints">${hints}</div>
+      </div>`;
+    updateStopButton();
+    return;
+  }
+
+  let html = '';
+  for (let mi = 0; mi < state.messages.length; mi++) {
+    const m = state.messages[mi];
+    if (m.hideAfterPlanChoice) continue;
+    // The admitted delegation already has its own Worker UI status.
+    if (m.role === 'assistant' && m.taskKind === 'orchestrator' && !m.loading &&
+        !String(m.content || m.text || m.conversationalResponse || m.conversational_response || '').trim() &&
+        !m.planSuggestion && !m.confirmTaskId) continue;
+    const role = m.role === 'user' ? 'user' : 'assistant';
+    const active = state.pendingTasks.find(item => item.task_id === m._taskId && item.kind !== 'orchestrator');
+    const view = IRUSmartUI.adapt({ ...m, cancelAvailable:Boolean(m.loading && active && active.task_id === m._taskId && !active.cancelRequested) }, mi, state.currentChatId);
+    const workerInDock = m.taskKind === 'worker';
+    if (workerInDock) view.blocks = view.blocks.filter(block => block.type !== 'task' && (block.type !== 'action' || m.planSuggestion || m.suggestedFact));
+    let bodyHTML = IRUSmartUI.render(view, {
+      expanded: state.expandedSmartBlocks,
+      taskDetails: block => renderSmartTaskDetails(block, m, mi),
+      actionDetails: renderMessageActions,
+    });
+    if (workerInDock) {
+      const status = IRUSmartUI.taskState(m, m.tasks || [], m.commands || []);
+      bodyHTML += `<button type="button" class="operation-reference" data-action="show-operation" data-task-id="${escapeAttr(m._taskId)}">${escapeHTML(IRUSmartUI.LABELS[status])} · Операции ↗</button>`;
+    }
+    if (typeof renderMessageUsage === 'function') bodyHTML += renderMessageUsage(m);
+    html += `<div class="msg ${role}${m.loading ? ' msg-thinking' : ''}" data-message-key="${escapeAttr(view.key)}"><div class="msg-role">${role === 'user' ? 'вы' : 'иру'}</div><div class="msg-body">${bodyHTML}</div></div>`;
   }
 
   container.innerHTML = html;
-  container.scrollTop = container.scrollHeight;
+  restoreMessagePresentation(container, presentation);
   updateStopButton();
 }
 
-function bindChatMessageActions() {
-  const container = document.getElementById('chatMessages');
+function bindChatMessageActions(container = document.getElementById('chatMessages')) {
   if (!container || container.dataset.delegated === '1') return;
   container.dataset.delegated = '1';
   container.addEventListener('click', (event) => {
@@ -593,6 +666,24 @@ function bindChatMessageActions() {
     if (!target || !container.contains(target)) return;
     const action = target.dataset.action;
 
+    if (action === 'toggle-smart-text' || action === 'toggle-smart-details' || action === 'toggle-smart-file') {
+      const block = target.closest('[data-smart-key]');
+      if (!block) return;
+      const open = !block.classList.contains('expanded');
+      block.classList.toggle('expanded', open);
+      target.setAttribute('aria-expanded', String(open));
+      target.textContent = action === 'toggle-smart-text' ? (open ? 'Свернуть текст' : 'Полный текст') : action === 'toggle-smart-file' ? (open ? 'Свернуть сведения' : 'Сведения о файле') : (open ? 'Свернуть подробности' : 'Ход выполнения');
+      if (open) state.expandedSmartBlocks.add(block.dataset.smartKey);
+      else state.expandedSmartBlocks.delete(block.dataset.smartKey);
+      return;
+    }
+    if (action === 'show-operation') {
+      window.IRUOperations?.show(target.dataset.taskId).catch(error=>showToast(error.message,true)); return;
+    }
+    if (action === 'cancel-smart-task') {
+      cancelActiveTask(target.dataset.taskId);
+      return;
+    }
     if (action === 'download-message-file') {
       downloadMessageFile(target.dataset.deviceId || '', target.dataset.filePath || '', target);
       return;
@@ -699,17 +790,33 @@ function bindChatMessageActions() {
   });
 }
 
-const MAX_INPUT_LENGTH = 500;
+const MAX_INPUT_LENGTH = 4000;
+let chatCreationPromise = null;
+const taskPollLoops = new Map();
+async function ensureSendChat() {
+  if (state.currentChatId) return state.currentChatId;
+  if (!chatCreationPromise) chatCreationPromise = (async () => {
+    const response = await apiFetch(`${API}/api/chats`, {method:'POST', headers:authHeaders(), body:JSON.stringify({title:''})});
+    const data = await response.json();
+    if (!response.ok || !data.chat?.id) throw new Error('Не удалось создать чат.');
+    if (!state.currentChatId) state.currentChatId = data.chat.id;
+    loadChats(); return data.chat.id;
+  })().finally(() => { chatCreationPromise = null; });
+  return chatCreationPromise;
+}
 
 async function sendMessage(options = {}) {
   const input = document.getElementById('chatInput');
   const fromVoice = typeof options.voiceText === 'string';
   const text = (fromVoice ? options.voiceText : input.value).trim();
-  if (!text) return;
+  if (!text || (fromVoice && !/[\p{L}\p{N}]/u.test(text))) return;
   if (text.length > MAX_INPUT_LENGTH) {
     showToast(`Максимум ${MAX_INPUT_LENGTH} символов`, true);
     return;
   }
+  let sourceChatId;
+  try {sourceChatId=await ensureSendChat();}catch(error){showToast(error.message,true);return;}
+  const requestId = crypto.randomUUID();
   const ids = Object.keys(state.devices);
   const isOnboarding = ids.length === 0;
 
@@ -720,14 +827,15 @@ async function sendMessage(options = {}) {
   if (!fromVoice) {
     input.value = '';
     autoGrow(input);
+    updateCharCount();
     clearAttachments();
   }
 
   // Добавить сообщение пользователя в UI сразу
   state.messages.push({ role: 'user', content: text });
   // Добавить placeholder для ответа (live-статус вместо точек загрузки)
-  const msgIndex = state.messages.length;
-  state.messages.push({ role: 'assistant', content: '', loading: true, currentStatus: 'thinking', liveTasks: [], liveCommands: [] });
+  let msgIndex = state.messages.length;
+  state.messages.push({ role:'assistant', _requestId:requestId, content:'', loading:true, currentStatus:'thinking', liveTasks:[], liveCommands:[] });
   renderMessages();
 
   try {
@@ -735,7 +843,8 @@ async function sendMessage(options = {}) {
     const body = {
       device_id: isOnboarding ? '' : (state.selectedDevice || ids[0]),
       message: messageToSend,
-      chat_id: state.currentChatId,
+      chat_id: sourceChatId,
+      orchestrate: true, request_id: requestId,
       broadcast: isBroadcast,
       modes: { ...state.modes },
     };
@@ -746,31 +855,33 @@ async function sendMessage(options = {}) {
     });
     const data = await r.json();
 
-    if (data.chat_id && data.chat_id !== state.currentChatId) {
-      state.currentChatId = data.chat_id;
-      loadChats();
-    }
-
+    msgIndex = state.currentChatId === sourceChatId ? state.messages.findIndex(message => message._requestId === requestId || message._taskId === data.task_id) : -1;
     if (data.status === 'ok' && data.task_id) {
       voiceTaskId = data.task_id;
       // Задача запущена в фоне — начинаем polling
-      state.messages[msgIndex]._taskId = data.task_id;
-      state.pendingTasks.push({ task_id: data.task_id, msgIndex });
+      if (msgIndex >= 0) state.messages[msgIndex]._taskId = data.task_id;
+      if (!state.pendingTasks.some(item => item.task_id === data.task_id)) state.pendingTasks.push({task_id:data.task_id,msgIndex,chatId:sourceChatId,kind:data.response_type === 'orchestrator' ? 'orchestrator' : 'worker'});
       updateStopButton();
-      pollTask(data.task_id, msgIndex, voiceTicket);
+      pollTask(data.task_id,msgIndex,voiceTicket,sourceChatId);
+      if (data.worker_task_id) {
+        let workerIndex = state.currentChatId === sourceChatId ? state.messages.findIndex(message => message._taskId === data.worker_task_id) : -1;
+        if (workerIndex < 0 && state.currentChatId === sourceChatId) {
+          workerIndex=state.messages.length;
+          state.messages.push({role:'assistant',_taskId:data.worker_task_id,taskKind:'worker',content:'',loading:true,taskStatus:data.worker_status,currentStatus:data.worker_status === 'queued' ? 'queued' : 'running',liveTasks:[],liveCommands:[]});
+          renderMessages();
+        }
+        if (!state.pendingTasks.some(item => item.task_id === data.worker_task_id)) state.pendingTasks.push({task_id:data.worker_task_id,msgIndex:workerIndex,chatId:sourceChatId,kind:'worker'});
+        window.iruVoice?.watchTask(data.worker_task_id,undefined,true);
+        pollTask(data.worker_task_id,workerIndex,undefined,sourceChatId);
+      }
     } else {
       // Ошибка до запуска задачи
-      state.messages[msgIndex] = {
-        role: 'assistant',
-        content: `Ошибка: ${data.error || 'Неизвестная ошибка'}`,
-      };
+      if (msgIndex >= 0) state.messages[msgIndex] = {role:'assistant',content:`Ошибка: ${data.error || 'Неизвестная ошибка'}`};
       renderMessages();
     }
   } catch (e) {
-    state.messages[msgIndex] = {
-      role: 'assistant',
-      content: `Ошибка сети: ${e.message}`,
-    };
+    const currentIndex = state.currentChatId === sourceChatId ? state.messages.findIndex(message => message._requestId === requestId) : -1;
+    if (currentIndex >= 0) state.messages[currentIndex] = {role:'assistant',content:`Ошибка сети: ${e.message}`};
     window.iruVoice?.requestLost(voiceTicket);
     renderMessages();
   } finally {
@@ -778,19 +889,25 @@ async function sendMessage(options = {}) {
   }
 }
 
-async function pollTask(taskId, msgIndex, voiceTicket) {
-  window.iruVoice?.watchTask(taskId, voiceTicket);
-  const startTime = Date.now();
-  const MAX_POLL_MS = 600000; // 10 минут макс (для длинных конвейеров)
+async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.currentChatId) {
+  if (taskPollLoops.has(taskId)) return;
+  taskPollLoops.set(taskId,true);
+  window.iruVoice?.watchTask(taskId,voiceTicket,state.pendingTasks.find(item=>item.task_id===taskId)?.kind === 'worker');
+  let startTime = Date.now();
+  const MAX_POLL_MS = 3600000; // Один час: соответствует предельному времени Worker.
   let stopped = false;
-  rememberActiveTask(taskId, state.currentChatId);
+  rememberActiveTask(taskId,sourceChatId);
   if (state.messages[msgIndex]) state.messages[msgIndex]._taskId = taskId;
   updateStopButton();
   const poll = async () => {
     if (stopped) return;
+    msgIndex = state.currentChatId === sourceChatId ? state.messages.findIndex(message => message._taskId === taskId) : -1;
+    const tracked=state.pendingTasks.find(item=>item.task_id===taskId);
+    if (tracked) tracked.msgIndex=msgIndex;
     if (Date.now() - startTime > MAX_POLL_MS) {
       window.iruVoice?.taskLost(taskId);
-      state.messages[msgIndex] = { role: 'assistant', content: 'Истекло время ожидания ответа.' };
+      if (msgIndex >= 0) state.messages[msgIndex] = {role:'assistant',content:'Истекло время ожидания ответа. Исход не подтверждён.',taskStatus:'unknown'};
+      stopped=true; taskPollLoops.delete(taskId);
       state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
       forgetActiveTask(taskId);
       renderMessages();
@@ -800,8 +917,8 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       const r = await apiFetch(`${API}/api/tasks/${taskId}`, { headers: authHeaders() });
       if (!r.ok) {
         window.iruVoice?.taskLost(taskId);
-        stopped = true;
-        state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена.' };
+        stopped = true; taskPollLoops.delete(taskId);
+        if (msgIndex >= 0) state.messages[msgIndex] = {role:'assistant',content:'Задача не найдена.',taskStatus:'unknown'};
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
         forgetActiveTask(taskId);
         renderMessages();
@@ -809,22 +926,31 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       }
       const data = await r.json();
       const task = data.task;
+      if (task.worker_id) window.iruVoice?.watchTask(taskId,voiceTicket,true);
+      if (task.status === 'queued') startTime=Date.now();
+      if (msgIndex < 0) {
+        if (isTaskTerminalStatus(task.status)) {stopped=true;taskPollLoops.delete(taskId);state.pendingTasks=state.pendingTasks.filter(item=>item.task_id!==taskId);forgetActiveTask(taskId);}
+        else setTimeout(poll,800);
+        return;
+      }
+      const smartTaskMetadata = { taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind,conversationalResponse:task.conversational_response,executionDetails:task.execution_details };
       const pendingTask = state.pendingTasks.find(t => t.task_id === taskId);
+      if (pendingTask && task.kind) pendingTask.kind=task.kind;
       if (pendingTask && String(task.status || '').trim().toLowerCase() === 'cancelling') {
         pendingTask.cancelRequested = true;
       }
 
       if (task.status === 'confirm') {
         if (task.plan_review) {
-          stopped = true;
-          state.messages[msgIndex] = { role: 'assistant', _taskId: taskId,
+          stopped = true; taskPollLoops.delete(taskId);
+          state.messages[msgIndex] = { role: 'assistant', _taskId: taskId, ...smartTaskMetadata,
             content: `План:\n${task.plan_review.steps.map((step, i) => `${i + 1}. ${step.title}\n${step.instruction}`).join('\n')}\n\nХотите что-то изменить?`,
             planReview: task.plan_review, tasks: task.tasks || [], commands: task.commands || [] };
           renderMessages();
           window.iruVoice?.taskPlanReview(taskId, task.plan_review);
           return;
         }
-        stopped = true;
+        stopped = true; taskPollLoops.delete(taskId);
         const cd = task.confirm_data || {};
         const cmdText = cd.command || '';
         state.messages[msgIndex] = {
@@ -833,6 +959,7 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
           commands: task.commands,
           tasks: task.tasks || [],
           confirmTaskId: taskId,
+          ...smartTaskMetadata,
           commandConfirmation: cd,
           _taskId: taskId,
         };
@@ -842,12 +969,13 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       }
       if (isTaskTerminalStatus(task.status)) {
         window.iruVoice?.taskFinished(taskId, task);
-        stopped = true;
+        stopped = true; taskPollLoops.delete(taskId);
         const isCancelled = String(task.status || '').trim().toLowerCase() === 'cancelled';
-        const fallbackAnswer = isCancelled ? 'Остановлено пользователем.' : (task.plan_suggestion ? '' : 'ИРУ завершила задачу без текстового ответа.');
+        const fallbackAnswer = isCancelled ? 'Остановлено пользователем.' : ((task.kind === 'orchestrator' || task.plan_suggestion) ? '' : 'ИРУ завершила задачу без текстового ответа.');
         const msg = {
           role: 'assistant',
-          content: task.answer || fallbackAnswer,
+          ...smartTaskMetadata,
+          content: task.conversational_response || task.answer || fallbackAnswer,
           commands: task.commands,
           tasks: task.tasks || [],
         };
@@ -871,7 +999,9 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       // Ещё выполняется — обновить live-статус
       const msg = state.messages[msgIndex];
       if (msg && msg.loading) {
-        let needRender = false;
+        const metadataChanged = JSON.stringify([msg.taskStatus,msg.taskReceipt,msg.overallStatus,msg.taskTitle,msg.taskMode]) !== JSON.stringify([smartTaskMetadata.taskStatus,smartTaskMetadata.taskReceipt,smartTaskMetadata.overallStatus,smartTaskMetadata.taskTitle,smartTaskMetadata.taskMode]);
+        Object.assign(msg,smartTaskMetadata);
+        let needRender = metadataChanged;
         const liveStatus = deriveLiveTaskStatus(task, msg);
         if (msg.currentStatus !== liveStatus) {
           msg.currentStatus = liveStatus;
@@ -895,8 +1025,8 @@ async function pollTask(taskId, msgIndex, voiceTicket) {
       poll._retries++;
       if (poll._retries > 30) {
         window.iruVoice?.taskLost(taskId);
-        stopped = true;
-        state.messages[msgIndex] = { role: 'assistant', content: 'Задача не найдена или истекла.' };
+        stopped = true; taskPollLoops.delete(taskId);
+        if (msgIndex >= 0) state.messages[msgIndex] = {role:'assistant',content:'Связь с задачей потеряна. Исход не подтверждён.',taskStatus:'unknown'};
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
         forgetActiveTask(taskId);
         renderMessages();
@@ -946,24 +1076,22 @@ function forgetActiveTask(taskId) {
 
 function restoreActiveChatTasks(chatId) {
   if (!chatId) return;
+  for(const message of state.messages) if(message._taskId && message.taskKind && !isTaskTerminalStatus(message.taskStatus))rememberActiveTask(message._taskId,chatId);
   const tasksToRestore = readActiveTasks().filter(item => Number(item?.chatId) === Number(chatId));
   if (!tasksToRestore.length) return;
 
   let added = false;
   for (const item of tasksToRestore) {
     if (!item?.taskId) continue;
-    if (state.pendingTasks.some(task => task.task_id === item.taskId)) continue;
-    const msgIndex = state.messages.length;
-    state.messages.push({
-      role: 'assistant',
-      content: '',
-      loading: true,
-      currentStatus: 'restoring',
-      liveTasks: [],
-      liveCommands: [],
-      _taskId: item.taskId,
-    });
-    state.pendingTasks.push({ task_id: item.taskId, msgIndex });
+    if (state.pendingTasks.some(task=>task.task_id===item.taskId)) {
+      const existing=state.messages.find(message=>message._taskId===item.taskId);
+      if(existing && !isTaskTerminalStatus(existing.taskStatus))Object.assign(existing,{loading:true,currentStatus:'restoring'});
+      continue;
+    }
+    let msgIndex=state.messages.findIndex(message=>message._taskId===item.taskId);
+    if (msgIndex<0) {msgIndex=state.messages.length;state.messages.push({role:'assistant',content:'',loading:true,currentStatus:'restoring',liveTasks:[],liveCommands:[],_taskId:item.taskId});}
+    else Object.assign(state.messages[msgIndex],{loading:true,currentStatus:'restoring'});
+    state.pendingTasks.push({task_id:item.taskId,msgIndex,chatId,kind:state.messages[msgIndex].taskKind || 'worker'});
     added = true;
   }
 
@@ -993,13 +1121,11 @@ function isPipelineCommandLog(commands) {
 }
 
 function getCommandStatus(command) {
-  if (command?.status) return command.status;
-  const result = command?.result || {};
   if (command?.action === 'budget_guard' || stripUtfPrefix(command?.command || '') === '[budget_guard]') return 'blocked';
-  if (result?.error) return 'error';
-  if (result?.returncode != null && result.returncode !== 0) return 'error';
-  if (command?.tool_name === 'execute_cmd' && /^\s*(NO|ERROR):/im.test(String(result?.stdout || ''))) return 'error';
-  return 'success';
+  if (command?.tool_name === 'execute_cmd' && /^\s*(NO|ERROR):/im.test(String(command?.result?.stdout || ''))) return 'error';
+  if (command?.status === 'terminal' && String(command?.tool_name || '').startsWith('answer.')) return 'terminal';
+  const status = IRUSmartUI.commandState(command);
+  return status === 'failed' ? 'error' : status === 'waiting' ? 'pending' : status;
 }
 
 function getToolEntries(commands) {
@@ -1183,10 +1309,12 @@ function renderStepDetails(step) {
 }
 
 function getStepCommandStatusIcon(status) {
-  if (status === 'error') return '\u2717';
-  if (status === 'blocked') return '\u25a0';
+  if (status === 'error' || status === 'failed') return '\u2717';
+  if (status === 'blocked' || status === 'partial') return '\u25a0';
   if (status === 'running') return '\u23f3';
-  return '\u2713';
+  if (status === 'cancelled') return '\u2014';
+  if (status === 'success' || status === 'terminal') return '\u2713';
+  return '\u25cb';
 }
 
 function getStepStatusLine(stepStatus, stepCommands, step) {
@@ -1276,9 +1404,8 @@ function renderPipelineProgress(task) {
   const progress = calculatePipelineProgress(task);
   const statusLabel = normalizeTaskBadgeLabel(progress.status);
   if (progress.total === 0) {
-    return `<div class="pipeline-progress pipeline-progress-indeterminate">
-      <div class="pipeline-progress-head"><span>Pipeline выполняется...</span><span>${escapeHTML(statusLabel)}</span></div>
-      <div class="pipeline-progress-bar"><span style="width: 38%"></span></div>
+    return `<div class="pipeline-progress">
+      <div class="pipeline-progress-head"><span>Шаги не указаны</span><span>${escapeHTML(statusLabel)}</span></div>
     </div>`;
   }
   const stepNumber = Math.min(progress.total, (progress.currentIndex ?? progress.completed) + 1);
@@ -1319,6 +1446,7 @@ function renderTaskBlock(tasks, commands = [], fallbackTaskId = '') {
         const icon = sst === 'done' ? '\u2713'
           : sst === 'recovered' ? '!'
           : sst === 'failed' ? '\u2717'
+          : (sst === 'partial' || sst === 'partial_failure') ? '!'
           : sst === 'running' ? '\u23f3'
           : sst === 'blocked' ? '\u25a0'
           : sst === 'skipped' ? '\u2014'

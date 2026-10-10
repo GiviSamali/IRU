@@ -342,3 +342,124 @@ test('sleep requires a complete standalone phrase and is ignored during work', (
   assert.deepEqual(h.submitted, ['напиши слово усни']);
   h.session.transcript('усни', true); assert.equal(h.session.phase, 'working');
 });
+
+
+const wakeVariants = ['ИРУ', 'Иру.', 'ИРУ!', 'Иру?', 'Иру,', 'Иру…', '«ИРУ.»',
+  'ИРУ:', 'ИРУ —', 'И Р У.', 'И.Р.У.', 'И. Р. У.', 'IRU.', 'I R U.', 'I.R.U.'];
+for (const wakeWord of wakeVariants) {
+  test(`punctuated/spelled wake activates without submitting punctuation: ${wakeWord}`, () => {
+    const h = setup();
+    h.session.transcript(wakeWord, true); h.advance(1000);
+    assert.deepEqual(h.submitted, []); assert.equal(h.session.phase, 'listening');
+    h.session.transcript('.', true); h.advance(1000);
+    assert.deepEqual(h.submitted, []);
+    h.session.transcript('Создай файл report.docx.', true); h.advance(1000);
+    assert.deepEqual(h.submitted, ['Создай файл report.docx.']);
+  });
+  test(`wake separators are excluded from an attached command: ${wakeWord}`, () => {
+    const h = setup(); h.session.transcript(`${wakeWord} Открой GPT.`, true); h.advance(1000);
+    assert.deepEqual(h.submitted, ['Открой GPT.']);
+  });
+}
+
+test('interim wake, final punctuated wake and repeated wake never enqueue an empty command', () => {
+  const h = setup();
+  h.session.transcript('ИРУ', false); h.advance(1000);
+  h.session.transcript('ИРУ.', true); h.advance(1000);
+  h.session.transcript('Иру!', true); h.advance(1000);
+  assert.deepEqual(h.submitted, []);
+  h.session.transcript('открой', true); h.session.transcript('...', true);
+  h.session.transcript('браузер!', true); h.advance(1000);
+  assert.deepEqual(h.submitted, ['открой браузер!']);
+});
+
+test('wake variants require word boundaries and do not accept similar names', () => {
+  for (const phrase of ['миру привет', 'игру открой', 'Ирина открой', 'Ира привет', 'IRUser открой', 'XИРУ привет']) {
+    const h = setup(); h.session.transcript(phrase, true); h.advance(1000);
+    assert.deepEqual(h.submitted, [], phrase); assert.equal(h.session.phase, 'idle', phrase);
+  }
+});
+
+test('punctuated wake supports sleep and stop without submitting a command', () => {
+  const h = setup(); h.session.transcript('ИРУ.', true); h.session.transcript('И.Р.У. Усни!', true);
+  assert.equal(h.session.phase, 'idle');
+  h.session.transcript('Открой GPT', true); h.advance(1000); assert.deepEqual(h.submitted, []);
+  h.session.transcript('IRU.', true); h.advance(1000); assert.equal(h.session.phase, 'listening');
+  h.session.watchTask('task'); h.session.taskFinished('task', {answer: 'Готово'});
+  h.spoken[0].onSpeaking(); h.session.transcript('И Р У. Стоп!', true);
+  assert.equal(h.spoken[0].signal.aborted, true); assert.deepEqual(h.submitted, []);
+});
+
+test('wake punctuation alone cannot approve a command, but an explicit answer can', async () => {
+  const h = setup(); h.session.watchTask('task');
+  h.session.taskPaused('task', {kind: 'command', voice_allowed: true, confirmation_id: 'ordinary'});
+  h.spoken[0].onSpeaking(); h.spoken[0].resolve(); await Promise.resolve();
+  h.session.transcript('ИРУ.', true); await Promise.resolve(); assert.deepEqual(h.commandChoices, []);
+  h.session.transcript('И.Р.У. Да!', false); await Promise.resolve(); assert.deepEqual(h.commandChoices, []);
+  h.session.transcript('И.Р.У. Да!', true); await Promise.resolve();
+  assert.equal(h.commandChoices.length, 1); assert.equal(h.commandChoices[0].accepted, true);
+});
+
+test('punctuated wake works for plan consent, review and edits without an empty revision', async () => {
+  const offer = setup(); await offerPlan(offer);
+  offer.session.transcript('ИРУ.', true); await Promise.resolve(); assert.deepEqual(offer.choices, []);
+  offer.session.transcript('IRU. Запускай!', true); await Promise.resolve();
+  assert.equal(offer.choices.length, 1); assert.equal(offer.choices[0].accepted, true);
+  const h = setup(); h.session.watchTask('plan'); h.session.taskPlanReview('plan', {revision: 'v1'});
+  h.spoken[0].onSpeaking(); h.spoken[0].resolve(); await Promise.resolve();
+  h.session.transcript('ИРУ.', true); await Promise.resolve(); assert.deepEqual(h.reviews, []);
+  h.session.transcript('Иру. Да!', true); assert.equal(h.session.phase, 'editing_plan');
+  h.session.transcript('ИРУ.', true); h.session.transcript('.', true); h.advance(1200);
+  await Promise.resolve(); assert.deepEqual(h.reviews, []);
+  h.session.transcript('И.Р.У. Добавь Excel.', true); h.advance(1200); await Promise.resolve();
+  assert.equal(h.reviews.length, 1); assert.equal(h.reviews[0].changes, 'Добавь Excel.');
+  h.session.taskPlanReview('plan', {revision: 'v2'});
+  h.spoken[1].onSpeaking(); h.spoken[1].resolve(); await Promise.resolve();
+  h.session.transcript('И Р У. Нет!', true); await Promise.resolve();
+  assert.equal(h.reviews.length, 2); assert.equal(h.reviews[1].changes, '');
+});
+
+
+test('OW background Worker does not occupy dialogue and sleep never cancels it',async()=>{
+ const tickets=[];let h;h=setup({submit:text=>{h.submitted.push(text);tickets.push(h.session.beginRequest());}});h.session.enable([],{continuous:true});
+ h.session.watchTask('worker-A',undefined,true);
+ assert.equal(h.listening,true);
+ h.session.transcript('Иру объясни квантовый компьютер',true);h.advance(1300);
+ assert.deepEqual(h.submitted,['объясни квантовый компьютер']);
+ // The short dialogue response is a different tracked lifecycle.
+ const ticket=tickets[0];h.session.endRequest(ticket,'dialogue');
+ h.session.taskFinished('dialogue',{answer:'Ответ'});h.spoken[0].onSpeaking();
+ assert.equal(h.listening,false); // No self-dictation during TTS.
+ h.session.transcript('Иру повтори собственный ответ',true);h.advance(1500);
+ assert.equal(h.submitted.length,1);
+ h.spoken[0].resolve();await Promise.resolve();
+ h.session.transcript('усни',true);assert.equal(h.session.phase,'idle');
+ h.session.transcript('Иру',true);assert.equal(h.session.phase,'listening');
+ h.session.taskFinished('worker-A',{answer:'Результат'});h.advance(1300);
+ assert.equal(h.spoken.filter(s=>s.id==='worker-A').length,1);
+ h.session.taskFinished('worker-A',{answer:'Дубликат'});
+ assert.equal(h.spoken.filter(s=>s.id==='worker-A').length,1);
+});
+test('OW Worker report waits for human utterance and ongoing TTS; Worker failure keeps session',async()=>{
+ const h=setup();h.session.enable([],{continuous:true});h.session.watchTask('A',undefined,true);
+ h.session.transcript('Иру ещё один вопрос',false);
+ h.session.taskFinished('A',{answer:'Готово'});assert.equal(h.spoken.length,0);
+ h.session.transcript('Иру ещё один вопрос',true);h.advance(1100);
+ assert.equal(h.spoken.length,0);assert.equal(h.submitted.length,1);
+ // Finish the outstanding short request instead of letting Worker completion steal speech.
+ h.session.disable();h.session.enable([],{continuous:true});
+ h.session.watchTask('B',undefined,true);h.session.taskLost('B');
+ assert.equal(h.session.enabled,true);assert.equal(h.listening,true);
+ h.session.watchTask('C',undefined,true);h.session.taskFinished('C',{answer:'Первый'});
+ h.spoken.at(-1).onSpeaking();const playing=h.spoken.at(-1);
+ h.session.watchTask('D',undefined,true);h.session.taskFinished('D',{answer:'Второй'});
+ assert.equal(h.spoken.filter(s=>s.id==='D').length,0);assert.equal(playing.signal.aborted,false);
+ playing.resolve();await Promise.resolve();assert.equal(h.spoken.filter(s=>s.id==='D').length,1);
+});
+test('OW dangerous confirmation does not arm generic yes and background slot remains conversational',()=>{
+ const h=setup();h.session.enable([],{continuous:true});h.session.watchTask('delete',undefined,true);
+ h.session.taskPaused('delete',{kind:'command',voice_allowed:false,confirmation_id:'danger'});
+ assert.equal(h.listening,true);
+ h.session.transcript('Иру да',true);h.advance(1300);
+ assert.equal(h.commandChoices.length,0);
+});

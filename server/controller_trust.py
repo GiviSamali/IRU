@@ -38,7 +38,7 @@ _DEVICE_INVENTORY_CONNECTED_ONLY_ANSWER = (
 
 
 def _infer_action(command_entry: dict) -> str | None:
-    action = command_entry.get("action")
+    action = command_entry.get("action") or command_entry.get("tool_name")
     if action:
         return action
 
@@ -185,13 +185,39 @@ def _sanitize_device_inventory_wording(answer: str) -> str:
     return answer
 
 
+def has_validated_terminal_answer(answer: str, commands_log: list[dict]) -> bool:
+    """Bind raw presentation text to the existing validated terminal payload.
+
+    This checks identity/structure only; it never decides goal completion.
+    """
+    for index in range(len(commands_log) - 1, -1, -1):
+        entry = commands_log[index]
+        if entry.get("tool_name") != "answer.text" or entry.get("status") != "terminal":
+            continue
+        payload = entry.get("result")
+        if not isinstance(payload, dict) or payload.get("text") != answer:
+            return False
+        try:
+            try:
+                from .run_journal import validate_answer_text_payload
+            except ImportError:
+                from run_journal import validate_answer_text_payload
+            validate_answer_text_payload(payload, commands_log[:index])
+        except (ValueError, TypeError):
+            return False
+        return True
+    return False
+
+
 def has_grounded_terminal_answer(answer: str, commands_log: list[dict]) -> bool:
     """Respect validated terminal evidence without masking later/other-device failures."""
     for index in range(len(commands_log) - 1, -1, -1):
         entry = commands_log[index]
         if entry.get("tool_name") != "answer.text" or entry.get("status") != "terminal":
             continue
-        payload = entry.get("result") or {}
+        payload = entry.get("result")
+        if not isinstance(payload, dict):
+            return False
         if payload.get("answer_type") != "grounded_report" or payload.get("text") != answer:
             return False
         if any(_is_failed_action(item) for item in commands_log[index + 1:]):
@@ -234,6 +260,15 @@ def enforce_trusted_answer(answer: str, commands_log: list[dict] | None) -> str:
     failed_actions = [entry for entry in commands_log if _is_failed_action(entry)]
     if not failed_actions:
         return safe_answer
+
+    # Honest negative terminals may describe a verified subset and a failure.
+    # Their typed outcome is incomplete; a bare completion claim still fails.
+    if has_validated_terminal_answer(answer, commands_log):
+        terminal=next((c for c in reversed(commands_log) if c.get("tool_name")=="answer.text" and c.get("status")=="terminal"), {})
+        payload=terminal.get("result") or {}
+        if payload.get("answer_type") in {"partial_report","error_report","failure"} and (payload.get("self_check") or {}).get("has_sufficient_evidence") is False:
+            if not _SUCCESS_CLAIM_RE.search(safe_answer) or _ERROR_TEXT_RE.search(safe_answer):
+                return safe_answer
 
     if _SUCCESS_CLAIM_RE.search(safe_answer) or not _ERROR_TEXT_RE.search(safe_answer):
         return _build_failure_answer(failed_actions[0])

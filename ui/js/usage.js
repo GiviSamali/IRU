@@ -1,3 +1,12 @@
+function canViewUsage() { return state.user?.is_admin === true; }
+function updateUsageVisibility() {
+  const badge = document.getElementById('usageBadge');
+  if (badge) { badge.style.display = canViewUsage() ? 'inline-flex' : 'none'; if (!canViewUsage()) {
+    badge.classList.remove('open');
+    const text=document.getElementById('usageBadgeText'), body=document.getElementById('usagePopoverBody');
+    if (text) text.textContent=''; if (body) body.innerHTML='';
+  } }
+}
 const USAGE_FALLBACK_TEXT = 'Токены сегодня: —';
 
 function formatUsageTokens(value) {
@@ -50,14 +59,18 @@ function renderUsageDetails(data) {
 }
 
 async function refreshUsageSummary() {
+  updateUsageVisibility();
+  if (!canViewUsage()) return;
   const badgeText = document.getElementById('usageBadgeText');
   const body = document.getElementById('usagePopoverBody');
   if (!badgeText || !body) return;
 
+  const owner=state.user.id;
   try {
     const response = await apiFetch(`${API}/api/usage/summary`, { headers: authHeaders() });
     const data = await response.json();
     if (!response.ok || data.status !== 'ok') throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+    if (!canViewUsage() || state.user.id !== owner) return;
     const today = data.summary?.today || {};
     badgeText.textContent = `Токены сегодня: ${renderUsageSummaryLine(today)}`;
     body.innerHTML = renderUsageDetails(data);
@@ -68,11 +81,14 @@ async function refreshUsageSummary() {
 }
 
 async function refreshTaskUsage(taskId, msgIndex) {
+  if (!canViewUsage()) return;
   if (!taskId || Number.isNaN(Number(msgIndex))) return;
+  const owner=state.user.id;
   try {
     const response = await apiFetch(`${API}/api/tasks/${encodeURIComponent(taskId)}/usage`, { headers: authHeaders() });
     const data = await response.json();
     if (!response.ok || data.status !== 'ok') return;
+    if (!canViewUsage() || state.user.id !== owner) return;
     const msg = state.messages[msgIndex];
     if (!msg) return;
     msg.usageSummary = data.summary || null;
@@ -84,6 +100,7 @@ async function refreshTaskUsage(taskId, msgIndex) {
 }
 
 function renderMessageUsage(message) {
+  if (!canViewUsage()) return '';
   const summary = message?.usageSummary;
   if (!summary || !Number(summary.llm_calls || 0)) return '';
   return `<div class="message-usage">Использование: ${escapeHTML(renderUsageSummaryLine(summary))}</div>`;
@@ -94,6 +111,7 @@ function bindUsageBadge() {
   if (!badge || badge.dataset.bound === '1') return;
   badge.dataset.bound = '1';
   badge.addEventListener('click', () => {
+    if (!canViewUsage()) return;
     const expanded = badge.getAttribute('aria-expanded') === 'true';
     badge.setAttribute('aria-expanded', expanded ? 'false' : 'true');
     badge.classList.toggle('open', !expanded);

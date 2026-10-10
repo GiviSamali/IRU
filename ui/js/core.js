@@ -14,12 +14,14 @@ const state = {
   explorerOpen: false,
   explorerPath: null,
   explorerHistory: [],
+  settingsPanelOpen: false,
   memoryPanelOpen: false,
   memoryPanelLoading: false,
   memoryPanelError: '',
   memoryFacts: [],
   pendingTasks: [],  // [{task_id, msgIndex}]
   expandedStepDetails: new Set(),
+  expandedSmartBlocks: new Set(),
   expandedStepCommands: new Set(),
   devModeOpen: false,
   userPlan: 'free',
@@ -165,6 +167,10 @@ function doLogout() {
   _clearTokens();
   stopDevicePolling();
   state.user = null;
+  if (typeof updateUsageVisibility === 'function') updateUsageVisibility();
+  state.memoryFacts = [];
+  if (typeof closeMemoryPanel === 'function') closeMemoryPanel();
+  if (typeof closeSettingsPanel === 'function') closeSettingsPanel();
   state.chats = [];
   state.currentChatId = null;
   state.messages = [];
@@ -238,6 +244,7 @@ function showApp() {
   checkConsent();
   checkTermsStatus();
   fetchUserInfo();
+  if (typeof refreshMemoryStats === 'function') refreshMemoryStats().catch(() => {});
   if (typeof refreshUsageSummary === 'function') refreshUsageSummary();
   if (typeof renderInputModeBtn === 'function') renderInputModeBtn();
   if (typeof updateCharCount === 'function') updateCharCount();

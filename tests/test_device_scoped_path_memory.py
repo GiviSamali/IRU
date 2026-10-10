@@ -1,3 +1,4 @@
+import json
 import asyncio
 
 import pytest
@@ -190,11 +191,11 @@ def test_device_memory_path_with_matching_machine_guid_is_allowed_in_memory_bloc
     from server.database import add_fact
 
     user = _create_user("path-scope-device-memory")
-    add_fact("machine-new", "device-new", r"Project path is C:\Users\User\TEST_IRU", "config")
+    add_fact("machine-new", "device-new", r"Project path is C:\Users\User\TEST_IRU", "config", user_id=str(user["id"]))
 
-    block = build_memory_block("machine-new", str(user["id"]))
+    block = build_memory_block("machine-new", str(user["id"]), "device-new")
 
-    assert r"C:\Users\User\TEST_IRU" in block
+    assert r"C:\Users\User\TEST_IRU" in json.loads(block)["facts"][0]["text"]
 
 
 def test_device_memory_path_with_different_machine_guid_is_not_exposed(client):
@@ -203,7 +204,7 @@ def test_device_memory_path_with_different_machine_guid_is_not_exposed(client):
     user = _create_user("path-scope-other-device-memory")
     add_fact("machine-old", "device-old", r"Old path is C:\Users\russa\TEST_IRU", "config")
 
-    block = build_memory_block("machine-new", str(user["id"]))
+    block = build_memory_block("machine-new", str(user["id"]), "device-new")
 
     assert r"C:\Users\russa\TEST_IRU" not in block
 

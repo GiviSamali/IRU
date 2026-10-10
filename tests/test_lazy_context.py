@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 
 from server.controller_prompts import SYSTEM_PROMPT_TEMPLATE
 from server.device_activation import compact_activation_summary
@@ -46,7 +47,7 @@ def test_full_activation_receipt_only_by_handle():
         all_devices={"givi": {"ws": object(), "activation_receipt": receipt}},
     )
 
-    assert response == {"status": "ok", "source": "agent_live", "data": receipt}
+    assert response == {"status": "ok", "source": "agent_live", "data": receipt, "runtime_authority": "historical_only"}
 
 
 def test_offline_handle_returns_stale_cache(monkeypatch):
@@ -134,7 +135,7 @@ def test_managed_runtime_ok_overrides_activation_python_missing():
                     "venv_python": r"C:\Users\tester\AppData\Local\IRU\runtime\venv\Scripts\python.exe",
                     "python_version": "3.11.9",
                     "pip_status": "ok",
-                    "last_runtime_check": "2026-05-22T00:00:00Z",
+                    "last_runtime_check": datetime.now(timezone.utc).isoformat(),
                     "receipt_hash": "abc",
                 },
             }

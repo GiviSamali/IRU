@@ -51,14 +51,17 @@ async function acceptTerms() {
 
 // ── USER INFO & DEV MODE ────────────────────────────────────
 async function fetchUserInfo() {
+  const owner=state.user?.id;
   try {
     const r = await apiFetch(`${API}/api/user_info`, { headers: authHeaders() });
     const data = await r.json();
-    if (data.status === 'ok') {
+    if (data.status === 'ok' && state.user?.id === owner) {
       state.user = { ...(state.user || {}), ...(data.user || {}) };
       state.userPlan = data.user.plan || 'free';
+      if (typeof updateUsageVisibility === 'function') updateUsageVisibility();
+      if (typeof refreshUsageSummary === 'function') refreshUsageSummary();
       const limits = data.user.limits || {};
-      const isAdmin = !!(data.user?.is_admin || data.user?.role === 'admin' || limits.admin_panel || limits.admin || state.user?.name === 'admin');
+      const isAdmin = data.user?.is_admin === true;
       document.getElementById('btnAdmin').style.display = isAdmin ? 'flex' : 'none';
       document.getElementById('devModeToggle').style.display = (limits.dev_mode || isAdmin) ? 'flex' : 'none';
     }

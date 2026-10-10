@@ -90,7 +90,7 @@ def test_long_answer_parts_preserve_text_and_fit_form_limit():
 
 def test_part_index_and_rate_limit(client, monkeypatch):
     headers = setup_task(answer="Ответ. " * 200)
-    tasks["voice-task"]["message"] = "Расскажи подробно"
+    tasks["voice-task"]["message"] = "Прочитай ответ вслух полностью"
     monkeypatch.setenv("YANDEX_API_KEY", "test-key")
     spoken = []
     async def synthesize(text):

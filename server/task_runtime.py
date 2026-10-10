@@ -21,9 +21,10 @@ try:
         process_onboarding_message,
         strip_markdown,
     )
-    from .controller_trust import enforce_trusted_answer, has_grounded_terminal_answer
+    from .controller_trust import enforce_trusted_answer, has_grounded_terminal_answer, has_validated_terminal_answer
     from .database import (
         add_message,
+        message_task_metadata,
         add_training_record,
         add_user_fact,
         get_chat,
@@ -67,9 +68,10 @@ except ImportError:
         process_onboarding_message,
         strip_markdown,
     )
-    from controller_trust import enforce_trusted_answer, has_grounded_terminal_answer
+    from controller_trust import enforce_trusted_answer, has_grounded_terminal_answer, has_validated_terminal_answer
     from database import (
         add_message,
+        message_task_metadata,
         add_training_record,
         add_user_fact,
         get_chat,
@@ -105,6 +107,11 @@ except ImportError:
     from tool_registry import compact_device_passport
 
 
+try:
+    from .run_journal import diagnostic_task, record_lifecycle_event
+except ImportError:
+    from run_journal import diagnostic_task, record_lifecycle_event
+
 logger = logging.getLogger("iru.run_plan")
 
 
@@ -130,6 +137,9 @@ def _registered_identity(device_id: str, dev: dict | None, profile: dict | None 
         "registered_hostname": registered.get("registered_hostname") or info.get("hostname") or (profile or {}).get("hostname"),
         "registered_machine_guid": registered.get("registered_machine_guid") or info.get("machine_guid") or (profile or {}).get("machine_guid"),
         "registered_device_id": info.get("device_id") or _short_did(device_id),
+        "registered_machine_guid_type": registered.get("machine_guid_type") or info.get("machine_guid_type") or
+            ("windows_machine_guid" if "windows" in str(info.get("os") or (profile or {}).get("os") or "").lower()
+             else "linux_machine_id" if "linux" in str(info.get("os") or (profile or {}).get("os") or "").lower() else None),
     }
 
 
@@ -149,8 +159,10 @@ def _build_identity_receipt(
         **_registered_identity(device_id, dev, profile),
         "observed_hostname": observed.get("observed_hostname") or observed.get("hostname"),
         "observed_computer_name": observed.get("observed_computer_name") or observed.get("computer_name"),
-        "observed_machine_guid": observed.get("observed_machine_guid") or observed.get("machine_uuid") or observed.get("uuid"),
+        "observed_machine_guid": observed.get("observed_machine_guid"),
         "observed_username": observed.get("observed_username") or observed.get("username"),
+        "observed_machine_guid_type": observed.get("machine_guid_type") or observed.get("observed_machine_guid_type"),
+        "observed_system_uuid": observed.get("system_uuid"),
         "collected_at": observed.get("collected_at") or _utc_now_iso(),
         "identity_status": "unknown",
     }
@@ -160,16 +172,22 @@ def _build_identity_receipt(
         _norm_identity_value(receipt.get("observed_computer_name")),
     ]
     observed_names = [name for name in observed_names if name]
-    if observed_names:
-        receipt["identity_status"] = "ok"
-        if registered_hostname and registered_hostname not in observed_names:
-            receipt["identity_status"] = "mismatch"
-
+    comparisons = []
+    registered_type = receipt.get("registered_machine_guid_type")
+    if registered_type and registered_type == receipt.get("observed_machine_guid_type"):
+        registered_guid = _norm_identity_value(receipt.get("registered_machine_guid"))
+        observed_guid = _norm_identity_value(receipt.get("observed_machine_guid"))
+        if registered_guid and observed_guid:
+            comparisons.append(registered_guid == observed_guid)
     for stable_key in ("bios_serial", "system_uuid"):
         registered_value = _norm_identity_value((dev or {}).get("info", {}).get(stable_key) if isinstance(dev, dict) else "")
         observed_value = _norm_identity_value(observed.get(stable_key))
         if registered_value and observed_value:
-            receipt["identity_status"] = "ok" if registered_value == observed_value else "mismatch"
+            comparisons.append(registered_value == observed_value)
+    if comparisons:
+        receipt["identity_status"] = "ok" if all(comparisons) else "mismatch"
+    elif registered_hostname and observed_names:
+        receipt["identity_status"] = "ok" if registered_hostname in observed_names else "mismatch"
     return receipt
 
 
@@ -184,6 +202,7 @@ def _attach_identity_receipt(result: dict, *, device_id: str, dev: dict | None) 
                 "observed_hostname",
                 "observed_computer_name",
                 "observed_machine_guid",
+                "machine_guid_type",
                 "observed_username",
                 "bios_serial",
                 "system_uuid",
@@ -289,7 +308,7 @@ async def send_command_to_agent(
             )
         if needs_confirmation(cmd_text):
             if skip_confirm:
-                logger.info("[security] skip_confirm=True, команда пропущена без плашки: %s", cmd_text[:80])
+                logger.info("[security] skip_confirm=True, command_chars=%s", len(cmd_text))
             else:
                 raise RuntimeError("CONFIRM_REQUIRED: Команда требует подтверждения пользователя.")
 
@@ -338,8 +357,6 @@ async def send_command_to_agent(
         "type": "command",
         "payload": {"id": cmd_id, "action": action, "params": params},
     })
-    await dev["ws"].send_text(msg)
-
     wait_timeout = 60.0
     if action.startswith("file.transfer_"):
         wait_timeout = 1560.0
@@ -354,14 +371,23 @@ async def send_command_to_agent(
     elif action == "device.prepare_runtime":
         wait_timeout = 180.0
 
+    wait_started=time.monotonic()
+    wait_state="success"
     try:
+        await dev["ws"].send_text(msg)
         result = await asyncio.wait_for(future, timeout=wait_timeout)
     except asyncio.CancelledError:
+        wait_state="cancelled"
         dev["pending"].pop(cmd_id, None)
         raise
     except asyncio.TimeoutError:
+        wait_state="unknown"
         dev["pending"].pop(cmd_id, None)
         raise RuntimeError("Таймаут ожидания ответа от агента")
+    except Exception:
+        wait_state="failed";dev["pending"].pop(cmd_id,None);raise
+    finally:
+        record_lifecycle_event("device_wait",tool_name=action,status=wait_state,duration_ms=int((time.monotonic()-wait_started)*1000))
 
     if action == "device.activate" and isinstance(result, dict) and not result.get("error"):
         valid, _ = validate_activation_receipt(result)
@@ -412,7 +438,7 @@ def _snapshot_command_for_device(device_info: dict) -> str:
             "    try: return subprocess.check_output(cmd, text=True).strip()\n"
             "    except Exception: return ''\n"
             "print(json.dumps({'observed_hostname': platform.node(), 'observed_computer_name': platform.node(), "
-            "'observed_machine_guid': run(['cat','/etc/machine-id']), 'observed_username': getpass.getuser(), "
+            "'observed_machine_guid': run(['cat','/etc/machine-id']) or run(['cat','/var/lib/dbus/machine-id']), 'machine_guid_type': 'linux_machine_id', 'observed_username': getpass.getuser(), "
         "'os_caption': platform.platform(), 'os_version': platform.version(), 'cpu': platform.processor(), "
         "'cpu_load': os.getloadavg()[0] if hasattr(os, 'getloadavg') else None, "
         "'process_count': len([p for p in os.listdir('/proc') if p.isdigit()])}))\n"
@@ -422,13 +448,15 @@ def _snapshot_command_for_device(device_info: dict) -> str:
         "$ErrorActionPreference='SilentlyContinue'; "
         "$cs=Get-CimInstance Win32_ComputerSystem; $os=Get-CimInstance Win32_OperatingSystem; "
         "$prod=Get-CimInstance Win32_ComputerSystemProduct; $bios=Get-CimInstance Win32_BIOS; "
+        "$reg=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64); "
+        "$key=$reg.OpenSubKey('SOFTWARE\\Microsoft\\Cryptography'); $mid=$key.GetValue('MachineGuid'); $key.Close(); $reg.Close(); "
         "$cpu=Get-CimInstance Win32_Processor | Select-Object -First 1; "
         "$gpus=Get-CimInstance Win32_VideoController | ForEach-Object { "
         "[pscustomobject]@{name=$_.Name; adapter_ram_mb=if($_.AdapterRAM){[math]::Round($_.AdapterRAM/1MB,0)}else{$null}; driver_version=$_.DriverVersion; status=$_.Status} }; "
         "$disks=Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" | ForEach-Object { "
         "[pscustomobject]@{drive=$_.DeviceID; total_gb=[math]::Round($_.Size/1GB,2); free_gb=[math]::Round($_.FreeSpace/1GB,2)} }; "
         "[pscustomobject]@{observed_hostname=[System.Net.Dns]::GetHostName(); observed_computer_name=$env:COMPUTERNAME; "
-        "observed_machine_guid=$prod.UUID; bios_serial=$bios.SerialNumber; observed_username=[Environment]::UserName; "
+        "observed_machine_guid=$mid; machine_guid_type='windows_machine_guid'; system_uuid=$prod.UUID; bios_serial=$bios.SerialNumber; observed_username=[Environment]::UserName; "
         "os_caption=$os.Caption; os_version=$os.Version; os_build=$os.BuildNumber; cpu=$cpu.Name; cpu_load=$cpu.LoadPercentage; "
         "ram_total_gb=[math]::Round($cs.TotalPhysicalMemory/1GB,2); ram_free_gb=[math]::Round($os.FreePhysicalMemory/1MB,2); "
         "disks=$disks; gpus=$gpus; process_count=@(Get-Process).Count; uptime=((Get-Date)-$os.LastBootUpTime).ToString()} | ConvertTo-Json -Depth 6 -Compress"
@@ -770,6 +798,7 @@ def _device_execution_status(result: dict) -> str:
     return "ok"
 
 
+@diagnostic_task("nl", lambda task_id: tasks.get(task_id))
 async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list[str], chat_id: int):
     """
     Execute an NL task in the background.
@@ -777,8 +806,10 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
     Multiple devices => independent sequential execution in each device context.
     """
     task = tasks[task_id]
+    if task.get("worker_id") and task.get("original_request"):
+        message = task["original_request"]
     task["current_step"] = "ИРУ думает..."
-    is_broadcast = len(device_ids) > 1
+    is_broadcast = bool(task.get("broadcast")) if task.get("orchestrated") else len(device_ids)>1
     task_modes = task.get("modes") or {}
     plan_declined_for_request = bool(task_modes.get("plan_declined")) or is_plan_declined(chat_id, message)
     print(f"[run_nl_task] START task={task_id[:8]}, user={user_id}, devices={device_ids}")
@@ -809,7 +840,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         task["answer"] = answer
         task["tasks"] = task.get("tasks", [])
         try:
-            add_message(chat_id, "assistant", answer, task.get("commands", []))
+            add_message(chat_id, "assistant", answer, task.get("commands", []),
+                        task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id"))
         except Exception:
             pass
 
@@ -826,7 +858,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             }
 
         device_info = dev.get("info", {})
-        user_devs = {device_id: dev} if is_broadcast else get_user_devices(user_id)
+        user_devs = {device_id: dev} if is_broadcast else {did: value for did,value in get_user_devices(user_id).items() if not task.get("worker_id") or did in task["device_ids"]}
         all_devices_info = {
             _short_did(did): {
                 "user_id": user_id,
@@ -841,7 +873,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             for did, value in user_devs.items()
         }
         # Broadcast starts each ordinary task afresh: no paths/results from another device.
-        chat_history = [] if is_broadcast else get_messages(chat_id, limit=50)
+        chat_history = task.get("worker_context") or ([] if is_broadcast else get_messages(chat_id, limit=50))
         device_profile = get_device_profile(_short_did(device_id), user_id=user_id)
         autonomous_flag = bool(task_modes.get("autonomous")) and not task_modes.get("pipeline")
         all_devices_info.setdefault(_short_did(device_id), {
@@ -859,7 +891,69 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         dev["activation_context_markers"] = activation_markers
         all_devices_info[_short_did(device_id)]["activation_context_markers"] = activation_markers
 
+        try:
+            from .browser_policy import BrowserTaskPolicy
+            from .browser_bridge import execute_browser_action
+        except ImportError:
+            from browser_policy import BrowserTaskPolicy
+            from browser_bridge import execute_browser_action
+        browser_policy = BrowserTaskPolicy(message, _short_did(device_id), chat_history,
+                                           authorized_device_ids=set(all_devices_info))
+        browser_page_seen = False
+        async def confirm_browser_effect(target, params):
+            # The static extension has rejected the effect BEFORE activation.
+            # No interpretation of the user's wording and no additional LLM call.
+            decision = asyncio.get_running_loop().create_future()
+            task["_pipeline_confirm_future"] = decision
+            task["confirm_data"] = command_confirmation({
+                "command": f"Загрузка исполняемого файла из браузера на {target}",
+                "device_id": target, "params": {**params, "risk": "dangerous"},
+                "chat_id": chat_id, "user_id": user_id})
+            task["status"] = "confirm"
+            try:
+                accepted = await asyncio.wait_for(decision, timeout=300)
+                return bool(accepted) and not is_task_cancel_requested(task_id)
+            except asyncio.TimeoutError:
+                return False
+            finally:
+                if not is_task_cancel_requested(task_id):
+                    task["status"] = "running"
+                task.pop("_pipeline_confirm_future", None)
+                task.pop("confirm_data", None)
+
         async def send_fn(target_device_id, action, params):
+            nonlocal browser_page_seen
+            if task.get("worker_id"):
+                target_key=_dk(user_id,target_device_id) if isinstance(target_device_id,str) and ":" not in target_device_id else target_device_id
+                if target_key not in task["device_ids"]:return {"status":"failed","error":"device_outside_worker_assignment"}
+                if action=="transfer_file":
+                    for key in ("source_device_id","target_device_id"):
+                        raw=params.get(key)
+                        if not isinstance(raw,str) or _dk(user_id,raw) not in task["device_ids"]:
+                            return {"status":"failed","error":"device_outside_worker_assignment"}
+            if action.startswith("web."):
+                if not isinstance(target_device_id,str) or ":" in target_device_id:
+                    return {"status":"failed","error":"target_device_not_found"}
+                if is_task_cancel_requested(task_id):
+                    return {"status": "cancelled", "error": "task_cancelled"}
+                allowed, reason = browser_policy.allows(action, _short_did(target_device_id), params)
+                if not allowed:
+                    return {"status": "failed", "error": reason or "browser_authorization_required"}
+                result = await execute_browser_action(user_id, task_id, _short_did(target_device_id), action, params,
+                    external_action=action == "web.activate", cancelled=lambda: is_task_cancel_requested(task_id))
+                if action == "web.activate" and result.get("status") == "failed" and result.get("error") == "browser_confirmation_required":
+                    if not await confirm_browser_effect(_short_did(target_device_id), params):
+                        return {"status": "failed", "error": "browser_confirmation_declined"}
+                    # Revalidate ownership, connection and the exact DOM identity after approval.
+                    result = await execute_browser_action(user_id, task_id, _short_did(target_device_id), action, params,
+                        external_action=True, dangerous_effect_confirmed=True,
+                        cancelled=lambda: is_task_cancel_requested(task_id))
+                if action in {"web.read", "web.elements", "web.tabs"} and result.get("status") == "success":
+                    browser_page_seen = True
+                return result
+            if browser_page_seen or browser_policy.browser_only:
+                # Page/planner text is data. This bounded web capability cannot mint local authority.
+                return {"status": "failed", "error": "untrusted_web_content_cannot_authorize_device_action"}
             if action == "transfer_file":
                 try:
                     from .file_transfer import transfer_file
@@ -899,17 +993,23 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
 
 
         def file_link(dev_id: str, path: str) -> str:
+            if browser_page_seen:
+                raise RuntimeError("untrusted_web_content_cannot_authorize_file_download")
             target_key = dev_id if ":" in dev_id else _dk(user_id, dev_id)
+            if task.get("worker_id") and target_key not in task["device_ids"]:raise RuntimeError("device_outside_worker_assignment")
             if is_broadcast and target_key != device_id:
                 raise RuntimeError(f"target_device_not_found: {dev_id}")
             return get_file_link_fn(dev_id, path, user_id=user_id)
 
         async def device_tool_fn(tool_name: str, args: dict) -> dict:
+            if browser_page_seen:
+                return {"status": "failed", "error": "untrusted_web_content_cannot_authorize_device_action"}
             if is_task_cancel_requested(task_id):
                 return {"status": "cancelled", "error": "Task cancellation requested before starting next device tool"}
             requested = str(args.get("device_id") or device_id)
             target_key = _dk(user_id, requested) if ":" not in requested else requested
             target_dev = devices.get(target_key)
+            if task.get("worker_id") and target_key not in task["device_ids"]:return {"status":"failed","error":"device_outside_worker_assignment"}
             if is_broadcast and target_key != device_id:
                 return {"status": "unavailable", "error": "target_device_not_found"}
             if not target_dev or target_dev.get("user_id") != user_id:
@@ -1004,6 +1104,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     user_id=user_id,
                     send_fn=send_fn,
                 )
+            record_lifecycle_event("controller_selected", controller="pipeline" if task_modes.get("pipeline") else "non_pipeline",
+                mode="broadcast" if is_broadcast else "ordinary_task")
             result = await process_nl_command(
                 user_message=message,
                 device_id=_short_did(device_id),
@@ -1059,8 +1161,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         except Exception as exc:
             if is_task_cancel_requested(task_id):
                 return cancellation_payload()
-            print(f"[run_nl_task] ERROR on device={device_id}: {type(exc).__name__}: {exc}")
-            traceback.print_exc()
+            print(f"[run_nl_task] ERROR on device={device_id}: {type(exc).__name__}")
+            logger.warning("[task] exception type=%s", type(exc).__name__)
             error_text = str(exc).strip() or type(exc).__name__
             return {
                 "device_id": device_id,
@@ -1073,29 +1175,35 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
     if is_task_cancel_requested(task_id):
         finish_cancelled()
         return
+    orchestrator_simple=task.get("orchestrated") and task.get("orchestrator_execution_mode")=="simple"
+    if is_pipeline or plan_declined_for_request or orchestrator_simple:
+        record_lifecycle_event("classification", classification="skipped",
+            source="explicit_pipeline" if is_pipeline else "orchestrator_decision" if orchestrator_simple else "plan_declined")
     if not is_pipeline:
-        if not plan_declined_for_request:
+        if not plan_declined_for_request and not orchestrator_simple:
             if is_task_cancel_requested(task_id):
                 finish_cancelled()
                 return
-            kind, plan_desc = await _call_with_optional_usage_context(
-                classify_task_complexity,
-                message,
-                usage_context={
-                    "user_id": user_id,
-                    "chat_id": chat_id,
-                    "poll_task_id": task_id,
-                    "route": "classification",
-                    "phase": "classify_task_complexity",
-                },
-            )
-            logger.info(
-                "[classify] kind=%s plan_desc=%r user_id=%s message=%r",
-                kind,
-                plan_desc[:80] if plan_desc else "",
-                user_id,
-                message[:100],
-            )
+            try:
+                from .browser_policy import browser_request
+            except ImportError:
+                from browser_policy import browser_request
+            if browser_request(message):
+                kind, plan_desc = "SIMPLE", ""
+            else:
+                kind, plan_desc = await _call_with_optional_usage_context(
+                    classify_task_complexity,
+                    message,
+                    usage_context={
+                        "user_id": user_id,
+                        "chat_id": chat_id,
+                        "poll_task_id": task_id,
+                        "route": "classification",
+                        "phase": "classify_task_complexity",
+                    },
+                )
+            record_lifecycle_event("classification", classification=kind)
+            logger.info("[classify] kind=%s user_id=%s task_id=%s", kind, user_id, task_id)
             if kind == "PLAN":
                 task["plan_suggestion"] = plan_desc
                 task["plan_original_request"] = message
@@ -1209,10 +1317,32 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         if is_task_cancel_requested(task_id):
             finish_cancelled(combined_commands)
             return
-        if not ("combined_task_receipt" in locals() and (combined_task_receipt or {}).get("answer_source") in {"pipeline_step_report", "per_device_report"}):
+        validated_terminal = has_validated_terminal_answer(combined_answer, combined_commands)
+        if validated_terminal or not ("combined_task_receipt" in locals() and (combined_task_receipt or {}).get("answer_source") in {"pipeline_step_report", "per_device_report"}):
+            before_trust_guard = combined_answer
             combined_answer = enforce_trusted_answer(combined_answer, combined_commands)
-        combined_answer = strip_markdown(combined_answer)
-        add_message(chat_id, "assistant", combined_answer, combined_commands)
+            if combined_answer != before_trust_guard:
+                record_lifecycle_event("answer_adjusted", source="trust_guard")
+                if validated_terminal:
+                    # The journal retains the original answer and basis. A content
+                    # rejection is not a formatting change or proof of goal success.
+                    combined_task_receipt={**(combined_task_receipt or {}),"task_status":"blocked",
+                        "goal_completed":False,"final_verification_status":"unverified",
+                        "answer_source":"trust_guard","terminal_reason":"untrusted_terminal_content"}
+        # Preserve the exact audited answer; speech/UI formatting is a projection.
+        if not validated_terminal:
+            combined_answer = strip_markdown(combined_answer)
+        history_metadata = message_task_metadata({**task,
+            "status": (combined_task_receipt or {}).get("task_status") or "done",
+            "task_receipt": combined_task_receipt, "tasks": combined_tasks}, task_id=task_id)
+        task["history_metadata"] = history_metadata
+        try:
+            saved_message = add_message(chat_id, "assistant", combined_answer, combined_commands, task_metadata=history_metadata,message_id=task.get("history_message_id"))
+            if isinstance(saved_message, dict):task["history_message_id"] = saved_message.get("id")
+        except Exception as exc:
+            # A secondary chat projection cannot erase the completed execution.
+            logger.warning("history_persistence_failed task_id=%s type=%s",task_id,type(exc).__name__)
+            record_lifecycle_event("history_persistence_failed",source="history",status="failed")
 
         try:
             from .database import get_db
@@ -1231,7 +1361,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 add_training_record(
                     user_id=user_id,
                     chat_id=chat_id,
-                    input_text=message,
+                    input_text=task.get("original_request") or message,
                     os_info=os_info,
                     hostname=hostname_info,
                     method=method_info,
@@ -1248,7 +1378,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             return
         if receipt_status == "completed_with_recovery":
             task["status"] = "completed_with_recovery"
-        elif receipt_status in {"failed", "blocked"}:
+        elif receipt_status in {"failed", "blocked", "partial", "unknown"}:
             task["status"] = receipt_status
         else:
             task["status"] = "done"
@@ -1258,20 +1388,28 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         if "combined_task_receipt" in locals() and combined_task_receipt:
             task["task_receipt"] = combined_task_receipt
     except Exception as exc:
-        print(f"[run_nl_task] FATAL task={task_id[:8]}: {type(exc).__name__}: {exc}")
-        traceback.print_exc()
+        print(f"[run_nl_task] FATAL task={task_id[:8]}: {type(exc).__name__}")
+        logger.warning("[task] exception type=%s", type(exc).__name__)
         error_text = str(exc).strip() or type(exc).__name__
         task["status"] = "error"
         task["answer"] = f"Ошибка: {error_text}" if error_text else "Произошла внутренняя ошибка. Попробуйте ещё раз."
         task["commands"] = []
+        try:
+            add_message(chat_id, "assistant", task["answer"], [], task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id"))
+        except Exception:
+            logger.warning("task error history persistence failed task_id=%s", task_id)
 
 
+@diagnostic_task("onboarding", lambda task_id: tasks.get(task_id))
 async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id: int):
     """Background task for onboarding mode when no devices are connected."""
     task = tasks[task_id]
+    if task.get("worker_id") and task.get("original_request"):
+        message = task["original_request"]
     task["current_step"] = "ИРУ думает..."
     try:
-        chat_history = get_messages(chat_id, limit=50)
+        chat_history = task.get("worker_context") or get_messages(chat_id, limit=50)
+        record_lifecycle_event("controller_selected", controller="onboarding", mode="onboarding")
         result = await _call_with_optional_usage_context(
             process_onboarding_message,
             user_message=message,
@@ -1282,13 +1420,19 @@ async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id:
                 "poll_task_id": task_id,
                 "route": "onboarding",
                 "phase": "onboarding",
+                "worker_execution": bool(task.get("worker_id")),
             },
         )
         answer = result.get("answer", "")
         task["status"] = "done"
         task["answer"] = answer
         task["commands"] = result.get("commands", [])
-        add_message(chat_id, "assistant", answer, task["commands"])
+        if result.get("task_receipt"):
+            task["task_receipt"] = result["task_receipt"]
+            task["status"] = {"completed":"done","partial":"partial","failed":"failed"}.get(result["task_receipt"].get("task_status"),"done")
+        saved_message = add_message(chat_id, "assistant", answer, task["commands"],
+                    task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id"))
+        if isinstance(saved_message, dict):task["history_message_id"] = saved_message.get("id")
     except Exception as exc:
         task["status"] = "error"
         task["answer"] = f"Ошибка: {str(exc)}"

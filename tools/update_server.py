@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 
 
-DEPLOY_BRANCHES = {"main", "codex/deeptalk-integration"}
+DEPLOY_BRANCHES = {"main", "codex/deeptalk-integration", "codex/agentshell-webview"}
 
 
 def git(repo, *args):
@@ -20,7 +20,7 @@ def ancestor(repo, older, newer):
 
 def check_update(repo, branch, *, fetch=True):
     if branch not in DEPLOY_BRANCHES:
-        raise RuntimeError("Choose the deployment branch explicitly: main or codex/deeptalk-integration")
+        raise RuntimeError("Choose the deployment branch explicitly: " + ", ".join(sorted(DEPLOY_BRANCHES)))
     if git(repo, "branch", "--show-current") != branch:
         raise RuntimeError("Current branch differs from requested deployment branch; no automatic switch")
     if git(repo, "status", "--porcelain", "--untracked-files=no"):

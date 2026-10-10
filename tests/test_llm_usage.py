@@ -78,9 +78,9 @@ def test_add_llm_usage_event_and_summary_aggregation(client):
 
 
 def test_usage_summary_api_requires_auth_and_isolates_chat_usage(client):
-    from server.database import add_llm_usage_event, create_chat, create_user
+    from server.database import add_llm_usage_event, create_chat, create_user, get_user_by_id
 
-    user = create_user("usage-api-user")
+    user = get_user_by_id(1)
     other = create_user("usage-api-other")
     headers = _login_headers(client, user)
     user_chat = create_chat(user["id"], "user chat")
@@ -212,8 +212,9 @@ def test_no_device_onboarding_llm_usage_is_attributed_to_user(client, monkeypatc
     headers = _login_headers(client, user)
 
     start_summary = client.get("/api/usage/summary", headers=headers)
-    assert start_summary.status_code == 200
-    assert start_summary.json()["summary"]["today"]["total_tokens"] == 0
+    assert start_summary.status_code == 403
+    from server.database import get_llm_usage_summary
+    assert get_llm_usage_summary(user["id"], "today")["total_tokens"] == 0
 
     response = client.post(
         "/nl_command",
@@ -236,14 +237,13 @@ def test_no_device_onboarding_llm_usage_is_attributed_to_user(client, monkeypatc
     task_payload = client.get(f"/api/tasks/{task_id}", headers=headers).json()["task"]
     assert task_payload["status"] == "done", task_payload.get("answer")
 
-    summary = client.get("/api/usage/summary", headers=headers).json()["summary"]["today"]
+    summary = get_llm_usage_summary(user["id"], "today")
     assert summary["prompt_tokens"] == 12
     assert summary["completion_tokens"] == 4
     assert summary["total_tokens"] == 16
 
-    chat_usage = client.get(f"/api/chats/{payload['chat_id']}/usage", headers=headers).json()
-    assert chat_usage["summary"]["total_tokens"] == 16
-    assert chat_usage["recent_events"][0]["route"] == "onboarding"
-
-    task_usage = client.get(f"/api/tasks/{task_id}/usage", headers=headers).json()
-    assert task_usage["summary"]["total_tokens"] == 16
+    assert client.get(f"/api/chats/{payload['chat_id']}/usage", headers=headers).status_code == 403
+    assert client.get(f"/api/tasks/{task_id}/usage", headers=headers).status_code == 403
+    from server.database import get_recent_llm_usage_events_for_chat, get_llm_usage_summary_for_poll_task
+    assert get_recent_llm_usage_events_for_chat(user["id"],payload["chat_id"])[0]["route"] == "onboarding"
+    assert get_llm_usage_summary_for_poll_task(user["id"],task_id)["total_tokens"] == 16

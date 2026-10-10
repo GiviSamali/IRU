@@ -288,6 +288,7 @@ def init_db():
             # tier колонка убрана — используем существующий users.plan
             "ALTER TABLE device_memory ADD COLUMN user_id TEXT",
             "ALTER TABLE users ADD COLUMN plan_trial_used INTEGER DEFAULT 0",
+            "ALTER TABLE messages ADD COLUMN task_metadata TEXT",
         ]
         for sql in migrations:
             try:
@@ -451,6 +452,13 @@ def update_chat_title(chat_id: int, user_id: int, title: str) -> bool:
 
 def delete_chat(chat_id: int, user_id: int) -> bool:
     with get_db() as conn:
+        # Lock ownership before destructive operations; all deletes share this transaction.
+        conn.execute("BEGIN IMMEDIATE")
+        owner = conn.execute(
+            "SELECT 1 FROM chats WHERE id = ? AND user_id = ?", (chat_id, user_id)
+        ).fetchone()
+        if owner is None:
+            return False
         conn.execute("DELETE FROM training_data WHERE chat_id = ?", (chat_id,))
         conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
         cursor = conn.execute(
@@ -470,23 +478,65 @@ def touch_chat(chat_id: int):
 
 # ── Messages ───────────────────────────────────────────────────────────────────
 
-def add_message(chat_id: int, role: str, content: str, commands: list | None = None) -> dict:
+def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
+    """Snapshot existing server outcomes for history; never infer goal success."""
+    receipt = task.get("task_receipt")
+    receipt_keys = ("task_status", "goal_completed", "final_verification_status", "answer_source",
+                    "command_outcome", "continuation_status", "terminal_reason", "basis", "warnings")
+    saved_receipt = {key: receipt[key] for key in receipt_keys if key in receipt} if isinstance(receipt, dict) else None
+    metrics = task.get("orchestrator_metrics")
+    if not isinstance(metrics, dict):metrics = {}
+    created = task.get("created_at")
+    elapsed = max(0, int((time.time() - created) * 1000)) if isinstance(created, (int, float)) else None
+    return {
+        "taskStatus": task.get("status"), "taskReceipt": saved_receipt,
+        "overallStatus": task.get("overall_status"), "taskTitle": task.get("current_step") or task.get("message"),
+        "tasks": task.get("tasks") or [], "_taskId": task_id or task.get("task_id"),
+        "taskMode": "plan" if (task.get("modes") or {}).get("pipeline") or (saved_receipt or {}).get("answer_source") == "pipeline_step_report" else "conversation" if task.get("device_ids") == [] else "ordinary",
+        "taskElapsedMs": elapsed, "workerReport": task.get("worker_report"), "taskKind":task.get("kind"),
+        "planSuggestion":task.get("plan_suggestion"),"planOriginalRequest":task.get("plan_original_request"),
+        "orchestrated":task.get("orchestrated") is True,"proposedObjective":task.get("proposed_objective"),"proposedContextSummary":task.get("proposed_context_summary"),
+        "fullSpeechRequested":task.get("full_speech_requested") is True,"dialogueIntent":task.get("dialogue_intent"),"spokenResponse":task.get("dialogue_spoken_response"),
+        "spokenResponseAnswer":task.get("dialogue_speech_answer"),
+        "conversationalResponse":task.get("conversational_response"),"executionDetails":task.get("execution_details"),
+        "assignmentDeviceIds":task.get("device_ids"),"sourceTaskIds":task.get("source_task_ids"),"diagnosticTrace":task.get("diagnostic_trace"),"workerStartedAt":task.get("worker_started_at"),
+        "orchestratorMetrics":{key:value for key,value in metrics.items() if key in {"first_response_ms","elapsed_ms","llm_calls","snapshot_calls"} and type(value) is int},
+    }
+
+
+def _message_metadata(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs", "workerReport", "taskKind", "planSuggestion", "planOriginalRequest", "orchestrated", "proposedObjective", "proposedContextSummary", "conversationalResponse", "executionDetails", "assignmentDeviceIds", "sourceTaskIds", "diagnosticTrace", "workerStartedAt", "orchestratorMetrics", "dialogueIntent", "spokenResponse", "spokenResponseAnswer", "fullSpeechRequested")
+    return {key: value[key] for key in allowed if key in value}
+
+
+def add_message(chat_id: int, role: str, content: str, commands: list | None = None,
+                *, task_metadata: dict | None = None, message_id: int | None = None) -> dict:
     now = time.time()
     commands_json = json.dumps(commands, ensure_ascii=False) if commands else None
+    metadata = _message_metadata(task_metadata) if role == "assistant" else {}
+    metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
     with get_db() as conn:
-        cursor = conn.execute(
-            "INSERT INTO messages (chat_id, role, content, commands, created_at) VALUES (?, ?, ?, ?, ?)",
-            (chat_id, role, content, commands_json, now)
-        )
+        if message_id is not None:
+            cursor=conn.execute("UPDATE messages SET content=?,commands=?,task_metadata=? WHERE id=? AND chat_id=? AND role=?",
+                (content,commands_json,metadata_json,message_id,chat_id,role))
+            if cursor.rowcount != 1:raise ValueError("message_identity_mismatch")
+        else:
+            cursor = conn.execute(
+                "INSERT INTO messages (chat_id, role, content, commands, created_at, task_metadata) VALUES (?, ?, ?, ?, ?, ?)",
+                (chat_id, role, content, commands_json, now, metadata_json))
         conn.execute("UPDATE chats SET updated_at = ? WHERE id = ?", (now, chat_id))
-        msg_id = cursor.lastrowid
+        msg_id = message_id if message_id is not None else cursor.lastrowid
         row = conn.execute("SELECT * FROM messages WHERE id = ?", (msg_id,)).fetchone()
         result = dict(row)
         result["commands"] = commands
+        result.pop("task_metadata", None)
+        result.update(metadata)
         return result
 
 
-def get_messages(chat_id: int, limit: int = 50) -> list[dict]:
+def get_messages(chat_id: int, limit: int = 50, *, include_worker_commands: bool = True) -> list[dict]:
     with get_db() as conn:
         rows = conn.execute(
             """SELECT * FROM messages WHERE chat_id = ?
@@ -496,12 +546,20 @@ def get_messages(chat_id: int, limit: int = 50) -> list[dict]:
         messages = []
         for row in reversed(rows):
             msg = dict(row)
-            if msg["commands"]:
+            try:
+                metadata = _message_metadata(json.loads(msg.get("task_metadata") or "null"))
+            except (ValueError, TypeError):
+                metadata = {}
+            # Worker journals are fetched through the existing Operations panel.
+            if not include_worker_commands and metadata.get("taskKind") == "worker":
+                msg["commands"] = None
+            elif msg["commands"]:
                 try:
                     msg["commands"] = json.loads(msg["commands"])
                 except json.JSONDecodeError:
                     msg["commands"] = None
             messages.append({
+                **metadata,
                 "id":         msg["id"],
                 "role":       msg["role"],
                 "content":    msg["content"],
@@ -638,6 +696,26 @@ def check_daily_command_limit(user_id: int) -> dict:
             "limit":   limits["max_commands_per_day"],
         }
 
+
+
+def reserve_daily_worker_command(connection, user_id: int) -> None:
+    """Charge one admitted Worker in the caller's transaction; retries/rollback are free."""
+    import datetime
+    today = datetime.date.today().isoformat()
+    row = connection.execute(
+        "SELECT plan, daily_commands_count, daily_commands_date FROM users WHERE id = ?",
+        (user_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("worker_owner_not_found")
+    limit = PLAN_LIMITS.get(row["plan"] or "free", PLAN_LIMITS["free"])["max_commands_per_day"]
+    used = (row["daily_commands_count"] or 0) if row["daily_commands_date"] == today else 0
+    if used >= limit:
+        raise ValueError("daily_command_limit_exceeded")
+    connection.execute(
+        "UPDATE users SET daily_commands_count = ?, daily_commands_date = ? WHERE id = ?",
+        (used + 1, today, user_id),
+    )
 
 def increment_daily_commands(user_id: int):
     import datetime
@@ -996,14 +1074,14 @@ def add_command_memory(machine_guid: str, device_id: str | None,
 
 
 def add_fact(machine_guid: str, device_id: str | None,
-             text: str, category: str | None) -> int:
+             text: str, category: str | None, *, user_id: str | None = None) -> int:
     """Добавить закреплённый факт. Возвращает id."""
     with get_db() as conn:
         cur = conn.execute(
             """INSERT INTO device_memory
-               (machine_guid, device_id, type, fact_text, category, pinned, created_at)
-               VALUES (?, ?, 'fact', ?, ?, 1, ?)""",
-            (machine_guid, device_id, text, category, _utc_iso()),
+               (machine_guid, device_id, type, fact_text, category, pinned, created_at, user_id)
+               VALUES (?, ?, 'fact', ?, ?, 1, ?, ?)""",
+            (machine_guid, device_id, text, category, _utc_iso(), user_id),
         )
         return cur.lastrowid
 
@@ -1019,30 +1097,20 @@ def delete_fact(machine_guid: str, fact_id: int) -> bool:
 
 
 def get_recent_commands(machine_guid: str, user_id: str | None = None,
-                        limit: int = 20) -> list[dict]:
-    """Последние команды для устройства (новые первыми).
-    Если user_id передан — фильтрует по нему тоже."""
+                        limit: int = 20, device_id: str | None = None) -> list[dict]:
+    """Return only commands with a proven owner and exact device scope."""
+    if not machine_guid or not user_id or not device_id:
+        return []
     with get_db() as conn:
-        if user_id:
-            rows = conn.execute(
-                """SELECT id, command, intent, exit_code, success,
-                          stdout_preview, stderr_preview, created_at
-                   FROM device_memory
-                   WHERE machine_guid = ? AND type = 'command' AND (user_id = ? OR user_id IS NULL)
-                   ORDER BY created_at DESC LIMIT ?""",
-                (machine_guid, user_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """SELECT id, command, intent, exit_code, success,
-                          stdout_preview, stderr_preview, created_at
-                   FROM device_memory
-                   WHERE machine_guid = ? AND type = 'command'
-                   ORDER BY created_at DESC LIMIT ?""",
-                (machine_guid, limit),
-            ).fetchall()
+        rows = conn.execute(
+            """SELECT id, command, intent, exit_code, success,
+                      stdout_preview, stderr_preview, created_at
+               FROM device_memory
+               WHERE machine_guid = ? AND user_id = ? AND device_id = ? AND type = 'command'
+               ORDER BY created_at DESC LIMIT ?""",
+            (machine_guid, user_id, device_id, limit),
+        ).fetchall()
         return [dict(r) for r in rows]
-
 
 def get_pinned_facts(machine_guid: str) -> list[dict]:
     """Все закреплённые факты для устройства (старые первыми)."""
@@ -1057,72 +1125,45 @@ def get_pinned_facts(machine_guid: str) -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def get_memory_stats(machine_guid: str, user_id: str | None = None) -> dict:
-    """Количество фактов и команд + facts_list для единого источника в UI.
+def get_memory_stats(machine_guid: str | None, user_id: str | None = None,
+                     device_id: str | None = None) -> dict:
+    """User facts plus device records whose owner AND device are explicit.
 
-    Если есть user_id — берём факты из user_memory, плюс legacy-факты
-    из device_memory (pinned=1), чтобы старые записи до миграции не пропали.
-    Дедупликация по тексту (user_memory приоритетнее).
+    Ambiguous legacy rows stay in storage; ownership is never inferred from a GUID.
     """
+    facts_list = []
+    command_count = 0
+    if not user_id:
+        return {"facts": 0, "commands": 0, "facts_list": []}
     with get_db() as conn:
-        facts_list = []
-        seen_texts: set[str] = set()
-
-        if user_id:
-            # Основной источник — user_memory
-            rows = conn.execute(
-                """SELECT id, fact_text, category, created_at
-                   FROM user_memory WHERE user_id = ? ORDER BY created_at ASC""",
-                (user_id,),
+        rows = conn.execute(
+            """SELECT id, fact_text, category FROM user_memory
+               WHERE user_id = ? ORDER BY created_at ASC""", (user_id,)
+        ).fetchall()
+        seen = set()
+        for row in rows:
+            facts_list.append({"id": row["id"], "text": row["fact_text"],
+                               "category": row["category"], "source": "user"})
+            seen.add((row["fact_text"] or "").strip().lower())
+        if machine_guid and device_id:
+            scoped = (machine_guid, user_id, device_id)
+            legacy = conn.execute(
+                """SELECT id, fact_text, category FROM device_memory
+                   WHERE machine_guid = ? AND user_id = ? AND device_id = ?
+                     AND type = 'fact' AND pinned = 1 ORDER BY created_at ASC""", scoped
             ).fetchall()
-            for r in rows:
-                facts_list.append({"id": r["id"], "text": r["fact_text"],
-                                   "category": r["category"], "source": "user"})
-                seen_texts.add((r["fact_text"] or "").strip().lower())
-
-            # Legacy: device_memory (pinned facts до миграции)
-            if machine_guid:
-                legacy = conn.execute(
-                    """SELECT id, fact_text, category, created_at
-                       FROM device_memory
-                       WHERE machine_guid = ? AND type = 'fact' AND pinned = 1
-                       ORDER BY created_at ASC""",
-                    (machine_guid,),
-                ).fetchall()
-                for r in legacy:
-                    key = (r["fact_text"] or "").strip().lower()
-                    if key not in seen_texts:
-                        facts_list.append({"id": r["id"], "text": r["fact_text"],
-                                           "category": r["category"], "source": "device"})
-                        seen_texts.add(key)
-        else:
-            rows = conn.execute(
-                """SELECT id, fact_text, category, created_at
-                   FROM device_memory
-                   WHERE machine_guid = ? AND type = 'fact' AND pinned = 1
-                   ORDER BY created_at ASC""",
-                (machine_guid,),
-            ).fetchall()
-            facts_list = [{"id": r["id"], "text": r["fact_text"],
-                           "category": r["category"], "source": "device"} for r in rows]
-
-        if user_id:
-            cmds_row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM device_memory WHERE machine_guid = ? AND type = 'command' AND user_id = ?",
-                (machine_guid, user_id),
-            ).fetchone()
-        else:
-            cmds_row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM device_memory WHERE machine_guid = ? AND type = 'command'",
-                (machine_guid,),
-            ).fetchone()
-
-        return {
-            "facts": len(facts_list),
-            "commands": cmds_row["cnt"] if cmds_row else 0,
-            "facts_list": facts_list,
-        }
-
+            for row in legacy:
+                key = (row["fact_text"] or "").strip().lower()
+                if key not in seen:
+                    facts_list.append({"id": row["id"], "text": row["fact_text"],
+                                       "category": row["category"], "source": "device"})
+                    seen.add(key)
+            command_count = conn.execute(
+                """SELECT COUNT(*) FROM device_memory
+                   WHERE machine_guid = ? AND user_id = ? AND device_id = ? AND type = 'command'""",
+                scoped,
+            ).fetchone()[0]
+    return {"facts": len(facts_list), "commands": command_count, "facts_list": facts_list}
 
 # ── User Memory (факты пользователя) ──────────────────────────────────────
 
@@ -1147,12 +1188,13 @@ def delete_user_fact(user_id: str, fact_id: int) -> bool:
         return cur.rowcount > 0
 
 
-def delete_memory_fact(user_id: str, fact_id: int, source: str, machine_guid: str | None = None) -> bool:
+def delete_memory_fact(user_id: str, fact_id: int, source: str, machine_guid: str | None = None,
+                       device_id: str | None = None) -> bool:
     """Delete/unpin a fact from its explicit backend source."""
     if source == "user":
         return delete_user_fact(user_id, fact_id)
 
-    if source != "device" or not machine_guid:
+    if source != "device" or not machine_guid or not user_id or not device_id:
         return False
 
     with get_db() as conn:
@@ -1163,8 +1205,8 @@ def delete_memory_fact(user_id: str, fact_id: int, source: str, machine_guid: st
                  AND machine_guid = ?
                  AND type = 'fact'
                  AND pinned = 1
-                 AND (user_id = ? OR user_id IS NULL)""",
-            (fact_id, machine_guid, user_id),
+                 AND user_id = ? AND device_id = ?""",
+            (fact_id, machine_guid, user_id, device_id),
         )
         return cur.rowcount > 0
 

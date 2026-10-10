@@ -21,3 +21,6 @@ dist/
 
 # Ephemeral agent-to-agent relay bytes (metadata lives in SQLite)
 server/transfers/
+
+# OW process lease next to the development SQLite database.
+server/*.ow.lock

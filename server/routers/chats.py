@@ -40,7 +40,7 @@ async def api_get_messages(chat_id: int, request: Request):
     chat = get_chat(chat_id, user["id"])
     if not chat:
         raise HTTPException(status_code=404, detail="Чат не найден")
-    return {"status": "ok", "messages": get_messages(chat_id, limit=50)}
+    return {"status": "ok", "messages": get_messages(chat_id, limit=100, include_worker_commands=False)}
 
 
 @router.patch("/api/chats/{chat_id}")

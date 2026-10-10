@@ -92,7 +92,7 @@ def compact_activation_summary(receipt: dict | None) -> dict:
         "runtime_status": runtime_status_from_receipt(receipt),
         "python_capability": python_capability_from_receipt(receipt),
         "capabilities_summary": {k: v for k, v in caps.items() if v == "available"},
-        "last_activation_check": datetime.now(timezone.utc).isoformat(),
+        "last_activation_check": receipt.get("created_at"),
         "receipt_hash": receipt_hash(receipt),
     }
 

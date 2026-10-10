@@ -182,17 +182,17 @@ def test_pipeline_worker_cancelled_task_stops_before_llm_and_tool(monkeypatch):
     assert result["commands"][0]["status"] == "cancelled"
 
 
-def test_pipeline_worker_write_then_execute_ok_fast_exits_before_window_find():
+def test_pipeline_worker_write_then_execute_marker_does_not_skip_verification():
     sent = []
 
     async def _send(device_id, action, params):
         sent.append(action)
         if action == "write_content":
-            return {"status": "ok", "path": params["path"]}
+            return {"status": "ok", "path": params["path"], "bytes_written":13}
         if action == "execute_cmd":
             return {"returncode": 0, "stdout": "OK: open_requested C:/Temp/page.html", "stderr": ""}
         if action == "window.find":
-            raise AssertionError("pipeline must not verify window after execute_cmd OK evidence")
+            return {"status":"success","matches":[{"title":"page.html"}]}
         raise AssertionError(action)
 
     result = asyncio.run(run_pipeline_worker(
@@ -231,14 +231,15 @@ def test_pipeline_worker_write_then_execute_ok_fast_exits_before_window_find():
             })]),
             _message(tool_calls=[_execute_call("call-open", "start C:/Temp/page.html")]),
             _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "page.html"})]),
+            _message(tool_calls=[_answer_call("final", "File written and window observed", answer_type="grounded_report", basis=["step_1","step_3"])]),
         ]),
         worker_tools=[],
     ))
 
-    assert sent == ["write_content", "execute_cmd"]
+    assert sent == ["write_content", "execute_cmd", "window.find"]
     assert result["status"] == "ok"
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "execute_cmd", "answer.text"]
-    assert result["commands"][2]["result"]["basis"] == ["step_2"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "execute_cmd", "window.find", "answer.text"]
+    assert result["commands"][-1]["result"]["basis"] == ["step_1","step_3"]
 
 
 def test_conceptual_answer_through_answer_text_succeeds_without_external_tool():
@@ -319,7 +320,7 @@ def test_file_creation_raw_success_rejected_then_write_content_basis_accepted():
     assert result["commands"][1]["tool_name"] == "answer.text"
 
 
-def test_write_content_ok_result_is_terminal_sufficient():
+def test_write_content_receipt_does_not_complete_whole_goal():
     assert tool_result_terminal_sufficient({
         "tool_name": "write_content",
         "result": {
@@ -327,7 +328,7 @@ def test_write_content_ok_result_is_terminal_sufficient():
             "path": r"C:\x\a.html",
             "summary": r"OK: file_written C:\x\a.html",
         },
-    }) is True
+    }) is False
 
 
 def test_write_content_no_result_is_not_terminal_sufficient():
@@ -341,11 +342,11 @@ def test_write_content_no_result_is_not_terminal_sufficient():
     }) is False
 
 
-def test_execute_cmd_open_requested_is_terminal_sufficient():
+def test_execute_cmd_marker_does_not_complete_whole_goal():
     assert tool_result_terminal_sufficient({
         "tool_name": "execute_cmd",
         "result": {"returncode": 0, "stdout": r"OK: open_requested C:\x\a.html", "stderr": ""},
-    }) is True
+    }) is False
 
 
 def test_write_content_large_payload_is_compacted_in_journal_and_llm_result():
@@ -377,10 +378,10 @@ def test_write_content_large_payload_is_compacted_in_journal_and_llm_result():
     assert "A" * 5000 not in dumped_command
     assert command["command"] == "[write] C:/Temp/large.html"
     assert command["result"]["path"] == "C:/Temp/large.html"
-    assert command["result"]["chars_written"] == len(large_content)
+    assert command["result"]["chars_written"] is None
     assert command["result"]["bytes_written"] == len(large_content.encode("utf-8"))
     assert len(command["result"]["content_preview"]) <= 120
-    assert len(command["result"]["content_sha256"]) == 64
+    assert command["result"]["content_sha256"] is None
     assert command["result"]["summary"].startswith("OK: file_written")
 
     wrapped = wrap_tool_result_for_llm(command)
@@ -426,26 +427,20 @@ def test_write_content_error_basis_blocks_completed_success_claim():
     assert result["answer"] == "Не удалось записать файл: disk full."
 
 
-def test_write_content_ok_blocks_extra_window_verification_tool():
+def test_write_content_receipt_allows_requested_followup_verification():
     sent = []
-
     async def _send(device_id, action, params):
         sent.append(action)
         if action == "window.find":
-            raise AssertionError("window.find should not run after write_content OK evidence")
-        return {"status": "ok", "path": params["path"]}
-
+            return {"status": "success", "matches": [{"hwnd": 42}]}
+        return {"status": "ok", "path": params["path"], "bytes_written": 5}
     result = _run_case([
-        _message(tool_calls=[_tool_call("call-write", "write_content", {
-            "path": "C:/Temp/created.txt",
-            "content": "hello",
-        })]),
-        _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "created.txt"})]),
+        _message(tool_calls=[_tool_call("write", "write_content", {"path": "C:/Temp/created.txt", "content": "hello"})]),
+        _message(tool_calls=[_tool_call("find", "window_find", {"title_contains": "created.txt"})]),
+        _message(tool_calls=[_answer_call("final", "File written and window checked.", answer_type="grounded_report", basis=["step_1", "step_2"])]),
     ], send_command_fn=_send)
-
-    assert sent == ["write_content"]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "answer.text"]
-    assert result["commands"][1]["result"]["basis"] == ["step_1"]
+    assert sent == ["write_content", "window.find"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "window.find", "answer.text"]
 
 
 def test_grounded_report_empty_basis_rejected():
@@ -611,7 +606,7 @@ def test_duplicate_system_list_tools_is_guarded_then_answer_text(monkeypatch):
         and "duplicate_read_only_tool_call" in msg.get("content", "")
     ]
     assert duplicate_messages[-1]["previous_step_id"] == "step_1"
-    assert "Call answer_text" in captured[2]["messages"][-1]["content"]
+    assert "original goal remains" in captured[2]["messages"][-1]["content"]
 
 
 def test_duplicate_memory_list_facts_is_guarded_then_answer_text(monkeypatch):
@@ -760,14 +755,14 @@ def test_app_open_url_partial_focus_failure_terminates_with_answer_text():
     assert result["answer"] == "Ссылка открыта, окно найдено, но сфокусировать окно не удалось."
 
 
-def test_app_open_url_opened_unverified_synthesizes_terminal_answer():
+def test_app_open_url_opened_unverified_allows_followup_verification():
     sent = []
     captured = []
 
     async def _send(device_id, action, params):
         sent.append((action, dict(params)))
         if action != "app.open_url":
-            raise AssertionError("terminal partial URL evidence must not execute follow-up tools")
+            return {"status": "success", "windows": []}
         return {
             "status": "opened_unverified",
             "url": params["url"],
@@ -781,14 +776,13 @@ def test_app_open_url_opened_unverified_synthesizes_terminal_answer():
     result = _run_case([
         _message(tool_calls=[_tool_call("call-open", "app_open_url", {"url": "https://irumode.online/"})]),
         _message(tool_calls=[_tool_call("call-window", "window_list", {"visible": True})]),
+        _message(tool_calls=[_answer_call("final", "URL launch requested; window not verified.", answer_type="partial_report", basis=["step_1", "step_2"])]),
     ], send_command_fn=_send, captured=captured)
 
-    assert sent == [("app.open_url", {"url": "https://irumode.online/"})]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["app.open_url", "answer.text"]
-    assert result["commands"][1]["result"]["answer_type"] == "partial_report"
-    assert result["commands"][1]["result"]["basis"] == ["step_1"]
-    assert "команда открытия URL выполнена" in result["answer"]
-    assert len(captured) == 2
+    assert [action for action, _ in sent] == ["app.open_url", "window.list"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["app.open_url", "window.list", "answer.text"]
+    assert result["commands"][-1]["result"]["answer_type"] == "partial_report"
+    assert result["answer"] == "URL launch requested; window not verified."
 
 
 def test_window_list_args_are_sanitized_before_agent_dispatch():
@@ -927,7 +921,7 @@ def test_duplicate_device_get_passport_is_guarded_then_answer_text():
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["device.get_passport", "answer.text"]
 
 
-def test_repeat_guard_allows_execute_and_window_but_write_content_fast_exits():
+def test_repeat_guard_allows_execute_and_window_and_writes_without_skipping_mutations():
     sent = []
 
     async def _send(device_id, action, params):
@@ -955,45 +949,46 @@ def test_repeat_guard_allows_execute_and_window_but_write_content_fast_exits():
     ], send_command_fn=_send)
 
     assert [cmd["tool_name"] for cmd in execute_result["commands"]] == ["execute_cmd", "execute_cmd", "answer.text"]
-    assert [cmd["tool_name"] for cmd in write_result["commands"]] == ["write_content", "answer.text"]
+    assert [cmd["tool_name"] for cmd in write_result["commands"]] == ["write_content", "write_content", "answer.text"]
     assert [cmd["tool_name"] for cmd in window_result["commands"]] == ["window.find", "window.find", "answer.text"]
     assert [action for action, _ in sent].count("execute_cmd") == 2
-    assert [action for action, _ in sent].count("write_content") == 1
+    assert [action for action, _ in sent].count("write_content") == 2
     assert [action for action, _ in sent].count("window.find") == 2
 
 
-def test_execute_cmd_ok_stdout_is_terminal_sufficient_without_window_find():
+def test_execute_cmd_ok_stdout_does_not_skip_verification():
     sent = []
 
     async def _send(device_id, action, params):
         sent.append(action)
         if action == "window.find":
-            raise AssertionError("window.find should not be required after execute_cmd OK evidence")
+            return {"status":"success","matches":[{"title":"Downloads"}]}
         return {"returncode": 0, "stdout": "OK: open_requested Downloads", "stderr": ""}
 
     result = _run_case([
         _message(tool_calls=[_execute_call("call-exec", "open downloads")]),
         _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "Downloads"})]),
+        _message(tool_calls=[_answer_call("final", "Window observed", answer_type="grounded_report", basis=["step_2"])]),
     ], user_message="Open Downloads", send_command_fn=_send)
 
-    assert sent == ["execute_cmd"]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text"]
+    assert sent == ["execute_cmd", "window.find"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "window.find", "answer.text"]
     assert result["commands"][0]["summary"] == "OK: open_requested Downloads"
-    assert result["commands"][1]["result"]["basis"] == ["step_1"]
-    assert "OK: open_requested Downloads" in result["answer"]
+    assert result["commands"][-1]["result"]["basis"] == ["step_2"]
+    assert result["answer"] == "Window observed"
 
 
-def test_write_content_then_execute_cmd_ok_fast_exits_before_window_find():
+def test_write_content_then_execute_cmd_marker_does_not_skip_verification():
     sent = []
 
     async def _send(device_id, action, params):
         sent.append(action)
         if action == "write_content":
-            return {"status": "ok", "path": params["path"]}
+            return {"status": "ok", "path": params["path"], "bytes_written":13}
         if action == "execute_cmd":
             return {"returncode": 0, "stdout": "OK: open_requested C:/Temp/page.html", "stderr": ""}
         if action == "window.find":
-            raise AssertionError("window.find should not run after execute_cmd OK evidence")
+            return {"status":"success","matches":[{"title":"page.html"}]}
         raise AssertionError(action)
 
     result = _run_case([
@@ -1003,15 +998,16 @@ def test_write_content_then_execute_cmd_ok_fast_exits_before_window_find():
         })]),
         _message(tool_calls=[_execute_call("call-open", "start C:/Temp/page.html")]),
         _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "page.html"})]),
+            _message(tool_calls=[_answer_call("final", "File written and window observed", answer_type="grounded_report", basis=["step_1","step_3"])]),
     ], send_command_fn=_send)
 
-    assert sent == ["write_content", "execute_cmd"]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "execute_cmd", "answer.text"]
-    assert result["commands"][2]["result"]["basis"] == ["step_2"]
-    assert "OK: open_requested C:/Temp/page.html" in result["answer"]
+    assert sent == ["write_content", "execute_cmd", "window.find"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "execute_cmd", "window.find", "answer.text"]
+    assert result["commands"][-1]["result"]["basis"] == ["step_1","step_3"]
+    assert result["answer"] == "File written and window observed"
 
 
-def test_execute_cmd_long_running_timeout_synthesizes_ok_and_fast_exits():
+def test_execute_cmd_long_running_timeout_remains_unconfirmed():
     sent = []
 
     async def _send(device_id, action, params):
@@ -1025,16 +1021,20 @@ def test_execute_cmd_long_running_timeout_synthesizes_ok_and_fast_exits():
             "command": "python gui.py",
             "long_running": True,
         })]),
-        _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "GUI"})]),
+        _message(tool_calls=[_answer_call("final", "Запуск не подтверждён", answer_type="partial_report", basis=["step_1"])]),
     ], send_command_fn=_send)
 
     assert [action for action, _ in sent] == ["execute_cmd"]
     assert result["commands"][0]["result"]["stdout"] == "OK: launch_requested long_running"
     assert result["commands"][0]["summary"] == "OK: launch_requested long_running"
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text"]
+    assert result["commands"][0]["result"]["returncode"] is None
+    assert result["commands"][-1]["result"]["answer_type"] == "partial_report"
+    assert result["commands"][-1]["result"]["self_check"]["claims_completed_action"] is False
+    assert "не подтверждён" in result["answer"]
 
 
-def test_execute_cmd_no_stdout_rejects_completed_action_claim():
+def test_execute_cmd_nonzero_code_rejects_completed_action_claim():
     sent = []
     failure_payload = {
         "message": "Command did not confirm the requested state.",
@@ -1046,7 +1046,7 @@ def test_execute_cmd_no_stdout_rejects_completed_action_claim():
 
     async def _send(device_id, action, params):
         sent.append(action)
-        return {"returncode": 0, "stdout": "NO: destination_missing B", "stderr": ""}
+        return {"returncode": 1, "stdout": "NO: destination_missing B", "stderr": ""}
 
     result = _run_case([
         _message(tool_calls=[_execute_call("call-exec", "copy A B")]),
@@ -1060,7 +1060,7 @@ def test_execute_cmd_no_stdout_rejects_completed_action_claim():
     assert result["answer"] == failure_payload["message"]
 
 
-def test_execute_cmd_error_stdout_rejects_completed_action_claim():
+def test_execute_cmd_structured_error_rejects_completed_action_claim():
     sent = []
     failure_payload = {
         "message": "Command reported an error.",
@@ -1072,7 +1072,7 @@ def test_execute_cmd_error_stdout_rejects_completed_action_claim():
 
     async def _send(device_id, action, params):
         sent.append(action)
-        return {"returncode": 0, "stdout": "ERROR: access denied", "stderr": ""}
+        return {"returncode": 0, "stdout": "ERROR: access denied", "stderr": "", "error":"access denied"}
 
     result = _run_case([
         _message(tool_calls=[_execute_call("call-exec", "delete file")]),
@@ -1193,7 +1193,7 @@ def test_auditor_rejects_invalid_answer_and_retry_succeeds():
     assert any(kwargs.get("tools") is None for kwargs in captured)
 
 
-def test_pipeline_validated_steps_need_no_final_llm_summary(monkeypatch):
+def test_pipeline_validated_steps_require_final_goal_summary(monkeypatch):
     def _legacy_trust_should_not_run(answer, commands):
         raise AssertionError("legacy enforce_trusted_answer must not run for pipeline answer_text")
 
@@ -1224,7 +1224,7 @@ def test_pipeline_validated_steps_need_no_final_llm_summary(monkeypatch):
     }])
     monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
     monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
-    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id: "")
+    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id, device_id: "")
     monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
 
     async def _send(device_id, action, params):
@@ -1251,11 +1251,11 @@ def test_pipeline_validated_steps_need_no_final_llm_summary(monkeypatch):
         linux_rules="linux rules",
     ))
 
-    assert result["answer"].startswith("План выполнен.")
-    assert result["task_receipt"]["answer_source"] == "pipeline_step_report"
+    assert result["answer"] == final_text
+    assert not (result.get("task_receipt") or {}).get("goal_completed")
     assert finished == ["completed"]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text"]
-    assert not any(item.get("phase") == "pipeline.final" for item in captured)
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text", "answer.text"]
+    assert any(item.get("phase") == "pipeline.final" for item in captured)
 
 
 def test_pipeline_worker_max_iterations_runs_answer_only_repair(monkeypatch):
@@ -1286,7 +1286,7 @@ def test_pipeline_worker_max_iterations_runs_answer_only_repair(monkeypatch):
     }])
     monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
     monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
-    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id: "")
+    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id, device_id: "")
     monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
 
     async def _send(device_id, action, params):
@@ -1314,9 +1314,9 @@ def test_pipeline_worker_max_iterations_runs_answer_only_repair(monkeypatch):
         linux_rules="linux rules",
     ))
 
-    assert result["answer"].startswith("План выполнен.")
-    assert "step repaired" in result["answer"]
+    assert result["answer"] == final_text
+    assert any(cmd.get("result", {}).get("text") == "step repaired" for cmd in result["commands"])
     assert sent == ["execute_cmd"]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text", "answer.text"]
     repair_calls = [kwargs for kwargs in captured if [tool["function"]["name"] for tool in (kwargs.get("tools") or [])] == ["answer_text"]]
     assert repair_calls

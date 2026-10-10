@@ -141,6 +141,7 @@ def collect_system_info(device_id: str = "") -> dict:
         "username": platform_mod.get_username(),
         "desktop_path": platform_mod.get_desktop_path(),
         "machine_guid": platform_mod.get_machine_guid(),
+        "machine_guid_type": "windows_machine_guid" if platform.system() == "Windows" else "linux_machine_id",
         "cpu": "",
         "gpu": "",
         "ram_gb": 0,
@@ -199,6 +200,8 @@ def _runtime_summary(receipt: dict | None) -> dict:
         "python_version": python.get("venv_version") or python.get("base_version"),
         "pip_status": pip.get("status") or "unknown",
         "last_runtime_check": receipt.get("created_at"),
+        "pip_version": pip.get("version"),
+        "runtime_verified": receipt.get("runtime_receipt_version") == 1,
     }
 
 
@@ -316,25 +319,21 @@ def _activation_identity(device_id: str) -> dict:
         "hostname": info.get("hostname") or platform.node(),
         "computer_name": os.environ.get("COMPUTERNAME", ""),
         "machine_guid": info.get("machine_guid") or "",
+        "machine_guid_type": info.get("machine_guid_type"),
         "user": info.get("username") or getpass.getuser(),
         "os": info.get("os") or platform.system(),
         "os_build": info.get("os_version") or platform.version(),
     }
 
 
-def _runtime_receipt(home: Path) -> dict:
-    managed_python = home / "runtime" / "python" / ("python.exe" if sys.platform == "win32" else "bin/python")
-    venv_python = _runtime_venv_python(home)
-    python_path = managed_python if managed_python.exists() else None
-    status = "ok" if python_path else "missing"
-    return {
-        "managed_python_status": status,
-        "python_path": str(python_path) if python_path else None,
-        "venv_path": str(_runtime_venv_path(home)) if venv_python.exists() else None,
-        "venv_python": str(venv_python) if venv_python.exists() else None,
-        "python_version": None,
-        "pip_status": "unknown" if python_path else "missing",
-    }
+def _runtime_receipt(home: Path, device_id: str = "") -> dict:
+    checked = prepare_runtime(mode="check", device_id=device_id)
+    summary = _runtime_summary(checked)
+    paths = checked.get("paths") or {}
+    return {"managed_python_status": summary.get("runtime_status"),
+            "python_path": (checked.get("python") or {}).get("base_python"),
+            "venv_path": paths.get("venv_path"), "venv_python": summary.get("venv_python"),
+            "python_version": summary.get("python_version"), "pip_status": summary.get("pip_status")}
 
 
 def _runtime_home(home: Path) -> Path:
@@ -551,7 +550,7 @@ def _agent_snapshot_command() -> tuple[str, str]:
             "    try: return subprocess.check_output(cmd, text=True).strip()\n"
             "    except Exception: return ''\n"
             "print(json.dumps({'observed_hostname': platform.node(), 'observed_computer_name': platform.node(), "
-            "'observed_machine_guid': run(['cat','/etc/machine-id']), 'observed_username': getpass.getuser(), "
+            "'observed_machine_guid': run(['cat','/etc/machine-id']) or run(['cat','/var/lib/dbus/machine-id']), 'machine_guid_type': 'linux_machine_id', 'observed_username': getpass.getuser(), "
             "'os_caption': platform.platform(), 'os_version': platform.version(), 'cpu': platform.processor(), "
             "'cpu_load': os.getloadavg()[0] if hasattr(os, 'getloadavg') else None, "
             "'process_count': len([p for p in os.listdir('/proc') if p.isdigit()])}))\n"
@@ -562,6 +561,8 @@ def _agent_snapshot_command() -> tuple[str, str]:
         "$ErrorActionPreference='SilentlyContinue'; "
         "$cs=Get-CimInstance Win32_ComputerSystem; $os=Get-CimInstance Win32_OperatingSystem; "
         "$prod=Get-CimInstance Win32_ComputerSystemProduct; $bios=Get-CimInstance Win32_BIOS; "
+        "$reg=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64); "
+        "$key=$reg.OpenSubKey('SOFTWARE\\Microsoft\\Cryptography'); $mid=$key.GetValue('MachineGuid'); $key.Close(); $reg.Close(); "
         "$cpu=Get-CimInstance Win32_Processor | Select-Object -First 1; "
         "$gpus=Get-CimInstance Win32_VideoController | ForEach-Object { "
         "[pscustomobject]@{name=$_.Name; adapter_ram_mb=if($_.AdapterRAM){[math]::Round($_.AdapterRAM/1MB,0)}else{$null}; "
@@ -569,7 +570,7 @@ def _agent_snapshot_command() -> tuple[str, str]:
         "$disks=Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" | ForEach-Object { "
         "[pscustomobject]@{drive=$_.DeviceID; total_gb=[math]::Round($_.Size/1GB,2); free_gb=[math]::Round($_.FreeSpace/1GB,2)} }; "
         "[pscustomobject]@{observed_hostname=[System.Net.Dns]::GetHostName(); observed_computer_name=$env:COMPUTERNAME; "
-        "observed_machine_guid=$prod.UUID; bios_serial=$bios.SerialNumber; observed_username=[Environment]::UserName; "
+        "observed_machine_guid=$mid; machine_guid_type='windows_machine_guid'; system_uuid=$prod.UUID; bios_serial=$bios.SerialNumber; observed_username=[Environment]::UserName; "
         "os_caption=$os.Caption; os_version=$os.Version; os_build=$os.BuildNumber; cpu=$cpu.Name; cpu_load=$cpu.LoadPercentage; "
         "ram_total_gb=[math]::Round($cs.TotalPhysicalMemory/1GB,2); ram_free_gb=[math]::Round($os.FreePhysicalMemory/1MB,2); "
         "disks=$disks; gpus=$gpus; process_count=@(Get-Process).Count; uptime=((Get-Date)-$os.LastBootUpTime).ToString()} | ConvertTo-Json -Depth 6 -Compress",
@@ -596,11 +597,20 @@ def _identity_receipt(device_id: str, snapshot: dict, collected_at: str) -> dict
     observed_guid = snapshot.get("observed_machine_guid")
     registered_hostname = info.get("hostname")
     registered_guid = info.get("machine_guid")
-    status = "unknown"
-    if registered_guid and observed_guid:
-        status = "ok" if str(registered_guid).lower() == str(observed_guid).lower() else "mismatch"
+    registered_type = info.get("machine_guid_type")
+    observed_type = snapshot.get("machine_guid_type")
+    comparisons = []
+    if registered_guid and observed_guid and registered_type and registered_type == observed_type:
+        comparisons.append(str(registered_guid).strip().casefold() == str(observed_guid).strip().casefold())
+    for key in ("system_uuid", "bios_serial"):
+        if info.get(key) and snapshot.get(key):
+            comparisons.append(str(info[key]).strip().casefold() == str(snapshot[key]).strip().casefold())
+    if comparisons:
+        status = "ok" if all(comparisons) else "mismatch"
     elif registered_hostname and observed_hostname:
-        status = "ok" if str(registered_hostname).lower() == str(observed_hostname).lower() else "mismatch"
+        status = "ok" if str(registered_hostname).casefold() == str(observed_hostname).casefold() else "mismatch"
+    else:
+        status = "unknown"
     return {
         "target_device_id": device_id,
         "registered_hostname": registered_hostname,
@@ -608,6 +618,9 @@ def _identity_receipt(device_id: str, snapshot: dict, collected_at: str) -> dict
         "observed_hostname": observed_hostname,
         "observed_computer_name": snapshot.get("observed_computer_name"),
         "observed_machine_guid": observed_guid,
+        "registered_machine_guid_type": registered_type,
+        "observed_machine_guid_type": observed_type,
+        "observed_system_uuid": snapshot.get("system_uuid"),
         "observed_username": snapshot.get("observed_username"),
         "identity_status": status,
         "collected_at": collected_at,
@@ -1440,7 +1453,7 @@ def activate_device(mode: str = "soft", device_id: str = "") -> dict:
 
     identity = _activation_identity(device_id)
     paths = _activation_paths(home)
-    runtime = _runtime_receipt(home)
+    runtime = _runtime_receipt(home, device_id)
     capabilities = _activation_capabilities(runtime)
     health = {
         "agent": "ok",

@@ -11,6 +11,7 @@ from core.logging_utils import tail_log
 from core.runtime import AgentRuntime
 from core.state import AgentState
 from ui.setup import collect_setup
+from ui.windows_identity import set_taskbar_identity
 
 
 def launch_windows_shell(
@@ -21,7 +22,9 @@ def launch_windows_shell(
     logger,
     startup_update_check: Callable[[], bool] | None = None,
 ) -> int:
+    set_taskbar_identity(logger)
     from PySide6 import QtCore, QtGui, QtWidgets
+    from ui.webview import IruMainWindow, resolve_site_url
 
     app = QtWidgets.QApplication.instance()
     if app is None:
@@ -37,6 +40,7 @@ def launch_windows_shell(
     tray = None
     runtime_started = False
     update_window_forced = False
+    shutting_down = False
 
     def refresh_views() -> None:
         nonlocal update_window_forced
@@ -134,14 +138,20 @@ def launch_windows_shell(
         refresh_views()
 
     def shutdown() -> None:
-        runtime.stop(wait=False)
+        nonlocal shutting_down
+        if shutting_down:
+            return
+        shutting_down = True
+        timer.stop()
+        main_window.dispose_browser()
+        runtime.stop(wait=True)
         if tray is not None:
             tray.hide()
         app.quit()
 
     def start_runtime_if_needed() -> None:
         nonlocal runtime_started
-        if runtime_started:
+        if runtime_started or shutting_down:
             return
         runtime.start()
         runtime_started = True
@@ -163,7 +173,7 @@ def launch_windows_shell(
     class StatusWindow(QtWidgets.QWidget):
         def __init__(self) -> None:
             super().__init__()
-            self.setWindowTitle("IRU Agent")
+            self.setWindowTitle("ИРУ — Настройки агента")
             self.setWindowIcon(icon)
             self.setMinimumSize(480, 320)
 
@@ -220,12 +230,8 @@ def launch_windows_shell(
             layout.addLayout(row)
 
         def closeEvent(self, event) -> None:
-            if tray_available:
-                event.ignore()
-                self.hide()
-                return
-            shutdown()
-            event.accept()
+            event.ignore()
+            self.hide()
 
     class DiagnosticsWindow(QtWidgets.QDialog):
         def __init__(self) -> None:
@@ -262,12 +268,22 @@ def launch_windows_shell(
 
     status_window = StatusWindow()
     diagnostics_window = DiagnosticsWindow()
+    main_window = IruMainWindow(
+        site_url=resolve_site_url(config), config_dir=paths.config_dir, icon=icon,
+        tray_available=tray_available, show_agent_settings=show_status_window,
+        shutdown=shutdown,
+    )
 
     if tray_available:
         tray = QtWidgets.QSystemTrayIcon(icon, app)
         tray.setToolTip("IRU Agent")
         tray_menu = QtWidgets.QMenu()
-        tray_menu.addAction("Открыть статус", show_status_window)
+        tray_menu.addAction("Открыть ИРУ", main_window.show_iru)
+        tray_menu.addAction("Компактное окно", lambda: (main_window.set_compact(True), main_window.show_iru()))
+        tray_menu.addAction("Развернуть окно", lambda: (main_window.set_compact(False), main_window.show_iru()))
+        tray_menu.addAction("Скрыть ИРУ", main_window.hide)
+        tray_menu.addAction("Сообщение окна", main_window.show_notice)
+        tray_menu.addAction("Настройки агента", show_status_window)
         tray_menu.addAction("Открыть диагностику", show_diagnostics)
         tray_menu.addSeparator()
         tray_menu.addAction("Переподключиться", runtime.request_reconnect)
@@ -282,13 +298,13 @@ def launch_windows_shell(
                 QtWidgets.QSystemTrayIcon.ActivationReason.Trigger,
                 QtWidgets.QSystemTrayIcon.ActivationReason.DoubleClick,
             ):
-                show_status_window()
+                main_window.show_iru()
 
         tray.activated.connect(on_tray_activated)
         tray.show()
         logger.info("[agent] tray mode enabled")
     else:
-        logger.warning("[agent] system tray is unavailable, keeping status window visible")
+        logger.warning("[agent] system tray is unavailable, keeping IRU window visible")
 
     timer = QtCore.QTimer()
     timer.setInterval(500)
@@ -315,12 +331,16 @@ def launch_windows_shell(
             daemon=True,
         ).start()
 
-    if not tray_available:
-        status_window.show()
+    main_window.show()
+    app.aboutToQuit.connect(shutdown)
     QtCore.QTimer.singleShot(0, begin_startup)
 
     exit_code = app.exec()
-    runtime.stop(wait=False)
+    shutdown()
+    main_window.deleteLater()
+    status_window.deleteLater()
+    diagnostics_window.deleteLater()
+    QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
     return exit_code
 
 

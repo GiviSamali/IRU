@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import asyncio
 import json
 import sqlite3
@@ -90,7 +91,7 @@ def test_same_id_online_dispatch_and_api_profiles_are_isolated(client):
 def test_python_cache_does_not_cross_owners():
     toolchain._RECEIPT_CACHE.clear()
     for owner, path in ((1, r"C:\A\python.exe"), (2, r"D:\B\python.exe")):
-        toolchain.python_toolchain_from_runtime_summary({"runtime_status": "ok", "venv_python": path,
+        toolchain.python_toolchain_from_runtime_summary({"runtime_status": "ok", "last_runtime_check": datetime.now(timezone.utc).isoformat(), "runtime_verified": True, "venv_python": path,
             "python_version": "3.12.1", "pip_status": "ok"}, device_id="same", user_id=owner)
     assert toolchain.get_cached_python_toolchain({"device_id": "same", "user_id": 1}).interpreter_path == r"C:\A\python.exe"
     assert toolchain.get_cached_python_toolchain({"device_id": "same", "user_id": 2}).interpreter_path == r"D:\B\python.exe"

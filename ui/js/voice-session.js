@@ -1,9 +1,17 @@
 /* Voice lifecycle, independent of DOM/audio/network for deterministic tests. */
 (function (root) {
+  // STT may punctuate the name or spell out the acronym. Match whole words only.
+  const wakeName = String.raw`(?:иру|и[\s.]+р[\s.]+у|iru|i[\s.]+r[\s.]+u)`;
+  const wake = new RegExp(String.raw`(^|[^\p{L}\p{N}])${wakeName}(?=$|[^\p{L}\p{N}])`, 'iu');
+  const separators = /^[\s.,!?…:;—–«»“”"']+/u;
+  const wakePrefix = new RegExp(String.raw`^[\s.,!?…:;—–«»“”"']*${wakeName}(?=$|[^\p{L}\p{N}])[\s.,!?…:;—–«»“”"']*`, 'iu');
+  const hasWords = text => /[\p{L}\p{N}]/u.test(text);
+  const decisionWords = text => text.replace(wakePrefix, '').toLocaleLowerCase('ru').replace(/[.!?,…]+$/u, '').trim();
   function createVoiceSession(io) {
     let enabled = false, epoch = 0, phase = 'off', activeUntil = 0;
     let utterance = '', silenceTimer = null, wakeTimer = null, playback = null;
-    const requests = new Set(), tasks = new Set(), finished = new Set();
+    const requests = new Set(), tasks = new Set(), finished = new Set(), backgroundTasks = new Set();
+    let continuous=false, humanUntil=0, reportTimer=null;
     let queue = [], planOffer = null, planReview = null, editingPlan = false, reviewHeard = false;
     let commandConfirmation = null, commandHeard = false, standby = false;
     const now = io.now || Date.now, later = io.setTimeout || setTimeout, clear = io.clearTimeout || clearTimeout;
@@ -16,10 +24,10 @@
     }
     function clearUtterance() { utterance = ''; clear(silenceTimer); silenceTimer = null; }
     function stopPlayback() { if (playback) playback.abort(); playback = null; io.stopAudio(); }
-    function busy() { return tasks.size > 0 || requests.size > 0; }
+    function busy() { return requests.size > 0 || [...tasks].some(id=>!continuous || !backgroundTasks.has(id)); }
     function pause() { clearUtterance(); clear(wakeTimer); stopPlayback(); io.listen(false); setPhase('working'); }
     function resume(fresh = false) {
-      if (!enabled || busy()) return;
+      if (!enabled || busy() || playback) return;
       if (standby) { setPhase('idle'); io.listen(true); clear(wakeTimer); return; }
       if (commandConfirmation) {
         setPhase(commandHeard ? 'awaiting_command' : 'confirming');
@@ -43,6 +51,10 @@
     }
     async function drain() {
       if (!enabled || busy() || playback) return;
+      if (continuous && (utterance || now()<humanUntil)) {
+        if (!reportTimer) reportTimer=later(()=>{reportTimer=null;drain();},Math.max(100,humanUntil-now()));
+        return;
+      }
       if (standby) { resume(); return; }
       if (!queue.length) { resume(true); return; }
       const item = queue.shift(), taskId = item.id, savedEpoch = epoch;
@@ -51,7 +63,7 @@
       setPhase('synthesizing'); io.listen(false);
       try {
         await io.speak(taskId, controller.signal, () => {
-          if (!controller.signal.aborted && enabled && epoch === savedEpoch) { heard = true; setPhase('speaking'); io.listen(true); }
+          if (!controller.signal.aborted && enabled && epoch === savedEpoch) { heard = true; setPhase('speaking'); io.listen(!continuous); }
         }, item.review || item.confirmation);
         if (!controller.signal.aborted && enabled && epoch === savedEpoch) planOffer = heard ? item.plan : null;
         if (item.review && !controller.signal.aborted && enabled && epoch === savedEpoch) reviewHeard = heard;
@@ -67,71 +79,76 @@
       queue = []; planOffer = null; stopPlayback(); io.listen(false); resume(true);
     }
     function disable() {
-      enabled = false; epoch++; requests.clear(); tasks.clear(); finished.clear(); queue = []; planOffer = null; planReview = null; editingPlan = false;
+      enabled = false; epoch++; requests.clear(); tasks.clear(); backgroundTasks.clear(); finished.clear(); queue = []; clear(reportTimer); reportTimer=null; humanUntil=0; planOffer = null; planReview = null; editingPlan = false;
       commandConfirmation = null; commandHeard = false; standby = false;
       clearUtterance(); clear(wakeTimer); stopPlayback(); io.listen(false); setPhase('off');
     }
-    function enable(pending = []) {
-      disable(); enabled = true; activeUntil = 0; pending.forEach(id => tasks.add(id));
+    function enable(pending = [], options = {}) {
+      disable(); continuous=options.continuous === true; enabled=true; activeUntil=0;
+      pending.forEach(item=>{const id=typeof item==='string'?item:item.id;tasks.add(id);if(continuous && (typeof item==='string'||item.background)) backgroundTasks.add(id);});
       if (busy()) pause(); else resume();
     }
     function beginRequest() {
       if (!enabled) return null;
-      planOffer = null; planReview = null; editingPlan = false; queue = [];
-      commandConfirmation = null; commandHeard = false; standby = false;
-      const ticket = { epoch }; requests.add(ticket); pause(); return ticket;
+      planOffer = null; planReview = null; editingPlan = false; if (!continuous) queue = [];
+      commandConfirmation = null; commandHeard = false; if(!continuous)standby=false;
+      const ticket={epoch};requests.add(ticket);if (!continuous || !playback) pause();return ticket;
     }
     function endRequest(ticket, taskId) {
       if (!enabled || !ticket || ticket.epoch !== epoch || !requests.delete(ticket)) return;
-      if (taskId) { tasks.add(taskId); pause(); } else drain();
+      if (taskId) {tasks.add(taskId);if (!continuous || !backgroundTasks.has(taskId)) {if(!playback)pause();}else drain();} else drain();
     }
     function requestLost(ticket) {
-      if (enabled && ticket?.epoch === epoch && requests.has(ticket)) disable();
+      if (enabled && ticket?.epoch===epoch && requests.has(ticket)) {if(continuous){requests.delete(ticket);resume(true);}else disable();}
     }
-    function watchTask(taskId, ticket) {
+    function watchTask(taskId, ticket, background = false) {
       if (!enabled || (ticket !== undefined && (!ticket || ticket.epoch !== epoch)) || finished.has(taskId)) return;
-      tasks.add(taskId); pause();
+      if (tasks.has(taskId) && (!continuous || backgroundTasks.has(taskId) === background)) return;
+      tasks.add(taskId);if(continuous && background){backgroundTasks.add(taskId);drain();}else pause();
     }
     function taskFinished(taskId, task) {
       if (!enabled || !tasks.delete(taskId)) return;
+      const background=backgroundTasks.delete(taskId);
       if (commandConfirmation?.taskId === taskId) commandConfirmation = null;
       finished.add(taskId);
       if (task?.plan_suggestion || (typeof task?.answer === 'string' && task.answer.trim())) {
-        queue.push({ id: taskId, plan: task.plan_suggestion && !task.plan_trial_used
+        queue.push({id:taskId,background,order:task?.created_at || now(),plan: task.plan_suggestion && !task.plan_trial_used
           ? { taskId, chatId: task.chat_id, originalRequest: task.plan_original_request } : null });
       }
+      if(continuous)queue.sort((a,b)=>Number(a.background)-Number(b.background)||(a.order||0)-(b.order||0));
       drain();
     }
     function taskLost(taskId) {
+      if(continuous && backgroundTasks.has(taskId)){tasks.delete(taskId);backgroundTasks.delete(taskId);finished.add(taskId);io.error(new Error('Связь с задачей потеряна; диалог продолжается.'));drain();return;}
       if (tasks.has(taskId) || planReview?.taskId === taskId || commandConfirmation?.taskId === taskId) { disable(); io.error(new Error('Связь с задачей потеряна. Проверьте её состояние перед включением голоса.')); }
     }
     function taskPaused(taskId, confirmation) {
       if (!enabled) return;
       if (confirmation?.kind === 'command' && confirmation.voice_allowed === true && confirmation.confirmation_id) {
         if (commandConfirmation?.taskId === taskId && commandConfirmation.confirmationId === confirmation.confirmation_id) return;
-        tasks.delete(taskId); clearUtterance(); clear(wakeTimer); stopPlayback();
+        tasks.delete(taskId); if(!continuous){clearUtterance();clear(wakeTimer);stopPlayback();}
         planOffer = null; planReview = null; editingPlan = false; commandHeard = false;
         commandConfirmation = { taskId, confirmationId: confirmation.confirmation_id };
-        queue = [{ id: taskId, confirmation: commandConfirmation }]; drain();
-      } else if (tasks.has(taskId)) { pause(); setPhase('confirming'); }
+        if(continuous)queue.push({id:taskId,confirmation:commandConfirmation});else queue=[{id:taskId,confirmation:commandConfirmation}];drain();
+      } else if(tasks.has(taskId)){if(continuous){resume(true);}else{pause();setPhase('confirming');}}
     }
     function commandDecisionResolved(taskId) {
       if (!enabled) return;
       if (commandConfirmation?.taskId === taskId) commandConfirmation = null;
-      queue = []; tasks.add(taskId); pause();
+      if(!continuous)queue=[];tasks.add(taskId);if(continuous && backgroundTasks.has(taskId))drain();else pause();
     }
     function taskPlanReview(taskId, review) {
       if (!enabled || (planReview?.taskId === taskId && planReview.revision === review.revision)) return;
-      tasks.delete(taskId); clearUtterance(); clear(wakeTimer); stopPlayback();
+      tasks.delete(taskId); if(!continuous){clearUtterance();clear(wakeTimer);stopPlayback();}
       planOffer = null; editingPlan = false;
       reviewHeard = false;
       planReview = { taskId, revision: review.revision };
-      queue = [{ id: taskId, review: planReview }]; drain();
+      if(continuous)queue.push({id:taskId,review:planReview});else queue=[{id:taskId,review:planReview}];drain();
     }
     function planReviewResolved(taskId) {
       if (!enabled) return;
       if (planReview?.taskId === taskId) { planReview = null; editingPlan = false; }
-      queue = []; tasks.add(taskId); pause();
+      if(!continuous)queue=[];tasks.add(taskId);if(continuous && backgroundTasks.has(taskId))drain();else pause();
     }
     function editPlan(taskId) {
       if (!enabled || planReview?.taskId !== taskId) return;
@@ -151,14 +168,15 @@
       });
     }
     function transcript(text, final) {
-      if (!enabled || busy()) return;
-      const clean = text.trim();
-      if (final && /^(?:иру[\s,]*)?усни[.!?,]*$/iu.test(clean)) {
+      if(!enabled || busy())return;
+      const clean=text.trim();
+      if(continuous && clean && !['speaking','synthesizing'].includes(phase))humanUntil=now()+1200;
+      if (final && decisionWords(clean) === 'усни') {
         clearUtterance(); clear(wakeTimer); queue = []; planOffer = null;
         standby = true; activeUntil = 0; stopPlayback(); io.listen(false); resume(); return;
       }
       if (standby) {
-        if (!final || !/(^|[^\p{L}\p{N}])иру(?=$|[^\p{L}\p{N}])/iu.test(clean)) return;
+        if (!final || !wake.test(clean)) return;
         standby = false;
         if (planReview || commandConfirmation) {
           const item = planReview ? { id: planReview.taskId, review: planReview } : { id: commandConfirmation.taskId, confirmation: commandConfirmation };
@@ -168,9 +186,11 @@
       }
       if (phase === 'awaiting_command') {
         if (!final) return;
-        const words = clean.toLocaleLowerCase('ru').replace(/^иру[\s,]*/u, '').replace(/[.!?,]+$/u, '').trim();
+        const words = decisionWords(clean);
         const accepted = /^(да|подтверждаю|да выполни|да, выполни|выполняй)$/u.test(words);
-        if (!accepted && !/^(нет|не выполняй|отмена)$/u.test(words)) return;
+        if(!accepted && !/^(нет|не выполняй|отмена)$/u.test(words)){
+          if(!continuous)return;commandConfirmation=null;commandHeard=false;resume(true);
+        }else{
         const offer = commandConfirmation, savedEpoch = epoch;
         tasks.add(offer.taskId); pause();
         Promise.resolve().then(() => {
@@ -179,25 +199,28 @@
           if (enabled && epoch === savedEpoch) { disable(); io.error(error); }
         });
         return;
+        }
       }
       if (phase === 'awaiting_plan_review') {
         if (!final) return;
-        const words = clean.toLocaleLowerCase('ru').replace(/^иру[\s,]*/u, '').replace(/[.!?,]+$/u, '').trim();
+        const words = decisionWords(clean);
         if (/^(нет|нет изменений|ничего не менять|всё устраивает|все устраивает|нет запускай|нет, запускай)$/u.test(words)) submitReview('');
         else if (/^(да|да изменить|да, изменить|хочу изменить|изменить)$/u.test(words)) editPlan(planReview.taskId);
-        return;
+        else if(continuous){planReview=null;reviewHeard=false;resume(true);}else return;
+        if(phase !== 'listening')return;
       }
       if (phase === 'editing_plan') {
-        if (final && clean) utterance = [utterance, clean].filter(Boolean).join(' ');
+        const words = clean.replace(wakePrefix, '').trim();
+        if (final && hasWords(words)) utterance = [utterance, words].filter(Boolean).join(' ');
         clear(silenceTimer);
         silenceTimer = later(() => {
-          if (enabled && phase === 'editing_plan' && utterance.trim()) submitReview(utterance.trim());
+          if (enabled && phase === 'editing_plan' && hasWords(utterance)) submitReview(utterance.trim());
         }, 1200);
         return;
       }
       if (phase === 'awaiting_plan') {
         if (!final) return;
-        const words = clean.toLocaleLowerCase('ru').replace(/^иру[\s,]*/u, '').replace(/[.!?,]+$/u, '').trim();
+        const words = decisionWords(clean);
         const accepted = /^(да|запускай|запустить|да запускай|да, запускай)$/u.test(words);
         if (!accepted && !/^(нет|не надо|без плана|отмена)$/u.test(words)) return;
         const offer = planOffer, savedEpoch = epoch;
@@ -209,24 +232,23 @@
         return;
       }
       if (phase === 'speaking') {
-        if (/^(?:иру[\s,]*)?стоп[.!?,]*$/iu.test(clean)) stopSpeech();
+        if (decisionWords(clean) === 'стоп') stopSpeech();
         return;
       }
       if (!['idle', 'listening'].includes(phase)) return;
-      const wake = /(^|[^\p{L}\p{N}])иру(?=$|[^\p{L}\p{N}])/iu;
       const woke = wake.test(clean);
       if (!woke && now() >= activeUntil && !utterance) return;
       if (woke) activeUntil = now() + 10000;
       setPhase('listening'); clear(wakeTimer);
       if (final) {
-        const words = clean.replace(wake, '$1').trim();
-        if (words) utterance = [utterance, words].filter(Boolean).join(' ');
+        const words = (woke ? clean.replace(wake, '$1').replace(separators, '') : clean).trim();
+        if (hasWords(words)) utterance = [utterance, words].filter(Boolean).join(' ');
       }
       clear(silenceTimer);
       silenceTimer = later(() => {
         const textToSend = utterance.trim(); clearUtterance();
         if (!enabled || busy()) return;
-        if (!textToSend || /^стоп[.!?,]*$/iu.test(textToSend)) { resume(true); return; }
+        if (!hasWords(textToSend) || decisionWords(textToSend) === 'стоп') { resume(true); return; }
         io.listen(false); setPhase('working');
         const savedEpoch = epoch;
         Promise.resolve(io.submit(textToSend)).then(() => {

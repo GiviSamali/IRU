@@ -115,3 +115,51 @@ function curl.exe {
         env = {key: value for key, value in os.environ.items() if key.lower() != "psmodulepath"}
         result = subprocess.run([powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)], capture_output=True, env=env)
         assert (result.returncode == 0) == (failure == "none"), result.stderr.decode(errors="replace")
+
+
+def test_windows_desktop_build_packages_webview2_and_excludes_qt_browser():
+    source = _source()
+    imports = source.split("$qtHiddenImports = @(", 1)[1].split("\n)", 1)[0]
+    excluded = source.split("$qtExcludedModules = @(", 1)[1].split("\n)", 1)[0]
+    for module in ("PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets"):
+        assert module in imports and module not in excluded
+    for module in ("PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"):
+        assert module not in imports and module in excluded
+    assert '"pywebview==6.2.1"' in source and '"pythonnet==3.2.0"' in source
+    for requirement in ('"--hidden-import", "clr"', '"--hidden-import", "webview"',
+                        '"--collect-data", "webview"', '"--collect-binaries", "webview"',
+                        '"--collect-all", "pythonnet"', '"--collect-all", "clr_loader"'):
+        assert requirement in source
+
+
+def test_desktop_build_excludes_other_installed_qt_bindings_from_pyinstaller_args(tmp_path):
+    """Execute the real argument assembly, including its exclusion loop."""
+    import os
+    import shutil
+    import subprocess
+    import pytest
+
+    powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
+    if not powershell:
+        pytest.skip("PowerShell is required for the argument assembly check")
+    source = _source()
+    assembly = source.split("$qtHiddenImports = @(", 1)[1].split("# Точка входа", 1)[0]
+    script = tmp_path / "qt-args.ps1"
+    script.write_text(
+        "$ErrorActionPreference = 'Stop'\n$qtHiddenImports = @("
+        + assembly
+        + "\nforeach ($name in @('PyQt5','PyQt6','PySide2')) {\n"
+          "  $found = $false\n"
+          "  for ($i = 0; $i -lt ($pyiArgs.Count - 1); $i++) {\n"
+          "    if ($pyiArgs[$i] -eq '--exclude-module' -and $pyiArgs[$i + 1] -eq $name) { $found = $true }\n"
+          "  }\n"
+          "  if (-not $found) { throw ('Missing Qt exclusion: ' + $name) }\n"
+          "}\nif ($qtExcludedModules -contains 'PySide6') { throw 'Required Qt binding excluded' }\n"
+          "Write-Output 'Qt argument guard passed'\n",
+        encoding="utf-8-sig",
+    )
+    env = {key: value for key, value in os.environ.items() if key.lower() != "psmodulepath"}
+    result = subprocess.run([powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+                            capture_output=True, env=env)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    assert b"Qt argument guard passed" in result.stdout

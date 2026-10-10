@@ -2,7 +2,7 @@ import asyncio
 import json
 import pytest
 from server import controller_pipeline as pipeline
-from server.controller_trust import enforce_trusted_answer
+from server.controller_trust import enforce_trusted_answer, has_grounded_terminal_answer
 from server.pipeline_step_control import completion_matches
 from server.run_journal import append_answer_step, append_tool_step, validate_answer_text_payload
 from server.tool_completion import synthesize_terminal_answer_payload
@@ -161,7 +161,8 @@ def test_runtime_keeps_validated_markdown_recovery_answer(monkeypatch):
     async def process(**kw): return {"answer": payload["text"], "commands": journal}
     monkeypatch.setattr(rt, "process_nl_command", process)
     asyncio.run(rt.run_nl_task("report", 1, "open", ["1:a"], 1))
-    assert rt.tasks["report"]["answer"] == "ПРИЛОЖЕНИЕ ОТКРЫТО."
+    assert rt.tasks["report"]["answer"] == payload["text"]
+    assert has_grounded_terminal_answer(rt.tasks["report"]["answer"], journal)
 
 
 def test_broadcast_runtime_keeps_each_recovered_answer(monkeypatch):
