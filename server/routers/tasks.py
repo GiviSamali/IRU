@@ -145,7 +145,8 @@ async def submit_worker(user, chat_id, message, target_ids, modes, *, request_ke
     task['orchestrator_execution_mode']=execution_mode if objective else 'auto'
     task['source_task_ids']=list(source_task_ids)
     task['context_history']=history_snapshot if history_snapshot is not None else capture_history(chat_id)
-    task['worker_context']=build_worker_context(user['id'],chat_id,message,target_ids,task['context_history'],source_task_ids)
+    task['worker_context']=build_worker_context(user['id'],chat_id,message,target_ids,task['context_history'],source_task_ids,
+        objective=task['proposed_objective'],context_summary=task['proposed_context_summary'])
     return await scheduler.submit(task, request_key=request_key)
 
 

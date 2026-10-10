@@ -248,7 +248,8 @@ class WorkerScheduler:
                         except ImportError:
                             from worker_context import build_worker_context
                         task['worker_context']=build_worker_context(task['user_id'],task['chat_id'],task.get('original_request') or task['message'],
-                            task['device_ids'],task['context_history'],task.get('source_task_ids') or [])
+                            task['device_ids'],task['context_history'],task.get('source_task_ids') or [],
+                            objective=task.get('proposed_objective') or '',context_summary=task.get('proposed_context_summary') or '')
                     task["admitted_at"]=task["created_at"]
                     task["created_at"]=time.time()
                     task["worker_started_at"]=task["created_at"]
