@@ -46,9 +46,10 @@ def test_invalid_optional_speech_falls_back_without_losing_primary_answer(value,
  decision=orch.Decision(intent='conversation',answer=answer,spoken_response=value)
  speech=voice.conversational_speech(decision.spoken_response,answer)
  task={'kind':'orchestrator','status':'done','answer':answer,'dialogue_intent':'conversation','dialogue_spoken_response':speech,'dialogue_speech_answer':answer}
- async def forbidden(*args):raise AssertionError('Short fallback never needs another model')
- monkeypatch.setattr(voice,'shorten_answer',forbidden)
- assert asyncio.run(voice.spoken_parts(task))==[answer]
+ async def brief(t):return 'В настройках указан порт 8080.'
+ monkeypatch.setattr(voice,'shorten_answer',brief)
+ assert asyncio.run(voice.spoken_parts(task))==['В настройках указан порт 8080.']
+ assert task['answer']==answer
 
 
 def test_long_primary_speech_avoids_editor_latency_and_does_not_fill_420(monkeypatch):
@@ -80,11 +81,15 @@ def worker(status='done',action='app.open_url'):
  return {'kind':'worker','worker_id':'worker-1','task_id':'verified-worker','user_id':2,'device_ids':['2:pc'],
   'status':status,'message':'Открой страницу','answer':'Готово. Задача выполнена.',
   'commands':[{'tool_name':action,'device_id':'pc','step_id':'step_1','status':'success','result':{'status':'opened_verified','url':'https://example.invalid'}}],
-  'task_receipt':{'task_status':'completed','goal_completed':True,'final_verification_status':'verified'}}
+  'task_receipt':{'task_status':'completed','goal_completed':True,'final_verification_status':'verified','answer_source':'audited_terminal'}}
 
 
 def test_action_speech_is_structured_not_rewritten_model_prose(monkeypatch):
- task=worker();raw=task['answer'];report=build_worker_report(task)
+ task=worker()
+ task['commands'].append({'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report',
+  'text':task['answer'],'basis':['step_1'],'self_check':{'depends_on_current_external_state':True,
+  'claims_completed_action':True,'has_sufficient_evidence':True,'missing_evidence_question':''}}})
+ raw=task['answer'];report=build_worker_report(task)
  async def forbidden(*args):raise AssertionError('Action does not need another model')
  monkeypatch.setattr(voice,'shorten_answer',forbidden)
  assert asyncio.run(voice.spoken_parts(task))==['Открыла страницу.']
@@ -134,6 +139,10 @@ def test_dialogue_changes_topic_while_worker_and_delayed_report_stays_grounded(c
  reply=asyncio.run(orch.run_turn(cmd,user,chat,forbidden));assert seen[0]['tasks'][0]['task_id']=='long-ppt' and active['status']=='running'
  assert asyncio.run(voice.spoken_parts(tasks[reply['task_id']]))==['LAN — сеть рядом, WAN связывает такие сети.']
  active.update(status='done',answer='Технический журнал презентации.',commands=[{'tool_name':'write_content','device_id':'pc','step_id':'step_1','status':'success','result':{'path':r'C:\Users\Demo\Desktop\LAN.pptx','bytes_written':500}}],task_receipt={'task_status':'completed','goal_completed':True,'final_verification_status':'verified'})
+ active['task_receipt']['answer_source']='audited_terminal'
+ active['commands'].append({'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report',
+  'text':active['answer'],'basis':['step_1'],'self_check':{'depends_on_current_external_state':True,
+  'claims_completed_action':True,'has_sufficient_evidence':True,'missing_evidence_question':''}}})
  assert asyncio.run(voice.spoken_parts(active))==['Презентация готова. Файл на рабочем столе.']
  assert active['answer']=='Технический журнал презентации.'
 
