@@ -132,3 +132,37 @@ def test_agent_shutdown_returns_ack_and_sets_stop_event():
 
     assert result == {"id": "cmd-2", "status": "ok", "result": {"ack": True, "action": "agent.shutdown"}}
     assert runtime._stop_event.is_set()
+
+
+def test_execute_cmd_transport_preserves_medium_result_and_connection_limit(monkeypatch):
+    import json
+    from unittest.mock import Mock
+    from core import runtime as module
+    stdout = ('<div class="card">Компания</div>\n' * 1000)[:15000]
+    tool_result = {'stdout': stdout, 'stderr': '', 'returncode': 0, 'error': None}
+    monkeypatch.setitem(module.ACTIONS, 'execute_cmd', lambda **params: tool_result)
+    monkeypatch.setattr(module, 'build_registration_payload', lambda *args: {'device_id': 'dev'})
+    runtime = module.AgentRuntime({'device_id': 'dev', 'server_url': 'ws://example.test', 'user_token': 'test-token'},
+        'test-version', logging.getLogger('agent-transport-test'), Mock())
+    sent = []
+    options = {}
+    class Connection:
+        async def __aenter__(self):return self
+        async def __aexit__(self, *args):return None
+        async def recv(self):
+            return json.dumps({'type': 'command', 'payload': {'id': 'cmd-medium',
+                'action': 'execute_cmd', 'params': {'command': 'mock read'}}})
+        async def send(self, text):
+            message = json.loads(text)
+            sent.append(message)
+            if message['type'] == 'result':runtime._stop_event.set()
+    def connect(url, **kwargs):
+        options.update(kwargs)
+        return Connection()
+    monkeypatch.setattr(module.websockets, 'connect', connect)
+    asyncio.run(asyncio.wait_for(runtime._run_async(), timeout=2))
+    response = next(message for message in sent if message['type'] == 'result')
+    assert options['max_size'] == 2**23  # Incoming agent frames, not an stdout cap.
+    assert response['payload']['status'] == 'ok' and response['payload']['result'] == tool_result
+    assert len(response['payload']['result']['stdout']) == 15000
+    assert len(json.dumps(response).encode('utf-8')) < options['max_size']

@@ -165,6 +165,7 @@ INSUFFICIENT_EVIDENCE_CORRECTION = (
 
 ANSWER_TEXT_TYPES = {"pure_text", "grounded_report", "partial_report", "error_report", "clarification", "failure"}
 WRITE_CONTENT_PREVIEW_CHARS = 120
+TOOL_RESULT_LLM_MAX_CHARS = 32000
 
 
 class ProtocolValidationError(ValueError):
@@ -428,7 +429,7 @@ def serialize_tool_result_for_llm(entry: dict[str, Any]) -> str:
     """Bound the model's projection without slicing JSON or changing evidence."""
     wrapped = wrap_tool_result_for_llm(entry)
     payload = json.dumps(wrapped, ensure_ascii=False)
-    if canonical_tool_name(str(wrapped["tool_name"])).startswith("web.") or len(payload) <= 4000:
+    if canonical_tool_name(str(wrapped["tool_name"])).startswith("web.") or len(payload) <= TOOL_RESULT_LLM_MAX_CHARS:
         return payload
 
     # JSON round-trip detaches all nested fields from the original journal.
@@ -467,7 +468,7 @@ def serialize_tool_result_for_llm(entry: dict[str, Any]) -> str:
         original = fields.get(pointer, {}).get("original_chars", len(text))
         fields[pointer] = {"original_chars": original, "shown_chars": shown, "portion": "prefix"}
         candidate = json.dumps(compact, ensure_ascii=False)
-        if len(candidate) <= 4000:
+        if len(candidate) <= TOOL_RESULT_LLM_MAX_CHARS:
             return candidate
 
     # No list/dict prefix is represented as a complete tool result. Keep outcomes
@@ -516,7 +517,7 @@ def serialize_tool_result_for_llm(entry: dict[str, Any]) -> str:
         minimal["status"] = "unknown"
     projected = json.dumps(minimal, ensure_ascii=False)
     # Enforce the budget even for nonstandard service values supplied by a caller.
-    if len(projected) > 4000:
+    if len(projected) > TOOL_RESULT_LLM_MAX_CHARS:
         minimal["step_id"] = None
         minimal["tool_name"] = str(wrapped["tool_name"])[:32]
         minimal["summary"] = "Tool result details omitted; consult original evidence."
