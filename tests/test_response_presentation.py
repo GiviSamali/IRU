@@ -165,9 +165,9 @@ def test_show_details_is_presentation_of_exact_owned_job_without_execution(owner
         cmd=SimpleNamespace(message='Покажи все подробности выполнения',request_id='details',device_id='',modes={},broadcast=False)
         result=await orch.run_turn(cmd,owner,owner['chat_id'],forbidden)
         detail=tasks[result['task_id']]
-        assert task['answer'] in detail['execution_details'] and result['answer'].startswith('Подробности выполнения — ниже.')
+        assert task['answer'] in detail['execution_details'] and result['answer']==task['answer']
         assert 'write_content' in detail['execution_details'] and 'step_1' in detail['execution_details']
-        assert 'Все 10 слайдов.' not in result['answer']
+        assert 'Все 10 слайдов.' in result['answer']
         row=db.get_messages(owner['chat_id'])[-1]
         assert row['executionDetails']==detail['execution_details'] and row['workerReport']==task['worker_report']
         restored_dialogue=orch.restore_dialogue(result['task_id'],owner['id'])
@@ -530,3 +530,44 @@ def test_report_agrees_with_confirmed_zero_code_contract(owner,code):
  {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':task['answer'],'basis':['step_1'],
  'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,'has_sufficient_evidence':True,'missing_evidence_question':''}}}]
  assert build_worker_report(task)['status']=='unknown'
+
+
+def test_audited_command_report_is_not_replaced_by_helper_artifact(owner):
+    task=completed(owner, 'ps1')
+    task['answer']='В рабочем файле обменены две позиции; остальные позиции проверены.'
+    task['commands'].insert(1, {'tool_name':'execute_cmd','step_id':'step_2','status':'success',
+        'result':{'returncode':0,'stdout':'Observed resulting order','stderr':''}})
+    terminal=task['commands'][-1]['result']
+    terminal.update(text=task['answer'],basis=['step_2'])
+    before=json.dumps(task,ensure_ascii=False)
+    assert worker_presentation(task)['conversational_response']==task['answer']
+    assert worker_presentation(task)['execution_details']==''
+    assert json.dumps(task,ensure_ascii=False)==before
+    task.pop('task_receipt')
+    assert build_worker_report(task)['status']!='success'
+
+
+def test_orchestrator_worker_history_keeps_result_instead_of_file_ready(owner):
+    raw='Позиции 4 и 7 обменены: 4 — новая компания, 7 — прежняя четвёртая.'
+    db.add_message(owner['chat_id'],'assistant','Файл готов.',
+        task_metadata={'taskKind':'worker','executionDetails':raw})
+    context=orch.context_for(owner['id'],owner['chat_id'],'Продолжим','pc')
+    assert context['history'][-1]['content']==raw
+    assert len(json.dumps(context,ensure_ascii=False))<=orch.MAX_CONTEXT_CHARS
+
+
+def test_orchestrator_context_keeps_newest_result_when_old_reports_exceed_budget(owner,monkeypatch):
+    jobs=[]
+    for i in range(8):
+        tid=f'context-{i}'
+        report={'task_id':tid,'status':'success','summary':f'CURRENT-{i} '+('x'*2000),'artifacts':[],
+            'target_device_ids':['pc']}
+        jobs.append({'task_id':tid,'chat_id':owner['chat_id'],'state':'success','created_at':8-i,
+            'payload':json.dumps({'message':'Change file','device_ids':['pc'],'worker_report':report}),
+            'report':json.dumps({**report,'summary':'STALE_COLUMN'})})
+    monkeypatch.setattr(orch,'list_jobs',lambda user_id:jobs)
+    context=orch.context_for(owner['id'],owner['chat_id'],'Продолжить','pc')
+    assert context['context_truncated'] is True
+    assert context['tasks'][0]['report']['summary'].startswith('CURRENT-0 ')
+    assert 'STALE_COLUMN' not in json.dumps(context)
+    assert len(json.dumps(context,ensure_ascii=False))<=orch.MAX_CONTEXT_CHARS

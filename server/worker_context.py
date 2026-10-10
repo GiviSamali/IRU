@@ -47,7 +47,7 @@ def source_references(owner, chat_id, source_ids, allowed_devices):
                    and a.get('device_id') in allowed_devices]
         with db.get_db() as c:
             message=c.execute('SELECT content FROM messages WHERE id=? AND chat_id=?',(row.get('message_id'),chat_id)).fetchone()
-        summary=(message['content'] if message else restored.get('conversational_response') or restored.get('answer') or report.get('summary') or '') if (report.get('status') in {'success','partial'}
+        summary=(restored.get('answer') or report.get('summary') or (message['content'] if message else '') or restored.get('conversational_response') or '') if (report.get('status') in {'success','partial'}
             and bool(report.get('target_device_ids'))
             and set(report['target_device_ids']).issubset(allowed_devices)) else ''
         references.append({'task_id':source_id,'status':row['state'],'observed_at':row['updated_at'],

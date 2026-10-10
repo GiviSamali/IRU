@@ -134,7 +134,11 @@ def worker_presentation(task, report=None):
         payload=terminal.get("result") if isinstance(terminal.get("result"),dict) else {}
         self_check=payload.get("self_check") if isinstance(payload.get("self_check"),dict) else {}
         informational=self_check.get("claims_completed_action") is False
-        if operations and has_grounded_terminal_answer(answer,commands) and (informational or all(_tool(c) in OBSERVATION_TOOLS for c in operations)):
+        receipt=task.get("task_receipt") or {}
+        audited_command_report=(receipt.get("answer_source")=="audited_terminal"
+            and receipt.get("goal_completed") is True
+            and any(_tool(c)=="execute_cmd" and c.get("step_id") in (payload.get("basis") or []) for c in operations))
+        if operations and has_grounded_terminal_answer(answer,commands) and (informational or audited_command_report or all(_tool(c) in OBSERVATION_TOOLS for c in operations)):
             # A validated informational result can include execute_cmd processing.
             # No guessing intent from shell text and no extra classifier/model.
             human=answer

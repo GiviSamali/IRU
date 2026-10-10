@@ -346,3 +346,18 @@ def test_p003a_interpretation_cannot_expand_scope_permission_or_current_basis(ow
         validate_answer_text_payload(payload, [])
     confirmation = command_confirmation({'command': 'Remove-Item C:/Temp/example.txt', 'params': {'risk': 'dangerous'}})
     assert confirmation['confirmation_id'] and confirmation['kind'] == 'deletion' and not confirmation['voice_allowed']
+
+
+def test_worker_reference_prefers_saved_result_over_generic_message(owners):
+    a,_=owners
+    source_id='current-result'
+    text='Последний обмен выполнен: позиции поменялись, прежний порядок больше не актуален.'
+    report={'task_id':source_id,'status':'success','target_device_ids':['pc'],'summary':text,'artifacts':[]}
+    saved=db.add_message(a['chat_id'],'assistant','Файл готов.',task_metadata={'taskKind':'worker','_taskId':source_id})
+    with db.get_db() as c:
+        c.execute('INSERT INTO worker_jobs(task_id,owner_user_id,chat_id,state,payload,report,message_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
+            (source_id,a['id'],a['chat_id'],'success',json.dumps({'answer':text,'worker_report':report}),json.dumps(report),saved['id'],1,2))
+    context=build_worker_context(a['id'],a['chat_id'],'Проверь результат',[f"{a['id']}:pc"],[],[source_id])
+    data=json.loads(context[0]['content'].split('\n',1)[1].rsplit('\nEnd',1)[0])
+    assert data['referenced_results'][0]['summary']==text
+    assert data['current_run_evidence'] is False
