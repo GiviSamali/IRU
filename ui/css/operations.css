@@ -6,14 +6,14 @@
 .chat-view .chat-input-area{flex:none}
 .chat-view .chat-messages>.msg{width:100%!important;margin-inline:0!important;max-width:none!important}
 .chat-view .msg.assistant .msg-role,.chat-view .msg.assistant .msg-body{width:100%!important}
-.operations-dock,.operation-mirror{flex:0 0 clamp(250px,26vw,350px);min-width:0;min-height:0;border-left:1px solid var(--border);background:var(--bg-secondary,#10171d);display:flex;flex-direction:column;overflow:hidden}
+.operations-dock,.operation-mirror{flex:0 0 clamp(250px,26vw,350px);min-width:0;min-height:0;border-left:1px solid var(--border);background:var(--surface-shell,var(--bg-secondary,#10171d));display:flex;flex-direction:column;overflow:hidden}
 .operations-dock[hidden],.operation-mirror[hidden],#operationsList[hidden],#mirrorToggle[hidden]{display:none!important}
 .operation-panel-heading{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--border);flex:none;font-size:13px}
 .operation-panel-heading button{border:0;background:transparent;color:var(--text-muted);font-size:22px;cursor:pointer}
 #operationsList,#mirrorContent{flex:1;min-height:0;max-height:none;overflow:auto;padding:12px;overscroll-behavior:contain}
 #operationsItems{display:flex;flex-direction:column;gap:10px}
-.operation-item{min-width:0;padding:11px;border:1px solid var(--border);border-radius:10px;background:var(--bg-primary,#0b1015)}
-.operation-item.selected{border-color:var(--accent);background:rgba(0,212,255,.045)}
+.operation-item{min-width:0;padding:11px;border:1px solid var(--border);border-radius:10px;background:var(--surface-card,var(--bg-primary,#0b1015));box-shadow:var(--surface-highlight,none)}
+.operation-item.selected{border-color:var(--accent);background:linear-gradient(var(--accent-glow),var(--accent-glow)),var(--surface-card,var(--bg-primary,#0b1015))}
 .operation-heading{display:flex;gap:10px;justify-content:space-between;align-items:flex-start;font-size:12px}.operation-heading strong{overflow-wrap:anywhere}.operation-heading .smart-status{font-size:10px;flex:none}
 .operation-group{color:var(--text-muted);font-size:11px;margin-bottom:10px;font-weight:600}
 .operation-devices,.operation-empty{font-size:11px;color:var(--text-muted);margin:8px 0}
@@ -31,3 +31,54 @@
 @media(prefers-reduced-motion:no-preference){.operations-dock,.operation-mirror,.content>.chat-view{transition:flex-basis .18s ease}}
 
 .mirror-answer{white-space:normal}.mirror-answer p{margin:0 0 10px}.mirror-answer h1,.mirror-answer h2,.mirror-answer h3{font-size:15px;margin:12px 0 8px;line-height:1.4}.mirror-answer pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+
+/* Match Conversation without changing column sizing, disclosure or status cues. */
+.conversation-toolbar,.operation-panel-heading{background:rgba(22,30,40,.28);box-shadow:var(--surface-highlight,none)}
+@supports ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  .operations-dock,.operation-mirror{-webkit-backdrop-filter:blur(var(--surface-blur,12px));backdrop-filter:blur(var(--surface-blur,12px))}
+}
+
+/* Native compact window: one conversation, full prose, no workspace chrome. */
+.iru-mini .app .header,
+.iru-mini .app .sidebar,
+.iru-mini .app .sidebar-overlay,
+.iru-mini .app .conversation-toolbar,
+.iru-mini .app .operation-mirror,
+.iru-mini .app .operations-dock,
+.iru-mini .app .device-passport-panel,
+.iru-mini .app .memory-panel,
+.iru-mini .app .explorer-panel,
+.iru-mini .app .admin-panel,
+.iru-mini .app .devmode-panel,
+.iru-mini .app .smart-task,
+.iru-mini .app .smart-file,
+.iru-mini .app .smart-action,
+.iru-mini .app .message-files,
+.iru-mini .app .operation-reference,
+.iru-mini .app .smart-text-toggle,
+.iru-mini .app .chat-welcome .hints,
+.iru-mini .app .mobile-plus-btn,
+.iru-mini .app .input-device-select,
+.iru-mini .app .input-mode-select,
+.iru-mini .app .attach-btn,
+.iru-mini .app .char-count,
+.iru-mini .app .mobile-plus-popover { display: none !important; }
+
+.iru-mini .app .chat-messages { padding: 10px 12px; gap: 12px; scroll-padding-bottom: 10px; }
+.iru-mini .app .msg { width: 100% !important; margin: 0 !important; }
+.iru-mini .app .chat-view .msg .msg-body {
+  width: 100% !important; max-width: none !important;
+  padding: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none;
+  font-size: 13px; line-height: 1.55;
+}
+.iru-mini .app .smart-text.collapsible:not(.expanded) .smart-text-content {
+  display: block; -webkit-line-clamp: unset; overflow: visible;
+}
+.iru-mini .app .chat-input-area {
+  padding: 6px 8px; background: transparent; border-top: 0;
+}
+.iru-mini .app .chat-input-wrap {
+  min-height: 46px; padding: 4px 6px; gap: 6px;
+}
+.iru-mini .app .chat-welcome { min-height: 0; padding: 10px; }
+.iru-mini .app .chat-welcome img { display: none; }
