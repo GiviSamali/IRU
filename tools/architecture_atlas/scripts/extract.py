@@ -103,5 +103,8 @@ def extract(root):
     return apply_semantics(dict(schema_version=1,git_sha=sha,nodes=nodes,edges=edges,coverage=dict(source_files=len(modules),python_files=len(trees),entities=len(symbols),nodes=len(nodes),static_edges=len(edges),runtime_edges=0,parse_errors=errors)))
 
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--repo',type=Path,default=Path(__file__).resolve().parents[3]);ap.add_argument('--output',type=Path,default=Path(__file__).resolve().parents[1]/'data/architecture.json');args=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--repo',type=Path,default=Path(__file__).resolve().parents[3]);ap.add_argument('--output',type=Path,default=Path(__file__).resolve().parents[1]/'data/architecture.json');ap.add_argument('--knowledge-dir',type=Path,default=Path(__file__).resolve().parents[1]/'knowledge');args=ap.parse_args()
+    if args.output.resolve().is_relative_to(args.knowledge_dir.resolve()):ap.error('Architecture output cannot overwrite human knowledge')
     model=extract(args.repo);args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps(model,ensure_ascii=False),encoding='utf-8');print(json.dumps(model['coverage'],ensure_ascii=False))
+    from knowledge import build
+    status=build(args.repo,args.output,args.knowledge_dir,args.output.with_name('knowledge-status.json'));print('Knowledge:',json.dumps(status['summary'],ensure_ascii=False));print('Knowledge binding issues:',len(status['issues']))

@@ -8,6 +8,10 @@ export function validateGraph(g){
  return {g,nodes,edges,children,incoming,outgoing};
 }
 export function visibleNodes(m,expanded,full=false){return [...m.nodes.values()].filter(n=>{if(full)return true;let p=n.parent_id;while(p){if(!expanded.has(p))return false;p=m.nodes.get(p).parent_id;}return true;});}
+export function filterNodes(nodes,{levels=null,nodeTypes=null}={}){return nodes.filter(n=>(levels===null||levels.has(n.level))&&(nodeTypes===null||nodeTypes.has(n.type)));}
+export function displayedNodes(m,expanded,full=false,filters={},temporaryIds=new Set()){const result=new Map(filterNodes(visibleNodes(m,expanded,full),filters).map(n=>[n.id,n]));for(const id of temporaryIds){if(m.nodes.has(id))result.set(id,m.nodes.get(id));}return [...result.values()];}
+export function displayedEdges(m,nodeIds,edgeTypes=null){return [...m.edges.values()].filter(e=>nodeIds.has(e.source)&&nodeIds.has(e.target)&&(edgeTypes===null||edgeTypes.has(e.type)));}
+export function levelPreset(levels,action,n){const all=[...levels].sort((a,b)=>a-b);if(action==='all'||action==='reset')return null;if(action==='only')return new Set(all.filter(level=>level===n));if(action==='until')return new Set(all.filter(level=>level<=n));if(action==='from')return new Set(all.filter(level=>level>=n));throw Error('Unknown level preset');}
 export function search(m,q){q=q.toLocaleLowerCase();return [...m.nodes.values()].filter(n=>(n.name+' '+n.description).toLocaleLowerCase().includes(q));}
 export function selectionRelations(m,id,dir='both',transitive=false,types=null){const nodeIds=new Set([id]),edgeIds=new Set(),todo=[id];for(let cursor=0;cursor<todo.length;cursor++){const cur=todo[cursor];const edges=[...(dir!=='in'?m.outgoing.get(cur)||[]:[]),...(dir!=='out'?m.incoming.get(cur)||[]:[])];for(const e of edges){if(types&&!types.has(e.type))continue;edgeIds.add(e.id);const other=e.source===cur?e.target:e.source;if(!nodeIds.has(other)){nodeIds.add(other);if(transitive)todo.push(other);}}}return {nodeIds,edgeIds};}
 export function dependencies(m,id,dir='both',transitive=false,types=null){return selectionRelations(m,id,dir,transitive,types).nodeIds;}

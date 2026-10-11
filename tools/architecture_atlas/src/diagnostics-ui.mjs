@@ -1,7 +1,7 @@
 import {analyzeArchitecture,anomalyCategories,rankedRecords,STATIC_TYPES,SEMANTIC_TYPES} from './diagnostics.mjs';
 import {visibleNodes} from './model.mjs';
 
-export function mountDiagnostics(model,{host,getExpansion,getFull,onSelect,onDetails,onReset,onAnalysis=()=>{}}){
+export function mountDiagnostics(model,{host,getExpansion,getFull,getVisibleIds=null,getVisibleEdgeTypes=null,onSelect,onDetails,onReset,onAnalysis=()=>{}}){
  let result=null,category='centers',page=0;const pageSize=30;
  const $=id=>host.querySelector('#'+id);
  const node=(parent,tag,value)=>{const e=document.createElement(tag);if(value!==undefined)e.textContent=value;parent.append(e);return e;};
@@ -24,9 +24,9 @@ export function mountDiagnostics(model,{host,getExpansion,getFull,onSelect,onDet
  function settings(){return {metric:$('diagMetric').value,threshold:Math.max(1,Number($('diagThreshold').value)||20),topN:Math.min(1000,Math.max(1,Math.floor(Number($('diagTopN').value)||10)))};}
  function compute(){
   const scope=$('diagScope').value;let scopeIds=null,scopeLabel='Весь снимок';
-  if(scope==='visible'){scopeIds=visibleNodes(model,getExpansion(),getFull()).map(n=>n.id);scopeLabel='Подграф: видимые по раскрытию на момент расчёта';}
+  if(scope==='visible'){scopeIds=getVisibleIds?[...getVisibleIds()]:visibleNodes(model,getExpansion(),getFull()).map(n=>n.id);scopeLabel='Подграф: отображаемые узлы с фильтрами уровней/типов; рёбра ограничены видимыми типами';}
   else if(scope!=='all'){scopeIds=[];const todo=[scope];for(let cursor=0;cursor<todo.length;cursor++){scopeIds.push(todo[cursor]);todo.push(...model.children.get(todo[cursor])||[]);}scopeLabel='Подграф: '+model.nodes.get(scope).name;}
-  result=analyzeArchitecture(model,{types:types(),scopeIds,scopeLabel,layer:$('diagLayer').value,projectionPolicy:$('diagProjection').value});page=0;render();onAnalysis(result);
+  const analysisTypes=scope==='visible'&&getVisibleEdgeTypes?types().filter(type=>getVisibleEdgeTypes().has(type)):types();result=analyzeArchitecture(model,{types:analysisTypes,scopeIds,scopeLabel,layer:$('diagLayer').value,projectionPolicy:$('diagProjection').value});page=0;render();onAnalysis(result);
  }
  function render(){
   if(!result)return;const categories=anomalyCategories(result,settings());
@@ -46,5 +46,5 @@ export function mountDiagnostics(model,{host,getExpansion,getFull,onSelect,onDet
  for(const input of typeBox.querySelectorAll('input'))input.onchange=()=>{$('diagPreset').value='custom';compute();};
  for(const id of ['diagScope','diagLayer','diagProjection'])$(id).onchange=compute;
  for(const id of ['diagMetric','diagThreshold','diagTopN','diagSort'])$(id).onchange=()=>{page=0;render();};
- compute();return {open(){host.hidden=false;},refreshScope(){if($('diagScope').value==='visible')compute();},analysis(){return result;}};
+ compute();return {open(){host.hidden=false;},refreshScope(){if($('diagScope').value==='visible')compute();},analysis(){return result;},highlightGroups(){const cfg=settings();return {...result.categories,centers:rankedRecords([...result.records.values()].filter(r=>r[cfg.metric]>=cfg.threshold),cfg.metric),metric:cfg.metric,threshold:cfg.threshold};}};
 }

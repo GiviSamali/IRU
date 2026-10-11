@@ -10,6 +10,7 @@ export function mountPath(model,{host,onSwap,onNewTarget,onReset,onExit,onTypes,
   endpoints.textContent=`A: ${state.a?model.nodes.get(state.a).name:'не выбрана'} → B: ${state.b?model.nodes.get(state.b).name:'не выбрана'}`;
   const result=state.result;hint.textContent=!state.pathMode?'Режим завершён; маршрут сохранён и не подсвечивается.':!state.a?'Первый клик по узлу выбирает A.':!state.b?'Второй клик по другому узлу выбирает B.':result?.status==='not_found'?`Маршрут не найден. Типы: ${types().join(', ')||'нет'}. Возможно, модель неполна; измените фильтры или поменяйте A и B.`:`Кратчайший путь по выбранным архитектурным связям · ${result?.edgeIds.length??0} переходов. Типы: ${types().join(', ')||'нет'}. Это не фактическое выполнение.`;
   if(state.highlight==='execution')hint.textContent='Сохранён статический маршрут. Сейчас отображается Execution Trace; эти слои не смешиваются.';
+  if(state.programmaticActive)hint.textContent='Статический маршрут сохранён. Сейчас отображается программная группа; очистите её для возврата к пути.';
   steps.replaceChildren();if(result?.status!=='found')return;
   if(!result.steps.length){node(steps,'p','A = B: ноль переходов, одна точка.');return;}
   for(const [i,step] of result.steps.entries()){

@@ -1,0 +1,529 @@
+{
+  "schema_version": 1,
+  "relationships": {
+    "depends_on:component:orchestrator->component:llm": {
+      "id": "depends_on:component:orchestrator->component:llm",
+      "purpose": "Получить проверяемое решение о текущем turn.",
+      "data_or_signals": "Messages с untrusted context и human message, orchestrator_decision tool schema; обратно completion для Decision validation.",
+      "conditions": "Во время decide; один tool call и непустая структура обязательны.",
+      "failure_behavior": "Ошибка запроса или неверный Decision попадает в существующий failure path, не означает admission Worker.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "8803cf463ad53fd9c169b9fbe0da86197d01ced671636dbec3721619f18ea9a5",
+      "bindings": [
+        {
+          "path": "server/orchestrator.py",
+          "symbol": null,
+          "source_scope": "import",
+          "algorithm": "python-ast-v1",
+          "digest": "36fe574f91a1d77ebc9540022cf3495e58fcb4661f933d8a335cff22256e0523",
+          "import_signature": "ImportFrom(module='controller', names=[alias(name='load_llm_config'), alias(name='_chat_completion_request')], level=1)"
+        }
+      ],
+      "related_node_ids": [
+        "component:orchestrator",
+        "component:llm"
+      ]
+    },
+    "depends_on:component:orchestrator->component:scheduler": {
+      "id": "depends_on:component:orchestrator->component:scheduler",
+      "purpose": "Найти принадлежащее владельцу поручение для статуса или отмены.",
+      "data_or_signals": "Task ID/owner и owned job; cancellation передаётся существующему scheduler.",
+      "conditions": "При intent task_status/cancel и допустимой точной ссылке.",
+      "failure_behavior": "Чужое или отсутствующее задание не используется; поведение отказа связи при shutdown отдельно не реконструировано.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "944a1edc04f9b4d06d5d8e963a14beef661f3c7ccfa72a63dd697586f40e156b",
+      "bindings": [
+        {
+          "path": "server/orchestrator.py",
+          "symbol": null,
+          "source_scope": "import",
+          "algorithm": "python-ast-v1",
+          "digest": "b9b4bb5e956a9c15fc6f4dff847f769f1b4433db6cdce7cfde962042af7d0473",
+          "import_signature": "ImportFrom(module='worker_scheduler', names=[alias(name='list_jobs'), alias(name='owned_job'), alias(name='restore_task'), alias(name='scheduler')], level=1)"
+        }
+      ],
+      "related_node_ids": [
+        "component:orchestrator",
+        "component:scheduler"
+      ]
+    },
+    "depends_on:component:orchestrator->component:presentation": {
+      "id": "depends_on:component:orchestrator->component:presentation",
+      "purpose": "Получить разговорный ответ о результате найденного задания.",
+      "data_or_signals": "Восстановленный task и Worker Report; обратно conversational_response и execution_details.",
+      "conditions": "В ветке task status после ownership checks.",
+      "failure_behavior": "Неподтверждённый статус не превращается в сообщение об успехе; полного контракта отказа этой зависимости не установлено.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "b3f4b311b43a667f963dbff8b7348357e00f0086412bede5aebdef5c20e1925c",
+      "bindings": [
+        {
+          "path": "server/orchestrator.py",
+          "symbol": "run_turn",
+          "source_scope": "entity",
+          "algorithm": "python-ast-v1",
+          "digest": "e2fe226858bc1f3c21cf1fa5f311bc8b915e50eed31880dbee68b79c7356879e"
+        }
+      ],
+      "related_node_ids": [
+        "component:orchestrator",
+        "component:presentation"
+      ]
+    },
+    "depends_on:component:scheduler->component:context": {
+      "id": "depends_on:component:scheduler->component:context",
+      "purpose": "Подготовить Worker к поручению с ограниченными историческими ссылками.",
+      "data_or_signals": "Owner/chat, original_request, devices, frozen history и source IDs; обратно bounded messages.",
+      "conditions": "Перед исполнением job, когда context_history присутствует.",
+      "failure_behavior": "Ошибки ownership/ограничений передаются существующему task failure handling; history не выдаёт новых прав.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "e202c43fa70ccf36eb927783ec3626ac856d944209f015b85540ba83602f9377",
+      "bindings": [
+        {
+          "path": "server/worker_scheduler.py",
+          "symbol": "WorkerScheduler._run",
+          "source_scope": "entity",
+          "algorithm": "python-ast-v1",
+          "digest": "a8ce8da9ddca4a89e67b1c1b53ba508139515f774c5bcfa786660ce81d0e8fa0"
+        }
+      ],
+      "related_node_ids": [
+        "component:scheduler",
+        "component:context"
+      ]
+    },
+    "depends_on:component:scheduler->component:worker": {
+      "id": "depends_on:component:scheduler->component:worker",
+      "purpose": "Запустить уже принятое и сохранённое поручение.",
+      "data_or_signals": "Task identity, owner, message и device IDs передаются run_nl_task либо onboarding.",
+      "conditions": "Из _execute после выбора owner-scoped job; может использоваться заданный execute callback.",
+      "failure_behavior": "Исключения обрабатываются runner; независимый runtime маршрут без trace не утверждается.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "5dcf4f876295c8aaf19e1a5cb2805b0c95fdb59e4778daa757787562f465099c",
+      "bindings": [
+        {
+          "path": "server/worker_scheduler.py",
+          "symbol": "WorkerScheduler._execute",
+          "source_scope": "entity",
+          "algorithm": "python-ast-v1",
+          "digest": "495a2901225f6176cf5995988452cf74409d52f2e8a6900544daae7dc0fc731c"
+        }
+      ],
+      "related_node_ids": [
+        "component:scheduler",
+        "component:worker"
+      ]
+    },
+    "depends_on:component:scheduler->component:report": {
+      "id": "depends_on:component:scheduler->component:report",
+      "purpose": "Сохранить согласованный итог job для UI и восстановления.",
+      "data_or_signals": "Task snapshot и вычисленный WorkerReport; state/report сохраняются вместе с существующим payload.",
+      "conditions": "При финализации и persist_report.",
+      "failure_behavior": "Persistence failure отдельно журналируется; успешный tool не подменяет сохранённый outcome.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "a4107e0a8f7057eb2e311043f2b2b20ff8c257a0a012867a384c71628270e590",
+      "bindings": [
+        {
+          "path": "server/worker_scheduler.py",
+          "symbol": null,
+          "source_scope": "import",
+          "algorithm": "python-ast-v1",
+          "digest": "ed25f55e584fd428494a64b8f9c42f1c9dfb2815c9740df5cfe2853dc9e71609",
+          "import_signature": "ImportFrom(module='worker_reports', names=[alias(name='build_worker_report'), alias(name='TERMINAL')], level=1)"
+        }
+      ],
+      "related_node_ids": [
+        "component:scheduler",
+        "component:report"
+      ]
+    },
+    "depends_on:component:worker->component:journal": {
+      "id": "depends_on:component:worker->component:journal",
+      "purpose": "Записать текущие tool results и проверить terminal answer.",
+      "data_or_signals": "Tool name/result и step IDs, затем answer payload и basis; обратно entry либо validation error.",
+      "conditions": "Во время tool loop и обработки terminal tools.",
+      "failure_behavior": "Неуспешная validation вызывает существующую correction/recovery, а не доверенный completed claim.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "a8fbd1691b3a299aa31c0090e33a182ee27aee6308e04e0968f2a5c68cc6ed8c",
+      "bindings": [
+        {
+          "path": "server/controller.py",
+          "symbol": null,
+          "source_scope": "import",
+          "algorithm": "python-ast-v1",
+          "digest": "5c7f3fd73934bb035620ca2d69ff07ceb3a1a4c8d23ae9a0becad19204210946",
+          "import_signature": "ImportFrom(module='run_journal', names=[alias(name='record_lifecycle_event')], level=1)"
+        }
+      ],
+      "related_node_ids": [
+        "component:worker",
+        "component:journal"
+      ]
+    },
+    "depends_on:component:worker->component:auditor": {
+      "id": "depends_on:component:worker->component:auditor",
+      "purpose": "Сверить смысл ответа с исходной просьбой и текущими evidence.",
+      "data_or_signals": "User request, current journal, answer payload; обратно verdict/reason и признак недоступности аудитора.",
+      "conditions": "При терминальном ответе и включённом audit config.",
+      "failure_behavior": "Auditor transport failure возвращает отдельный unavailable flag; дальнейший controller recovery не описан как один универсальный outcome.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "7741d275fc876574480be4927da0386ff1c55e7be7df542388bfcdc39b88e7c4",
+      "bindings": [
+        {
+          "path": "server/controller_non_pipeline.py",
+          "symbol": null,
+          "source_scope": "import",
+          "algorithm": "python-ast-v1",
+          "digest": "263b3202dc1a3b33b7c6586cf5544be90e5f3471ee7b60f58dbf477e71704315",
+          "import_signature": "ImportFrom(module='answer_auditor', names=[alias(name='audit_answer_payload'), alias(name='answer_auditor_enabled')], level=1)"
+        }
+      ],
+      "related_node_ids": [
+        "component:worker",
+        "component:auditor"
+      ]
+    },
+    "depends_on:component:worker->component:registry": {
+      "id": "depends_on:component:worker->component:registry",
+      "purpose": "Использовать согласованные имена и описание tools в цикле.",
+      "data_or_signals": "Name/category и существующие operation results; обратно canonical names, metadata и log fields.",
+      "conditions": "При выборе/сериализации tools.",
+      "failure_behavior": "Inventory не выдаёт разрешение на tool execution; контракт отсутствующего registry элемента определяется вызывающей реализацией.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "9f98454efd42a921bbd95fb3555849e01f2e0833b67dad6d26c7217b13a74136",
+      "bindings": [
+        {
+          "path": "server/controller_non_pipeline.py",
+          "symbol": null,
+          "source_scope": "import",
+          "algorithm": "python-ast-v1",
+          "digest": "3d80954ecf9effa27da1f5acb5502d6d9bc32cd54c6956c0402139b87d3507fe",
+          "import_signature": "ImportFrom(module='tool_registry', names=[alias(name='list_tools'), alias(name='tool_log_entry'), alias(name='tool_log_fields')], level=1)"
+        }
+      ],
+      "related_node_ids": [
+        "component:worker",
+        "component:registry"
+      ]
+    },
+    "depends_on:component:worker->component:browser": {
+      "id": "depends_on:component:worker->component:browser",
+      "purpose": "Передать существующую browser operation расширению.",
+      "data_or_signals": "User/task/device IDs, operation и проверяемые params; обратно correlated safe result.",
+      "conditions": "В соответствующей ветке tool execution, после действующих permission checks.",
+      "failure_behavior": "Browser offline, cancellation и timeout не являются успешным результатом.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "650301a55893380a291f0bfac8394debc983f8d153e98837c9c9a6f15b12ed14",
+      "bindings": [
+        {
+          "path": "server/task_runtime.py",
+          "symbol": "run_nl_task.run_on_device",
+          "source_scope": "entity",
+          "algorithm": "python-ast-v1",
+          "digest": "3a04344ec885ce72e316119bcab971c76270a00c0267f2c7fe962ca252bcd83a"
+        }
+      ],
+      "related_node_ids": [
+        "component:worker",
+        "component:browser"
+      ]
+    },
+    "depends_on:component:context->component:scheduler": {
+      "id": "depends_on:component:context->component:scheduler",
+      "purpose": "Разрешить ссылки только на задания того же владельца.",
+      "data_or_signals": "Source task IDs/owner; owned_job возвращает сохранённый job.",
+      "conditions": "В source_references при составлении handoff.",
+      "failure_behavior": "Неowned или другой chat вызывает отказ привязки; совпадение текста/названия не считается разрешением.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "dd9883f637ff2b59b48b21606b677af5fa1cf2b3290f6bd8c13f53171712d5c2",
+      "bindings": [
+        {
+          "path": "server/worker_context.py",
+          "symbol": "source_references",
+          "source_scope": "entity",
+          "algorithm": "python-ast-v1",
+          "digest": "71817a17963c1a99dd74e315fc121f304d032ec62b2d83eca1ab8f7eeb561f4e"
+        }
+      ],
+      "related_node_ids": [
+        "component:context",
+        "component:scheduler"
+      ]
+    },
+    "depends_on:component:context->component:report": {
+      "id": "depends_on:component:context->component:report",
+      "purpose": "Взять проверенный исторический результат как данные для планирования.",
+      "data_or_signals": "Saved payload/report, status и verified artifacts разрешённых устройств; ограниченный summary помещается в context.",
+      "conditions": "При подтверждённых source references.",
+      "failure_behavior": "Старые step IDs не становятся current-run basis; усечённый summary отмечается truncated.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "4bf82870febf73ad8cbc1af049e1f8efe6d5d2c31323974bb2d0d6bad4a52c79",
+      "bindings": [
+        {
+          "path": "server/worker_context.py",
+          "symbol": "source_references",
+          "source_scope": "entity",
+          "algorithm": "python-ast-v1",
+          "digest": "71817a17963c1a99dd74e315fc121f304d032ec62b2d83eca1ab8f7eeb561f4e"
+        }
+      ],
+      "related_node_ids": [
+        "component:context",
+        "component:report"
+      ]
+    },
+    "depends_on:component:presentation->component:report": {
+      "id": "depends_on:component:presentation->component:report",
+      "purpose": "Нормализовать существующий итог перед выбором человеческой формулировки.",
+      "data_or_signals": "Task и возможный report; normalized_worker_report при необходимости строит его из task evidence.",
+      "conditions": "В начале worker_presentation.",
+      "failure_behavior": "Неверный/устаревший report не принимается как произвольное доказательство успеха.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "264b004693ce5619896f3f8493c97d4bda0b5845ea325231fb8602a500f67c79",
+      "bindings": [
+        {
+          "path": "server/response_presentation.py",
+          "symbol": null,
+          "source_scope": "import",
+          "algorithm": "python-ast-v1",
+          "digest": "51242e46e0d7379d0ab89b85d64753223812146e4c1402bc05d4470c2df9bb53",
+          "import_signature": "ImportFrom(module='worker_reports', names=[alias(name='build_worker_report'), alias(name='positive_evidence'), alias(name='WorkerReport')], level=1)"
+        }
+      ],
+      "related_node_ids": [
+        "component:presentation",
+        "component:report"
+      ]
+    },
+    "depends_on:component:presentation->component:auditor": {
+      "id": "depends_on:component:presentation->component:auditor",
+      "purpose": "Проверить grounded terminal evidence перед сохранением содержательного answer.",
+      "data_or_signals": "Answer text и текущие commands для controller_trust validation.",
+      "conditions": "В ветках grounded informational/audited command presentation.",
+      "failure_behavior": "Это агрегированная связь с trust-функцией, а не новый LLM audit call из Presentation.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "84dd82dfe64153627e17ac744f2acc805c9ec495a24ffa03e0d21050d08e95cc",
+      "bindings": [
+        {
+          "path": "server/response_presentation.py",
+          "symbol": null,
+          "source_scope": "import",
+          "algorithm": "python-ast-v1",
+          "digest": "ec6c14c9b3e93268a64eef3f954f1871e0c18f8511b2fc08934ea59a1703655b",
+          "import_signature": "ImportFrom(module='controller_trust', names=[alias(name='has_grounded_terminal_answer'), alias(name='has_validated_terminal_answer')], level=1)"
+        }
+      ],
+      "related_node_ids": [
+        "component:presentation",
+        "component:auditor"
+      ]
+    },
+    "depends_on:component:journal->component:registry": {
+      "id": "depends_on:component:journal->component:registry",
+      "purpose": "Проверить canonical tool name и ограничить diagnostic tool labels.",
+      "data_or_signals": "Tool name и существующая metadata/registry membership; обратно canonical label.",
+      "conditions": "При сериализации и lifecycle diagnostics.",
+      "failure_behavior": "Неизвестный tool label ограничивается; сама регистрация не подтверждает выполненную операцию.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "fc8ccd8e5454a0b2a21a558c21596f4bab1dafb134019a7738ffca0e9f0b2a60",
+      "bindings": [
+        {
+          "path": "server/run_journal.py",
+          "symbol": null,
+          "source_scope": "import",
+          "algorithm": "python-ast-v1",
+          "digest": "0411ff7f22aa02b16a1d731e9c066b8d3efc8147f16c6bb3db76c3521a69db64",
+          "import_signature": "ImportFrom(module='tool_registry', names=[alias(name='canonical_tool_name'), alias(name='compact_tool_summary'), alias(name='tool_log_fields')], level=1)"
+        }
+      ],
+      "related_node_ids": [
+        "component:journal",
+        "component:registry"
+      ]
+    },
+    "depends_on:component:auditor->component:journal": {
+      "id": "depends_on:component:auditor->component:journal",
+      "purpose": "Подготовить ограниченное представление доказательств для аудита.",
+      "data_or_signals": "Current journal entries оборачиваются для LLM и компактизируются.",
+      "conditions": "До отправки audit payload.",
+      "failure_behavior": "Compact projection сохраняет назначение evidence, но не является полной временной трассой.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "3bdee780ab5806179e8e1dd323180e224965ff940478ed1e213344fd5e1faaef",
+      "bindings": [
+        {
+          "path": "server/answer_auditor.py",
+          "symbol": null,
+          "source_scope": "import",
+          "algorithm": "python-ast-v1",
+          "digest": "e7431f9db143e110b9d453123597d34209087c83f772e3ebb8635985a6f166a0",
+          "import_signature": "ImportFrom(module='run_journal', names=[alias(name='wrap_tool_result_for_llm')], level=1)"
+        }
+      ],
+      "related_node_ids": [
+        "component:auditor",
+        "component:journal"
+      ]
+    },
+    "depends_on:component:memory->component:state": {
+      "id": "depends_on:component:memory->component:state",
+      "purpose": "Получить пользовательские факты из существующего серверного хранения.",
+      "data_or_signals": "Authenticated user key в get_user_facts; обратно rows для list/stats/context.",
+      "conditions": "После проверки user ID read tool.",
+      "failure_behavior": "Без authenticated user возвращается error; поведение DB outage не объявлено универсально восстановимым.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "d568e3d90037fe47c9087ec6cf458b5176e8b59a205522a3a265ed0c874c07b8",
+      "bindings": [
+        {
+          "path": "server/controller_shared.py",
+          "symbol": null,
+          "source_scope": "import",
+          "algorithm": "python-ast-v1",
+          "digest": "1b9d6102297b18442699baf6fcd60bd581bba3b52b8c91bbe30f633ea075ad4f",
+          "import_signature": "Import(names=[alias(name='database', asname='db')])"
+        }
+      ],
+      "related_node_ids": [
+        "component:memory",
+        "component:state"
+      ]
+    },
+    "depends_on:component:device->component:browser": {
+      "id": "depends_on:component:device->component:browser",
+      "purpose": "В существующем server task runtime вызвать browser bridge для browser tools.",
+      "data_or_signals": "Owner/task/device/operation/params и действующие authorization flags.",
+      "conditions": "Для browser operation, а не для каждой локальной Agent команды.",
+      "failure_behavior": "Связь агрегирована по shared task_runtime; не означает прямой вызов расширения каждым ACTIONS handler.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "a89161243923c70f95667c07e673ee0e1866795b5303f2973e98bef0d22b4669",
+      "bindings": [
+        {
+          "path": "server/task_runtime.py",
+          "symbol": "run_nl_task.run_on_device",
+          "source_scope": "entity",
+          "algorithm": "python-ast-v1",
+          "digest": "3a04344ec885ce72e316119bcab971c76270a00c0267f2c7fe962ca252bcd83a"
+        }
+      ],
+      "related_node_ids": [
+        "component:device",
+        "component:browser"
+      ]
+    },
+    "depends_on:component:voice->component:presentation": {
+      "id": "depends_on:component:voice->component:presentation",
+      "purpose": "Выбрать озвучиваемую основную часть проверенного результата.",
+      "data_or_signals": "Task и Worker Report; обратно conversational_response/worker_spoken_response.",
+      "conditions": "При подготовке spoken_parts для завершённого/текущего task.",
+      "failure_behavior": "Speech failure не становится новой исполнительной операцией и не подтверждает результат задачи.",
+      "interaction_kind": "aggregated_architectural_dependency",
+      "unknown_contracts": [
+        "Не доказывает участие в конкретном запуске; полная динамическая последовательность не установлена."
+      ],
+      "reviewed": true,
+      "reviewed_against": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+      "architecture_binding_digest": "04ef07403daa18a118c655b54c9fffa0e4ed0d1b676ce6be8dcb7fc21ca13d29",
+      "bindings": [
+        {
+          "path": "server/voice.py",
+          "symbol": "spoken_parts",
+          "source_scope": "entity",
+          "algorithm": "python-ast-v1",
+          "digest": "7d02f0f601835ff8442160ec8d978877051ff635f67dff02d23c891a31aaa77c"
+        }
+      ],
+      "related_node_ids": [
+        "component:voice",
+        "component:presentation"
+      ]
+    }
+  }
+}

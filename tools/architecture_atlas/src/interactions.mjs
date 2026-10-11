@@ -16,9 +16,10 @@ export function reduceInteraction(state,action){
   case 'exit_path':return {...state,pathMode:false,highlight:'overview',selected:null};
   case 'click_node':
    if(state.pathMode){if(!state.a)return {...state,a:action.id,b:null,result:null,highlight:'path'};if(action.id===state.a&&!state.b)return state;return {...state,b:action.id,result:null,highlight:'path'};}
-   return {...state,selected:action.id,detailsNode:state.detailsOpen?action.id:state.detailsNode,diagnosticNode:null,highlight:'selection',executionActive:false};
-  case 'double_node':return state.pathMode?state:{...state,selected:action.id,detailsNode:action.id,detailsOpen:true,highlight:'selection',executionActive:false};
-  case 'open_details':return {...state,detailsNode:action.id,detailsOpen:true};
+   return {...state,selected:action.id,detailsNode:state.detailsOpen?action.id:state.detailsNode,detailsEdgeId:state.detailsOpen?null:state.detailsEdgeId,diagnosticNode:null,highlight:'selection',executionActive:false};
+  case 'double_node':return state.pathMode?state:{...state,selected:action.id,detailsNode:action.id,detailsEdgeId:null,detailsOpen:true,highlight:'selection',executionActive:false};
+  case 'open_details':return {...state,detailsNode:action.id,detailsEdgeId:null,detailsOpen:true};
+  case 'open_edge':return {...state,detailsEdgeId:action.id,detailsOpen:true};
   case 'close_details':return {...state,detailsOpen:false};
   case 'set_path':return {...state,result:action.result,highlight:'path',executionActive:false};
   case 'new_target':return {...state,b:null,result:null,highlight:'path'};
