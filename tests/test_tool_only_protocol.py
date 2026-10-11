@@ -1013,7 +1013,7 @@ def test_execute_cmd_long_running_timeout_remains_unconfirmed():
     async def _send(device_id, action, params):
         sent.append((action, dict(params)))
         if action == "window.find":
-            raise AssertionError("window.find should not run after long_running OK evidence")
+            raise AssertionError("Unexpected window.find in timeout-only case")
         raise Exception("Таймаут выполнения команды")
 
     result = _run_case([
@@ -1025,10 +1025,14 @@ def test_execute_cmd_long_running_timeout_remains_unconfirmed():
     ], send_command_fn=_send)
 
     assert [action for action, _ in sent] == ["execute_cmd"]
-    assert result["commands"][0]["result"]["stdout"] == "OK: launch_requested long_running"
-    assert result["commands"][0]["summary"] == "OK: launch_requested long_running"
+    command_result = result["commands"][0]["result"]
+    assert command_result["error"] == "Таймаут выполнения команды"
+    assert "stdout" not in command_result
+    assert "launch_requested" not in json.dumps(command_result)
+    assert "terminal_sufficient" not in command_result
+    assert sent[0][1]["timeout"] == 5
+    assert not tool_result_terminal_sufficient(result["commands"][0])
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text"]
-    assert result["commands"][0]["result"]["returncode"] is None
     assert result["commands"][-1]["result"]["answer_type"] == "partial_report"
     assert result["commands"][-1]["result"]["self_check"]["claims_completed_action"] is False
     assert "не подтверждён" in result["answer"]
@@ -1320,3 +1324,52 @@ def test_pipeline_worker_max_iterations_runs_answer_only_repair(monkeypatch):
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text", "answer.text"]
     repair_calls = [kwargs for kwargs in captured if [tool["function"]["name"] for tool in (kwargs.get("tools") or [])] == ["answer_text"]]
     assert repair_calls
+
+
+def test_pipeline_long_running_transport_timeout_keeps_original_error():
+    sent = []
+
+    async def _send(device_id, action, params):
+        sent.append((action, dict(params)))
+        raise TimeoutError("Таймаут выполнения команды")
+
+    result = asyncio.run(run_pipeline_worker(
+        client=None,
+        cfg={"model": "mock-model", "answer_auditor_enabled": False},
+        model="mock-model",
+        shared={
+            "current_device_id": "device-1",
+            "target_device_id": "device-1",
+            "current_hostname": "devbox",
+            "current_os": "Windows",
+            "current_os_version": "10",
+            "devices_block": "- device-1 devbox Windows online",
+            "device_profile_block": "",
+            "device_context_block": "",
+            "target_device_block": "",
+            "device_memory_block": "",
+            "os_rules": "Use PowerShell on Windows.",
+            "current_datetime_msk": "2026-06-11 12:00:00 MSK",
+        },
+        overall_goal="Launch application",
+        step={"id": "s1", "title": "Launch", "instruction": "Launch application"},
+        completed_steps=[], chat_history=[], send_command_fn=_send,
+        get_file_link_fn=lambda device_id, path: "/api/download/mock",
+        machine_guid=None, mem_user_id=None, poll_task_id=None, step_index=0,
+        chat_completion_request_fn=_completion_fn([
+            _message(tool_calls=[_tool_call("exec", "execute_cmd", {
+                "command": "start application", "long_running": True,
+            })]),
+            _message(tool_calls=[_answer_call(
+                "final", "Запуск не подтверждён", answer_type="partial_report", basis=["step_1"],
+            )]),
+        ]),
+        worker_tools=[],
+    ))
+    assert [action for action, _ in sent] == ["execute_cmd"]
+    assert sent[0][1]["timeout"] == 5
+    command_result = result["commands"][0]["result"]
+    assert command_result["error"] == "Таймаут выполнения команды"
+    assert "stdout" not in command_result
+    assert "launch_requested" not in json.dumps(command_result)
+    assert not tool_result_terminal_sufficient(result["commands"][0])

@@ -964,23 +964,8 @@ async def process_non_pipeline_command(
                     try:
                         if is_long_running:
                             fn_args["timeout"] = 5
-                            try:
-                                tool_result = await send_command_fn(target_device, "execute_cmd", fn_args)
-                            except Exception as long_running_exc:
-                                if "Таймаут" in str(long_running_exc):
-                                    tool_result = {
-                                        "stdout": "OK: launch_requested long_running",
-                                        "stderr": "",
-                                        "returncode": None,
-                                        "status": "launch_requested",
-                                        # Enough to report uncertainty, not to confirm execution.
-                                        "terminal_sufficient": True,
-                                        "error": None,
-                                    }
-                                else:
-                                    raise
-                        else:
-                            tool_result = await send_command_fn(target_device, "execute_cmd", fn_args)
+                        # A transport timeout is not an agent launch receipt.
+                        tool_result = await send_command_fn(target_device, "execute_cmd", fn_args)
                         print(
                             f"[llm] cmd result: returncode={tool_result.get('returncode')}"
                         )

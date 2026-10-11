@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
@@ -13,6 +14,14 @@ except ImportError:
 
 
 router = APIRouter()
+
+
+def _fail_pending_commands(connection: dict, device_id: str) -> None:
+    pending = connection.get("pending", {})
+    for future in list(pending.values()):
+        if future is not None and not future.done():
+            future.set_result({"error": f"AGENT_DISCONNECTED: устройство '{device_id}' отключилось во время выполнения команды"})
+    pending.clear()
 
 
 @router.websocket("/ws/{device_id}")
@@ -34,7 +43,8 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
     print(f"[ws] agent connected: device_id='{device_id}', user_id={user['id']}, user='{user['name']}'")
     add_audit_log(user["id"], user["name"], "agent_connect", f"device={device_id}", None)
 
-    devices[composite_key] = {
+    old = devices.get(composite_key)
+    connection = {
         "ws": ws,
         "info": {},
         "registered_identity": {"target_device_id": device_id, "registered_hostname": None, "registered_machine_guid": None},
@@ -42,35 +52,45 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
         "user_id": user["id"],
         "short_device_id": device_id,
     }
+    devices[composite_key] = connection
+    if old:
+        _fail_pending_commands(old, device_id)
     print(f"[ws] devices after connect: {list(devices.keys())}")
 
     try:
+        if old:
+            try:
+                await asyncio.wait_for(old["ws"].close(code=4000, reason="agent_reconnected"), timeout=2)
+            except Exception:
+                pass
         while True:
             raw = await ws.receive_text()
+            if devices.get(composite_key) is not connection:
+                break
             data = json.loads(raw)
             msg_type = data.get("type")
 
             if msg_type == "register":
                 payload = data.get("payload", {})
-                devices[composite_key]["info"] = payload
+                connection["info"] = payload
                 cached_passport = payload.get("cached_passport") if isinstance(payload.get("cached_passport"), dict) else {}
                 if cached_passport:
-                    devices[composite_key]["agent_cached_passport"] = cached_passport
+                    connection["agent_cached_passport"] = cached_passport
                 activation_summary = payload.get("activation_summary") or cached_passport.get("activation_summary")
                 runtime_summary = payload.get("runtime_summary") or cached_passport.get("runtime_summary")
                 state_summary = payload.get("state_snapshot_summary") or cached_passport.get("state_snapshot_summary")
                 state_record = cached_passport.get("state_snapshot") if isinstance(cached_passport.get("state_snapshot"), dict) else None
                 if isinstance(activation_summary, dict) and activation_summary:
-                    devices[composite_key]["activation_summary"] = activation_summary
+                    connection["activation_summary"] = activation_summary
                 if isinstance(runtime_summary, dict) and runtime_summary:
-                    devices[composite_key]["python_runtime_summary"] = runtime_summary
+                    connection["python_runtime_summary"] = runtime_summary
                 if isinstance(state_record, dict) and state_record:
-                    devices[composite_key]["agent_cached_state_snapshot"] = state_record
+                    connection["agent_cached_state_snapshot"] = state_record
                 elif isinstance(state_summary, dict) and state_summary:
-                    devices[composite_key]["last_state_snapshot_summary"] = state_summary
+                    connection["last_state_snapshot_summary"] = state_summary
                 if isinstance(payload.get("hardware_summary"), dict):
-                    devices[composite_key]["hardware_summary"] = payload.get("hardware_summary")
-                devices[composite_key]["registered_identity"] = {
+                    connection["hardware_summary"] = payload.get("hardware_summary")
+                connection["registered_identity"] = {
                     "target_device_id": device_id,
                     "registered_hostname": payload.get("hostname"),
                     "registered_machine_guid": payload.get("machine_guid"),
@@ -86,7 +106,7 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
             elif msg_type == "result":
                 payload = data.get("payload", {})
                 cmd_id = payload.get("id")
-                future = devices[composite_key]["pending"].pop(cmd_id, None)
+                future = connection["pending"].pop(cmd_id, None)
                 if future and not future.done():
                     if payload.get("status") == "ok":
                         future.set_result(payload.get("result", {}))
@@ -98,13 +118,8 @@ async def websocket_agent(ws: WebSocket, device_id: str, user_token: str = Query
     except Exception as exc:
         print(f"[ws] error for {device_id}: {exc}")
     finally:
-        current = devices.get(composite_key)
-        if current and current.get("ws") is ws:
-            pending = current.get("pending", {})
-            for cmd_id, future in list(pending.items()):
-                if future and not future.done():
-                    future.set_result({"error": f"AGENT_DISCONNECTED: устройство '{device_id}' отключилось во время выполнения команды"})
-                pending.pop(cmd_id, None)
+        _fail_pending_commands(connection, device_id)
+        if devices.get(composite_key) is connection:
             devices.pop(composite_key, None)
             print(f"[ws] device removed: {device_id}")
         else:
