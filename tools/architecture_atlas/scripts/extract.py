@@ -4,6 +4,7 @@ import json
 import subprocess
 import argparse
 from pathlib import Path
+from semantics import apply_semantics
 
 GROUPS = ['Взаимодействие с человеком', 'Интеллект и понимание', 'Управление задачами', 'Исполнение и устройства', 'Память и состояние', 'Безопасность и полномочия', 'Контроль результатов и доказательства']
 def group(path):
@@ -39,7 +40,12 @@ def extract(root):
                         continue
                     symbol_ids.add(sid)
                     symbols[(p,q)]=sid
-                    nodes.append(dict(id=sid,name=q,type='class' if isinstance(n,ast.ClassDef) else 'function',parent_id=parent,level=3+q.count('.'),description=ast.get_docstring(n) or 'Определение в исходном коде',confidence='confirmed',references=[ref(p,n,'AST definition')]))
+                    kind='class' if isinstance(n,ast.ClassDef) else 'function'
+                    tags=[]
+                    for decorator in n.decorator_list:
+                        expr=decorator.func if isinstance(decorator,ast.Call) else decorator
+                        if isinstance(expr,ast.Attribute) and expr.attr in {'get','post','put','delete','patch','websocket','route'}:tags.append('api_endpoint' if expr.attr!='websocket' else 'event_handler')
+                    nodes.append(dict(id=sid,name=q,type=kind,kind_tags=tags,parent_id=parent,level=3+q.count('.'),description=ast.get_docstring(n) or 'Определение в исходном коде',confidence='confirmed',references=[ref(p,n,'AST definition')]))
                     walk(n.body,sid,q+'.')
                 else:
                     for field in ('body','orelse','finalbody'):
@@ -94,7 +100,7 @@ def extract(root):
                         if caller and target:edge(caller,target,'static_call',ref(p,c,'AST named call; dynamic dispatch not resolved'))
                     calls(n.body,q+'.')
         calls(tree.body)
-    return dict(schema_version=1,git_sha=sha,nodes=nodes,edges=edges,coverage=dict(source_files=len(modules),python_files=len(trees),entities=len(symbols),nodes=len(nodes),static_edges=len(edges),runtime_edges=0,parse_errors=errors,limitations=['JS/HTML modules only; no JS symbol analysis','Logical subsystem assignment is heuristic','Dynamic registries/event dispatch unresolved','Static calls do not prove execution; nested scopes may be conservative']))
+    return apply_semantics(dict(schema_version=1,git_sha=sha,nodes=nodes,edges=edges,coverage=dict(source_files=len(modules),python_files=len(trees),entities=len(symbols),nodes=len(nodes),static_edges=len(edges),runtime_edges=0,parse_errors=errors)))
 
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--repo',type=Path,default=Path(__file__).resolve().parents[3]);ap.add_argument('--output',type=Path,default=Path(__file__).resolve().parents[1]/'data/architecture.json');args=ap.parse_args()
