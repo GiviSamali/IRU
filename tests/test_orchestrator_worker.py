@@ -613,3 +613,42 @@ def test_server_worker_reserves_existing_last_turn_for_honest_partial_answer(own
     assert result['task_receipt']['goal_completed'] is False and result['task_receipt']['task_status']=='partial'
     assert [c['tool_name'] for c in result['commands']]==['web_search','web_search','answer.text']
     assert not responses
+
+
+def test_routing_context_filters_owner_and_chat_before_limit(owners):
+    a,b=owners
+    other_chat=db.create_chat(a['id'],'other')['id']
+    def insert(owner, chat, identifier, timestamp):
+        payload={'message':'bounded goal','device_ids':[]}
+        with db.get_db() as c:
+            c.execute("INSERT INTO worker_jobs(task_id,owner_user_id,chat_id,state,payload,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                      (identifier,owner,chat,'success',json.dumps(payload),timestamp,timestamp))
+    for i in range(9):insert(a['id'],a['chat_id'],f'local-{i}',100+i)
+    for i in range(12):insert(a['id'],other_chat,f'other-{i}',200+i)
+    insert(b['id'],b['chat_id'],'foreign-owner',300)
+    context=orch.context_for(a['id'],a['chat_id'],'question','pc')
+    assert [item['task_id'] for item in context['tasks']]==[f'local-{i}' for i in range(8,0,-1)]
+    assert all(item['chat_id']==a['chat_id'] and item['in_current_chat'] for item in context['tasks'])
+    new_chat=db.create_chat(a['id'],'new')['id']
+    db.add_user_fact(str(a['id']),'Объект расположен по указанному адресу.','general')
+    new_context=orch.context_for(a['id'],new_chat,'Объект','pc')
+    assert new_context['tasks']==[]
+    assert any('Объект' in fact['text'] for fact in new_context['facts'])
+
+
+def test_task_status_cannot_use_task_from_another_chat(owners,monkeypatch):
+    a,_=owners
+    other_chat=db.create_chat(a['id'],'other')['id']
+    t=task(a);t['chat_id']=other_chat
+    with db.get_db() as c:
+        c.execute("INSERT INTO worker_jobs(task_id,owner_user_id,chat_id,state,payload,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                  (t['task_id'],a['id'],other_chat,'success',json.dumps(t),time.time(),time.time()))
+    async def decide(*args,**kwargs):
+        return orch.Decision(intent='task_status',task_id=t['task_id'],reference='explicit'),{}
+    async def delegate(*args,**kwargs):
+        raise AssertionError('No execution is authorized by a status request')
+    monkeypatch.setattr(orch,'decide',decide)
+    cmd=routes.NLCommand(message='Статус задачи '+t['task_id'],chat_id=a['chat_id'],request_id=str(uuid.uuid4()))
+    result=asyncio.run(orch.run_turn(cmd,a,a['chat_id'],delegate))
+    assert tasks[result['task_id']]['status']=='failed'
+    assert tasks[result['task_id']]['commands']==[]
