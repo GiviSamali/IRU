@@ -4,10 +4,11 @@
   const providerKey = () => `iruVoiceProvider:${state.user?.id || 'guest'}`;
   function voiceProvider() {
     const saved = localStorage.getItem(providerKey());
-    const provider = saved === 'silero' ? 'silero' : 'yandex';
+    const provider = saved === 'piper' ? 'piper' : 'yandex';
     if (providerSelect) providerSelect.value = provider;
     return provider;
   }
+  window.iruVoiceProvider = voiceProvider;
   function providerQuery() {
     return `provider=${voiceProvider()}&device_id=${encodeURIComponent(state.selectedDevice || '')}`;
   }

@@ -24,15 +24,15 @@ TERMINAL_STATUSES = {"done", "error", "completed", "completed_with_recovery", "f
 @router.get("/config")
 async def config(request: Request, provider: str = "yandex", device_id: str | None = None):
     user = get_current_user(request)
-    if provider not in {"yandex", "silero"}:
+    if provider not in {"yandex", "piper"}:
         raise HTTPException(400, "Неизвестный обработчик озвучки")
-    if provider == "silero":
-        _silero_device(user["id"], device_id)
-    return {"available": provider == "silero" or voice.speech_configured(), "wake_word": "Иру",
-            "wake_timeout_seconds": 10, "voice": "silero" if provider == "silero" else "zahar"}
+    if provider == "piper":
+        _piper_device(user["id"], device_id)
+    return {"available": provider == "piper" or voice.speech_configured(), "wake_word": "Иру",
+            "wake_timeout_seconds": 10, "voice": "piper" if provider == "piper" else "zahar"}
 
 
-def _silero_device(user_id: int, device_id: str | None) -> str:
+def _piper_device(user_id: int, device_id: str | None) -> str:
     try:
         from ..runtime_state import devices, _dk
     except ImportError:
@@ -40,7 +40,7 @@ def _silero_device(user_id: int, device_id: str | None) -> str:
     key = _dk(user_id, device_id or "")
     device = devices.get(key)
     if not device or device.get("user_id") != user_id:
-        raise HTTPException(503, "Для Silero выберите подключённый компьютер")
+        raise HTTPException(503, "Для Piper выберите подключённый компьютер")
     return key
 
 
@@ -48,7 +48,7 @@ def _silero_device(user_id: int, device_id: str | None) -> str:
 async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0), revision: str | None = None,
                       confirmation: str | None = None, provider: str = "yandex", device_id: str | None = None):
     user = get_current_user(request)
-    if provider not in {"yandex", "silero"}:
+    if provider not in {"yandex", "piper"}:
         raise HTTPException(400, "Неизвестный обработчик озвучки")
     task = tasks.get(task_id)
     if not task or task.get("user_id") != user["id"]:
@@ -96,7 +96,7 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
     parts = voice.answer_parts(ordinary["speech"] if ordinary else review["speech"] if review else offer_text if plan_offer else human_answer, keep_inline=True)
     if not parts:
         return Response(status_code=204)
-    target = _silero_device(user["id"], device_id) if provider == "silero" else None
+    target = _piper_device(user["id"], device_id) if provider == "piper" else None
     if provider == "yandex" and not voice.speech_configured():
         raise HTTPException(503, "Озвучка не настроена на сервере")
     user_id = user["id"]
@@ -109,23 +109,23 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
         if part >= len(parts):
             raise HTTPException(404, "Часть ответа не найдена")
         media_type = "audio/ogg"
-        if provider == "silero":
+        if provider == "piper":
             try:
                 from ..task_runtime import send_command_to_agent
             except ImportError:
                 from task_runtime import send_command_to_agent
             result = await send_command_to_agent(target, "voice.synthesize", {"text": parts[part]}, user_id=user_id)
             if not isinstance(result, dict) or result.get("error") or result.get("media_type") != "audio/wav":
-                raise RuntimeError("Silero failed")
+                raise RuntimeError("Piper failed")
             encoded = result.get("audio_base64")
             if not isinstance(encoded, str) or len(encoded) > 5592408:
-                raise RuntimeError("Invalid Silero audio size")
+                raise RuntimeError("Invalid Piper audio size")
             audio = base64.b64decode(encoded, validate=True)
             if not 44 <= len(audio) <= 4 * 1024 * 1024:
-                raise RuntimeError("Invalid Silero audio size")
+                raise RuntimeError("Invalid Piper audio size")
             with wave.open(io.BytesIO(audio), "rb") as wav:
                 if not wav.getnframes() or wav.getcomptype() != "NONE":
-                    raise RuntimeError("Invalid Silero WAV")
+                    raise RuntimeError("Invalid Piper WAV")
             media_type = "audio/wav"
         else:
             audio = await voice.synthesize(parts[part])

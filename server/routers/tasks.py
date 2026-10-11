@@ -167,6 +167,7 @@ class NLCommand(BaseModel):
     broadcast: bool = False
     device_ids: list[str] = []
     modes: dict = {}
+    voice_provider: str = Field(default="yandex", pattern="^(yandex|piper)$")
     orchestrate: bool = False
     request_id: str | None = Field(default=None, min_length=1, max_length=64)
 

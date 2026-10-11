@@ -849,6 +849,7 @@ async function sendMessage(options = {}) {
       message: messageToSend,
       chat_id: sourceChatId,
       orchestrate: true, request_id: requestId,
+      voice_provider: window.iruVoiceProvider?.() || 'yandex',
       broadcast: isBroadcast,
       modes: { ...state.modes },
     };

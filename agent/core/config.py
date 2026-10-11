@@ -13,8 +13,8 @@ DEFAULT_CONFIG = {
     "device_id": "",
     "server_url": "wss://irumode.ru",
     "user_token": "",
-    "silero_python": "",
-    "silero_script": "",
+    "piper_python": "",
+    "piper_settings": "",
 }
 
 

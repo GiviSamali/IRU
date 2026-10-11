@@ -210,9 +210,15 @@ async def decide(message, context, *, user_id, chat_id, task_id):
     try:
         cfg=load_llm_config();started=time.monotonic()
         stage="llm_request"
+        speech_rules = ("\nДля Piper поле spoken_response оформляй с русскими ударениями: "
+            "ставь комбинируемый знак U+0301 сразу ПОСЛЕ ударной гласной (за́мок, замо́к). "
+            "Не используй плюс, SSML или блоки фонем. Меняется только оформление произношения; "
+            "смысл и факты сохраняются. Эти правила относятся только к spoken_response; "
+            "письменный answer оформляй как обычно."
+            if context.get("voice_provider") == "piper" else "")
         async with httpx.AsyncClient(timeout=httpx.Timeout(60,connect=10)) as client:
             data=await _chat_completion_request(client,cfg,cfg["model"],
-                [{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps({"untrusted_context":context},ensure_ascii=False)},
+                [{"role":"system","content":SYSTEM + speech_rules},{"role":"user","content":json.dumps({"untrusted_context":context},ensure_ascii=False)},
                  {"role":"user","content":message}],tools=[TOOL],tool_choice="required",max_tokens=1200,
                 usage_context={"user_id":user_id,"chat_id":chat_id,"poll_task_id":task_id,"route":"orchestrator","phase":"orchestrator","metadata":{"entity":"orchestrator","context_chars":len(json.dumps(context,ensure_ascii=False))}},phase="orchestrator")
         stage="llm_response"
@@ -232,7 +238,7 @@ async def decide(message, context, *, user_id, chat_id, task_id):
 async def run_turn(cmd, user, chat_id, delegate):
     turn_started=time.monotonic()
     init_turn_storage();owner=user["id"];key=cmd.request_id or str(uuid.uuid4())
-    fingerprint=sha256(json.dumps({"chat_id":chat_id,"message":cmd.message,"device":cmd.device_id,"modes":cmd.modes,"broadcast":cmd.broadcast},sort_keys=True).encode()).hexdigest()
+    fingerprint=sha256(json.dumps({"chat_id":chat_id,"message":cmd.message,"device":cmd.device_id,"modes":cmd.modes,"broadcast":cmd.broadcast,**({"voice_provider":"piper"} if getattr(cmd,"voice_provider","yandex")=="piper" else {})},sort_keys=True).encode()).hexdigest()
     with db.get_db() as c:
         c.execute("BEGIN IMMEDIATE")
         old=c.execute("SELECT * FROM orchestrator_turns WHERE owner_user_id=? AND request_key=?",(owner,key)).fetchone()
@@ -252,6 +258,7 @@ async def run_turn(cmd, user, chat_id, delegate):
     stage="context_for"
     try:
         routing_context=context_for(owner,chat_id,cmd.message,cmd.device_id)
+        routing_context["voice_provider"]=getattr(cmd,"voice_provider","yandex")
         stage="decide"
         choice,stats=await decide(cmd.message,routing_context,user_id=owner,chat_id=chat_id,task_id=tid)
         if choice.intent=="delegate":
@@ -330,7 +337,7 @@ async def run_turn(cmd, user, chat_id, delegate):
                 # Optional speech reuses the existing routing decision, never another model call.
                 speech=choice.spoken_response.strip()
                 # There is no completion evidence in a newly admitted handoff.
-                if speech and not re.search(r"(?i)\b(?:готово|сдела\w*|выполн\w*|заверш\w*|успешно|созда\w*|откры\w*|переда\w*|отправ\w*|сохрани\w*|наш[её]л\w*|подтверждено|задача\s+принята)\b",speech):
+                if speech and not re.search(r"(?i)\b(?:готово|сдела\w*|выполн\w*|заверш\w*|успешно|созда\w*|откры\w*|переда\w*|отправ\w*|сохрани\w*|наш[её]л\w*|подтверждено|задача\s+принята)\b",speech.replace("\u0301", "")):
                     task.update(dialogue_spoken_response=speech,dialogue_speech_answer=answer)
         except Exception as exc:
             _log_failure(tid,"voice_presentation",exc)
