@@ -12,7 +12,7 @@
   font: 11px var(--font); padding: 8px 10px; border-radius: var(--radius); cursor: pointer;
 }
 .smart-text-toggle { display: none; margin-top: 8px; }
-.smart-task { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px; background: var(--bg-tertiary); }
+.smart-task { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px; background: var(--surface-card, var(--bg-tertiary)); }
 .smart-task-heading { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
 .smart-task-title { font-weight: 500; min-width: 0; font-size: 12px; }
 .smart-status { flex-shrink: 0; max-width: 48%; font-size: 10px; color: var(--text-muted); white-space: normal; }
@@ -33,7 +33,7 @@
 .smart-task[data-status="failed"] .cmd-log::after { content: 'Ошибка'; color: var(--error); }
 .smart-task[data-status="cancelled"] .cmd-log::after { content: 'Отменено'; color: var(--text-muted); }
 .smart-task[data-status="success"] .cmd-log::after { content: 'Завершено'; color: var(--success); }
-.smart-file { background: var(--bg-tertiary); padding: 12px; border: 1px solid var(--border-active); border-radius: var(--radius-lg); }
+.smart-file { background: var(--surface-card, var(--bg-tertiary)); padding: 12px; border: 1px solid var(--border-active); border-radius: var(--radius-lg); }
 .smart-file-heading { display: flex; gap: 10px; align-items: baseline; min-width: 0; }
 .smart-file-heading strong { font-size: 12px; font-weight: 500; min-width: 0; }
 .smart-file-kind { font-size: 10px; color: var(--accent); text-transform: uppercase; flex-shrink: 0; }

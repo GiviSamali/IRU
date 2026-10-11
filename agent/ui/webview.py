@@ -40,7 +40,7 @@ class IruMainWindow(QtWidgets.QMainWindow):
         self._save_timer.setInterval(300)
         self._save_timer.timeout.connect(self._save_geometry)
         self.setMinimumSize(320, 240)
-        self.resize(400, 280)
+        self.resize(360, 400)
 
         menu = self.menuBar().addMenu("ИРУ")
         menu.addAction("Настройки агента", show_agent_settings)
@@ -67,6 +67,7 @@ class IruMainWindow(QtWidgets.QMainWindow):
         self._notice_action = self._compact_bar.addAction("Сообщение", self.show_notice)
         self._notice_action.setVisible(False)
         self.menuBar().hide()
+        self._compact_bar.hide()
         self.statusBar().hide()
         self._apply_rectangle("compact")
         app = QtWidgets.QApplication.instance()
@@ -92,7 +93,7 @@ class IruMainWindow(QtWidgets.QMainWindow):
             width, height = r.width(), r.height()
             # A manually enlarged widget must still have a small return form.
             if self.is_compact and (width > 640 or height > 480):
-                width, height = 400, 280
+                width, height = 360, 400
             self._rectangles["compact" if self.is_compact else "expanded"] = [r.x(), r.y(), width, height]
 
     def _save_geometry(self):
@@ -141,11 +142,12 @@ class IruMainWindow(QtWidgets.QMainWindow):
     def _apply_rectangle(self, mode):
         saved = self._rectangles.get(mode)
         if saved:
-            if mode == "compact" and (saved[2] > 640 or saved[3] > 480):
-                saved = [*saved[:2], 400, 280]
+            if mode == "compact" and (
+                    saved[2] > 640 or saved[3] > 480 or saved[2:] == [400, 280]):
+                saved = [*saved[:2], 360, 400]
             self.setGeometry(*saved)
         else:
-            size = (400, 280) if mode == "compact" else (1200, 800)
+            size = (360, 400) if mode == "compact" else (1200, 800)
             self.resize(*size)
         self.clamp_to_screen()
 
@@ -160,8 +162,9 @@ class IruMainWindow(QtWidgets.QMainWindow):
             self.is_compact = compact
             self.menuBar().setVisible(not compact)
             self.statusBar().setVisible(not compact)
-            self._compact_bar.setVisible(compact)
+            self._compact_bar.hide()
             self._apply_rectangle("compact" if compact else "expanded")
+            self._sync_compact_presentation()
         finally:
             self._changing_geometry = False
         self._save_geometry()
@@ -171,6 +174,14 @@ class IruMainWindow(QtWidgets.QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, "_save_timer") and not self._changing_geometry:
             self._save_timer.start()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if (event.type() == QtCore.QEvent.Type.WindowStateChange
+                and self.isMaximized() and getattr(self, "is_compact", False)
+                and not getattr(self, "_changing_geometry", False)):
+            # The title-bar maximize button remains available without a tray.
+            QtCore.QTimer.singleShot(0, lambda: self.set_compact(False))
 
     def moveEvent(self, event):
         super().moveEvent(event)
@@ -228,9 +239,18 @@ class IruMainWindow(QtWidgets.QMainWindow):
 
     def _loaded(self, success):
         if success:
+            self._sync_compact_presentation()
             self._set_notice("")
         else:
             self._set_notice("Сайт недоступен. Проверьте сеть и выберите ИРУ → Обновить страницу.")
+
+    def _sync_compact_presentation(self):
+        if self.web_view is not None:
+            enabled = "true" if self.is_compact else "false"
+            self.web_view.evaluate(
+                f"document.documentElement.classList.toggle('iru-mini', {enabled})",
+                lambda _result: None,
+            )
 
     def _renderer_failed(self, kind):
         recovery = "Перезапустите ИРУ" if kind == "BrowserProcessExited" else "Выберите ИРУ → Обновить страницу"
