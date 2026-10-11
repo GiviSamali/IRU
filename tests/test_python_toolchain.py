@@ -428,3 +428,39 @@ def test_managed_runtime_app_launch_rewrite_is_process_safe():
     assert rewritten["executable"] == r"C:\Users\tester\AppData\Local\IRU\runtime\venv\Scripts\python.exe"
     assert rewritten["args"] == ["app.py"]
     assert not rewritten["command"].startswith("& ")
+
+
+def test_user_instruction_is_saved_verbatim_as_unverified_without_receipt():
+    from server.memory_intent_guard import ORIGINAL_WORKER_REQUEST
+
+    instruction = "Для просмотра проекта используй python -m http.server 8766."
+    token = ORIGINAL_WORKER_REQUEST.set("Запомни инструкцию: " + instruction)
+    try:
+        allowed, stored = validate_toolchain_fact_against_receipt(
+            instruction, None, category="instruction", human_request="planner data",
+        )
+        assert allowed is True
+        assert stored == "Инструкция со слов пользователя; состояние окружения не проверено:\n" + instruction
+        # The instruction remains subject to the ordinary receipt guard as a fact.
+        assert validate_toolchain_fact_against_receipt(instruction, None) == (False, None)
+    finally:
+        ORIGINAL_WORKER_REQUEST.reset(token)
+
+
+def test_instruction_category_cannot_authorize_or_fabricate_environment_memory():
+    from server.memory_intent_guard import ORIGINAL_WORKER_REQUEST
+
+    token = ORIGINAL_WORKER_REQUEST.set("Запомни инструкцию: запускай проект через Python.")
+    try:
+        assert validate_toolchain_fact_against_receipt(
+            "Python установлен в C:\\Python311", None, category="instruction",
+            human_request="Запомни: Python установлен в C:\\Python311",
+        ) == (False, None)
+        assert validate_toolchain_fact_against_receipt(
+            "Python установлен", None, category="preference",
+        ) == (False, None)
+    finally:
+        ORIGINAL_WORKER_REQUEST.reset(token)
+    assert validate_toolchain_fact_against_receipt(
+        "Python", None, category="instruction", human_request="Обсудим Python",
+    ) == (False, None)

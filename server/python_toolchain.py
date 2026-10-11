@@ -601,10 +601,28 @@ def rewrite_python_app_launch_command(command: str, receipt: PythonToolchainRece
 def validate_toolchain_fact_against_receipt(
     fact: str,
     receipt: PythonToolchainReceipt | None,
+    *,
+    category: str | None = None,
+    human_request: str | None = None,
 ) -> tuple[bool, str | None]:
     text = (fact or "").strip()
     if not text:
         return False, None
+    if category == "instruction":
+        # A model-selected category alone is not authority or environment evidence.
+        try:
+            from .memory_intent_guard import ORIGINAL_WORKER_REQUEST, memory_permissions_from_human_request
+        except ImportError:
+            from memory_intent_guard import ORIGINAL_WORKER_REQUEST, memory_permissions_from_human_request
+        original = ORIGINAL_WORKER_REQUEST.get()
+        source = original if original is not None else human_request
+        if (
+            not isinstance(source, str)
+            or "remember_fact" not in memory_permissions_from_human_request(source)
+            or text not in source
+        ):
+            return False, None
+        return True, "Инструкция со слов пользователя; состояние окружения не проверено:\n" + text
     lower = text.lower()
     needs_receipt = bool("python" in lower or "pyqt" in lower or "pyqt5" in lower or "toolchain" in lower)
     if not needs_receipt:

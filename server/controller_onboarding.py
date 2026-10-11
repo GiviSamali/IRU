@@ -155,7 +155,9 @@ async def process_onboarding_message(
                         text = args.get("text")
                         if not isinstance(text, str) or set(args) - {"text","category"}:
                             raise ValueError("invalid memory arguments")
-                        allowed, corrected = validate_toolchain_fact_against_receipt(text, None)
+                        allowed, corrected = validate_toolchain_fact_against_receipt(
+                            text, None, category=args.get("category"), human_request=user_message,
+                        )
                         if not allowed:
                             raise ValueError("Toolchain memory fact requires a verified receipt")
                         result = {"status":"ok","fact_id":db.add_user_fact(str(user_id),corrected or text,args.get("category"))}

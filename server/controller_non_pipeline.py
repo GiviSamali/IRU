@@ -1119,6 +1119,8 @@ async def process_non_pipeline_command(
                             allowed, corrected_fact = validate_toolchain_fact_against_receipt(
                                 fn_args.get("text", ""),
                                 python_receipt,
+                                category=fn_args.get("category"),
+                                human_request=user_message,
                             )
                             if not allowed:
                                 raise ValueError("Toolchain memory fact requires a verified PythonToolchainReceipt")
