@@ -1,0 +1,1771 @@
+{
+  "repository_head": "7008a85bc270612bc402e07d74409b4e7d6b6d00",
+  "snapshot_git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+  "snapshot_id": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858:semantics-0.2",
+  "model_unchanged": true,
+  "profiles": {
+    "static": {
+      "metadata": {
+        "scopeLabel": "Весь снимок",
+        "layer": "all",
+        "nodeCount": 1233,
+        "edgeCount": 1549,
+        "selectedTypes": [
+          "import",
+          "static_call"
+        ],
+        "usedTypes": [
+          "import",
+          "static_call"
+        ],
+        "projectionPolicy": "deduplicate",
+        "suppressedDerivedEdges": 0,
+        "includeInferred": false,
+        "runtimeObservedIncluded": false
+      },
+      "orphans": 163,
+      "dead_ends": 334,
+      "isolated": 355,
+      "centers_above_threshold": 10,
+      "threshold": 20,
+      "top10": [
+        {
+          "id": "code:server/database.py:get_db",
+          "name": "get_db",
+          "subsystem": "Память и состояние",
+          "type": "function",
+          "confidence": "confirmed_source",
+          "in_degree": 91,
+          "out_degree": 0,
+          "total_degree": 91,
+          "unique_neighbors": 91,
+          "edge_types": [
+            "static_call"
+          ],
+          "evidence": [
+            {
+              "path": "server/browser_bridge.py",
+              "symbol": null,
+              "line": 53,
+              "end_line": 53,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/browser_bridge.py",
+              "symbol": null,
+              "line": 92,
+              "end_line": 92,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/browser_bridge.py",
+              "symbol": null,
+              "line": 101,
+              "end_line": 101,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/browser_bridge.py",
+              "symbol": null,
+              "line": 218,
+              "end_line": 218,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/browser_bridge.py",
+              "symbol": null,
+              "line": 240,
+              "end_line": 240,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/browser_bridge.py",
+              "symbol": null,
+              "line": 341,
+              "end_line": 341,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/database.py",
+              "symbol": null,
+              "line": 79,
+              "end_line": 79,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/database.py",
+              "symbol": null,
+              "line": 314,
+              "end_line": 314,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            }
+          ]
+        },
+        {
+          "id": "code:server/controller_non_pipeline.py:process_non_pipeline_command",
+          "name": "process_non_pipeline_command",
+          "subsystem": "Управление задачами",
+          "type": "function",
+          "confidence": "confirmed_source",
+          "in_degree": 0,
+          "out_degree": 66,
+          "total_degree": 66,
+          "unique_neighbors": 66,
+          "edge_types": [
+            "static_call"
+          ],
+          "evidence": [
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 255,
+              "end_line": 255,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 263,
+              "end_line": 263,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 264,
+              "end_line": 264,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 274,
+              "end_line": 274,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 276,
+              "end_line": 276,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 278,
+              "end_line": 278,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 282,
+              "end_line": 282,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 292,
+              "end_line": 292,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            }
+          ]
+        },
+        {
+          "id": "code:server/controller_pipeline.py:run_pipeline_worker",
+          "name": "run_pipeline_worker",
+          "subsystem": "Управление задачами",
+          "type": "function",
+          "confidence": "confirmed_source",
+          "in_degree": 1,
+          "out_degree": 54,
+          "total_degree": 55,
+          "unique_neighbors": 55,
+          "edge_types": [
+            "static_call"
+          ],
+          "evidence": [
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1064,
+              "end_line": 1064,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1083,
+              "end_line": 1083,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1085,
+              "end_line": 1085,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1109,
+              "end_line": 1110,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1111,
+              "end_line": 1111,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1123,
+              "end_line": 1123,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1125,
+              "end_line": 1125,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1171,
+              "end_line": 1171,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            }
+          ]
+        },
+        {
+          "id": "code:server/controller_pipeline.py:process_pipeline_subagents",
+          "name": "process_pipeline_subagents",
+          "subsystem": "Управление задачами",
+          "type": "function",
+          "confidence": "confirmed_source",
+          "in_degree": 0,
+          "out_degree": 46,
+          "total_degree": 46,
+          "unique_neighbors": 46,
+          "edge_types": [
+            "static_call"
+          ],
+          "evidence": [
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1918,
+              "end_line": 1927,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1929,
+              "end_line": 1929,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1931,
+              "end_line": 1931,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1933,
+              "end_line": 1933,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1935,
+              "end_line": 1940,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1949,
+              "end_line": 1949,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1950,
+              "end_line": 1950,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1951,
+              "end_line": 1951,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            }
+          ]
+        },
+        {
+          "id": "code:server/tool_registry.py:canonical_tool_name",
+          "name": "canonical_tool_name",
+          "subsystem": "Исполнение и устройства",
+          "type": "function",
+          "confidence": "confirmed_source",
+          "in_degree": 34,
+          "out_degree": 0,
+          "total_degree": 34,
+          "unique_neighbors": 34,
+          "edge_types": [
+            "static_call"
+          ],
+          "evidence": [
+            {
+              "path": "server/run_journal.py",
+              "symbol": null,
+              "line": 66,
+              "end_line": 66,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/run_journal.py",
+              "symbol": null,
+              "line": 239,
+              "end_line": 239,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/run_journal.py",
+              "symbol": null,
+              "line": 245,
+              "end_line": 245,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/run_journal.py",
+              "symbol": null,
+              "line": 251,
+              "end_line": 251,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/run_journal.py",
+              "symbol": null,
+              "line": 257,
+              "end_line": 257,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/run_journal.py",
+              "symbol": null,
+              "line": 263,
+              "end_line": 263,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/run_journal.py",
+              "symbol": null,
+              "line": 275,
+              "end_line": 275,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/run_journal.py",
+              "symbol": null,
+              "line": 302,
+              "end_line": 302,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            }
+          ]
+        },
+        {
+          "id": "module:server/controller_pipeline.py",
+          "name": "server/controller_pipeline.py",
+          "subsystem": "Управление задачами",
+          "type": "module",
+          "confidence": "confirmed_source",
+          "in_degree": 1,
+          "out_degree": 25,
+          "total_degree": 26,
+          "unique_neighbors": 26,
+          "edge_types": [
+            "import"
+          ],
+          "evidence": [
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 27,
+              "end_line": 27,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 12,
+              "end_line": 12,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 13,
+              "end_line": 13,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 14,
+              "end_line": 14,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 16,
+              "end_line": 16,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 17,
+              "end_line": 17,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 18,
+              "end_line": 18,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 19,
+              "end_line": 19,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            }
+          ]
+        },
+        {
+          "id": "module:server/database.py",
+          "name": "server/database.py",
+          "subsystem": "Память и состояние",
+          "type": "module",
+          "confidence": "confirmed_source",
+          "in_degree": 26,
+          "out_degree": 0,
+          "total_degree": 26,
+          "unique_neighbors": 26,
+          "edge_types": [
+            "import"
+          ],
+          "evidence": [
+            {
+              "path": "server/api_support.py",
+              "symbol": null,
+              "line": 8,
+              "end_line": 8,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/browser_bridge.py",
+              "symbol": null,
+              "line": 17,
+              "end_line": 17,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST Import"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 79,
+              "end_line": 79,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST Import"
+            },
+            {
+              "path": "server/controller_onboarding.py",
+              "symbol": null,
+              "line": 27,
+              "end_line": 27,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST Import"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 76,
+              "end_line": 76,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST Import"
+            },
+            {
+              "path": "server/controller_shared.py",
+              "symbol": null,
+              "line": 13,
+              "end_line": 13,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST Import"
+            },
+            {
+              "path": "server/device_context.py",
+              "symbol": null,
+              "line": 17,
+              "end_line": 17,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST Import"
+            },
+            {
+              "path": "server/file_transfer.py",
+              "symbol": null,
+              "line": 20,
+              "end_line": 20,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST Import"
+            }
+          ]
+        },
+        {
+          "id": "code:server/task_runtime.py:run_nl_task",
+          "name": "run_nl_task",
+          "subsystem": "Управление задачами",
+          "type": "function",
+          "confidence": "confirmed_source",
+          "in_degree": 1,
+          "out_degree": 22,
+          "total_degree": 23,
+          "unique_neighbors": 23,
+          "edge_types": [
+            "static_call"
+          ],
+          "evidence": [
+            {
+              "path": "server/task_runtime.py",
+              "symbol": null,
+              "line": 814,
+              "end_line": 814,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/task_runtime.py",
+              "symbol": null,
+              "line": 1175,
+              "end_line": 1175,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/task_runtime.py",
+              "symbol": null,
+              "line": 1180,
+              "end_line": 1181,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/task_runtime.py",
+              "symbol": null,
+              "line": 1191,
+              "end_line": 1191,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/task_runtime.py",
+              "symbol": null,
+              "line": 1194,
+              "end_line": 1204,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/task_runtime.py",
+              "symbol": null,
+              "line": 1210,
+              "end_line": 1210,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/task_runtime.py",
+              "symbol": null,
+              "line": 1211,
+              "end_line": 1211,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/task_runtime.py",
+              "symbol": null,
+              "line": 1213,
+              "end_line": 1213,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            }
+          ]
+        },
+        {
+          "id": "module:server/controller_non_pipeline.py",
+          "name": "server/controller_non_pipeline.py",
+          "subsystem": "Управление задачами",
+          "type": "module",
+          "confidence": "confirmed_source",
+          "in_degree": 1,
+          "out_degree": 21,
+          "total_degree": 22,
+          "unique_neighbors": 22,
+          "edge_types": [
+            "import"
+          ],
+          "evidence": [
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 25,
+              "end_line": 25,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 12,
+              "end_line": 12,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 13,
+              "end_line": 13,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 14,
+              "end_line": 14,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 15,
+              "end_line": 15,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 16,
+              "end_line": 21,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 22,
+              "end_line": 22,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 23,
+              "end_line": 29,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST ImportFrom"
+            }
+          ]
+        },
+        {
+          "id": "code:server/python_toolchain.py:resolve_python_toolchain",
+          "name": "resolve_python_toolchain",
+          "subsystem": "Исполнение и устройства",
+          "type": "function",
+          "confidence": "confirmed_source",
+          "in_degree": 4,
+          "out_degree": 17,
+          "total_degree": 21,
+          "unique_neighbors": 21,
+          "edge_types": [
+            "static_call"
+          ],
+          "evidence": [
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 398,
+              "end_line": 398,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 1179,
+              "end_line": 1182,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/python_toolchain.py",
+              "symbol": null,
+              "line": 320,
+              "end_line": 320,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/python_toolchain.py",
+              "symbol": null,
+              "line": 321,
+              "end_line": 321,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/python_toolchain.py",
+              "symbol": null,
+              "line": 331,
+              "end_line": 331,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/python_toolchain.py",
+              "symbol": null,
+              "line": 338,
+              "end_line": 338,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/python_toolchain.py",
+              "symbol": null,
+              "line": 339,
+              "end_line": 339,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            },
+            {
+              "path": "server/python_toolchain.py",
+              "symbol": null,
+              "line": 340,
+              "end_line": 340,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "AST named call; dynamic dispatch not resolved"
+            }
+          ]
+        }
+      ]
+    },
+    "semantic": {
+      "metadata": {
+        "scopeLabel": "Весь снимок",
+        "layer": "all",
+        "nodeCount": 1233,
+        "edgeCount": 491,
+        "selectedTypes": [
+          "depends_on",
+          "implements"
+        ],
+        "usedTypes": [
+          "depends_on",
+          "implements"
+        ],
+        "projectionPolicy": "deduplicate",
+        "suppressedDerivedEdges": 0,
+        "includeInferred": false,
+        "runtimeObservedIncluded": false
+      },
+      "orphans": 126,
+      "dead_ends": 7,
+      "isolated": 1049,
+      "centers_above_threshold": 15,
+      "threshold": 20,
+      "top10": [
+        {
+          "id": "mechanism:runtime-context",
+          "name": "Controller runtime context",
+          "subsystem": "Интеллект и понимание",
+          "type": "mechanism",
+          "confidence": "verified_architectural_mapping",
+          "in_degree": 21,
+          "out_degree": 12,
+          "total_degree": 33,
+          "unique_neighbors": 27,
+          "edge_types": [
+            "depends_on",
+            "implements"
+          ],
+          "evidence": [
+            {
+              "path": "server/controller.py",
+              "symbol": "LLMRuntimeContext",
+              "line": 203,
+              "end_line": 218,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Собирает профиль, устройства и историю для выбора controller route.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": "_build_runtime_context",
+              "line": 451,
+              "end_line": 485,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Собирает профиль, устройства и историю для выбора controller route.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller_shared.py",
+              "symbol": "build_memory_block",
+              "line": 407,
+              "end_line": 449,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Собирает профиль, устройства и историю для выбора controller route.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller_shared.py",
+              "symbol": "build_chat_messages",
+              "line": 464,
+              "end_line": 484,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Собирает профиль, устройства и историю для выбора controller route.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 25,
+              "end_line": 25,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_non_pipeline.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_non_pipeline.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 27,
+              "end_line": 27,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_pipeline.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_pipeline.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 35,
+              "end_line": 46,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_shared.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_shared.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 100,
+              "end_line": 100,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/run_journal.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/run_journal.py"
+            }
+          ]
+        },
+        {
+          "id": "mechanism:device-fanout",
+          "name": "Device-scoped execution",
+          "subsystem": "Управление задачами",
+          "type": "mechanism",
+          "confidence": "verified_architectural_mapping",
+          "in_degree": 13,
+          "out_degree": 17,
+          "total_degree": 30,
+          "unique_neighbors": 26,
+          "edge_types": [
+            "depends_on",
+            "implements"
+          ],
+          "evidence": [
+            {
+              "path": "server/task_runtime.py",
+              "symbol": "run_nl_task",
+              "line": 802,
+              "end_line": 1400,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Определяет broadcast и запускает run_on_device с проверкой владельца; собирает результаты устройств.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/task_runtime.py",
+              "symbol": "run_on_device",
+              "line": 848,
+              "end_line": 1172,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Определяет broadcast и запускает run_on_device с проверкой владельца; собирает результаты устройств.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": "build_pipeline_other_devices_summary",
+              "line": 624,
+              "end_line": 631,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Определяет broadcast и запускает run_on_device с проверкой владельца; собирает результаты устройств.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 27,
+              "end_line": 27,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_pipeline.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_pipeline.py"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 16,
+              "end_line": 16,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_pipeline.py->module:server/answer_auditor.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_pipeline.py->module:server/answer_auditor.py"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 33,
+              "end_line": 33,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_pipeline.py->module:server/memory_tools.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_pipeline.py->module:server/memory_tools.py"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 34,
+              "end_line": 38,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_pipeline.py->module:server/memory_intent_guard.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_pipeline.py->module:server/memory_intent_guard.py"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 39,
+              "end_line": 39,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_pipeline.py->module:server/runtime_state.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_pipeline.py->module:server/runtime_state.py"
+            }
+          ]
+        },
+        {
+          "id": "mechanism:worker-tool-loop",
+          "name": "Tool execution loop",
+          "subsystem": "Управление задачами",
+          "type": "mechanism",
+          "confidence": "verified_architectural_mapping",
+          "in_degree": 13,
+          "out_degree": 16,
+          "total_degree": 29,
+          "unique_neighbors": 26,
+          "edge_types": [
+            "depends_on",
+            "implements"
+          ],
+          "evidence": [
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": "process_non_pipeline_command",
+              "line": 224,
+              "end_line": 1353,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Выполняет итерации controller non-pipeline, обрабатывает tools и терминальный ответ по протоколу.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": "process_nl_command",
+              "line": 708,
+              "end_line": 774,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Выполняет итерации controller non-pipeline, обрабатывает tools и терминальный ответ по протоколу.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 25,
+              "end_line": 25,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_non_pipeline.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_non_pipeline.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 27,
+              "end_line": 27,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_pipeline.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_pipeline.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 35,
+              "end_line": 46,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_shared.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_shared.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 100,
+              "end_line": 100,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/run_journal.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/run_journal.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 749,
+              "end_line": 749,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро static_call:code:server/controller.py:process_nl_command->code:server/controller.py:_select_llm_route между привязанными реализациями",
+              "source_edge_id": "static_call:code:server/controller.py:process_nl_command->code:server/controller.py:_select_llm_route"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 12,
+              "end_line": 12,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_non_pipeline.py->module:server/answer_auditor.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_non_pipeline.py->module:server/answer_auditor.py"
+            }
+          ]
+        },
+        {
+          "id": "mechanism:memory-read",
+          "name": "User fact reads",
+          "subsystem": "Память и состояние",
+          "type": "mechanism",
+          "confidence": "verified_architectural_mapping",
+          "in_degree": 25,
+          "out_degree": 1,
+          "total_degree": 26,
+          "unique_neighbors": 26,
+          "edge_types": [
+            "depends_on",
+            "implements"
+          ],
+          "evidence": [
+            {
+              "path": "server/memory_tools.py",
+              "symbol": "run_memory_tool",
+              "line": 39,
+              "end_line": 78,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Возвращает stats/list фактов только authenticated user.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/database.py",
+              "symbol": "get_user_facts",
+              "line": 1399,
+              "end_line": 1408,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Возвращает stats/list фактов только authenticated user.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller_shared.py",
+              "symbol": "build_memory_block",
+              "line": 407,
+              "end_line": 449,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Возвращает stats/list фактов только authenticated user.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/browser_bridge.py",
+              "symbol": null,
+              "line": 17,
+              "end_line": 17,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/browser_bridge.py->module:server/database.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/browser_bridge.py->module:server/database.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 35,
+              "end_line": 46,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_shared.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_shared.py"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 33,
+              "end_line": 33,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_pipeline.py->module:server/memory_tools.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_pipeline.py->module:server/memory_tools.py"
+            },
+            {
+              "path": "server/controller_shared.py",
+              "symbol": null,
+              "line": 13,
+              "end_line": 13,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_shared.py->module:server/database.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_shared.py->module:server/database.py"
+            },
+            {
+              "path": "server/orchestrator.py",
+              "symbol": null,
+              "line": 21,
+              "end_line": 21,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/orchestrator.py->module:server/database.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/orchestrator.py->module:server/database.py"
+            }
+          ]
+        },
+        {
+          "id": "mechanism:bounded-context",
+          "name": "Bounded Worker context",
+          "subsystem": "Интеллект и понимание",
+          "type": "mechanism",
+          "confidence": "verified_architectural_mapping",
+          "in_degree": 16,
+          "out_degree": 7,
+          "total_degree": 23,
+          "unique_neighbors": 19,
+          "edge_types": [
+            "depends_on",
+            "implements"
+          ],
+          "evidence": [
+            {
+              "path": "server/worker_context.py",
+              "symbol": "capture_history",
+              "line": 17,
+              "end_line": 31,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Отбирает историю, проверяет принадлежность результатов и устройств, ограничивает размер handoff.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/worker_context.py",
+              "symbol": "source_references",
+              "line": 33,
+              "end_line": 57,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Отбирает историю, проверяет принадлежность результатов и устройств, ограничивает размер handoff.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/worker_context.py",
+              "symbol": "build_worker_context",
+              "line": 60,
+              "end_line": 124,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Отбирает историю, проверяет принадлежность результатов и устройств, ограничивает размер handoff.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller_shared.py",
+              "symbol": "data_only_context",
+              "line": 400,
+              "end_line": 404,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Отбирает историю, проверяет принадлежность результатов и устройств, ограничивает размер handoff.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 35,
+              "end_line": 46,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_shared.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_shared.py"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 135,
+              "end_line": 151,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_pipeline.py->module:server/controller_shared.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_pipeline.py->module:server/controller_shared.py"
+            },
+            {
+              "path": "server/controller_shared.py",
+              "symbol": null,
+              "line": 13,
+              "end_line": 13,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_shared.py->module:server/database.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_shared.py->module:server/database.py"
+            },
+            {
+              "path": "server/worker_context.py",
+              "symbol": null,
+              "line": 7,
+              "end_line": 7,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/worker_context.py->module:server/controller_shared.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/worker_context.py->module:server/controller_shared.py"
+            }
+          ]
+        },
+        {
+          "id": "mechanism:plan-contract",
+          "name": "Plan normalization",
+          "subsystem": "Управление задачами",
+          "type": "mechanism",
+          "confidence": "verified_architectural_mapping",
+          "in_degree": 10,
+          "out_degree": 13,
+          "total_degree": 23,
+          "unique_neighbors": 22,
+          "edge_types": [
+            "depends_on",
+            "implements"
+          ],
+          "evidence": [
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": "normalize_pipeline_plan",
+              "line": 282,
+              "end_line": 349,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Нормализует план и проверяет устройство шага; готовит shared/worker context.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": "validate_pipeline_step_device",
+              "line": 634,
+              "end_line": 648,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Нормализует план и проверяет устройство шага; готовит shared/worker context.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": "build_pipeline_shared_context",
+              "line": 580,
+              "end_line": 614,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Нормализует план и проверяет устройство шага; готовит shared/worker context.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": "build_pipeline_worker_context",
+              "line": 651,
+              "end_line": 695,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Нормализует план и проверяет устройство шага; готовит shared/worker context.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 27,
+              "end_line": 27,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_pipeline.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_pipeline.py"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 16,
+              "end_line": 16,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_pipeline.py->module:server/answer_auditor.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_pipeline.py->module:server/answer_auditor.py"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 33,
+              "end_line": 33,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_pipeline.py->module:server/memory_tools.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_pipeline.py->module:server/memory_tools.py"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 34,
+              "end_line": 38,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_pipeline.py->module:server/memory_intent_guard.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_pipeline.py->module:server/memory_intent_guard.py"
+            }
+          ]
+        },
+        {
+          "id": "mechanism:report-projection",
+          "name": "Outcome report projection",
+          "subsystem": "Контроль результатов и доказательства",
+          "type": "mechanism",
+          "confidence": "verified_architectural_mapping",
+          "in_degree": 12,
+          "out_degree": 11,
+          "total_degree": 23,
+          "unique_neighbors": 21,
+          "edge_types": [
+            "depends_on",
+            "implements"
+          ],
+          "evidence": [
+            {
+              "path": "server/worker_reports.py",
+              "symbol": "WorkerReport",
+              "line": 6,
+              "end_line": 24,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Собирает WorkerReport из команд, basis, task receipt и status.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/worker_reports.py",
+              "symbol": "build_worker_report",
+              "line": 57,
+              "end_line": 132,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Собирает WorkerReport из команд, basis, task receipt и status.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/worker_reports.py",
+              "symbol": "positive_evidence",
+              "line": 41,
+              "end_line": 54,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Собирает WorkerReport из команд, basis, task receipt и status.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/worker_scheduler.py",
+              "symbol": "persist_report",
+              "line": 105,
+              "end_line": 149,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Собирает WorkerReport из команд, basis, task receipt и status.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/orchestrator.py",
+              "symbol": null,
+              "line": 19,
+              "end_line": 19,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/orchestrator.py->module:server/worker_scheduler.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/orchestrator.py->module:server/worker_scheduler.py"
+            },
+            {
+              "path": "server/response_presentation.py",
+              "symbol": null,
+              "line": 9,
+              "end_line": 9,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/response_presentation.py->module:server/worker_reports.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/response_presentation.py->module:server/worker_reports.py"
+            },
+            {
+              "path": "server/worker_context.py",
+              "symbol": null,
+              "line": 35,
+              "end_line": 35,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/worker_context.py->module:server/worker_scheduler.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/worker_context.py->module:server/worker_scheduler.py"
+            },
+            {
+              "path": "server/worker_reports.py",
+              "symbol": null,
+              "line": 28,
+              "end_line": 28,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/worker_reports.py->module:server/controller_trust.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/worker_reports.py->module:server/controller_trust.py"
+            }
+          ]
+        },
+        {
+          "id": "mechanism:llm-route",
+          "name": "Controller route selection",
+          "subsystem": "Интеллект и понимание",
+          "type": "mechanism",
+          "confidence": "verified_architectural_mapping",
+          "in_degree": 11,
+          "out_degree": 11,
+          "total_degree": 22,
+          "unique_neighbors": 20,
+          "edge_types": [
+            "depends_on",
+            "implements"
+          ],
+          "evidence": [
+            {
+              "path": "server/controller.py",
+              "symbol": "LLMRouteSpec",
+              "line": 222,
+              "end_line": 225,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Выбирает LLMRouteSpec по modes и формирует аргументы executor.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": "_select_llm_route",
+              "line": 513,
+              "end_line": 515,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Выбирает LLMRouteSpec по modes и формирует аргументы executor.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": "_build_route_kwargs",
+              "line": 599,
+              "end_line": 691,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Выбирает LLMRouteSpec по modes и формирует аргументы executor.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 25,
+              "end_line": 25,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_non_pipeline.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_non_pipeline.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 27,
+              "end_line": 27,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_pipeline.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_pipeline.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 35,
+              "end_line": 46,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_shared.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_shared.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 100,
+              "end_line": 100,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/run_journal.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/run_journal.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 749,
+              "end_line": 749,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро static_call:code:server/controller.py:process_nl_command->code:server/controller.py:_select_llm_route между привязанными реализациями",
+              "source_edge_id": "static_call:code:server/controller.py:process_nl_command->code:server/controller.py:_select_llm_route"
+            }
+          ]
+        },
+        {
+          "id": "mechanism:llm-transport",
+          "name": "Chat completion transport",
+          "subsystem": "Интеллект и понимание",
+          "type": "mechanism",
+          "confidence": "verified_architectural_mapping",
+          "in_degree": 11,
+          "out_degree": 11,
+          "total_degree": 22,
+          "unique_neighbors": 20,
+          "edge_types": [
+            "depends_on",
+            "implements"
+          ],
+          "evidence": [
+            {
+              "path": "server/controller.py",
+              "symbol": "load_llm_config",
+              "line": 87,
+              "end_line": 96,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Формирует chat/completions запрос, thinking fields и usage context; применяет существующие retries.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": "_chat_completion_request",
+              "line": 267,
+              "end_line": 429,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Формирует chat/completions запрос, thinking fields и usage context; применяет существующие retries.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": "_thinking_request_fields",
+              "line": 236,
+              "end_line": 264,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Формирует chat/completions запрос, thinking fields и usage context; применяет существующие retries.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 25,
+              "end_line": 25,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_non_pipeline.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_non_pipeline.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 27,
+              "end_line": 27,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_pipeline.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_pipeline.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 35,
+              "end_line": 46,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/controller_shared.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/controller_shared.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 100,
+              "end_line": 100,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller.py->module:server/run_journal.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller.py->module:server/run_journal.py"
+            },
+            {
+              "path": "server/controller.py",
+              "symbol": null,
+              "line": 470,
+              "end_line": 470,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро static_call:code:server/controller.py:_build_runtime_context->code:server/controller.py:load_llm_config между привязанными реализациями",
+              "source_edge_id": "static_call:code:server/controller.py:_build_runtime_context->code:server/controller.py:load_llm_config"
+            }
+          ]
+        },
+        {
+          "id": "mechanism:task-state",
+          "name": "Task cancellation state",
+          "subsystem": "Память и состояние",
+          "type": "mechanism",
+          "confidence": "verified_architectural_mapping",
+          "in_degree": 22,
+          "out_degree": 0,
+          "total_degree": 22,
+          "unique_neighbors": 22,
+          "edge_types": [
+            "depends_on",
+            "implements"
+          ],
+          "evidence": [
+            {
+              "path": "server/runtime_state.py",
+              "symbol": "is_task_cancel_requested",
+              "line": 150,
+              "end_line": 154,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Хранит task state и маркирует запрос остановки и terminal cancellation.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/runtime_state.py",
+              "symbol": "mark_task_cancelled",
+              "line": 157,
+              "end_line": 171,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Хранит task state и маркирует запрос остановки и terminal cancellation.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/database.py",
+              "line": 1,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Хранит task state и маркирует запрос остановки и terminal cancellation.; reviewed definition/contract binding"
+            },
+            {
+              "path": "server/browser_bridge.py",
+              "symbol": null,
+              "line": 15,
+              "end_line": 15,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/browser_bridge.py->module:server/runtime_state.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/browser_bridge.py->module:server/runtime_state.py"
+            },
+            {
+              "path": "server/controller_non_pipeline.py",
+              "symbol": null,
+              "line": 37,
+              "end_line": 37,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_non_pipeline.py->module:server/runtime_state.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_non_pipeline.py->module:server/runtime_state.py"
+            },
+            {
+              "path": "server/controller_pipeline.py",
+              "symbol": null,
+              "line": 39,
+              "end_line": 39,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_pipeline.py->module:server/runtime_state.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_pipeline.py->module:server/runtime_state.py"
+            },
+            {
+              "path": "server/controller_shared.py",
+              "symbol": null,
+              "line": 13,
+              "end_line": 13,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/controller_shared.py->module:server/database.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/controller_shared.py->module:server/database.py"
+            },
+            {
+              "path": "server/orchestrator.py",
+              "symbol": null,
+              "line": 18,
+              "end_line": 18,
+              "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+              "explanation": "Статическое ребро import:module:server/orchestrator.py->module:server/runtime_state.py между привязанными реализациями",
+              "source_edge_id": "import:module:server/orchestrator.py->module:server/runtime_state.py"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "example_path": {
+    "status": "found",
+    "source": "code:server/orchestrator.py:run_turn",
+    "target": "code:server/worker_reports.py:build_worker_report",
+    "edgeIds": [
+      "static_call:code:server/orchestrator.py:run_turn->code:server/response_presentation.py:normalized_worker_report",
+      "static_call:code:server/response_presentation.py:normalized_worker_report->code:server/worker_reports.py:build_worker_report"
+    ],
+    "nodeIds": [
+      "code:server/orchestrator.py:run_turn",
+      "code:server/response_presentation.py:normalized_worker_report",
+      "code:server/worker_reports.py:build_worker_report"
+    ],
+    "steps": [
+      {
+        "edge_id": "static_call:code:server/orchestrator.py:run_turn->code:server/response_presentation.py:normalized_worker_report",
+        "source": "code:server/orchestrator.py:run_turn",
+        "target": "code:server/response_presentation.py:normalized_worker_report",
+        "type": "static_call",
+        "direction": "forward",
+        "evidence": [
+          {
+            "path": "server/orchestrator.py",
+            "symbol": null,
+            "line": 291,
+            "end_line": 291,
+            "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+            "explanation": "AST named call; dynamic dispatch not resolved"
+          }
+        ]
+      },
+      {
+        "edge_id": "static_call:code:server/response_presentation.py:normalized_worker_report->code:server/worker_reports.py:build_worker_report",
+        "source": "code:server/response_presentation.py:normalized_worker_report",
+        "target": "code:server/worker_reports.py:build_worker_report",
+        "type": "static_call",
+        "direction": "forward",
+        "evidence": [
+          {
+            "path": "server/response_presentation.py",
+            "symbol": null,
+            "line": 95,
+            "end_line": 95,
+            "git_sha": "ee3cc4971e5b88f9853e36cef38e7e986f7fd858",
+            "explanation": "AST named call; dynamic dispatch not resolved"
+          }
+        ]
+      }
+    ],
+    "types": [
+      "import",
+      "static_call"
+    ]
+  }
+}
