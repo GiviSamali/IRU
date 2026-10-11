@@ -1,5 +1,23 @@
 /* DeepTalk voice interaction using IRU's chat/task/auth flow. */
 (() => {
+  const providerSelect = document.getElementById('voiceProvider');
+  const providerKey = () => `iruVoiceProvider:${state.user?.id || 'guest'}`;
+  function voiceProvider() {
+    const saved = localStorage.getItem(providerKey());
+    const provider = saved === 'piper' ? 'piper' : 'yandex';
+    if (providerSelect) providerSelect.value = provider;
+    return provider;
+  }
+  window.iruVoiceProvider = voiceProvider;
+  function providerQuery() {
+    return `provider=${voiceProvider()}&device_id=${encodeURIComponent(state.selectedDevice || '')}`;
+  }
+  providerSelect?.addEventListener('focus', voiceProvider);
+  document.getElementById('settingsToggle')?.addEventListener('click', voiceProvider);
+  providerSelect?.addEventListener('change', () => {
+    localStorage.setItem(providerKey(), providerSelect.value);
+    window.stopVoice?.();
+  });
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const singleUtterance = /Android/i.test(navigator.userAgent);
   const button = document.getElementById('voiceBtn');
@@ -153,14 +171,18 @@
     }
   }
   async function speak(taskId, signal, onSpeaking, review) {
+    const selectedProviderQuery = providerQuery();
     let count = 1;
     for (let part = 0; part < count; part++) {
       const consentQuery = review?.confirmationId ? `&confirmation=${encodeURIComponent(review.confirmationId)}` : review?.revision ? `&revision=${encodeURIComponent(review.revision)}` : '';
-      const response = await apiFetch(`${API}/api/voice/tasks/${encodeURIComponent(taskId)}/speech?part=${part}${consentQuery}`, {
+      const response = await apiFetch(`${API}/api/voice/tasks/${encodeURIComponent(taskId)}/speech?part=${part}&${selectedProviderQuery}${consentQuery}`, {
         method: 'POST', headers: authHeaders(), signal,
       });
       if (response.status === 204) return;
-      if (!response.ok) throw new Error('Озвучка недоступна. Ответ сохранён в чате.');
+      if (!response.ok) {
+        const failure = await response.json().catch(() => ({}));
+        throw new Error(typeof failure.detail === 'string' ? `${failure.detail}. Ответ сохранён в чате.` : 'Озвучка недоступна. Ответ сохранён в чате.');
+      }
       count = Number(response.headers.get('X-Voice-Parts')) || 1;
       const bytes = await response.arrayBuffer();
       if (signal.aborted) return;
@@ -206,10 +228,11 @@
     try {
       audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
       await audioContext.resume();
-      const response = await apiFetch(`${API}/api/voice/config`, { headers: authHeaders() });
+      const response = await apiFetch(`${API}/api/voice/config?${providerQuery()}`, { headers: authHeaders() });
       if (!response.ok) throw new Error('Не удалось включить голосовой режим.');
       const config = await response.json();
       if (id !== activation) return;
+      if (!response.ok) throw new Error(typeof config.detail === 'string' ? config.detail : 'Озвучка недоступна.');
       if (!config.available) throw new Error('Озвучка не настроена на сервере.');
       session.enable(state.pendingTasks.map(task=>({id:task.task_id,background:task.kind !== 'orchestrator'})),{continuous:true});
       const reviewMessage = state.messages.find(message => message.planReview);

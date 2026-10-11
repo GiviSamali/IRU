@@ -60,6 +60,10 @@ def conversational_speech(value, answer: str) -> str:
     """Conservative projection guard, not a new intent classifier or execution authority."""
     if not isinstance(value,str) or not 0<len(value.strip())<=420:return ""
     value=value.strip()
+    spoken_value=value
+    # Pronunciation marks are presentation only; apply the same fact guards to plain text.
+    value=re.sub(r"(?<=[аеёиоуыэюяАЕЁИОУЫЭЮЯ])\u0301", "", value)
+    if "\u0301" in value:return ""
     if not any(ch.isalnum() for ch in value):return ""
     try:value.encode("utf-8")
     except UnicodeEncodeError:return ""
@@ -77,7 +81,7 @@ def conversational_speech(value, answer: str) -> str:
     if not values(value)<=values(answer):return ""
     claim=r"\b(?:сделал\w*|выполн(?:ил|ен)\w*|создал\w*|сохранил\w*|открыл\w*|удалил\w*)\b"
     if re.search(claim,value,re.I) and not re.search(claim,answer,re.I):return ""
-    return value
+    return spoken_value
 
 
 def wants_spoken_details(message: str) -> bool:

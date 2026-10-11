@@ -114,6 +114,12 @@ def worker_presentation(task, report=None):
     """Keep raw protocol text unchanged; derive prose only from normalized evidence."""
     report=normalized_worker_report(task,report)
     answer=task.get("answer") if isinstance(task.get("answer"),str) else ""
+    receipt=task.get("task_receipt") or {}
+    if (report["status"]=="success" and receipt.get("answer_source")=="audited_terminal"
+            and receipt.get("goal_completed") is True and receipt.get("final_verification_status")=="verified"
+            and has_grounded_terminal_answer(answer,task.get("commands") or [])):
+        # A legacy presentation cache or helper artifact cannot replace an audited result.
+        return {"conversational_response":answer,"execution_details":""}
     saved=task.get("history_metadata")
     if isinstance(saved,dict) and saved.get("workerReport")==report and isinstance(saved.get("conversationalResponse"),str):
         details=saved.get("executionDetails") or ""

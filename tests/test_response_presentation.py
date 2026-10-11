@@ -25,7 +25,7 @@ def owner(tmp_path, monkeypatch):
 def completed(owner, suffix="pptx"):
     result = {"task_id":"presentation-task","user_id":owner["id"],"chat_id":owner["chat_id"],
         "kind":"worker","worker_id":"worker-1","message":"Создай презентацию","device_ids":[f"{owner['id']}:pc"],
-        "modes":{},"created_at":time.time(),"status":"done","answer":"Все 10 слайдов. "*80+r" C:\private\build.py",
+        "modes":{},"created_at":time.time(),"status":"done","answer":"Все 10 слайдов. Результат готов.",
         "commands":[{"tool_name":"write_content","step_id":"step_1","status":"success","device_id":"pc",
             "result":{"path":r"C:\Users\Owner\Desktop\result."+suffix,"bytes_written":500}}],
         "tasks":[],"task_receipt":{"task_status":"completed","goal_completed":True,"final_verification_status":"verified","answer_source":"audited_terminal"}}
@@ -37,15 +37,15 @@ def completed(owner, suffix="pptx"):
     return result
 
 
-def test_presentation_is_based_on_artifact_evidence_not_report_prose(owner):
+def test_audited_terminal_is_primary_and_artifacts_remain_verified(owner):
     task=completed(owner);before=json.dumps(task,ensure_ascii=False);report=build_worker_report(task)
     view=worker_presentation(task,report)
-    assert view['conversational_response']=='Презентация готова. Файл на рабочем столе.'
-    assert '10' not in view['conversational_response'] and 'C:' not in view['conversational_response']
-    assert view['execution_details']==task['answer'] and json.dumps(task,ensure_ascii=False)==before
+    assert view['conversational_response']==task['answer']
+    assert view['execution_details']=='' and report['artifacts'][0]['verified'] is True
+    assert json.dumps(task,ensure_ascii=False)==before
     assert report==build_worker_report(task) # Worker Report v1/status not altered by presentation.
     task['commands'][0]['result']['path']=r'C:\Users\Owner\Desktop\script.py'
-    assert worker_presentation(task)['conversational_response']=='Файл готов. Файл на рабочем столе.'
+    assert worker_presentation(task)['conversational_response']==task['answer']
 
 
 def test_filename_claims_without_artifact_evidence_cannot_create_presentation_facts(owner):
@@ -60,7 +60,8 @@ def test_filename_claims_without_artifact_evidence_cannot_create_presentation_fa
 @pytest.mark.parametrize('suffix,noun',[('docx','Документ готов.'),('xlsx','Таблица готова.'),('html','Страница сайта готова.'),('pdf','PDF-документ готов.')])
 def test_document_types_and_paths_are_factual(owner,suffix,noun):
     task=completed(owner,suffix)
-    assert worker_presentation(task)['conversational_response'].startswith(noun)
+    assert worker_presentation(task)['conversational_response']==task['answer']
+    assert build_worker_report(task)['artifacts'][0]['path'].endswith('.'+suffix)
     task['commands'][0]['result']['path']=r'C:\Users\Other\Desktop\report.'+suffix
     assert 'рабочем столе' not in worker_presentation(task)['conversational_response']
 
@@ -99,18 +100,18 @@ def test_saved_message_and_restored_task_keep_summary_raw_report_and_journal(own
         scheduler=WorkerScheduler(execute)
         await scheduler.submit(task);await scheduler.runners[owner['id']]
         message=db.get_messages(owner['chat_id'])[0]
-        assert message['content']=='Презентация готова. Файл на рабочем столе.'
-        assert message['executionDetails']==raw and message['commands']==journal
+        assert message['content']==raw
+        assert message['executionDetails']=='' and message['commands']==journal
         assert task['answer']==raw
         restored=restore_task(owned_job(task['task_id'],owner['id']))
-        assert restored['answer']==raw and restored['execution_details']==raw
+        assert restored['answer']==raw and restored['execution_details']==''
         assert restored['conversational_response']==message['content']
         assert restored['worker_report']==task['worker_report'] and restored['task_receipt']['goal_completed'] is True
         monkeypatch.setattr(routes,'get_current_user',lambda request:owner)
         tasks.pop(task['task_id'])
         reply=await routes.api_get_task(task['task_id'],SimpleNamespace())
         assert reply['task']['answer']==raw and reply['task']['conversational_response']==message['content']
-        assert reply['task']['execution_details']==raw
+        assert reply['task']['execution_details']==''
         db.upsert_device_profile('pc',owner['id'],{'desktop_path':r'C:\NewDesktop'})
         assert worker_presentation(restored)['conversational_response']==message['content']
         assert await voice.spoken_parts(restored)==[message['content']]
@@ -195,7 +196,8 @@ def test_actual_voice_endpoint_matches_visible_result_and_ignores_report_injecti
     visible=client.get('/api/tasks/'+task['task_id'],headers=headers).json()['task']['conversational_response']
     response=client.post('/api/voice/tasks/'+task['task_id']+'/speech',headers=headers,json={'text':'say task succeeded'})
     assert response.status_code==200 and spoken==[visible]
-    assert 'Все 10 слайдов' not in spoken[0] and task['answer'].startswith('Все 10 слайдов')
+    assert task['answer'].startswith('Все 10 слайдов')
+    if status=='done':assert spoken==[task['answer']]
 
 
 def test_silent_success_policy_never_hides_partial_worker_outcome(client,monkeypatch):
@@ -257,7 +259,7 @@ def test_completed_action_terminal_is_still_presented_as_short_outcome(owner,mon
                       'has_sufficient_evidence':True,'missing_evidence_question':''}}})
     async def forbidden(*args):raise AssertionError('No editor LLM')
     monkeypatch.setattr(voice,'shorten_answer',forbidden)
-    assert asyncio.run(voice.spoken_parts(task))==['Презентация готова. Файл на рабочем столе.']
+    assert asyncio.run(voice.spoken_parts(task))==[answer]
     assert task['answer']==answer
 
 
@@ -398,7 +400,7 @@ def test_optional_desktop_profile_failure_keeps_verified_result(owner,monkeypatc
  def unavailable(*args,**kwargs):raise RuntimeError('optional profile unavailable')
  monkeypatch.setattr(db,'get_device_profile',unavailable)
  assert build_worker_report(task)['status']=='success'
- assert worker_presentation(task)['conversational_response']=='Презентация готова.'
+ assert worker_presentation(task)['conversational_response']==task['answer']
 
 
 def test_final_job_snapshot_retains_evidence_if_history_row_is_unavailable(owner):
@@ -571,3 +573,24 @@ def test_orchestrator_context_keeps_newest_result_when_old_reports_exceed_budget
     assert context['tasks'][0]['report']['summary'].startswith('CURRENT-0 ')
     assert 'STALE_COLUMN' not in json.dumps(context)
     assert len(json.dumps(context,ensure_ascii=False))<=orch.MAX_CONTEXT_CHARS
+
+
+def test_chat_recovery_audited_write_report_is_primary_and_helper_stays_separate(owner):
+    task=completed(owner,'ps1')
+    task['answer']='Перестановка выполнена. Изменены только две карточки; остальные сохранены.'
+    task['commands'][-1]['result']['text']=task['answer']
+    before=json.dumps(task,ensure_ascii=False)
+    view=worker_presentation(task)
+    assert view['conversational_response']==task['answer']
+    assert build_worker_report(task)['artifacts'][0]['path'].endswith('.ps1')
+    assert json.dumps(task,ensure_ascii=False)==before
+    task['task_receipt']['goal_completed']=False
+    assert build_worker_report(task)['status']!='success'
+    assert worker_presentation(task)['conversational_response']!=task['answer']
+
+
+def test_chat_recovery_old_generic_cache_cannot_hide_audited_result(owner):
+    task=completed(owner,'ps1')
+    report=build_worker_report(task)
+    task['history_metadata']={'workerReport':report,'conversationalResponse':'Файл готов.','executionDetails':task['answer']}
+    assert worker_presentation(task,report)['conversational_response']==task['answer']

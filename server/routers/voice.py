@@ -1,4 +1,8 @@
 """Authenticated voice output. The client selects a task, never arbitrary text."""
+import base64
+import io
+import wave
+
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 try:
@@ -18,16 +22,34 @@ TERMINAL_STATUSES = {"done", "error", "completed", "completed_with_recovery", "f
 
 
 @router.get("/config")
-async def config(request: Request):
-    get_current_user(request)
-    return {"available": voice.speech_configured(), "wake_word": "Иру",
-            "wake_timeout_seconds": 10, "voice": "zahar"}
+async def config(request: Request, provider: str = "yandex", device_id: str | None = None):
+    user = get_current_user(request)
+    if provider not in {"yandex", "piper"}:
+        raise HTTPException(400, "Неизвестный обработчик озвучки")
+    if provider == "piper":
+        _piper_device(user["id"], device_id)
+    return {"available": provider == "piper" or voice.speech_configured(), "wake_word": "Иру",
+            "wake_timeout_seconds": 10, "voice": "piper" if provider == "piper" else "zahar"}
+
+
+def _piper_device(user_id: int, device_id: str | None) -> str:
+    try:
+        from ..runtime_state import devices, _dk
+    except ImportError:
+        from runtime_state import devices, _dk
+    key = _dk(user_id, device_id or "")
+    device = devices.get(key)
+    if not device or device.get("user_id") != user_id:
+        raise HTTPException(503, "Для Piper выберите подключённый компьютер")
+    return key
 
 
 @router.post("/tasks/{task_id}/speech")
 async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0), revision: str | None = None,
-                      confirmation: str | None = None):
+                      confirmation: str | None = None, provider: str = "yandex", device_id: str | None = None):
     user = get_current_user(request)
+    if provider not in {"yandex", "piper"}:
+        raise HTTPException(400, "Неизвестный обработчик озвучки")
     task = tasks.get(task_id)
     if not task or task.get("user_id") != user["id"]:
         raise HTTPException(404, "Задача не найдена")
@@ -74,7 +96,8 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
     parts = voice.answer_parts(ordinary["speech"] if ordinary else review["speech"] if review else offer_text if plan_offer else human_answer, keep_inline=True)
     if not parts:
         return Response(status_code=204)
-    if not voice.speech_configured():
+    target = _piper_device(user["id"], device_id) if provider == "piper" else None
+    if provider == "yandex" and not voice.speech_configured():
         raise HTTPException(503, "Озвучка не настроена на сервере")
     user_id = user["id"]
     if user_id in _active_users or not check_rate_limit(f"voice:{user_id}"):
@@ -85,7 +108,27 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
             parts = await voice.spoken_parts(task)
         if part >= len(parts):
             raise HTTPException(404, "Часть ответа не найдена")
-        audio = await voice.synthesize(parts[part])
+        media_type = "audio/ogg"
+        if provider == "piper":
+            try:
+                from ..task_runtime import send_command_to_agent
+            except ImportError:
+                from task_runtime import send_command_to_agent
+            result = await send_command_to_agent(target, "voice.synthesize", {"text": parts[part]}, user_id=user_id)
+            if not isinstance(result, dict) or result.get("error") or result.get("media_type") != "audio/wav":
+                raise RuntimeError("Piper failed")
+            encoded = result.get("audio_base64")
+            if not isinstance(encoded, str) or len(encoded) > 5592408:
+                raise RuntimeError("Invalid Piper audio size")
+            audio = base64.b64decode(encoded, validate=True)
+            if not 44 <= len(audio) <= 4 * 1024 * 1024:
+                raise RuntimeError("Invalid Piper audio size")
+            with wave.open(io.BytesIO(audio), "rb") as wav:
+                if not wav.getnframes() or wav.getcomptype() != "NONE":
+                    raise RuntimeError("Invalid Piper WAV")
+            media_type = "audio/wav"
+        else:
+            audio = await voice.synthesize(parts[part])
     except HTTPException:
         raise
     except Exception:
@@ -93,6 +136,6 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
         raise HTTPException(502, "Озвучка временно недоступна") from None
     finally:
         _active_users.discard(user_id)
-    return Response(audio, media_type="audio/ogg", headers={
+    return Response(audio, media_type=media_type, headers={
         "Cache-Control": "no-store", "X-Voice-Parts": str(len(parts)),
     })

@@ -207,6 +207,10 @@ class AgentRuntime:
             self._format_params_for_log(action_name, params),
         )
         try:
+            if action_name == "voice.synthesize":
+                from .voice import synthesize
+                result = await asyncio.to_thread(synthesize, params.get("text"), self._config)
+                return {"id": cmd_id, "status": "ok", "result": result}
             if action_name == "agent.shutdown":
                 self._stop_event.set()
                 return {"id": cmd_id, "status": "ok", "result": {"ack": True, "action": "agent.shutdown"}}

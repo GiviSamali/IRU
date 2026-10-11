@@ -13,6 +13,8 @@ DEFAULT_CONFIG = {
     "device_id": "",
     "server_url": "wss://irumode.ru",
     "user_token": "",
+    "piper_python": "",
+    "piper_settings": "",
 }
 
 
