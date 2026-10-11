@@ -239,6 +239,12 @@
           <a href="/about" target="_blank" rel="noopener">Об ИРУ</a>
         </div>
         <section class="settings-browser">
+          <h4>Озвучка ответов</h4>
+          <label for="voiceProvider">Обработчик</label>
+          <select id="voiceProvider"><option value="yandex">Яндекс</option><option value="silero">Silero · на выбранном компьютере</option></select>
+          <p class="settings-hint">Для Silero укажите Python и say.py в настройках агента. Звук воспроизводится здесь.</p>
+        </section>
+        <section class="settings-browser">
           <h4>Браузер</h4>
           <p id="browserConnectionStatus" role="status">Выберите устройство для проверки браузера.</p>
           <button id="browserConnectionCheckBtn" type="button" class="memory-panel-add">Проверить соединение</button>

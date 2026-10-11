@@ -4,6 +4,7 @@ import os
 import platform
 import re
 import sys
+from pathlib import Path
 
 from core.config import DEFAULT_CONFIG, merge_config
 
@@ -18,6 +19,17 @@ def gui_available() -> bool:
 
 def collect_setup(initial_config: dict | None = None) -> dict | None:
     config = merge_config(initial_config or DEFAULT_CONFIG)
+    if sys.platform == "win32":
+        runtime_python = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "IRU" / "runtime" / "venv" / "Scripts" / "python.exe"
+        desktops = [Path(os.environ["OneDrive"]) / "Desktop"] if os.environ.get("OneDrive") else []
+        desktops.append(Path.home() / "Desktop")
+        if not config.get("silero_python") and runtime_python.is_file():
+            config["silero_python"] = str(runtime_python)
+        if not config.get("silero_script"):
+            for desktop in desktops:
+                if (desktop / "say.py").is_file():
+                    config["silero_script"] = str(desktop / "say.py")
+                    break
     if gui_available():
         attempted, setup = _collect_setup_gui(config)
         if attempted:
@@ -76,6 +88,12 @@ def _collect_setup_gui(initial_config: dict) -> tuple[bool, dict | None]:
             self.server_edit = QtWidgets.QLineEdit(config.get("server_url", DEFAULT_CONFIG["server_url"]))
             self.server_edit.setPlaceholderText("wss://irumode.ru")
             advanced_form.addRow("Server URL", self.server_edit)
+            self.silero_python_edit = QtWidgets.QLineEdit(config.get("silero_python", ""))
+            self.silero_script_edit = QtWidgets.QLineEdit(config.get("silero_script", ""))
+            self.silero_python_edit.setPlaceholderText("Полный путь к python.exe с torch и soundfile")
+            self.silero_script_edit.setPlaceholderText("Полный путь к say.py (создаёт output.wav)")
+            advanced_form.addRow("Python Silero", self.silero_python_edit)
+            advanced_form.addRow("Скрипт Silero", self.silero_script_edit)
             layout.addWidget(self.advanced_box)
 
             self.error_label = QtWidgets.QLabel("")
@@ -118,6 +136,8 @@ def _collect_setup_gui(initial_config: dict) -> tuple[bool, dict | None]:
                 "user_token": user_token,
                 "device_id": device_id,
                 "server_url": server_url,
+                "silero_python": self.silero_python_edit.text().strip(),
+                "silero_script": self.silero_script_edit.text().strip(),
             }
             self.accept()
 
@@ -148,6 +168,8 @@ def _collect_setup_cli(initial_config: dict) -> dict | None:
         user_token = input(f"{token_prompt}: ").strip()
         device_id = input(f"Имя устройства [{initial_config.get('device_id', platform.node())}]: ").strip()
         server_url = input(f"Server URL [{initial_config.get('server_url', DEFAULT_CONFIG['server_url'])}]: ").strip()
+        silero_python = input(f"Python Silero [{initial_config.get('silero_python', '')}]: ").strip()
+        silero_script = input(f"Скрипт Silero [{initial_config.get('silero_script', '')}]: ").strip()
     except (EOFError, KeyboardInterrupt):
         return None
 
@@ -155,6 +177,8 @@ def _collect_setup_cli(initial_config: dict) -> dict | None:
         "user_token": user_token or initial_config.get("user_token", ""),
         "device_id": device_id or initial_config.get("device_id") or platform.node(),
         "server_url": server_url or initial_config.get("server_url", DEFAULT_CONFIG["server_url"]),
+        "silero_python": silero_python or initial_config.get("silero_python", ""),
+        "silero_script": silero_script or initial_config.get("silero_script", ""),
     }
     if not payload["user_token"]:
         print("[agent] токен обязателен.")
