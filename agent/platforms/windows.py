@@ -12,6 +12,7 @@ Windows-специфичные функции агента ИРУ.
 import os
 import platform as _platform
 import subprocess
+import tempfile
 import ctypes
 import string
 from pathlib import Path
@@ -47,23 +48,29 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         si.wShowWindow = 0  # SW_HIDE
 
-        result = subprocess.run(
-            shell_cmd,
-            capture_output=True,
-            timeout=timeout,
-            env=env,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            startupinfo=si,
-        )
-
-        return {
-            "stdout": result.stdout.strip(),
-            "stderr": result.stderr.strip(),
-            "returncode": result.returncode,
-            "error": None,
-        }
+        # A detached child may inherit stdout/stderr and keep pipes open after the
+        # shell exits (including after timeout). Regular files need no EOF wait.
+        with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+            result = subprocess.run(
+                shell_cmd,
+                stdout=stdout,
+                stderr=stderr,
+                timeout=timeout,
+                env=env,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                startupinfo=si,
+            )
+            # Snapshot lengths: a background child may still be writing output.
+            stdout_size = os.fstat(stdout.fileno()).st_size
+            stderr_size = os.fstat(stderr.fileno()).st_size
+            stdout.seek(0)
+            stderr.seek(0)
+            return {
+                "stdout": stdout.read(stdout_size).decode("utf-8", errors="replace").strip(),
+                "stderr": stderr.read(stderr_size).decode("utf-8", errors="replace").strip(),
+                "returncode": result.returncode,
+                "error": None,
+            }
     except subprocess.TimeoutExpired:
         return {"stdout": "", "stderr": "", "returncode": -1,
                 "error": f"Таймаут: команда выполнялась дольше {timeout} сек"}
