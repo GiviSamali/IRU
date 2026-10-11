@@ -9,6 +9,7 @@ import {loadKnowledge} from './knowledge.mjs';
 import {renderNodeKnowledge,renderRelationshipKnowledge} from './knowledge-panel.mjs';
 import {createProgrammaticHighlight,shortRightClick,effectiveHighlightKind} from './highlight.mjs';
 const $=id=>document.getElementById(id), notice=t=>$('notice').textContent=t;
+const wallpaperMode=document.body.dataset.presentation==='wallpaper';
 let model;try{const response=await fetch('data/architecture.json');if(!response.ok)throw Error('Снимок не найден');model=validateGraph(await response.json());}catch(e){notice(e.message);throw e;}
 $('sha').textContent='Снимок '+model.g.git_sha.slice(0,12)+' · '+model.nodes.size+' узлов';
 const knowledge=await loadKnowledge(model);
@@ -16,13 +17,18 @@ if(knowledge.issues.length)notice(knowledge.issues.join('; '));
 const evidenceNames={confirmed_source:'Confirmed source',verified_architectural_mapping:'Verified architectural mapping',static_dependency:'Static dependency',inferred:'Inferred',logical_taxonomy:'Logical taxonomy',runtime_observed:'Runtime observed'};
 for(const type of [...new Set(model.g.edges.map(e=>e.type))].sort()){const label=document.createElement('label');const input=document.createElement('input');input.type='checkbox';input.className='edgeType';input.value=type;input.checked=true;label.append(input,document.createTextNode(' '+type));$('edgeFilters').append(label);}
 const expanded=new Set(['iru',...Array.from({length:7},(_,i)=>'group:'+i)]);
-let full=false,selected='iru',mode='Architecture',related=new Set(),relatedEdges=new Set(),pathEdges=new Set(),physicalTree=false;
+let full=wallpaperMode,selected='iru',mode='Architecture',related=new Set(),relatedEdges=new Set(),pathEdges=new Set(),physicalTree=false;
 let interaction=initialInteraction(),diagnosticHighlight=null,executionEdges=new Set(),pathFocus=null;
 const temporaryIds=new Set();let renderedEdgeTypes=new Set();
 const programmaticTemporary=new Set();
 const programmatic=createProgrammaticHighlight(model,()=>{programmaticTemporary.clear();paint();});
 window.IRUArchitectureHighlight=programmatic.api;
-mountTopNavigation($('topNavigation'));
+const topNavigation=mountTopNavigation($('topNavigation'));
+function setInterfaceHidden(hidden){topNavigation.close();document.body.classList.toggle('clean-view',hidden);$('labels').hidden=false;$('restoreInterface').hidden=!hidden;$('hideInterface').setAttribute('aria-pressed',String(hidden));(hidden?$('restoreInterface'):$('hideInterface')).focus();}
+$('hideInterface').onclick=()=>setInterfaceHidden(true);$('restoreInterface').onclick=()=>setInterfaceHidden(false);
+document.addEventListener('keydown',event=>{if(!wallpaperMode&&event.key==='Escape'&&document.body.classList.contains('clean-view')){event.preventDefault();setInterfaceHidden(false);}});
+function syncFullscreen(){const active=Boolean(document.fullscreenElement);$('fullscreen').setAttribute('aria-pressed',String(active));$('fullscreen').setAttribute('aria-label',active?'Выйти из полного экрана':'На весь экран');$('fullscreen').title=active?'Выйти из полного экрана':'На весь экран';}
+$('fullscreen').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch{notice('Браузер не разрешил полный экран. Попробуйте открыть карту в обычном браузере и нажать F11.');}syncFullscreen();};document.addEventListener('fullscreenchange',syncFullscreen);syncFullscreen();
 const nodeFilters=mountNodeFilters(model,{levelsHost:$('levelFilters'),typesHost:$('nodeTypeFilters'),onChange(){temporaryIds.clear();programmaticTemporary.clear();rebuild();}});
 const view=new SpatialView(model,$('viewport'),$('labels'));
 const {renderer,scene,camera,controls}=view;
@@ -40,7 +46,7 @@ function paint(){
  const exceptions=kind==='programmatic'?new Set([...temporaryIds,...programmaticTemporary]):temporaryIds;
  const display=new Set(displayedNodes(model,expanded,full,nodeFilters.get(),exceptions).map(n=>n.id));renderedEdgeTypes=new Set([...edgeTypes].filter(type=>types().has(type)));
  if(display.size!==view.visible.size||[...display].some(id=>!view.visible.has(id))){visible=[...display].map(id=>model.nodes.get(id));index=new Map(visible.map((n,i)=>[n.id,i]));view.setVisible(visible);}
- view.paint(anchor,related,relatedEdges,pathEdges,renderedEdgeTypes,{kind,pathNodes:related});$('highlightStatus').textContent=kind==='programmatic'?`Программная подсветка: ${programmed.label} · ручной выбор/результаты сохранены`:({overview:'Overview · без выделения',selection:'Выбранный узел',diagnostic:'Диагностическая подсветка',path:'Статический архитектурный путь',execution:'Execution Trace'})[kind];
+ view.paint(anchor,related,relatedEdges,pathEdges,renderedEdgeTypes,{kind,pathNodes:related,working:mode==='Execution'});$('highlightStatus').textContent=kind==='programmatic'?`Программная подсветка: ${programmed.label} · ручной выбор/результаты сохранены`:({overview:'Overview · без выделения',selection:'Выбранный узел',diagnostic:'Диагностическая подсветка',path:'Статический архитектурный путь',execution:'Execution Trace'})[kind];
  if(kind==='execution'&&programmed.active)$('highlightStatus').textContent+=' · программная группа сохранена ниже слоя Execution';
  $('pathMode').classList.toggle('active',interaction.pathMode);pathUI.render({...interaction,programmaticActive:kind==='programmatic'});
  const filters=nodeFilters.get(),links=displayedEdges(model,display,renderedEdgeTypes),aggregated=links.filter(e=>e.type==='depends_on').length;

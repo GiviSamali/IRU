@@ -19,7 +19,9 @@
 <details class="menu-settings" id="edgeSettings"><summary>Фильтры рёбер</summary><p>depends_on — проверенные агрегированные зависимости с исходными evidence; не новые прямые вызовы.</p><div id="edgeFilters"></div></details><button id="resetDiagnostics" data-menu-action>Сбросить диагностику</button><button id="resetRoute" data-menu-action>Сбросить маршрут</button><details class="menu-settings"><summary>Программная подсветка</summary><p>Отдельный архитектурный слой; не Execution Trace.</p><button id="highlightAnomalies" data-menu-action>Обнаруженные аномалии</button><button id="highlightCenters" data-menu-action>10 центров связности</button><button id="highlightWorker" data-menu-action>Механизмы Worker</button><button id="highlightSecurity" data-menu-action>Компоненты безопасности</button><button id="clearProgrammatic" data-menu-action>Очистить программную подсветку</button></details>
 </div></details>
 </div></details><small id="filterIndicator" aria-live="polite"></small><small id="sha"></small>
+<div id="presentationControls"><button id="fullscreen" type="button" aria-label="На весь экран" aria-pressed="false" title="На весь экран">⛶</button><button id="hideInterface" type="button" aria-pressed="false" title="Скрыть панели и подсказки, сохранить подписи узлов">Скрыть интерфейс</button></div>
 </header>
+<button id="restoreInterface" type="button" hidden aria-label="Показать интерфейс" title="Показать интерфейс (Esc)">↩</button>
 <main>
 <aside id="left" hidden><div class="heading">Архитектура <button id="hideLeft">‹</button></div><button id="physical">Исходники</button><input id="search" placeholder="Компоненты, механизмы, функции…"><div id="tree"></div></aside>
 <aside id="diagnostics" hidden aria-label="Аномалии"></aside>

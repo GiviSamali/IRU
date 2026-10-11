@@ -12,3 +12,7 @@ header{position:relative;z-index:20;flex-shrink:0;gap:12px;min-height:64px;heigh
 @media(max-width:900px){#left,#right{position:absolute;top:var(--atlas-header-height,64px);bottom:0;z-index:8;max-width:90vw}#left{left:0}#right{right:0}}
 
 .knowledge-status{display:block;padding:6px 0}.knowledge-status.current{color:#85b6a1}.knowledge-status.review_required,.knowledge-status.status_unavailable{color:#d4aa70}.knowledge-status.missing_description{color:#879db4}#details h4{font-size:12px;color:#d3b47d;margin:18px 0 6px}#details>p{line-height:1.7}.menu-settings>button{display:block;width:100%;text-align:left;margin:4px 0}
+
+#presentationControls{display:flex;gap:5px;flex-shrink:0;margin-left:auto}#presentationControls button{white-space:nowrap}#fullscreen{font-size:18px;padding:3px 9px}body{height:100dvh}#restoreInterface{position:fixed;top:12px;left:12px;z-index:30;width:36px;height:36px;padding:0;font-size:20px;opacity:.35}#restoreInterface:hover,#restoreInterface:focus-visible{opacity:1}body.clean-view>header,body.clean-view>footer,body.clean-view main>aside,body.clean-view #legend,body.clean-view #notice,body.clean-view #visibilityPrompt{display:none!important}body.clean-view #viewport{width:100%;height:100%}
+@media(max-width:560px){#presentationControls{grid-column:1 / -1;grid-row:3;width:100%;justify-content:flex-end}#filterIndicator{grid-row:4}}
+body[data-presentation="wallpaper"] #restoreInterface{display:none!important}
