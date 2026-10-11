@@ -66,6 +66,9 @@
 
 .iru-mini .app .chat-messages { padding: 10px 12px; gap: 12px; scroll-padding-bottom: 10px; }
 .iru-mini .app .msg { width: 100% !important; margin: 0 !important; }
+.iru-mini .app .msg + .msg {
+  border-top: 1px solid rgba(173, 194, 211, 0.12); padding-top: 10px;
+}
 .iru-mini .app .chat-view .msg .msg-body {
   width: 100% !important; max-width: none !important;
   padding: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none;
@@ -78,7 +81,14 @@
   padding: 6px 8px; background: transparent; border-top: 0;
 }
 .iru-mini .app .chat-input-wrap {
-  min-height: 46px; padding: 4px 6px; gap: 6px;
+  min-height: 36px; padding: 3px 6px; gap: 6px;
 }
+.iru-mini .app .chat-input { min-height: 28px; padding: 3px 4px; line-height: 20px; font-size: 13px; }
+.iru-mini .app .voice-btn,
+.iru-mini .app .btn-send {
+  width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 5px;
+}
+.iru-mini .app .voice-btn svg,
+.iru-mini .app .btn-send svg { width: 16px; height: 16px; }
 .iru-mini .app .chat-welcome { min-height: 0; padding: 10px; }
 .iru-mini .app .chat-welcome img { display: none; }
