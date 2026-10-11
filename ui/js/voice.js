@@ -4,7 +4,7 @@
   const providerKey = () => `iruVoiceProvider:${state.user?.id || 'guest'}`;
   function voiceProvider() {
     const saved = localStorage.getItem(providerKey());
-    const provider = saved === 'piper' ? 'piper' : 'yandex';
+    const provider = ['piper', 'elevenlabs'].includes(saved) ? saved : 'yandex';
     if (providerSelect) providerSelect.value = provider;
     return provider;
   }

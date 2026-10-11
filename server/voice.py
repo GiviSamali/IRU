@@ -211,3 +211,55 @@ async def synthesize(text: str) -> bytes:
         if not response.content:
             raise RuntimeError("Empty speech response")
         return response.content
+
+
+def elevenlabs_configured() -> bool:
+    return bool(os.getenv("ELEVENLABS_API_KEY") and os.getenv("ELEVENLABS_VOICE_ID"))
+
+
+async def synthesize_elevenlabs(text: str) -> bytes:
+    """One bounded provider request; reuse the existing task speech and UI playback."""
+    import base64
+    import websockets
+    key = os.getenv("ELEVENLABS_API_KEY")
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "")
+    model = os.getenv("ELEVENLABS_MODEL_ID", "eleven_v4_turbo")
+    if not key or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", voice_id):
+        raise RuntimeError("ElevenLabs is not configured")
+    if model not in {"eleven_v4_turbo", "eleven_v4"}:
+        raise RuntimeError("Unsupported ElevenLabs dialogue model")
+    # Stress marks from a previously selected Piper are not ElevenLabs markup.
+    text = re.sub(r"(?<=[аеёиоуыэюяАЕЁИОУЫЭЮЯ])\u0301", "", text)
+    if not text.strip() or len(text) > CHUNK_SIZE:
+        raise ValueError("Invalid ElevenLabs text size")
+    stability = float(os.getenv("ELEVENLABS_STABILITY", "1.0"))
+    similarity = float(os.getenv("ELEVENLABS_SIMILARITY", "1.0"))
+    if not 0 <= stability <= 1 or not 0 <= similarity <= 1:
+        raise ValueError("Invalid ElevenLabs voice settings")
+    uri = ("wss://api.elevenlabs.io/v1/text-to-dialogue/stream-input"
+           f"?model_id={model}&output_format=mp3_44100_128")
+    async def receive_audio():
+        audio = bytearray()
+        async with websockets.connect(uri, open_timeout=10, close_timeout=2, max_size=6 * 1024 * 1024) as socket:
+            await socket.send(json.dumps({"voices": [voice_id], "xi_api_key": key,
+                "voice_settings": {"stability": stability, "similarity_boost": similarity}}))
+            await socket.send(json.dumps({"inputs": [{"text": text, "voice_id": voice_id, "new_turn": False}]}))
+            await socket.send(json.dumps({"close_socket": True}))
+            for _ in range(256):
+                message = json.loads(await socket.recv())
+                if message.get("error") or message.get("error_type"):
+                    raise RuntimeError("ElevenLabs synthesis failed")
+                chunk = message.get("audio")
+                if chunk:
+                    if not isinstance(chunk, str) or len(chunk) > 5592408:
+                        raise RuntimeError("ElevenLabs audio limit exceeded")
+                    decoded = base64.b64decode(chunk, validate=True)
+                    if len(audio) + len(decoded) > 4 * 1024 * 1024:
+                        raise RuntimeError("ElevenLabs audio limit exceeded")
+                    audio.extend(decoded)
+                if message.get("is_final") is True:
+                    if not audio:
+                        raise RuntimeError("Empty ElevenLabs speech response")
+                    return bytes(audio)
+            raise RuntimeError("ElevenLabs frame limit exceeded")
+    return await asyncio.wait_for(receive_audio(), timeout=30)

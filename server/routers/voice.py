@@ -24,12 +24,16 @@ TERMINAL_STATUSES = {"done", "error", "completed", "completed_with_recovery", "f
 @router.get("/config")
 async def config(request: Request, provider: str = "yandex", device_id: str | None = None):
     user = get_current_user(request)
-    if provider not in {"yandex", "piper"}:
+    if provider not in {"yandex", "piper", "elevenlabs"}:
         raise HTTPException(400, "Неизвестный обработчик озвучки")
     if provider == "piper":
         _piper_device(user["id"], device_id)
-    return {"available": provider == "piper" or voice.speech_configured(), "wake_word": "Иру",
-            "wake_timeout_seconds": 10, "voice": "piper" if provider == "piper" else "zahar"}
+    if provider == "elevenlabs":
+        available = voice.elevenlabs_configured()
+    else:
+        available = provider == "piper" or voice.speech_configured()
+    return {"available": available, "wake_word": "Иру",
+            "wake_timeout_seconds": 10, "voice": "elevenlabs" if provider == "elevenlabs" else "piper" if provider == "piper" else "zahar"}
 
 
 def _piper_device(user_id: int, device_id: str | None) -> str:
@@ -48,7 +52,7 @@ def _piper_device(user_id: int, device_id: str | None) -> str:
 async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0), revision: str | None = None,
                       confirmation: str | None = None, provider: str = "yandex", device_id: str | None = None):
     user = get_current_user(request)
-    if provider not in {"yandex", "piper"}:
+    if provider not in {"yandex", "piper", "elevenlabs"}:
         raise HTTPException(400, "Неизвестный обработчик озвучки")
     task = tasks.get(task_id)
     if not task or task.get("user_id") != user["id"]:
@@ -97,7 +101,7 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
     if not parts:
         return Response(status_code=204)
     target = _piper_device(user["id"], device_id) if provider == "piper" else None
-    if provider == "yandex" and not voice.speech_configured():
+    if (provider == "yandex" and not voice.speech_configured()) or (provider == "elevenlabs" and not voice.elevenlabs_configured()):
         raise HTTPException(503, "Озвучка не настроена на сервере")
     user_id = user["id"]
     if user_id in _active_users or not check_rate_limit(f"voice:{user_id}"):
@@ -127,6 +131,9 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
                 if not wav.getnframes() or wav.getcomptype() != "NONE":
                     raise RuntimeError("Invalid Piper WAV")
             media_type = "audio/wav"
+        elif provider == "elevenlabs":
+            audio = await voice.synthesize_elevenlabs(parts[part])
+            media_type = "audio/mpeg"
         else:
             audio = await voice.synthesize(parts[part])
     except HTTPException:
