@@ -600,6 +600,7 @@ function restoreMessagePresentation(container, snapshot) {
 }
 
 function renderMessages() {
+  window.IRUOperations?.contextChanged();
   const container = document.getElementById('chatMessages');
   const presentation = captureMessagePresentation(container);
 
@@ -639,13 +640,15 @@ function renderMessages() {
     const active = state.pendingTasks.find(item => item.task_id === m._taskId && item.kind !== 'orchestrator');
     const view = IRUSmartUI.adapt({ ...m, cancelAvailable:Boolean(m.loading && active && active.task_id === m._taskId && !active.cancelRequested) }, mi, state.currentChatId);
     const workerInDock = m.taskKind === 'worker';
-    if (workerInDock) view.blocks = view.blocks.filter(block => block.type !== 'task' && (block.type !== 'action' || m.planSuggestion || m.suggestedFact));
+    const resultFiles = workerInDock ? view.blocks.filter(block => block.type === 'file') : [];
+    if (workerInDock) view.blocks = view.blocks.filter(block => block.type !== 'task' && block.type !== 'file' && (block.type !== 'action' || m.planSuggestion || m.suggestedFact));
     let bodyHTML = IRUSmartUI.render(view, {
       expanded: state.expandedSmartBlocks,
       formatAssistantText: role === 'assistant',
       taskDetails: block => renderSmartTaskDetails(block, m, mi),
       actionDetails: renderMessageActions,
     });
+    if (resultFiles.length) bodyHTML += `<details class="message-files"><summary>Файлы задачи</summary>${IRUSmartUI.render({blocks:resultFiles}, {})}</details>`;
     if (workerInDock) {
       const status = IRUSmartUI.taskState(m, m.tasks || [], m.commands || []);
       bodyHTML += `<button type="button" class="operation-reference" data-action="show-operation" data-task-id="${escapeAttr(m._taskId)}">${escapeHTML(IRUSmartUI.LABELS[status])} · Операции ↗</button>`;
