@@ -537,14 +537,21 @@ def test_report_agrees_with_confirmed_zero_code_contract(owner,code):
 def test_audited_command_report_is_not_replaced_by_helper_artifact(owner):
     task=completed(owner, 'ps1')
     task['answer']='В рабочем файле обменены две позиции; остальные позиции проверены.'
-    task['commands'].insert(1, {'tool_name':'execute_cmd','step_id':'step_2','status':'success',
+    task['commands'].insert(1, {'tool_name':'execute_cmd','step_id':'step_3','status':'success',
         'result':{'returncode':0,'stdout':'Observed resulting order','stderr':''}})
     terminal=task['commands'][-1]['result']
-    terminal.update(text=task['answer'],basis=['step_2'])
+    # The helper alone is not evidence of the requested edit. Include the actual
+    # current target write plus its markerless verification in the audited basis.
+    task['commands'].insert(1, {'tool_name':'write_content','step_id':'step_2','status':'success',
+        'result':{'path':r'C:\Users\Owner\Desktop\ranking.html','bytes_written':100}})
+    terminal.update(text=task['answer'],basis=['step_2','step_3'])
     before=json.dumps(task,ensure_ascii=False)
     assert worker_presentation(task)['conversational_response']==task['answer']
     assert worker_presentation(task)['execution_details']==''
     assert json.dumps(task,ensure_ascii=False)==before
+    terminal['basis']=['step_3']
+    assert build_worker_report(task)['status']=='unknown'
+    terminal['basis']=['step_2','step_3']
     task.pop('task_receipt')
     assert build_worker_report(task)['status']!='success'
 
@@ -567,7 +574,13 @@ def test_orchestrator_context_keeps_newest_result_when_old_reports_exceed_budget
         jobs.append({'task_id':tid,'chat_id':owner['chat_id'],'state':'success','created_at':8-i,
             'payload':json.dumps({'message':'Change file','device_ids':['pc'],'worker_report':report}),
             'report':json.dumps({**report,'summary':'STALE_COLUMN'})})
-    monkeypatch.setattr(orch,'list_jobs',lambda user_id:jobs)
+    orch.init_worker_storage()
+    with db.get_db() as connection:
+        for job in jobs:
+            connection.execute(
+                "INSERT INTO worker_jobs(task_id,owner_user_id,chat_id,state,payload,report,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                (job['task_id'], owner['id'], owner['chat_id'], job['state'], job['payload'], job['report'], job['created_at'], job['created_at']),
+            )
     context=orch.context_for(owner['id'],owner['chat_id'],'Продолжить','pc')
     assert context['context_truncated'] is True
     assert context['tasks'][0]['report']['summary'].startswith('CURRENT-0 ')

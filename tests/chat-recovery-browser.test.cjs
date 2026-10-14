@@ -41,6 +41,8 @@ for(const width of [1280,360])test(`P0 conversation, mirror, tasks and isolation
   assert.equal(await p.locator('#operationsDock').isVisible(),true);
   assert.equal(await p.locator('#operationsItems [data-task-id="foreign"]').count(),0);
   await p.locator('#operationsItems [data-task-id="b"] [data-operation="details"]').click();
+  // The click starts an asynchronous details fetch; wait for the exact chosen task.
+  await p.locator('#mirrorContent [data-task-id="b"]').waitFor();
   assert.equal(await p.locator('#mirrorContent [data-task-id]').getAttribute('data-task-id'),'b');
   await p.locator('#operationsClose').click();
   assert.equal(await p.locator('#operationsDock').isVisible(),false);

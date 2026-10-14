@@ -44,7 +44,7 @@ for(const number of [...Array.from({length:20},(_,i)=>i+1),121,122])test(`P0 con
    snapshot=phase;
    await page.evaluate(history=>{state.currentChatId=1;state.messages=history.messages;renderMessages();return IRUOperations.refresh();},phase.history);
    if(await page.locator('#operationsToggle').getAttribute('aria-expanded')!=='true')await page.locator('#operationsToggle').click();
-   const row=page.locator(`[data-task-id="${phase.api.task_id}"]`);
+   const row=page.locator(`#operationsItems [data-task-id="${phase.api.task_id}"]`);
    const expected=phase.api.worker_report.status;
    const label=await page.evaluate(status=>status==='queued'?'В очереди':status==='waiting_confirmation'?'Нужно подтверждение':IRUSmartUI.LABELS[IRUSmartUI.normalizeStatus(status)],expected);
    assert.equal(await row.locator('.smart-status').textContent(),label);
@@ -57,17 +57,29 @@ for(const number of [...Array.from({length:20},(_,i)=>i+1),121,122])test(`P0 con
    const key=`smart-${record.api.chat_id}-${encodeURIComponent(record.api.task_id)}`;
    const message=page.locator(`[data-message-key="${key}"]`);
    assert.equal(await message.count(),1);
-   assert.equal(await message.locator('.smart-text-content').textContent(),record.api.conversational_response);
+   const prose=record.api.conversational_response;
+   const visibleProse=prose.replace(/\*\*([^*\n]+)\*\*/g,'$1');
+   assert.equal(await message.locator('.smart-text-content').textContent(),visibleProse);
+   const bold=[...prose.matchAll(/\*\*([^*\n]+)\*\*/g)].map(match=>match[1]);
+   assert.deepEqual(await message.locator('.smart-text-content strong').allTextContents(),bold);
    assert.ok(!(await message.textContent()).includes('ИРУ завершила задачу без текстового ответа'));
    if(record.api.worker_report){
     if(await page.locator('#operationsToggle').getAttribute('aria-expanded')!=='true')await page.locator('#operationsToggle').click();
-    const row=page.locator(`[data-task-id="${record.api.task_id}"]`);
+    const row=page.locator(`#operationsItems [data-task-id="${record.api.task_id}"]`);
     const label=await page.evaluate(status=>IRUSmartUI.LABELS[status],record.expected);
     assert.equal(await row.locator('.smart-status').textContent(),label);
     await row.locator('[data-operation="details"]').click();
-    assert.equal(await row.locator('.operation-prose').first().textContent(),record.api.conversational_response);
+    const mirror=page.locator(`#mirrorContent [data-task-id="${record.api.task_id}"]`);
+    await page.waitForFunction(({id,text})=>{
+     const node=document.querySelector(`#mirrorContent [data-task-id="${CSS.escape(id)}"] .mirror-answer .smart-text-content`);
+     return node?.textContent===text;
+    },{id:record.api.task_id,text:visibleProse});
+    assert.equal(await mirror.locator('.mirror-answer .smart-text-content').textContent(),visibleProse);
+    assert.deepEqual(await mirror.locator('.mirror-answer .smart-text-content strong').allTextContents(),bold);
     await page.evaluate(()=>{state.currentChatId=2;state.messages=[];renderMessages();});
-    assert.equal(await row.locator('.smart-status').textContent(),label);
+    assert.equal(await row.count(),0);
+    assert.equal(await page.locator('#operationMirror').isVisible(),false);
+    assert.equal(await page.locator('#operationsItems [data-task-id]').count(),0);
    }else{assert.equal(await page.locator('.operation-item').count(),0);}
   }
   if(record.voice_failure){

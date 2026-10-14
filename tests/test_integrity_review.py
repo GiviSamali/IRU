@@ -332,3 +332,22 @@ def test_cached_success_cannot_bypass_current_goal_evidence_contract(owners):
         {'tool_name':'answer.text','status':'terminal','result':payload(text)}],task_receipt=None)
     assert build_worker_report(t)['status']=='unknown'
     assert normalized_worker_report(t,stale)['status']=='unknown'
+
+
+@pytest.mark.parametrize("status", ["started", "launch_requested", "unknown"])
+def test_launch_only_receipt_cannot_confirm_goal_even_with_ok_text(owners, status):
+    owner, _ = owners
+    t = task(owner, "Открой файл и подтверди результат")
+    answer = "Файл открыт."
+    terminal = payload(answer)
+    terminal["self_check"]["claims_completed_action"] = True
+    t.update(status="done", answer=answer, task_receipt={
+        "answer_source": "audited_terminal", "task_status": "completed",
+        "goal_completed": True, "final_verification_status": "verified",
+    }, commands=[
+        {"tool_name": "execute_cmd", "step_id": "step_1", "status": "success",
+         "result": {"returncode": 0, "status": status, "stdout": "OK: claimed"}},
+        {"tool_name": "answer.text", "status": "terminal", "result": terminal},
+    ])
+    report = build_worker_report(t)
+    assert report["status"] == "unknown" and report["goal_completed"] is False

@@ -27,12 +27,12 @@ class WorkerReport(BaseModel):
 try:
     from .controller_trust import has_grounded_terminal_answer
     from .runtime_state import _short_did
-    from .tool_completion import execute_cmd_result_is_negative, execute_cmd_result_is_complete, execute_cmd_returncode_is_zero, write_content_result_is_ok, tool_result_terminal_sufficient
+    from .tool_completion import execute_cmd_outcome_marker, execute_cmd_result_is_negative, execute_cmd_result_is_complete, execute_cmd_returncode_is_zero, write_content_result_is_ok, tool_result_terminal_sufficient
     from .command_confirmation import confirmed_command_outcome
 except ImportError:
     from controller_trust import has_grounded_terminal_answer
     from runtime_state import _short_did
-    from tool_completion import execute_cmd_result_is_negative, execute_cmd_result_is_complete, execute_cmd_returncode_is_zero, write_content_result_is_ok, tool_result_terminal_sufficient
+    from tool_completion import execute_cmd_outcome_marker, execute_cmd_result_is_negative, execute_cmd_result_is_complete, execute_cmd_returncode_is_zero, write_content_result_is_ok, tool_result_terminal_sufficient
     from command_confirmation import confirmed_command_outcome
 
 TERMINAL = {"done", "completed", "completed_with_recovery", "failed", "error", "cancelled", "blocked", "partial", "unknown", "interrupted", "success"}
@@ -47,7 +47,7 @@ def positive_evidence(command, *, observation=False):
     if (command.get("tool_name") or command.get("action")) == "write_content":
         return write_content_result_is_ok(result)
     if command.get("tool_name") == "execute_cmd" or command.get("action") == "execute_cmd":
-        if confirmed_command_outcome(result)=="success":return True
+        if confirmed_command_outcome(result)=="success" and execute_cmd_outcome_marker(result)=="OK":return True
         # A successful observation is usable by an already validated informational
         # terminal answer. It does not establish that an action achieved its goal.
         return observation and execute_cmd_result_is_complete(result) and not execute_cmd_result_is_negative(result)
@@ -78,7 +78,8 @@ def build_worker_report(task):
                 and receipt.get("task_status") in {"completed", "completed_with_recovery"}
                 and receipt.get("goal_completed") is True
                 and receipt.get("final_verification_status") == "verified"
-                and all(positive_evidence(c) for c in observations))
+                and all(positive_evidence(c, observation=True) for c in observations)
+                and any(positive_evidence(c) for c in observations))
     native_basis = observations if grounded else evidence
     native_evidence = bool(native_basis) and all(
         positive_evidence(c) and (c.get("tool_name") or c.get("action")) not in {"execute_cmd", "write_content"}

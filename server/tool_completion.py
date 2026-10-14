@@ -184,17 +184,30 @@ def synthesize_device_terminal_report(journal: list[dict], terminal_entry: dict)
         if not target or entry.get("tool_type") == "answer":
             continue
         result = entry.get("result") or {}
-        if tool_result_terminal_sufficient(entry):
+        # Preserve observations per device; sufficiency for the whole goal is separate.
+        if tool_result_terminal_sufficient(entry) or (
+            (entry.get("tool_name") or entry.get("action")) == "execute_cmd"
+            and execute_cmd_result_is_complete(result)
+        ):
             latest[target] = entry
         elif isinstance(result, dict) and (result.get("error") or entry.get("status") in {"failed", "error", "blocked"}):
-            latest.pop(target, None)
+            latest[target] = entry
     if len(latest) < 2:
         return synthesize_terminal_answer_payload(terminal_entry)
-    payloads = [(target, synthesize_terminal_answer_payload(entry)) for target, entry in latest.items()]
+    payloads = []
+    for target, entry in latest.items():
+        payload = synthesize_terminal_answer_payload(entry)
+        if (entry.get("result") or {}).get("error"):
+            payload["text"] = str(entry["result"]["error"])
+            payload["answer_type"] = "partial_report"
+        payloads.append((target, payload))
     result = synthesize_terminal_answer_payload(terminal_entry)
     result["text"] = "\n".join(f"{target}: {payload['text']}" for target, payload in payloads)
     result["basis"] = list(dict.fromkeys(step for _, payload in payloads for step in payload["basis"]))
-    if any(payload["answer_type"] != "grounded_report" for _, payload in payloads):
+    if any(payload["answer_type"] != "grounded_report" for _, payload in payloads) or any(
+        (entry.get("tool_name") or entry.get("action")) == "execute_cmd"
+        and execute_cmd_outcome_marker(entry.get("result")) != "OK" for entry in latest.values()
+    ):
         result["answer_type"] = "partial_report"
         result["self_check"]["claims_completed_action"] = False
     return result

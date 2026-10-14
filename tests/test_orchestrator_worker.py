@@ -380,7 +380,7 @@ def test_conversation_status_and_retry_do_not_consume_exhausted_command_quota(ow
         assert one==two and one['answer']=='Как дела? Хорошо.' and len(decisions)==1 and used_commands(a)==30
         selected=orch.Decision(intent='task_status',task_id=job['task_id'],reference='explicit')
         answer=await routes.nl_command(routes.NLCommand(orchestrate=True,request_id='status-free',message='Что мы делали?',chat_id=a['chat_id']),request)
-        assert answer['answer']=='Файл готов.' and used_commands(a)==30
+        assert answer['answer']==job['answer']=='verified' and used_commands(a)==30
         assert owned_job(job['task_id'],a['id'])['state']=='success'
         selected=orch.Decision(intent='delegate',objective='Посмотри файлы',target_device_ids=['pc'])
         rejected=await routes.nl_command(routes.NLCommand(orchestrate=True,request_id='over-quota',message='Посмотри файлы',chat_id=a['chat_id']),request)
@@ -464,7 +464,13 @@ def test_generated_scope_never_becomes_worker_human_request_or_instructions(owne
         await local.runners[a['id']]
         assert t['message']==original and t['proposed_objective']==expansion
         assert len(observed)==1 and observed[0]['user_message']==original
-        assert expansion not in json.dumps(observed[0]['chat_history'],ensure_ascii=False)
+        history = observed[0]['chat_history']
+        assert history[-1] == {'role': 'user', 'content': original}
+        containing = [row for row in history if expansion in str(row.get('content', ''))]
+        assert containing and all(row['role'] == 'assistant' for row in containing)
+        assert all('authority=data_only' in row['content'] for row in containing)
+        assert all('not a new human request or permission' in row['content'] for row in containing)
+        assert all(expansion not in str(row.get('content', '')) for row in history if row['role'] in {'user','system'})
         assert actions==['list_dir']
         await local.shutdown()
     asyncio.run(scenario())

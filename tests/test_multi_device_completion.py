@@ -49,18 +49,24 @@ def test_verified_url_worker_stops_without_another_llm_or_verification(monkeypat
     calls, sent = [], []
     async def completion(**kw):
         calls.append(kw)
-        assert len(calls) == 1
-        return {"choices": [{"message": {"tool_calls": [{"id": "open", "function": {"name": "app_open_url", "arguments": json.dumps({"url": "https://music.yandex.ru"})}}]}}]}
+        assert len(calls) <= 2, "No LLM calls after the terminal answer"
+        if len(calls) == 1:
+            return {"choices": [{"message": {"tool_calls": [{"id": "open", "function": {"name": "app_open_url", "arguments": json.dumps({"url": "https://music.yandex.ru"})}}]}}]}
+        return {"choices": [{"message": {"tool_calls": [{"id": "answer", "function": {"name": "answer_text", "arguments": json.dumps({
+            "answer_type": "grounded_report", "text": "Music opened.", "basis": ["step_1"],
+            "self_check": {"depends_on_current_external_state": True, "claims_completed_action": True,
+                           "has_sufficient_evidence": True, "missing_evidence_question": ""},
+        })}}]}}]}
     async def send(device, action, params):
         sent.append((device, action))
         return {"status": "opened_verified", "launched": True, "window_found": True, "url": "https://music.yandex.ru"}
-    result = asyncio.run(pipeline.run_pipeline_worker(client=None, cfg={"model": "mock"}, model="mock",
+    result = asyncio.run(pipeline.run_pipeline_worker(client=None, cfg={"model": "mock", "answer_auditor_enabled": False}, model="mock",
         shared=_shared_context(), overall_goal="Open music", step={"title": "Open music", "instruction": "Open music",
         "completion_check": {"tool": "app_open_url", "url": "https://music.yandex.ru"}}, completed_steps=[],
         chat_history=[], send_command_fn=send, get_file_link_fn=lambda *a: "", machine_guid=None, mem_user_id=None,
         poll_task_id=None, chat_completion_request_fn=completion, worker_tools=[]))
     assert result["status"] == "ok"
-    assert len(calls) == len(sent) == 1
+    assert len(calls) == 2 and sent == [("device-1", "app.open_url")]
     assert result["commands"][-1]["tool_name"] == "answer.text"
 
 
@@ -110,9 +116,16 @@ def test_plan_reports_each_device_despite_missing_summary_tool(monkeypatch, vali
         chat_completion_request_fn=completion, worker_tools=[], windows_rules="", linux_rules=""))
     assert result["task_receipt"]["answer_source"] == "pipeline_step_report"
     assert "Open on a" in result["answer"] and "Open on b" in result["answer"]
-    assert result["answer"].startswith("План выполнен не полностью." if fail_second else "План выполнен.")
+    assert result["answer"].startswith("План выполнен не полностью." if fail_second else "Результаты выполнения шагов:")
+    assert result["task_receipt"]["answer_source"] != "audited_terminal"
+    assert result["task_receipt"].get("goal_completed") is not True
+    if not fail_second:
+        assert "Команда завершилась с ошибкой: timeout" not in result["answer"]
+    else:
+        assert "b: Open on b — не выполнено." in result["answer"]
+        assert "not found" in result["answer"]
     assert not any(x.get("action") == "tool_only_protocol" for x in result["commands"])
-    assert phases.count("pipeline.final") == (0 if valid_terminal else 2)
+    assert phases.count("pipeline.final") == 2
 
 
 def test_other_device_success_cannot_hide_failed_device():
@@ -186,3 +199,28 @@ def test_broadcast_runtime_keeps_each_recovered_answer(monkeypatch):
     assert task["status"] == "done" and task["overall_status"] == "success"
     assert "[a] ok" in task["answer"] and "[b] ok" in task["answer"]
     assert "old timeout" not in task["answer"]
+
+
+def test_device_fallback_preserves_failure_without_claiming_whole_goal():
+    from server.tool_completion import synthesize_device_terminal_report
+    journal = []
+    evidence(journal, "a", {"returncode": 0, "stdout": "OK: observed_a"})
+    evidence(journal, "b", {"error": "device disconnected"}, "failed")
+    payload = validate_answer_text_payload(synthesize_device_terminal_report(journal, journal[-1]), journal)
+    assert "a: OK: observed_a" in payload["text"]
+    assert "b: device disconnected" in payload["text"]
+    assert len(payload["basis"]) == 2
+    assert payload["answer_type"] == "partial_report"
+    assert payload["self_check"]["claims_completed_action"] is False
+
+
+def test_device_observations_are_preserved_without_action_completion():
+    from server.tool_completion import synthesize_device_terminal_report
+    journal = []
+    evidence(journal, "a", {"returncode": 0, "stdout": "existing.txt"})
+    evidence(journal, "b", {"returncode": 0, "stdout": "process started"})
+    payload = validate_answer_text_payload(synthesize_device_terminal_report(journal, journal[-1]), journal)
+    assert "a: existing.txt" in payload["text"] and "b: process started" in payload["text"]
+    assert len(payload["basis"]) == 2
+    assert payload["answer_type"] == "partial_report"
+    assert payload["self_check"]["claims_completed_action"] is False

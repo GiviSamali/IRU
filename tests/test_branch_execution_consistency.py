@@ -26,7 +26,7 @@ def test_repeated_observation_warns_but_does_not_skip_execution_or_end_goal():
     captured=Captures()
     async def send(device, action, args):
         calls.append(args['command'])
-        return {'returncode':0,'stdout':'tail' if args['command']=='inspect' else 'changed and verified','stderr':''}
+        return {'returncode':0,'stdout':'tail' if args['command']=='inspect' else 'OK: changed and verified','stderr':''}
     result=_run_case([
         _message(tool_calls=[_tool_call('a','execute_cmd',{'command':'inspect'})]),
         _message(tool_calls=[_tool_call('b','execute_cmd',{'command':'inspect'})]),

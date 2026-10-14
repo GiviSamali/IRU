@@ -878,7 +878,7 @@ def test_remember_fact_blocked_without_explicit_memory_intent(monkeypatch):
 def test_remember_fact_allowed_with_explicit_memory_intent(monkeypatch):
     saved = []
 
-    monkeypatch.setattr(controller_non_pipeline, "validate_toolchain_fact_against_receipt", lambda text, receipt: (True, text))
+    monkeypatch.setattr(controller_non_pipeline, "validate_toolchain_fact_against_receipt", lambda text, receipt, **kwargs: (True, text))
     monkeypatch.setattr(
         controller_non_pipeline.db,
         "add_user_fact",

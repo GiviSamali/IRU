@@ -40,7 +40,7 @@ try:
     from .task_summary import get_last_run_summary  # type: ignore
     from .tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from .tool_completion import (  # type: ignore
-        synthesize_terminal_answer_payload,
+        synthesize_terminal_answer_payload, synthesize_device_terminal_report, execute_cmd_result_is_complete,
     )
     from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from .tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
@@ -101,7 +101,7 @@ except ImportError:
     from task_summary import get_last_run_summary  # type: ignore
     from tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from tool_completion import (  # type: ignore
-        synthesize_terminal_answer_payload,
+        synthesize_terminal_answer_payload, synthesize_device_terminal_report, execute_cmd_result_is_complete,
     )
     from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from tool_registry import DEVICE_TOOL_SCHEMAS, tool_log_fields  # type: ignore
@@ -2147,10 +2147,17 @@ async def process_pipeline_subagents(
                 break
 
             if not _result_has_validated_answer_text(worker_result.get("commands", [])):
-                worker_result["answer"] = enforce_trusted_answer(
-                    worker_result.get("answer", ""),
-                    worker_result.get("commands", []),
-                )
+                current_commands = worker_result.get("commands", [])
+                latest = current_commands[-1] if current_commands else {}
+                if (worker_result.get("status") == "ok" and latest.get("tool_name") == "execute_cmd"
+                        and execute_cmd_result_is_complete(latest.get("result"))):
+                    # A later current observation supersedes the old failure on that device.
+                    # This is a step summary, never an audited whole-goal completion.
+                    worker_result["answer"] = synthesize_device_terminal_report(current_commands, latest)["text"]
+                else:
+                    worker_result["answer"] = enforce_trusted_answer(
+                        worker_result.get("answer", ""), current_commands,
+                    )
             _extend_pipeline_run_journal(all_commands, worker_result.get("commands", []))
             step_summary = strip_markdown(worker_result.get("answer", "")).strip() or "Шаг завершён."
             urls = [
