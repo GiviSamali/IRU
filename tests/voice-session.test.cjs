@@ -463,3 +463,21 @@ test('OW dangerous confirmation does not arm generic yes and background slot rem
  h.session.transcript('Иру да',true);h.advance(1300);
  assert.equal(h.commandChoices.length,0);
 });
+
+
+test('window question is spoken once without finishing the Worker; its result remains audible', async () => {
+  const h=setup();
+  h.session.watchTask('window');
+  const task={answer:'Какое окно?',input_required:{question_id:'q-window'}};
+  h.session.taskInputRequired('window',task);
+  h.session.taskInputRequired('window',task);
+  assert.equal(h.spoken.length,1);
+  h.spoken[0].onSpeaking();h.spoken[0].resolve();await Promise.resolve();
+  assert.equal(h.listening,true);
+  h.session.watchTask('window');
+  assert.equal(h.listening,false);
+  h.session.taskFinished('window',{answer:'Окно подтверждено.'});
+  assert.equal(h.spoken.length,2);
+  h.spoken[1].onSpeaking();h.spoken[1].resolve();await Promise.resolve();
+  assert.equal(h.listening,true);
+});

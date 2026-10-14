@@ -170,6 +170,8 @@ class NLCommand(BaseModel):
     voice_provider: str = Field(default="yandex", pattern="^(yandex|piper|elevenlabs)$")
     orchestrate: bool = False
     request_id: str | None = Field(default=None, min_length=1, max_length=64)
+    input_task_id: str | None = Field(default=None, min_length=1, max_length=64)
+    input_question_id: str | None = Field(default=None, min_length=32, max_length=32)
 
 
 class RunPlanBody(BaseModel):
@@ -298,6 +300,8 @@ async def nl_command(cmd: NLCommand, request: Request):
     if not check_rate_limit(str(user["id"])):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
+    if (cmd.input_task_id or cmd.input_question_id) and not cmd.orchestrate:
+        raise HTTPException(422, "Ответ на вопрос должен проходить через Orchestrator")
     user_devs = get_user_devices(user["id"])
     print(
         f"[nl_command] user_id={user['id']}, user='{user['name']}', "
@@ -390,7 +394,7 @@ async def api_operations(request: Request):
             "status": report["status"], "device_ids": report["target_device_ids"],
             "summary": report["summary"],
             "created_at": job["created_at"], "updated_at": job["updated_at"],
-            "can_cancel": report["status"] in {"queued", "running", "waiting_confirmation"},
+            "can_cancel": report["status"] in {"queued", "running", "waiting_confirmation", "waiting_input"},
             "waiting_confirmation": report["status"] == "waiting_confirmation"})
     return {"status": "ok", "operations": items}
 
@@ -559,6 +563,7 @@ async def api_get_task(task_id: str, request: Request):
         "results": task.get("results", {}),
         "overall_status": task.get("overall_status"),
         "confirm_data": task.get("confirm_data"),
+        "input_required": task.get("input_required"),
         "plan_review": task.get("plan_review"),
         "created_at": task["created_at"],
         "memory_stats": memory_stats,

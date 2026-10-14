@@ -64,7 +64,7 @@
       try {
         await io.speak(taskId, controller.signal, () => {
           if (!controller.signal.aborted && enabled && epoch === savedEpoch) { heard = true; setPhase('speaking'); io.listen(!continuous); }
-        }, item.review || item.confirmation);
+        }, item.review || item.confirmation || item.question);
         if (!controller.signal.aborted && enabled && epoch === savedEpoch) planOffer = heard ? item.plan : null;
         if (item.review && !controller.signal.aborted && enabled && epoch === savedEpoch) reviewHeard = heard;
         if (item.confirmation && !controller.signal.aborted && enabled && epoch === savedEpoch) commandHeard = heard;
@@ -105,6 +105,16 @@
       if (!enabled || (ticket !== undefined && (!ticket || ticket.epoch !== epoch)) || finished.has(taskId)) return;
       if (tasks.has(taskId) && (!continuous || backgroundTasks.has(taskId) === background)) return;
       tasks.add(taskId);if(continuous && background){backgroundTasks.add(taskId);drain();}else pause();
+    }
+    const heardQuestions = new Set();
+    function taskInputRequired(taskId, task) {
+      const questionId=task?.input_required?.question_id;
+      if (!enabled || !questionId || heardQuestions.has(questionId)) return;
+      heardQuestions.add(questionId);
+      tasks.delete(taskId);
+      const background=backgroundTasks.delete(taskId);
+      queue.push({id:taskId,background,question:{questionId}});
+      drain();
     }
     function taskFinished(taskId, task) {
       if (!enabled || !tasks.delete(taskId)) return;
@@ -256,7 +266,7 @@
         }).catch(error => { if (enabled && epoch === savedEpoch) { io.error(error); resume(true); } });
       }, 1000);
     }
-    return { enable, disable, beginRequest, endRequest, requestLost, watchTask, taskFinished, taskLost,
+    return { enable, disable, beginRequest, endRequest, requestLost, watchTask, taskFinished, taskInputRequired, taskLost,
       taskPaused, commandDecisionResolved, taskPlanReview, planReviewResolved, editPlan, transcript, stopSpeech, get enabled() { return enabled; }, get phase() { return phase; } };
   }
   if (typeof module !== 'undefined' && module.exports) module.exports = { createVoiceSession };

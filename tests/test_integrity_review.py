@@ -269,7 +269,7 @@ def test_operations_read_with_large_completed_history(owners,monkeypatch,count):
     from server.worker_scheduler import init_worker_storage
     init_worker_storage()
     with db.get_db() as c:
-        for ordering in ("created_at DESC", "CASE WHEN state IN ('running','waiting_confirmation') THEN 0 WHEN state='queued' THEN 1 ELSE 2 END, CASE WHEN state='queued' THEN created_at ELSE -created_at END, rowid"):
+        for ordering in ("created_at DESC", "CASE WHEN state IN ('running','waiting_confirmation','waiting_input') THEN 0 WHEN state='queued' THEN 1 ELSE 2 END, CASE WHEN state='queued' THEN created_at ELSE -created_at END, rowid"):
             plan=[r[3] for r in c.execute('EXPLAIN QUERY PLAN SELECT * FROM worker_jobs WHERE owner_user_id=? ORDER BY '+ordering+' LIMIT 20',(owner['id'],))]
             assert any('USING INDEX worker_owner_' in step for step in plan),plan
             assert not any('TEMP B-TREE' in step for step in plan),plan

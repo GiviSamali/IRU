@@ -1137,6 +1137,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 "commands": result.get("commands", []),
                 "tasks": result.get("tasks", []),
                 "task_receipt": task_receipt,
+                "input_required": result.get("input_required"),
             }
         except ConfirmationRequired as confirm:
             return {
@@ -1266,6 +1267,15 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 task["confirm_data"]["user_id"] = user_id
                 return
 
+            if result.get("input_required"):
+                task.update(status="waiting_input", input_required=result["input_required"],
+                            commands=result.get("commands", []), tasks=[])
+                try:
+                    from .orchestrator import present_window_input
+                except ImportError:
+                    from orchestrator import present_window_input
+                present_window_input(task)
+                return
             combined_answer = result.get("answer", "")
             combined_commands = result.get("commands", [])
             combined_tasks = result.get("tasks", [])
@@ -1437,3 +1447,61 @@ async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id:
         task["status"] = "error"
         task["answer"] = f"Ошибка: {str(exc)}"
         task["commands"] = []
+
+
+async def continue_window_input(task):
+    """Worker continuation: revalidate one exact window; never restart a controller."""
+    try:
+        from .run_journal import append_tool_step, append_answer_step, validate_answer_text_payload
+        from .tool_completion import synthesize_terminal_answer_payload
+    except ImportError:
+        from run_journal import append_tool_step, append_answer_step, validate_answer_text_payload
+        from tool_completion import synthesize_terminal_answer_payload
+    event = task['input_required']
+    selected = event['options'][event['choice']]
+    target = event['device_id']
+    target = target if ':' in target else f"{task['user_id']}:{target}"
+    if target not in task['device_ids'] or event['operation'] != {'action':'activate'}:
+        raise ValueError('input_scope_mismatch')
+    journal = task['commands']
+    event['phase'] = 'executing'
+    try:
+        observation = await send_command_to_agent(target, 'window.control',
+            {'action':'find','window_id':selected['window_id']}, user_id=task['user_id'])
+        append_tool_step(journal, {'tool_name':'window.control','action':'window.control',
+            'device_id':target,'target_device_id':target,'status':'success' if observation.get('status')=='success' else 'failed',
+            'result':observation})
+        window = observation.get('window') or {}
+        if observation.get('status') != 'success' or any(window.get(key) != selected.get(key)
+                for key in ('window_id','pid','process_name','class_name')):
+            task.update(status='unknown',worker_error_code='input_window_stale',
+                        answer='Выбранное окно больше не подтверждено. Переключение не выполняла.')
+            event['phase']='stale'
+            return
+        if task.get('cancel_requested'):
+            task.update(status='cancelled',answer='Задача отменена до переключения.')
+            event['phase']='cancelled'
+            return
+        # Agent checks the same window_id/handle+pid again immediately before native action.
+        result = await send_command_to_agent(target, 'window.control',
+            {**event['operation'],'window_id':selected['window_id']}, user_id=task['user_id'])
+        entry = append_tool_step(journal, {'tool_name':'window.control','action':'window.control',
+            'device_id':target,'target_device_id':target,
+            'status':'success' if result.get('status')=='success' else 'failed','result':result})
+        reported = result.get('window') or {}
+        if (result.get('status') != 'success' or result.get('completion_state') != 'success'
+                or result.get('action') != 'activate' or any(reported.get(key) != selected.get(key)
+                    for key in ('window_id','pid','process_name','class_name'))):
+            event['phase']='unknown'
+            task.update(status='unknown',worker_error_code='input_result_not_verified',
+                        answer='Не могу подтвердить переключение выбранного окна. Повторять действие не буду.')
+            return
+        payload = validate_answer_text_payload(synthesize_terminal_answer_payload(entry), journal)
+        append_answer_step(journal,'answer_text',payload,target_device_id=target)
+        task.update(status='done' if result.get('status')=='success' and result.get('completion_state')=='success' else 'unknown',
+                    answer=payload['text'], task_receipt=None)
+        event['phase']='answered'
+    except Exception:
+        event['phase']='unknown'
+        task.update(status='unknown',worker_error_code='input_continuation_unknown',
+                    answer='Не могу подтвердить переключение. Автоматически повторять его не буду.')

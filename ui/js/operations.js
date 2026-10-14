@@ -56,7 +56,7 @@ window.IRUOperations = (() => {
     mirror.hidden=!visible;toggle.hidden=!i;toggle.setAttribute('aria-expanded',String(visible));
     if(!visible)return;
     const status=IRUSmartUI.normalizeStatus(i.status)||'unknown';
-    const label=i.status==='waiting_confirmation'?'Нужно подтверждение':i.status==='queued'?'В очереди':IRUSmartUI.LABELS[status];
+    const label=i.status==='waiting_input'?'Нужно выбрать окно':i.status==='waiting_confirmation'?'Нужно подтверждение':i.status==='queued'?'В очереди':IRUSmartUI.LABELS[status];
     const html=`<article data-task-id="${a(i.task_id)}" data-status="${a(status)}"><div class="mirror-object"><span class="mirror-object-icon" aria-hidden="true">▣</span><h2>${e(i.title)}</h2></div><div class="operation-devices">${e(i.device_ids.join(', ')||'Сервер')}</div><span class="smart-status">${e(label)}</span>${stale?'<p role="status">Последнее известное состояние. Соединение потеряно.</p>':''}${i.can_cancel?'<div class="operation-actions"><button data-operation="cancel">Отменить задачу</button></div>':''}${detailMarkup(i,status)}</article>`;
     if(html!==mirrorHTML) {
       const container=document.getElementById('mirrorContent'), wasOpen=mirrorTask===i.task_id && container.querySelector('details')?.open;
@@ -84,7 +84,7 @@ window.IRUOperations = (() => {
     let previousGroup=null;
     const rows=[...scoped].sort((left,right)=>group(left)-group(right)).map(i=>{
       const status=IRUSmartUI.normalizeStatus(i.status)||'unknown';
-      const label=i.status==='waiting_confirmation'?'Нужно подтверждение':i.status==='queued'?'В очереди':IRUSmartUI.LABELS[status];
+      const label=i.status==='waiting_input'?'Нужно выбрать окно':i.status==='waiting_confirmation'?'Нужно подтверждение':i.status==='queued'?'В очереди':IRUSmartUI.LABELS[status];
       const number=group(i), heading=number!==previousGroup?`<div class="operation-group">${e(groups[number])}</div>`:'';previousGroup=number;
       return {id:i.task_id,html:`<article class="operation-item${selected===i.task_id?' selected':''}" data-message-key="dock-${a(i.task_id)}" data-task-id="${a(i.task_id)}" data-status="${a(status)}">${heading}<div class="operation-heading"><strong>${e(i.title)}</strong><span class="smart-status">${e(label)}</span></div><div class="operation-devices">${e(i.device_ids.join(', ')||'Сервер')}</div><div class="operation-actions"><button data-operation="details" aria-pressed="${selected===i.task_id}">${selected===i.task_id?'Выбрана':'Показать'}</button>${i.can_cancel?'<button data-operation="cancel">Отменить</button>':''}</div></article>`};
     });

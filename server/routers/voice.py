@@ -1,3 +1,4 @@
+import time
 """Authenticated voice output. The client selects a task, never arbitrary text."""
 import base64
 import io
@@ -50,7 +51,7 @@ def _piper_device(user_id: int, device_id: str | None) -> str:
 
 @router.post("/tasks/{task_id}/speech")
 async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0), revision: str | None = None,
-                      confirmation: str | None = None, provider: str = "yandex", device_id: str | None = None):
+                      confirmation: str | None = None, question: str | None = None, provider: str = "yandex", device_id: str | None = None):
     user = get_current_user(request)
     if provider not in {"yandex", "piper", "elevenlabs"}:
         raise HTTPException(400, "Неизвестный обработчик озвучки")
@@ -81,7 +82,13 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
         raise HTTPException(409, "Подтверждение команды изменилось")
     if revision is not None and (not review or review.get("revision") != revision):
         raise HTTPException(409, "Вариант плана изменился")
-    if task.get("status") not in TERMINAL_STATUSES and not review and not ordinary:
+    input_event = task.get("input_required") or {}
+    input_question = (task.get("status")=="waiting_input" and input_event.get("phase")=="waiting" and time.time()<input_event.get("expires_at",0))
+    if question is not None and (not input_question or input_event.get("question_id") != question):
+        raise HTTPException(409, "Вопрос уже изменился")
+    if input_question and question is None:
+        raise HTTPException(409, "Требуется идентификатор вопроса")
+    if task.get("status") not in TERMINAL_STATUSES and not review and not ordinary and not input_question:
         raise HTTPException(409, "Задача ещё не завершена")
     plan_offer = bool(task.get("plan_suggestion") and not task.get("plan_declined") and not task.get("voice_plan_started"))
     offer_text = "Задача требует нескольких шагов. Предлагаю режим План: составлю план, выполню его и доложу результат. Запустить?"

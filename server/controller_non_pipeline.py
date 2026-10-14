@@ -386,6 +386,14 @@ async def process_non_pipeline_command(
         entry = append_entry(_command_log_entry("window_control", "[tool] window_control", device_id, device_info, direct_result, 1))
         if is_task_cancel_requested(poll_task_id):
             return cancelled_result(1)
+        try:
+            from .window_policy import window_input_required
+        except ImportError:
+            from window_policy import window_input_required
+        event = (window_input_required(direct_args, direct_result, commands_log, device_id)
+                 if window_only and expected_window_actions == ["activate"] else None)
+        if event:
+            return {"answer":"", "commands":commands_log, "tasks":[], "input_required":event}
         payload = synthesize_terminal_answer_payload(entry)
         payload = validate_answer_text_payload(payload, commands_log)
         append_answer_step(commands_log, "answer_text", payload, target_device_id=device_id, iteration=1)
@@ -1168,6 +1176,8 @@ async def process_non_pipeline_command(
                 if arg_warnings and isinstance(commands_log[-1].get("result"), dict):
                     existing_warnings = list(commands_log[-1]["result"].get("arg_warnings") or [])
                     commands_log[-1]["result"]["arg_warnings"] = existing_warnings + arg_warnings
+                if fn_name == "window_control":
+                    commands_log[-1]["window_request"] = dict(fn_args)
                 mark_read_only_tool_step(commands_log[-1], fn_name, repeat_guard_args)
                 append_tool_message(tool_call["id"], commands_log[-1])
                 repeated = repeated_command_observation(commands_log)
@@ -1220,6 +1230,14 @@ async def process_non_pipeline_command(
 
                 if fn_name == "window_control" and tool_result.get("status") in {"ambiguous", "pending"}:
                     if tool_result["status"] == "ambiguous":
+                        try:
+                            from .window_policy import window_input_required
+                        except ImportError:
+                            from window_policy import window_input_required
+                        event = (window_input_required(fn_args, tool_result, commands_log, target_device)
+                                 if window_only and expected_window_actions == ["activate"] else None)
+                        if event:
+                            return {"answer":"", "commands":commands_log, "tasks":[], "input_required":event}
                         titles = [str(candidate.get("title") or candidate.get("process_name") or "Окно")
                                   for candidate in tool_result.get("candidates", [])]
                         question = "Найдено несколько окон: " + "; ".join(titles) + ". Какое выбрать?"

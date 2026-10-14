@@ -853,6 +853,13 @@ async function sendMessage(options = {}) {
       broadcast: isBroadcast,
       modes: { ...state.modes },
     };
+    const awaiting = [...state.messages].reverse().find(row => row.inputRequired?.phase === 'waiting' && row.taskStatus === 'waiting_input');
+    const choice = messageToSend.trim().toLocaleLowerCase().replace(/[.!]$/,'');
+    if (awaiting && (/^(?:[0-9]+|первое|второе|третье|четвёртое|пятое)$/.test(choice)
+        || awaiting.inputRequired.options.some(option => String(option.title || '').toLocaleLowerCase() === choice))) {
+      body.input_task_id = awaiting._taskId;
+      body.input_question_id = awaiting.inputRequired.question_id;
+    }
     const r = await fetch(`${API}/nl_command`, {
       method: 'POST',
       headers: authHeaders(),
@@ -931,20 +938,28 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
       }
       const data = await r.json();
       const task = data.task;
-      if (task.worker_id) window.iruVoice?.watchTask(taskId,voiceTicket,true);
+      if (task.worker_id && task.status !== 'waiting_input') window.iruVoice?.watchTask(taskId,voiceTicket,true);
       if (task.status === 'queued') startTime=Date.now();
       if (msgIndex < 0) {
         if (isTaskTerminalStatus(task.status)) {stopped=true;taskPollLoops.delete(taskId);state.pendingTasks=state.pendingTasks.filter(item=>item.task_id!==taskId);forgetActiveTask(taskId);}
         else setTimeout(poll,800);
         return;
       }
-      const smartTaskMetadata = { taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind,conversationalResponse:task.conversational_response,executionDetails:task.execution_details };
+      const smartTaskMetadata = { taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind,inputRequired:task.input_required,conversationalResponse:task.conversational_response,executionDetails:task.execution_details };
       const pendingTask = state.pendingTasks.find(t => t.task_id === taskId);
       if (pendingTask && task.kind) pendingTask.kind=task.kind;
       if (pendingTask && String(task.status || '').trim().toLowerCase() === 'cancelling') {
         pendingTask.cancelRequested = true;
       }
 
+      if (task.status === 'waiting_input') {
+        state.messages[msgIndex] = {role:'assistant', _taskId:taskId, ...smartTaskMetadata,
+          content:task.conversational_response || task.answer, commands:task.commands || [], tasks:task.tasks || []};
+        renderMessages();
+        window.iruVoice?.taskInputRequired?.(taskId,task);
+        setTimeout(poll,800);
+        return;
+      }
       if (task.status === 'confirm') {
         if (task.plan_review) {
           stopped = true; taskPollLoops.delete(taskId);

@@ -248,7 +248,7 @@ async def decide(message, context, *, user_id, chat_id, task_id):
 async def run_turn(cmd, user, chat_id, delegate):
     turn_started=time.monotonic()
     init_turn_storage();owner=user["id"];key=cmd.request_id or str(uuid.uuid4())
-    fingerprint=sha256(json.dumps({"chat_id":chat_id,"message":cmd.message,"device":cmd.device_id,"modes":cmd.modes,"broadcast":cmd.broadcast,**({"voice_provider":"piper"} if getattr(cmd,"voice_provider","yandex")=="piper" else {})},sort_keys=True).encode()).hexdigest()
+    fingerprint=sha256(json.dumps({"chat_id":chat_id,"message":cmd.message,"device":cmd.device_id,"modes":cmd.modes,"broadcast":cmd.broadcast,**({"input_task_id":cmd.input_task_id,"input_question_id":cmd.input_question_id} if getattr(cmd,"input_task_id",None) or getattr(cmd,"input_question_id",None) else {}),**({"voice_provider":"piper"} if getattr(cmd,"voice_provider","yandex")=="piper" else {})},sort_keys=True).encode()).hexdigest()
     with db.get_db() as c:
         c.execute("BEGIN IMMEDIATE")
         old=c.execute("SELECT * FROM orchestrator_turns WHERE owner_user_id=? AND request_key=?",(owner,key)).fetchone()
@@ -270,7 +270,12 @@ async def run_turn(cmd, user, chat_id, delegate):
         routing_context=context_for(owner,chat_id,cmd.message,cmd.device_id)
         routing_context["voice_provider"]=getattr(cmd,"voice_provider","yandex")
         stage="decide"
-        choice,stats=await decide(cmd.message,routing_context,user_id=owner,chat_id=chat_id,task_id=tid)
+        if getattr(cmd,"input_task_id",None) or getattr(cmd,"input_question_id",None):
+            worker=await scheduler.answer_window_input(owner,chat_id,cmd.input_task_id,cmd.input_question_id,cmd.message)
+            choice=Decision(intent="conversation",answer="Продолжаю исходную задачу.")
+            stats={"entity":"orchestrator","llm_calls":0,"snapshot_calls":0}
+        else:
+            choice,stats=await decide(cmd.message,routing_context,user_id=owner,chat_id=chat_id,task_id=tid)
         if choice.intent=="delegate":
             stage="handoff"
             if not choice.objective.strip():raise ValueError("missing_objective")
@@ -290,7 +295,7 @@ async def run_turn(cmd, user, chat_id, delegate):
             jobs=routing_context["tasks"]
             if choice.reference=="latest" and jobs and not choice.task_id:choice.task_id=jobs[0]["task_id"]
             if choice.reference in {"unique","active"}:
-                eligible={"running","waiting_confirmation"} if choice.reference=="active" else {"queued","running","waiting_confirmation"}
+                eligible={"running","waiting_confirmation","waiting_input"} if choice.reference=="active" else {"queued","running","waiting_confirmation","waiting_input"}
                 active=[job for job in jobs if job["status"] in eligible]
                 if len(active)!=1 or (choice.task_id and choice.task_id!=active[0]["task_id"]):raise ValueError("ambiguous_task_reference")
                 choice.task_id=active[0]["task_id"]
@@ -299,7 +304,7 @@ async def run_turn(cmd, user, chat_id, delegate):
             if choice.intent=="cancel":
                 quoted=bool(choice.reference_quote and choice.reference_quote in cmd.message)
                 if choice.reference=="latest" or (choice.reference=="explicit" and choice.task_id not in cmd.message and not quoted):raise ValueError("cancel_requires_exact_task_reference")
-                if job["state"] not in {"queued","running","waiting_confirmation"}:
+                if job["state"] not in {"queued","running","waiting_confirmation","waiting_input"}:
                     answer="Эта задача уже завершена. Следующую задачу не отменяю."
                 else:
                     result=await scheduler.cancel(choice.task_id,owner)
@@ -404,3 +409,23 @@ def restore_dialogue(task_id, owner):
         "current_step":metadata.get("taskTitle"),"plan_suggestion":metadata.get("planSuggestion"),"plan_original_request":metadata.get("planOriginalRequest"),
         "orchestrated":metadata.get("orchestrated") is True,"proposed_objective":metadata.get("proposedObjective") or "",
         "proposed_context_summary":metadata.get("proposedContextSummary") or ""}
+
+
+def present_window_input(task):
+    """Orchestrator presents the ready Worker event; no editorial LLM call."""
+    event=task['input_required']
+    event['presented_by']='orchestrator'
+    task.update(answer=event['question'],dialogue_intent='input_required')
+
+
+def present_window_input_result(task, report):
+    """Only Orchestrator publishes this prototype's question and continuation outcome."""
+    try:
+        from .response_presentation import worker_presentation
+    except ImportError:
+        from response_presentation import worker_presentation
+    event=task['input_required']
+    task['dialogue_intent']='input_required' if report['status']=='waiting_input' else 'input_resolved'
+    if report['status']=='waiting_input':
+        return {'conversational_response':event['question'],'execution_details':''}
+    return worker_presentation(task, report)

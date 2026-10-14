@@ -90,3 +90,29 @@ test('P0 result prose stays primary and partial stays partial',async()=>{
   assert.equal(await p.locator('#mirrorContent details').evaluate(node=>node.open),false);
  }finally{await p.close();}
 });
+
+
+test('window input uses the shown task/question binding; unrelated text remains a new request',async()=>{
+ const f=await setup(),p=f.page,requests=[];
+ try{
+  const qid='a'.repeat(32), question={question_id:qid,phase:'waiting',question:'Какое окно выбрать?',options:[{title:'First'},{title:'Second'}]};
+  f.setDetails({window:{...task('window','waiting_input'),input_required:question,answer:question.question,
+   conversational_response:question.question,presentation_status:'waiting_input'}});
+  await p.route('**/nl_command',async route=>{requests.push(route.request().postDataJSON());await route.fulfill({json:{status:'ok',response_type:'orchestrator',task_id:'reply-'+requests.length,worker_task_id:null}});});
+  await p.route('**/api/tasks/reply-*',route=>route.fulfill({json:{status:'ok',task:{task_id:new URL(route.request().url()).pathname.split('/').pop(),chat_id:1,kind:'orchestrator',status:'done',answer:'Принято.',conversational_response:'Принято.',commands:[],tasks:[]}}}));
+  await p.evaluate(()=>{state.messages=[{role:'assistant',_taskId:'window',content:'',loading:true}];renderMessages();pollTask('window',0);});
+  await p.waitForFunction(()=>state.messages[0]?.inputRequired?.phase==='waiting');
+  const savedQuestion=await p.evaluate(()=>state.messages[0]);
+  await p.unroute('**/api/chats/1/messages');
+  await p.route('**/api/chats/1/messages',route=>route.fulfill({json:{status:'ok',messages:[savedQuestion]}}));
+  await p.reload({waitUntil:'networkidle'});
+  await p.waitForFunction(()=>state.messages.some(row=>row.inputRequired?.phase==='waiting' && !row.loading));
+  await p.locator('#chatInput').fill('Второе');await p.locator('#btnSend').click();
+  await p.waitForFunction(()=>state.messages.every(row=>!row.loading));
+  assert.equal(requests[0].input_task_id,'window');assert.equal(requests[0].input_question_id,qid);
+  await p.locator('#chatInput').fill('Сколько свободного места?');await p.locator('#btnSend').click();
+  await p.waitForFunction(()=>state.messages.every(row=>!row.loading));
+  assert.equal(requests.length,2);assert.equal(requests[1].input_task_id,undefined);
+  assert.equal(requests[1].input_question_id,undefined);
+ }finally{await p.close();}
+});

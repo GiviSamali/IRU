@@ -132,6 +132,7 @@ def worker_presentation(task, report=None):
     result=_artifact_result(artifacts)
     if task.get("plan_suggestion"):
         human=answer or "Предлагаю составить план. Запустить?"
+    elif status=="waiting_input":human=answer or "Какое окно выбрать?"
     elif status=="waiting_confirmation":human="Нужно твоё подтверждение, прежде чем продолжить."
     elif status=="queued":human="Поручение в очереди. Начну после текущей задачи."
     elif status=="running":human="Работа ещё идёт."

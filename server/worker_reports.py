@@ -8,7 +8,7 @@ class WorkerReport(BaseModel):
     schema_version: Literal[1]
     task_id: str
     worker_id: Literal["worker-1"]
-    status: Literal["queued","running","waiting_confirmation","success","partial","blocked","failed","cancelled","unknown"]
+    status: Literal["queued","running","waiting_confirmation","waiting_input","success","partial","blocked","failed","cancelled","unknown"]
     goal_completed: bool
     summary: str = Field(max_length=2000)
     target_device_ids: list[str]
@@ -95,6 +95,7 @@ def build_worker_report(task):
     if task.get("plan_suggestion"):status="blocked"
     elif raw == "queued": status = "queued"
     elif raw == "confirm": status = "waiting_confirmation"
+    elif raw == "waiting_input": status = "waiting_input"
     elif raw not in TERMINAL: status = "running"
     elif raw in negative: status = negative[raw]
     elif receipt.get("task_status") in negative: status = negative[receipt["task_status"]]
@@ -122,12 +123,12 @@ def build_worker_report(task):
     summaries = {"success":"Задача выполнена по подтверждённым результатам.", "partial":"Задача выполнена частично.",
         "blocked":"Выполнение заблокировано.", "failed":"Задача завершилась с ошибкой.", "cancelled":"Задача отменена.",
         "unknown":"Исход задачи не подтверждён; автоматически её не повторяю.", "queued":"Задача ожидает освобождения Worker.",
-        "running":"Задача выполняется.", "waiting_confirmation":"Задача ожидает решения пользователя."}
+        "waiting_input":"Задача ожидает выбора окна.", "running":"Задача выполняется.", "waiting_confirmation":"Задача ожидает решения пользователя."}
     error_code=(task.get("worker_error_code") or receipt.get("terminal_reason")) if status!="success" else None
     if not isinstance(error_code, str):error_code=None
     report = {"schema_version":1, "task_id":task["task_id"], "worker_id":"worker-1", "status":status,
         "goal_completed":status == "success", "summary":payload["text"][:2000] if (terminal_negative or confirmed) and isinstance(payload.get("text"),str) and payload["text"] == task.get("answer") else summaries[status],
         "target_device_ids":[_short_did(d) for d in task.get("device_ids") or []], "artifacts":artifacts,
-        "evidence_refs":refs, "requires_user_action":status in {"waiting_confirmation","blocked"},
+        "evidence_refs":refs, "requires_user_action":status in {"waiting_confirmation","waiting_input","blocked"},
         "error_code":error_code}
     return WorkerReport.model_validate(report).model_dump()

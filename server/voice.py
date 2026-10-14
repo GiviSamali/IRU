@@ -190,6 +190,8 @@ async def spoken_parts(task: dict) -> list[str]:
     cleaned = " ".join(answer_parts(answer, keep_inline=True))
     if wants_full_speech(source[1]) or task.get("full_speech_requested") is True:
         parts = answer_parts(answer, keep_inline=True)
+    elif task.get("status")=="waiting_input" and (task.get("input_required") or {}).get("presented_by")=="orchestrator":
+        parts = answer_parts(answer, keep_inline=True)
     elif candidate and (not has_technical_details(candidate) or wants_spoken_details(source[1])):
         parts = answer_parts(candidate,keep_inline=True)
     elif worker_speech and worker_speech!=answer and (not has_technical_details(worker_speech) or wants_spoken_details(source[1])):

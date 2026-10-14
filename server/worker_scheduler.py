@@ -20,7 +20,7 @@ except ImportError:
     from response_presentation import worker_presentation
 
 MAX_QUEUED = 4
-ACTIVE_STATES = ("running", "waiting_confirmation")
+ACTIVE_STATES = ("running", "waiting_confirmation", "waiting_input")
 
 
 def init_worker_storage():
@@ -30,10 +30,16 @@ def init_worker_storage():
             state TEXT NOT NULL, payload TEXT NOT NULL, report TEXT, message_id INTEGER,
             created_at REAL NOT NULL, updated_at REAL NOT NULL, request_key TEXT,
             UNIQUE(owner_user_id, request_key))""")
-        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS worker_one_active_owner ON worker_jobs(owner_user_id) WHERE state IN ('running','waiting_confirmation')")
+        index = connection.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name='worker_one_active_owner'").fetchone()
+        if index and 'waiting_input' not in index['sql']:
+            connection.execute("DROP INDEX worker_one_active_owner")
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS worker_one_active_owner ON worker_jobs(owner_user_id) WHERE state IN ('running','waiting_confirmation','waiting_input')")
         connection.execute("CREATE INDEX IF NOT EXISTS worker_owner_recent ON worker_jobs(owner_user_id,created_at DESC)")
+        queue_index=connection.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name='worker_owner_queue'").fetchone()
+        if queue_index and 'waiting_input' not in queue_index['sql']:
+            connection.execute("DROP INDEX worker_owner_queue")
         connection.execute("""CREATE INDEX IF NOT EXISTS worker_owner_queue ON worker_jobs(owner_user_id,
-            CASE WHEN state IN ('running','waiting_confirmation') THEN 0 WHEN state='queued' THEN 1 ELSE 2 END,
+            CASE WHEN state IN ('running','waiting_confirmation','waiting_input') THEN 0 WHEN state='queued' THEN 1 ELSE 2 END,
             CASE WHEN state='queued' THEN created_at ELSE -created_at END)""")
 
 
@@ -46,7 +52,7 @@ def owned_job(task_id, user_id):
 
 def list_jobs(user_id, limit=8, *, queue_first=False):
     init_worker_storage()
-    ordering = ("CASE WHEN state IN ('running','waiting_confirmation') THEN 0 WHEN state='queued' THEN 1 ELSE 2 END, "
+    ordering = ("CASE WHEN state IN ('running','waiting_confirmation','waiting_input') THEN 0 WHEN state='queued' THEN 1 ELSE 2 END, "
                 "CASE WHEN state='queued' THEN created_at ELSE -created_at END, rowid") if queue_first else "created_at DESC"
     with db.get_db() as c:
         return [dict(row) for row in c.execute(
@@ -96,7 +102,7 @@ def _final_snapshot(task, report, previous):
     # Never serialize transient controller locks/events or transport objects.
     for key in ("answer","commands","tasks","task_receipt","diagnostic_trace","worker_started_at",
                 "conversational_response","execution_details","cancel_requested","worker_error_code",
-                "history_message_id","history_metadata"):
+                "history_message_id","history_metadata","input_required"):
         if key in task:snapshot[key]=task[key]
     snapshot.update(status=report["status"],worker_report=report)
     return snapshot
@@ -104,7 +110,14 @@ def _final_snapshot(task, report, previous):
 
 def persist_report(task, *, include_report_column=True):
     report=build_worker_report(task);task["worker_report"]=report
-    task.update(worker_presentation(task,report))
+    if task.get("input_required"):
+        try:
+            from .orchestrator import present_window_input_result
+        except ImportError:
+            from orchestrator import present_window_input_result
+        task.update(present_window_input_result(task, report))
+    else:
+        task.update(worker_presentation(task,report))
     metadata=db.message_task_metadata({**task,"status":report["status"],"worker_report":report},task_id=task["task_id"])
     task["history_metadata"]=metadata
     message_id=task.get("history_message_id")
@@ -191,7 +204,7 @@ class WorkerScheduler:
                     previous=json.loads(old["payload"])
                     if any(previous.get(key)!=task.get(key) for key in ("chat_id","message","device_ids","modes","original_request","proposed_objective","orchestrator_execution_mode","source_task_ids")):raise ValueError("request_id_conflict")
                     return tasks.get(old["task_id"]) or restore_task(dict(old))
-            active=c.execute("SELECT task_id FROM worker_jobs WHERE owner_user_id=? AND state IN ('running','waiting_confirmation')",(owner,)).fetchone()
+            active=c.execute("SELECT task_id FROM worker_jobs WHERE owner_user_id=? AND state IN ('running','waiting_confirmation','waiting_input')",(owner,)).fetchone()
             waiting=c.execute("SELECT COUNT(*) FROM worker_jobs WHERE owner_user_id=? AND state='queued'",(owner,)).fetchone()[0]
             if active and waiting >= MAX_QUEUED: raise ValueError("worker_queue_full")
             if owner != ADMIN_USER_ID:
@@ -228,7 +241,7 @@ class WorkerScheduler:
         try:
             while not self.closing:
                 with db.get_db() as c:
-                    row=c.execute("SELECT * FROM worker_jobs WHERE owner_user_id=? AND state IN ('running','waiting_confirmation')",(owner,)).fetchone()
+                    row=c.execute("SELECT * FROM worker_jobs WHERE owner_user_id=? AND state IN ('running','waiting_confirmation','waiting_input')",(owner,)).fetchone()
                 if row is None: return
                 task=tasks.get(row["task_id"])
                 if task is None:
@@ -262,14 +275,39 @@ class WorkerScheduler:
                         LLM_ENTITY.reset(role_token);WORKER_MEMORY_QUERY.reset(memory_token);ORIGINAL_WORKER_REQUEST.reset(human_token)
                     # Ordinary confirmation unwinds its controller; retain the slot
                     # until the existing confirmation handler produces a terminal result.
+                    if task.get("status") == "waiting_input":
+                        task['_window_input_deadline']=time.monotonic()+max(0,min(120,
+                            task['input_required']['expires_at']-time.time()))
+                        _finalize_report(task)
                     while task.get("status") not in TERMINAL and not self.closing:
+                        event = task.get("input_required") or {}
+                        if event and event.get("phase") in {"waiting", "claimed"}:
+                            if task.get("cancel_requested"):
+                                event["phase"]="cancelled"
+                                task.update(status="cancelled",answer="Ожидание выбора отменено.")
+                                break
+                            if (time.time() >= event["expires_at"]
+                                    or time.monotonic() >= task.get('_window_input_deadline',0)):
+                                event["phase"]="expired"
+                                task.update(status="blocked",worker_error_code="input_expired",
+                                            answer="Время ожидания выбора истекло. Переключение не выполняла.")
+                                break
+                            if event["phase"] == "claimed":
+                                try:
+                                    from .task_runtime import continue_window_input
+                                except ImportError:
+                                    from task_runtime import continue_window_input
+                                await continue_window_input(task)
+                                break
                         with db.get_db() as c:
-                            c.execute("UPDATE worker_jobs SET state=? WHERE task_id=?",("waiting_confirmation" if task.get("status")=="confirm" else "running",task["task_id"]))
+                            c.execute("UPDATE worker_jobs SET state=? WHERE task_id=?",("waiting_input" if task.get("status")=="waiting_input" else "waiting_confirmation" if task.get("status")=="confirm" else "running",task["task_id"]))
                         if time.time()-task["created_at"]>3600:
                             task.update(status="unknown",worker_error_code="confirmation_expired");break
                         await asyncio.sleep(.1)
                     if self.closing: return
                 except asyncio.CancelledError:
+                    if task.get("input_required"):
+                        task["input_required"]["phase"]="interrupted"
                     task.update(status="unknown",worker_error_code="server_interrupted")
                     _finalize_report(task);raise
                 except asyncio.TimeoutError:
@@ -289,6 +327,35 @@ class WorkerScheduler:
             # A new submit can occur immediately after this coroutine returns;
             # ensure_runner checks done(), rather than leaving a stale busy flag.
             pass
+
+    async def answer_window_input(self, owner, chat_id, task_id, question_id, text):
+        try:
+            from .window_policy import window_input_choice
+        except ImportError:
+            from window_policy import window_input_choice
+        with db.get_db() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row=c.execute("SELECT * FROM worker_jobs WHERE task_id=? AND owner_user_id=? AND chat_id=?",
+                          (task_id,owner,chat_id)).fetchone()
+            if not c.execute("SELECT 1 FROM chats WHERE id=? AND user_id=?",(chat_id,owner)).fetchone():
+                raise ValueError('input_question_not_active')
+            task=tasks.get(task_id)
+            runner=self.runners.get(owner)
+            if (not row or row['state']!='waiting_input' or not task or task.get('status')!='waiting_input'
+                    or not runner or runner.done() or task.get('cancel_requested')
+                    or time.monotonic()>=task.get('_window_input_deadline',0)):
+                raise ValueError('input_question_not_active')
+            saved=json.loads(row['payload']);event=saved.get('input_required') or {}
+            if (event.get('question_id')!=question_id or event.get('phase')!='waiting'
+                    or time.time()>=event.get('expires_at',0)):
+                raise ValueError('input_question_not_active')
+            event.update(choice=window_input_choice(text,event['options']),phase='claimed')
+            saved.update(input_required=event,status='running')
+            c.execute("UPDATE worker_jobs SET state='running',payload=?,updated_at=? WHERE task_id=? AND owner_user_id=? AND state='waiting_input'",
+                      (json.dumps(saved,ensure_ascii=False),time.time(),task_id,owner))
+        task.update(status='running',input_required=event)
+        _finalize_report(task)
+        return task
 
     async def cancel(self, task_id, owner):
         job=owned_job(task_id,owner)
@@ -331,9 +398,11 @@ class WorkerScheduler:
         self.runners={}
         init_worker_storage()
         with db.get_db() as c:
-            rows=[dict(row) for row in c.execute("SELECT * FROM worker_jobs WHERE state IN ('queued','running','waiting_confirmation')")]
+            rows=[dict(row) for row in c.execute("SELECT * FROM worker_jobs WHERE state IN ('queued','running','waiting_confirmation','waiting_input')")]
         for row in rows:
             task=restore_task(row);tasks[task["task_id"]]=task
+            if task.get("input_required"):
+                task["input_required"]["phase"]="interrupted"
             task.update(status="cancelled" if row["state"]=="queued" else "unknown",
                 worker_error_code="server_restarted_not_executed" if row["state"]=="queued" else "server_restarted_outcome_unknown")
             _finalize_report(task)

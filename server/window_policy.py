@@ -23,7 +23,9 @@ _BARE = {'сверни': 'minimize', 'разверни': 'maximize', 'восст
 
 def normalize_window_request(message):
     text = re.sub(r'\s+', ' ', message.lower()).strip().rstrip('.!?')
-    return re.sub(r'^(?:(?:отлично|хорошо|ладно|а теперь|теперь|пожалуйста)[, ]+)+', '', text)
+    text = re.sub(r'^(?:(?:отлично|хорошо|ладно|а теперь|теперь|пожалуйста)[, ]+)+', '', text)
+    text = re.sub(r'^иру[, ]+', '', text)
+    return re.sub(r'^переключись на ', 'активируй ', text)
 
 def unsupported_virtual_desktop_request(message):
     text = normalize_window_request(message)
@@ -116,3 +118,52 @@ def direct_window_action(message, history, device_id):
         if len(current_context) == 1:
             args = {'action': _BARE[text], 'window_id': current_context[0]['window_id']}
     return args
+
+
+def window_input_required(args, result, journal, device_id):
+    """Only a not-yet-executed activation can have this bounded continuation."""
+    import time
+    import uuid
+    if args.get('action') != 'activate' or result.get('status') != 'ambiguous':
+        return None
+    candidates = result.get('candidates') or []
+    if not 2 <= len(candidates) <= 20 or not all(
+        isinstance(row, dict) and isinstance(row.get('window_id'), str)
+        and len(row['window_id']) == 32 and type(row.get('pid')) is int
+        and row.get('process_name') and row.get('class_name') for row in candidates
+    ):
+        return None
+    # No completed/unknown side effect can be replayed by this slice.
+    for entry in journal[:-1]:
+        outcome = entry.get('result') or {}
+        if ((entry.get('tool_name') or entry.get('action')) not in {'window_control','window.control'}
+                or (entry.get('window_request') or {}).get('action', outcome.get('action')) not in {'list','find','active','monitors'}
+                or outcome.get('status') != 'success'):
+            return None
+    if len({row['window_id'] for row in candidates}) != len(candidates):
+        return None
+    options = [{key: row[key] for key in ('window_id','pid','process_name','class_name','title') if key in row}
+               for row in candidates]
+    question = 'Найдено несколько окон. Какое выбрать?\n' + '\n'.join(
+        f"{index + 1}. {row.get('title') or row['process_name']}" for index, row in enumerate(options))
+    return {'type':'input_required','question_id':uuid.uuid4().hex,'question':question,
+            'options':options,'operation':{'action':'activate'},'device_id':device_id,
+            'basis':[journal[-1]['step_id']], 'phase':'waiting','expires_at':time.time()+120}
+
+
+def window_input_choice(text, options):
+    # Parse a choice in this exact displayed list, not an independent user intent.
+    value = (text or '').strip().casefold().rstrip('.!')
+    ordinals = ('первое','второе','третье','четвёртое','пятое')
+    if value in ordinals:
+        index = ordinals.index(value)
+    elif value.isdecimal():
+        index = int(value)-1
+    else:
+        matches = [i for i, row in enumerate(options) if value == str(row.get('title') or '').casefold()]
+        if len(matches) != 1:
+            raise ValueError('invalid_input_choice')
+        index = matches[0]
+    if not 0 <= index < len(options):
+        raise ValueError('invalid_input_choice')
+    return index

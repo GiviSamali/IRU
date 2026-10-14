@@ -174,7 +174,7 @@
     const selectedProviderQuery = providerQuery();
     let count = 1;
     for (let part = 0; part < count; part++) {
-      const consentQuery = review?.confirmationId ? `&confirmation=${encodeURIComponent(review.confirmationId)}` : review?.revision ? `&revision=${encodeURIComponent(review.revision)}` : '';
+      const consentQuery = review?.questionId ? `&question=${encodeURIComponent(review.questionId)}` : review?.confirmationId ? `&confirmation=${encodeURIComponent(review.confirmationId)}` : review?.revision ? `&revision=${encodeURIComponent(review.revision)}` : '';
       const response = await apiFetch(`${API}/api/voice/tasks/${encodeURIComponent(taskId)}/speech?part=${part}&${selectedProviderQuery}${consentQuery}`, {
         method: 'POST', headers: authHeaders(), signal,
       });
