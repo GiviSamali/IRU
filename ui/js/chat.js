@@ -617,6 +617,13 @@ function setAdaptiveSurface(enabled) {
   renderMessages();
 }
 window.setAdaptiveSurface=setAdaptiveSurface;
+// Released AgentShell versions announce compact mode through this CSS class.
+// Observe that existing signal too, so deploying the site does not require a
+// simultaneous native-client update. New hosts call setAdaptiveSurface directly.
+new MutationObserver(()=>{
+  const enabled=document.documentElement.classList.contains('iru-mini');
+  if(enabled!==Boolean(document.getElementById('adaptiveBody')))setAdaptiveSurface(enabled);
+}).observe(document.documentElement,{attributes:true,attributeFilter:['class']});
 
 function adaptiveMessageIndexes() {
   const indexes=new Set();
