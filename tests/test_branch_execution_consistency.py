@@ -1,4 +1,5 @@
 import asyncio
+import time
 import copy
 import json
 
@@ -113,7 +114,7 @@ def test_stale_pipeline_confirmation_cannot_approve_next_command(owners,monkeypa
     a,_=owners
     monkeypatch.setattr(routes,'get_current_user',lambda request:a)
     async def scenario():
-        task={'task_id':'nonce-task','user_id':a['id'],'status':'confirm','modes':{'pipeline':True}}
+        task={'task_id':'nonce-task','user_id':a['id'],'status':'confirm','created_at':time.time(),'modes':{'pipeline':True}}
         task['confirm_data']=command_confirmation({'command':'first','params':{'command':'first'}})
         first=task['confirm_data']['confirmation_id'];task['_pipeline_confirm_future']=asyncio.get_running_loop().create_future()
         tasks[task['task_id']]=task

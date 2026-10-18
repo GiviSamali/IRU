@@ -85,6 +85,7 @@ async def run_answer_only_repair_turn(
     except (ProtocolValidationError, json.JSONDecodeError) as exc:
         return {"ok": False, "reason": f"repair answer invalid: {exc}"}
 
+    audit_details = {}
     audit_ok, audit_reason, audit_infra_error = await audit_answer_payload(
         client=client,
         cfg=cfg,
@@ -92,6 +93,8 @@ async def run_answer_only_repair_turn(
         user_request=user_request,
         current_run_journal=journal,
         answer_payload=answer_payload,
+        audit_details=audit_details,
+        request_context=[entry for entry in messages if entry.get('role') in {'user','assistant'} and not entry.get('tool_calls')][:4],
         completion_scope=completion_scope,
         usage_context={**(usage_context or {}), "phase": f"{(usage_context or {}).get('phase') or 'answer_repair'}.auditor"},
     )
@@ -121,4 +124,4 @@ async def run_answer_only_repair_turn(
         iteration=iteration,
     )
     return {"ok": True, "answer": answer_payload["text"], "entry": entry,
-            "task_receipt": audited_task_receipt(answer_payload, audited=answer_auditor_enabled(cfg))}
+            "task_receipt": audited_task_receipt(answer_payload, audited=answer_auditor_enabled(cfg), audit_details=audit_details)}

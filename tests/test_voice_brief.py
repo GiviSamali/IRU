@@ -145,7 +145,11 @@ def test_configured_cost_cap_prevents_paid_request(monkeypatch):
 def test_short_worker_file_name_uses_existing_brief_instead_of_direct_tts(monkeypatch):
     from server import response_presentation
     raw='Открыта презентация slides.pptx в редакторе.'
-    task={'kind':'worker','worker_id':'worker-1','status':'done','answer':raw,'message':'Открой презентацию'}
+    task={'kind':'worker','worker_id':'worker-1','task_id':'voice-file','device_ids':['pc'],
+        'status':'done','answer':raw,'message':'Открой презентацию',
+        'commands':[{'tool_name':'app.launch','step_id':'step_1','status':'success',
+                     'result':{'status':'launched_verified','terminal_sufficient':True}}],
+        'task_receipt':{'task_status':'completed','goal_completed':True,'final_verification_status':'verified'}}
     monkeypatch.setattr(response_presentation,'worker_presentation',lambda *args:{'conversational_response':raw})
     monkeypatch.setattr(response_presentation,'worker_spoken_response',lambda *args:raw)
     calls=[]

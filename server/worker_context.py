@@ -13,14 +13,26 @@ except ImportError:
 MAX_HANDOFF_CHARS=4000
 
 
+def clip_context_text(text, limit):
+    """Keep the object at the start and the latest proposal at the end, within the existing budget."""
+    text=str(text or '')
+    if limit<=0:return ''
+    if len(text)<=limit:return text
+    marker='\n[…]\n'
+    if limit<=len(marker):return text[:limit]
+    head=(limit-len(marker))//3
+    return text[:head]+marker+text[-(limit-len(marker)-head):]
+
+
+
 
 def capture_history(chat_id):
     """Freeze only bounded fields needed for handoff, never a complete old loop."""
     frozen=[]
     for row in db.get_messages(chat_id,limit=8):
         record={key:row.get(key) for key in ('id','role','taskKind','_taskId','assignmentDeviceIds')}
-        record['content']=str(row.get('content') or '')[:1000]
-        record['content_truncated']=len(str(row.get('content') or ''))>1000
+        record['content']=clip_context_text(row.get('executionDetails') or row.get('content'),1000)
+        record['content_truncated']=len(str(row.get('executionDetails') or row.get('content') or ''))>1000
         report=row.get('workerReport') if isinstance(row.get('workerReport'),dict) else {}
         record['artifacts']=[{key:a.get(key) for key in ('path','device_id','verified')}
             for a in report.get('artifacts') or [] if isinstance(a,dict) and a.get('verified') is True][:6]
@@ -50,9 +62,13 @@ def source_references(owner, chat_id, source_ids, allowed_devices):
         summary=(restored.get('answer') or report.get('summary') or (message['content'] if message else '') or restored.get('conversational_response') or '') if (report.get('status') in {'success','partial'}
             and bool(report.get('target_device_ids'))
             and set(report['target_device_ids']).issubset(allowed_devices)) else ''
-        references.append({'task_id':source_id,'status':row['state'],'observed_at':row['updated_at'],
+        summary_verified=report.get('status') in {'success','partial'} and bool(summary)
+        if not summary and report.get('status')=='unknown' and report.get('target_device_ids') and set(report['target_device_ids']).issubset(allowed_devices):
+            unverified=restored.get('execution_details') or restored.get('answer') or ''
+            if unverified:summary='Неподтверждённый исторический ответ; только для разрешения ссылок, не доказательство исполнения: '+unverified
+        references.append({'summary_verified':summary_verified,'task_id':source_id,'status':row['state'],'observed_at':row['updated_at'],
             'source_device_ids':report.get('target_device_ids') or [],
-            'summary':summary[:1600],'summary_truncated':len(summary)>1600,'artifacts':artifacts[:6],
+            'summary':clip_context_text(summary,1600),'summary_truncated':len(summary)>1600,'artifacts':artifacts[:6],
             'artifacts_truncated':len(artifacts)>6})
     return references
 
@@ -66,7 +82,7 @@ def build_worker_context(owner, chat_id, message, device_ids, history, source_id
     # Legacy intake may already have inserted the current message; do not duplicate it.
     last_user=next((r for r in reversed(rows) if r.get('role')=='user'),None)
     if last_user and last_user.get('content')==message:rows=[r for r in rows if r is not last_user]
-    dialogue=[{'role':r['role'],'text':str(r.get('content') or '')[:700],
+    dialogue=[{'role':r['role'],'text':clip_context_text(r.get('content'),700),
                'truncated':bool(r.get('content_truncated')) or len(str(r.get('content') or ''))>700} for r in rows
               if r.get('role') in {'user','assistant'} and r.get('content') and r.get('taskKind')!='worker'][-4:]
     # Reuse recent server-owned reports when Orchestrator omitted explicit sources.
@@ -101,11 +117,11 @@ def build_worker_context(owner, chat_id, message, device_ids, history, source_id
         data['context_truncated']=True
         if data['historical_dialogue']:data['historical_dialogue'].pop(0);continue
         long=next((r for r in references if len(r['summary'])>200),None)
-        if long:long['summary']=long['summary'][:len(long['summary'])//2];long['summary_truncated']=True;continue
+        if long:long['summary']=clip_context_text(long['summary'],len(long['summary'])//2);long['summary_truncated']=True;continue
         interpretation=data.get('orchestrator_interpretation') or {}
         long=next((key for key in ('context_summary','objective') if len(interpretation.get(key,''))>200),None)
         if long:
-            interpretation[long]=interpretation[long][:len(interpretation[long])//2]
+            interpretation[long]=clip_context_text(interpretation[long],len(interpretation[long])//2)
             interpretation[long+'_truncated']=True;continue
         with_artifacts=next((r for r in references if r['artifacts']),None)
         if with_artifacts:

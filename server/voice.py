@@ -171,6 +171,7 @@ async def spoken_parts(task: dict) -> list[str]:
             candidate=task.get("dialogue_spoken_response") or ""
     worker_speech=worker_spoken_response(task,task.get("worker_report")) if task.get("worker_id") else ""
     informational = False
+    worker_report = None
     if task.get("worker_id"):
         try:
             from .controller_trust import has_grounded_terminal_answer
@@ -180,7 +181,8 @@ async def spoken_parts(task: dict) -> list[str]:
             from response_presentation import normalized_worker_report
         terminal = next((entry for entry in reversed(task.get("commands") or [])
                          if entry.get("tool_name") == "answer.text" and entry.get("status") == "terminal"), {})
-        informational = (normalized_worker_report(task, task.get("worker_report"))["status"] == "success"
+        worker_report = normalized_worker_report(task, task.get("worker_report"))
+        informational = (worker_report["status"] == "success"
                          and (terminal.get("result", {}).get("self_check") or {}).get("claims_completed_action") is False
                          and has_grounded_terminal_answer(task.get("answer") or "", task.get("commands") or []))
     source = (answer, task.get("message") or "", task.get("status"),candidate,worker_speech,task.get("full_speech_requested") is True)
@@ -192,6 +194,9 @@ async def spoken_parts(task: dict) -> list[str]:
         parts = answer_parts(answer, keep_inline=True)
     elif task.get("status")=="waiting_input" and (task.get("input_required") or {}).get("presented_by")=="orchestrator":
         parts = answer_parts(answer, keep_inline=True)
+    elif worker_report and worker_report.get('error_code')=='clarification_required':
+        # Reuse the ready question; do not ask another model to paraphrase a missing parameter.
+        parts = answer_parts(answer,keep_inline=True)
     elif candidate and (not has_technical_details(candidate) or wants_spoken_details(source[1])):
         parts = answer_parts(candidate,keep_inline=True)
     elif worker_speech and worker_speech!=answer and (not has_technical_details(worker_speech) or wants_spoken_details(source[1])):

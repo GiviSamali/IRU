@@ -678,6 +678,9 @@ async def api_confirm_task(task_id: str, request: Request, confirmation_id: str 
     if task.get("plan_review"):
         raise HTTPException(409, "Подтвердите текущий вариант плана через карточку плана.")
 
+    created = task.get("created_at")
+    if type(created) not in (int, float) or not 0 <= time.time() - created <= TASK_TTL:
+        raise HTTPException(409, detail="Подтверждение устарело. Запустите исходную задачу заново.")
     decision = task.get("_pipeline_confirm_future")
     if decision is not None:
         if not confirmation_id or (task.get("confirm_data") or {}).get("confirmation_id") != confirmation_id:
@@ -696,9 +699,6 @@ async def api_confirm_task(task_id: str, request: Request, confirmation_id: str 
     # Never restart it, replay old actions, or equate one command with the whole goal.
     if is_task_cancel_requested(task_id):
         raise HTTPException(409, detail="Задача отменена; команда не будет выполнена.")
-    created = task.get("created_at")
-    if type(created) not in (int, float) or not 0 <= time.time() - created <= TASK_TTL:
-        raise HTTPException(409, detail="Подтверждение устарело. Запустите исходную задачу заново.")
     confirm_data = deepcopy(task.get("confirm_data") or {})
     short_did = confirm_data.get("device_id")
     params = confirm_data.get("params")
@@ -738,7 +738,7 @@ async def api_confirm_task(task_id: str, request: Request, confirmation_id: str 
             command="[tool] execute_cmd (confirmed)", target_device_id=short_did,
             result=evidence, status=outcome, summary=f"confirmed_execution={outcome}; original_goal=not_verified"))
         if outcome == "success":
-            text = "Подтверждённая команда выполнена по проверенному результату. "
+            text = "Процесс подтверждённой команды завершился без ненулевого кода возврата. Результат действия отдельно не проверен. "
         elif reason == "device_unavailable":
             text = "Устройство отключено или недоступно. Подтверждённая команда не выполнялась. "
         elif outcome == "failed":

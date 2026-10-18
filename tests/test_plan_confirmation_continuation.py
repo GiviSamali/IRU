@@ -153,7 +153,7 @@ def test_three_step_plan_survives_confirmation_with_same_task_and_context(monkey
             assert updates == {0: "running", 1: "pending", 2: "pending"}
             assert not finishes and not dispatched
             if choice == "confirm":
-                await routes.api_confirm_task(tid, None)
+                await routes.api_confirm_task(tid, None, confirmation_id=runtime.tasks[tid]["confirm_data"]["confirmation_id"])
                 assert runtime.tasks[tid]["status"] == "running"
                 assert not finishes
             elif choice == "deny":

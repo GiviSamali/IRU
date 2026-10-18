@@ -120,6 +120,10 @@ def worker_presentation(task, report=None):
             and has_grounded_terminal_answer(answer,task.get("commands") or [])):
         # A legacy presentation cache or helper artifact cannot replace an audited result.
         return {"conversational_response":answer,"execution_details":""}
+    if (report.get('error_code') in {'confirmed_transport_outcome_unknown','confirmation_expired'}
+            and receipt.get('answer_source')=='confirmation_result'
+            and has_validated_terminal_answer(answer,task.get('commands') or [])):
+        return {'conversational_response':answer,'execution_details':''}
     saved=task.get("history_metadata")
     if isinstance(saved,dict) and saved.get("workerReport")==report and isinstance(saved.get("conversationalResponse"),str):
         details=saved.get("executionDetails") or ""
@@ -169,12 +173,24 @@ def worker_presentation(task, report=None):
         else:human="Не получилось завершить задачу полностью."
     elif status=="failed":human=(result+" Но закончить задачу не удалось.") if result else "Не получилось завершить задачу."
     elif status=="blocked":
+        if report.get('error_code')=='clarification_required':
+            terminal=next((c for c in reversed(commands) if c.get('status')=='terminal'),{})
+            payload=terminal.get('result') or {}
+            if terminal.get('tool_name')=='answer.ask_clarification' and payload.get('question')==answer:
+                options=payload.get('options')
+                suffix='\n\n'+'\n'.join(f'{i}. {option}' for i,option in enumerate(options,1)) if isinstance(options,list) and options and all(isinstance(o,str) for o in options) else ''
+                return {'conversational_response':answer+suffix,'execution_details':''}
         receipt=task.get("task_receipt") or {}
         if receipt.get("command_outcome")=="success" and any(positive_evidence(c) for c in commands):
             human="Команда выполнена, но остальную задачу завершить не удалось."
         else:human="Не могу продолжить без твоего решения."
     elif status=="cancelled":human="Задача отменена."
-    else:human="Не могу подтвердить результат. Подробности сохранены в ходе выполнения."
+    else:
+        human={
+            'action_evidence_unconfirmed':'Не могу подтвердить результат: проверка не связала изменение с доказательствами текущей задачи. Подробности сохранены в ходе выполнения.',
+            'goal_not_completed':'Не могу подтвердить результат: полученный ответ не завершает исходное поручение. Подробности сохранены в ходе выполнения.',
+            'terminal_answer_missing':'Не могу подтвердить результат: выполнение остановилось без проверенного итогового ответа. Уже выполненные действия автоматически не повторяю.',
+        }.get(report.get('error_code'),'Не могу подтвердить результат. Подробности сохранены в ходе выполнения.')
     if status=="blocked" and (task.get("task_receipt") or {}).get("answer_source")=="trust_guard":
         return {"conversational_response":answer,"execution_details":""}
     if status in {"partial","failed","blocked"}:
@@ -197,6 +213,8 @@ def worker_spoken_response(task, report=None):
     """Compose from verified structured outcomes; never rewrite model prose by replacements."""
     report=normalized_worker_report(task,report)
     human=worker_presentation(task,report)["conversational_response"]
+    # A ready clarification is the actual question, not a generic incomplete-task summary.
+    if report.get('error_code')=='clarification_required':return human
     # Incomplete/permission-sensitive results stay protected; informational answers stay intact.
     if report["status"]!="success":
         if len(human)>420:

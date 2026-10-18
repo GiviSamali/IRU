@@ -1585,6 +1585,12 @@ async def run_pipeline_worker(
                         tool_result["missing_packages"] = command_error["missing_packages"]
 
                 append_step_command(fn_name, fn_args.get("command", ""), target_device, tool_result)
+                if tool_result.get('error') in {'confirmed_transport_outcome_unknown','confirmation_expired'}:
+                    try:
+                        from .run_journal import confirmed_unknown_answer
+                    except ImportError:
+                        from run_journal import confirmed_unknown_answer
+                    return confirmed_unknown_answer(commands_log,target_device,tool_result['error'])
                 python_receipt = (
                     python_toolchain_from_runtime_summary((db.get_device_profile(target_device, user_id=mem_user_id) or {}).get("python_runtime_summary"), device_id=target_device, user_id=mem_user_id)
                     or resolve_python_toolchain({"user_id": mem_user_id, "device_id": target_device}, commands_log)
@@ -2317,6 +2323,7 @@ async def process_pipeline_subagents(
                     if is_answer_text_tool(fn_name):
                         payload = validate_answer_text_payload(fn_args, all_commands)
                         payload = sanitize_system_list_tools_answer(payload, all_commands)
+                        audit_details = {}
                         audit_ok, audit_reason, audit_infra_error = await audit_answer_payload(
                             client=client,
                             cfg=cfg,
@@ -2324,6 +2331,8 @@ async def process_pipeline_subagents(
                             user_request=user_message,
                             current_run_journal=all_commands,
                             answer_payload=payload,
+                            audit_details=audit_details,
+                            request_context=chat_history,
                             usage_context={**(usage_context or {}), "phase": "pipeline.final.answer_auditor"},
                         )
                         if audit_infra_error:
@@ -2340,7 +2349,7 @@ async def process_pipeline_subagents(
                             target_device_id=device_id,
                             hostname=device_info.get("hostname") or device_id,
                         )
-                        audited = audited_task_receipt(payload, audited=answer_auditor_enabled(cfg))
+                        audited = audited_task_receipt(payload, audited=answer_auditor_enabled(cfg), audit_details=audit_details)
                         if audited:
                             if receipt["task_status"] == "completed_with_recovery" and audited["goal_completed"]:
                                 audited["task_status"] = "completed_with_recovery"

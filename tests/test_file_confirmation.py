@@ -119,7 +119,7 @@ def test_risky_command_rejects_voice_but_accepts_button(monkeypatch, command):
         decision = asyncio.get_running_loop().create_future()
         data = command_confirmation({"command": command})
         monkeypatch.setitem(runtime.tasks, "danger", {"user_id": 1, "status": "confirm", "confirm_data": data,
-            "modes": {"pipeline": True}, "_pipeline_confirm_future": decision})
+            "created_at": time.time(), "modes": {"pipeline": True}, "_pipeline_confirm_future": decision})
         with pytest.raises(HTTPException) as error:
             await routes.api_command_decision("danger", routes.CommandDecisionBody(confirmation_id=data["confirmation_id"], accepted=True, via_voice=True), None)
         assert error.value.status_code == 403 and not decision.done()
@@ -135,7 +135,7 @@ def test_ordinary_command_accepts_voice_decision(monkeypatch, accepted):
         decision = asyncio.get_running_loop().create_future()
         data = command_confirmation({"command": "New-Item report.txt"})
         monkeypatch.setitem(runtime.tasks, "ordinary", {"user_id": 1, "status": "confirm", "confirm_data": data,
-            "modes": {"pipeline": True}, "_pipeline_confirm_future": decision})
+            "created_at": time.time(), "modes": {"pipeline": True}, "_pipeline_confirm_future": decision})
         await routes.api_command_decision("ordinary", routes.CommandDecisionBody(
             confirmation_id=data["confirmation_id"], accepted=accepted, via_voice=True), None)
         assert decision.done() and decision.result() is accepted

@@ -84,7 +84,7 @@ def worker(status='done',action='app.open_url'):
   'task_receipt':{'task_status':'completed','goal_completed':True,'final_verification_status':'verified','answer_source':'audited_terminal'}}
 
 
-def test_action_speech_is_structured_not_rewritten_model_prose(monkeypatch):
+def test_action_speech_is_structured_and_chat_preserves_audited_text(monkeypatch):
  task=worker()
  task['commands'].append({'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report',
   'text':task['answer'],'basis':['step_1'],'self_check':{'depends_on_current_external_state':True,
@@ -93,7 +93,7 @@ def test_action_speech_is_structured_not_rewritten_model_prose(monkeypatch):
  async def forbidden(*args):raise AssertionError('Action does not need another model')
  monkeypatch.setattr(voice,'shorten_answer',forbidden)
  assert asyncio.run(voice.spoken_parts(task))==['Открыла страницу.']
- assert worker_presentation(task)['conversational_response']=='Страница открыта.'
+ assert worker_presentation(task)['conversational_response']==raw
  assert task['answer']==raw and build_worker_report(task)==report
 
 
@@ -143,7 +143,8 @@ def test_dialogue_changes_topic_while_worker_and_delayed_report_stays_grounded(c
  active['commands'].append({'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report',
   'text':active['answer'],'basis':['step_1'],'self_check':{'depends_on_current_external_state':True,
   'claims_completed_action':True,'has_sufficient_evidence':True,'missing_evidence_question':''}}})
- assert asyncio.run(voice.spoken_parts(active))==['Презентация готова. Файл на рабочем столе.']
+ assert asyncio.run(voice.spoken_parts(active))==[active['answer']]
+ assert worker_presentation(active)['conversational_response']==active['answer']
  assert active['answer']=='Технический журнал презентации.'
 
 

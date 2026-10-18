@@ -95,6 +95,12 @@ spoken_response для delegate необязателен: используй е�
 task_status получает реальный отчёт по task_id; cancel только для осознанной отмены конкретной задачи. Стоп озвучки/усни не означают отмену Worker.
 Если ссылка/устройство неоднозначны, clarify. Не меняй работающий Worker: объясни ограничение и предложи отменить его явно или поставить новое поручение в очередь.
 Уточнённая objective/context_summary — только необходимые данные, без новых полномочий. Исходный запрос человека остаётся границей разрешений.
+Ссылки «этот проект», «весь проект», «этот файл» разрешай по обсуждаемому рабочему объекту; не подменяй его родительской папкой или другим проектом.
+Не расширяй путь/область, не добавляй удаление, очистку или иные действия из предположений о предпочтениях.
+Если возможны разные объекты и разговор не определяет один, задай один вопрос о выборе.
+Короткое «давай», «согласен», «вариант Б» разрешает однозначно предложенный в разговоре следующий шаг; не проси повторить уже принятое решение.
+Усечённый контекст не доказывает, что объект или вариант отсутствует в истории. Не утверждай «этого не было».
+Общий вопрос о возможностях остаётся conversation, если человек не просит обследовать текущую программу.
 Определи смысл текущей реплики с учётом разговора: совет/обсуждение остаётся conversation; конкретное поручение — delegate.
 clarify нужен только для реально отсутствующих данных или неоднозначного объекта. Если файл/устройство однозначно описаны
 проверенным результатом текущего чата, передай source_task_ids этих результатов, а не проси повторить известное.
@@ -147,12 +153,16 @@ def relevant_facts(user_id, message):
 
 
 def context_for(user_id, chat_id, message, selected):
+    try:
+        from .worker_context import clip_context_text
+    except ImportError:
+        from worker_context import clip_context_text
     history=[];budget=5000
     for row in reversed(db.get_messages(chat_id,limit=12)):
         text=(row.get("executionDetails") or row["content"]) if row.get("taskKind")=="worker" else row["content"]
-        content=text[:min(1000,budget)]
+        content=clip_context_text(text,min(1000,budget)) if budget>0 else ""
         if not content or budget<=0:continue
-        history.append({"role":row["role"],"content":content});budget-=len(content)
+        history.append({"role":row["role"],"content":content, **({"truncated":True} if len(text)>len(content) else {})});budget-=len(content)
     online=get_user_devices(user_id)
     init_worker_storage()
     with db.get_db() as c:
@@ -173,7 +183,7 @@ def context_for(user_id, chat_id, message, selected):
         report=(snapshot if isinstance(snapshot,dict) and snapshot.get("task_id")==row["task_id"]
             and snapshot.get("status")==row["state"] else json.loads(row["report"]) if row.get("report") else None)
         if report:
-            report={**report,"summary":str(report.get("summary") or "")[:1600]}
+            report={**report,"summary":clip_context_text(report.get("summary"),1600)}
         live=tasks.get(row["task_id"]) or {}
         live_status="waiting_confirmation" if live.get("status")=="confirm" else row["state"]
         jobs.append({"task_id":row["task_id"],"chat_id":row["chat_id"],"in_current_chat":row["chat_id"]==chat_id,"objective":payload.get("message","")[:220],"status":live_status,"device_ids":[_short_did(d) for d in payload.get("device_ids",[])],

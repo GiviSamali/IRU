@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from hashlib import sha256
 import logging
 import time
 from contextvars import ContextVar
@@ -10,10 +12,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 try:
-    from .tool_completion import execute_cmd_result_is_negative
+    from .tool_completion import execute_cmd_result_is_negative, execute_cmd_result_is_complete
     from .tool_registry import canonical_tool_name, compact_tool_summary, tool_log_fields
 except ImportError:
-    from tool_completion import execute_cmd_result_is_negative  # type: ignore
+    from tool_completion import execute_cmd_result_is_negative, execute_cmd_result_is_complete  # type: ignore
     from tool_registry import canonical_tool_name, compact_tool_summary, tool_log_fields  # type: ignore
 
 
@@ -542,7 +544,47 @@ def _repair_step_line(entry: dict[str, Any]) -> dict[str, Any]:
     return wrapped
 
 
-def audited_task_receipt(payload: dict[str, Any], *, audited: bool) -> dict[str, Any] | None:
+def confirmed_unknown_answer(journal, target_device_id, reason="confirmed_transport_outcome_unknown"):
+    """A lost approved-command result must never trigger another execution or a success claim."""
+    expired=reason=='confirmation_expired'
+    payload={'answer_type':'partial_report',
+             'text':'Ошибка связи после отправки подтверждённой команды. Она могла выполниться; результат неизвестен. Дальнейшие действия остановлены, автоматически команду не повторяю.',
+             'basis':[journal[-1]['step_id']],
+             'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,
+                           'has_sufficient_evidence':False,'missing_evidence_question':'Нет результата отправленной команды.'}}
+    if expired:payload['text']='Время ожидания подтверждения истекло. Команда не выполнялась; задача остановлена.'
+    append_answer_step(journal,'answer_text',validate_answer_text_payload(payload,journal),target_device_id=target_device_id)
+    return {'status':'error','answer':payload['text'],'commands':journal,'tasks':[],
+            'task_receipt':{'task_status':'blocked' if expired else 'unknown','goal_completed':False,'final_verification_status':'unverified',
+                            'answer_source':'confirmation_result','terminal_reason':reason}}
+
+
+def audited_action_evidence(payload, journal, user_request, details):
+    """Bind the existing auditor's action/postcondition decision to this exact run and answer."""
+    if not isinstance(details,dict) or payload.get('answer_type')!='grounded_report':return None
+    basis=payload.get('basis') or []
+    groups=[details.get('action_steps'),details.get('verification_steps')]
+    if any(not isinstance(group,list) or not group or len(group)>64
+           or any(not isinstance(ref,str) or ref not in basis for ref in group) for group in groups):return None
+    refs=set(groups[0]+groups[1])
+    selected=[entry for entry in journal if entry.get('step_id') in refs]
+    if len(selected)!=len(refs):return None
+    if any((entry.get('tool_name') or entry.get('action')) not in {'execute_cmd','write_content'}
+           for entry in selected if entry.get('step_id') in groups[0]):return None
+    for entry in selected:
+        result=entry.get('result')
+        if entry.get('status')!='success' or not isinstance(result,dict) or execute_cmd_result_is_negative(result):return None
+        if (entry.get('tool_name') or entry.get('action'))=='execute_cmd':
+            if not isinstance(entry.get('command'),str) or not entry['command'].strip():return None
+            if not execute_cmd_result_is_complete(result):return None
+    content={'request':user_request,'answer':payload,'steps':[
+        {key:entry.get(key) for key in ('step_id','tool_name','action','command','status','target_device_id','device_id','created_at','collected_at','result')}
+        for entry in selected]}
+    return {'action_steps':list(groups[0]),'verification_steps':list(groups[1]),
+            'digest':sha256(json.dumps(content,ensure_ascii=False,sort_keys=True).encode('utf-8')).hexdigest()}
+
+
+def audited_task_receipt(payload: dict[str, Any], *, audited: bool, audit_details=None) -> dict[str, Any] | None:
     """Project an accepted audit, never the model's self_check alone."""
     kind = payload.get("answer_type")
     if not audited or kind not in {"grounded_report", "partial_report", "error_report", "failure"}:
@@ -550,7 +592,9 @@ def audited_task_receipt(payload: dict[str, Any], *, audited: bool) -> dict[str,
     completed = kind == "grounded_report"
     return {"task_status": "completed" if completed else "partial" if kind == "partial_report" else "failed",
             "goal_completed": completed, "final_verification_status": "verified" if completed else "unverified",
-            "answer_source": "audited_terminal"}
+            "answer_source": "audited_terminal",
+            **({'action_evidence':audit_details['action_evidence']} if isinstance(audit_details,dict)
+               and isinstance(audit_details.get('action_evidence'),dict) else {})}
 
 
 def build_terminal_answer_repair_prompt(user_request: str, journal: list[dict[str, Any]]) -> str:
@@ -715,6 +759,15 @@ def validate_answer_text_payload(payload: Any, journal: list[dict[str, Any]]) ->
                 f"completed-action answer uses NO/ERROR evidence: {invalid}",
                 GROUNDED_CORRECTION,
             )
+    # Legacy suggestions are optional metadata, not part of the audited human answer.
+    # Normalize before audit/journaling; never edit a terminal answer after acceptance.
+    suggestion=re.search(r"\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]",payload['text'])
+    if suggestion:
+        payload={**payload,'text':re.sub(r'\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]','',payload['text']).strip(),
+                 'suggested_fact':{'text':suggestion.group(1).strip(),'category':suggestion.group(2).strip()}}
+    plan=re.search(r"\[\[SUGGEST_PLAN:\s*([^\[\]]+?)\s*\]\]",payload['text'])
+    if plan:payload={**payload,'text':re.sub(r'\[\[SUGGEST_PLAN:\s*([^\[\]]+?)\s*\]\]','',payload['text']).strip()}
+    if not payload['text'].strip():raise ProtocolValidationError('answer_text needs a human answer, not only an internal annotation',GROUNDED_CORRECTION)
     return payload
 
 

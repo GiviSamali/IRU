@@ -389,13 +389,13 @@ def test_not_ok_is_not_verification_success():
     }) is False
 
 
-def test_strict_iru_verified_marker_is_verification_success():
+def test_printed_iru_verified_marker_alone_is_not_verification_success():
     assert _verification_command_succeeded({
         "action": "execute_cmd",
         "command": "verify",
         "status": "success",
         "result": {"returncode": 0, "stdout": "IRU_VERIFIED=1", "stderr": ""},
-    }) is True
+    }) is False
 
 
 def test_complex_bare_python_command_records_bare_interpreter_not_first_token():

@@ -973,7 +973,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 return await send_command_to_agent(target_dk, action, params, user_id=user_id,
                                                    skip_confirm=autonomous_flag)
             except RuntimeError as exc:
-                if not (task_modes.get("pipeline") or is_broadcast) or "CONFIRM_REQUIRED" not in str(exc):
+                if "CONFIRM_REQUIRED" not in str(exc):
                     raise
                 # Keep this bounded worker alive; confirmation resumes the pending call.
                 decision = asyncio.get_running_loop().create_future()
@@ -982,14 +982,24 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                                         "params": params, "chat_id": chat_id, "user_id": user_id})
                 task["status"] = "confirm"
                 try:
-                    accepted = await decision
+                    accepted = await asyncio.wait_for(decision,timeout=300)
+                except asyncio.TimeoutError:
+                    task['status']='running'
+                    return {'status':'blocked','error':'confirmation_expired'}
                 finally:
                     task.pop("_pipeline_confirm_future", None)
                     task.pop("confirm_data", None)
                 if not accepted or is_task_cancel_requested(task_id):
                     raise RuntimeError("Task cancellation requested during confirmation")
                 task["status"] = "running"
-                return await send_command_to_agent(target_dk, action, params, user_id=user_id, skip_confirm=True)
+                try:
+                    result = await send_command_to_agent(target_dk, action, params, user_id=user_id, skip_confirm=True)
+                except Exception:
+                    # Dispatch may have taken effect. Stop this run rather than letting the model repeat it.
+                    return {"status":"unknown","completion_state":"unknown","error":"confirmed_transport_outcome_unknown"}
+                if isinstance(result,dict) and result.get('returncode') == -1 and result.get('error'):
+                    return {**result,"status":"unknown","completion_state":"unknown","error":"confirmed_transport_outcome_unknown"}
+                return result
 
 
         def file_link(dev_id: str, path: str) -> str:
@@ -1281,10 +1291,13 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             combined_tasks = result.get("tasks", [])
             combined_task_receipt = result.get("task_receipt")
 
+        terminal_payload=next((c.get('result') or {} for c in reversed(combined_commands)
+            if c.get('tool_name')=='answer.text' and c.get('status')=='terminal'),{})
+        suggestion=terminal_payload.get('suggested_fact') if terminal_payload.get('text')==combined_answer else None
         suggest_match = _re.search(r"\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]", combined_answer)
-        if suggest_match:
-            fact_text = suggest_match.group(1).strip()
-            fact_category = suggest_match.group(2).strip()
+        if suggest_match or (isinstance(suggestion,dict) and isinstance(suggestion.get('text'),str) and isinstance(suggestion.get('category'),str)):
+            fact_text = suggest_match.group(1).strip() if suggest_match else suggestion['text']
+            fact_category = suggest_match.group(2).strip() if suggest_match else suggestion['category']
             first_dev_id = device_ids[0] if device_ids else None
             first_profile = get_device_profile(_short_did(first_dev_id), user_id=user_id) if first_dev_id else None
             first_short = _short_did(first_dev_id) if first_dev_id else None
@@ -1306,9 +1319,10 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     "category": fact_category,
                 }
                 task["python_toolchain_receipt"] = python_receipt.to_dict()
-            combined_answer = (
-                combined_answer[:suggest_match.start()].rstrip() + combined_answer[suggest_match.end():]
-            ).strip()
+            if suggest_match:
+                combined_answer = (
+                    combined_answer[:suggest_match.start()].rstrip() + combined_answer[suggest_match.end():]
+                ).strip()
 
         plan_match = _re.search(r"\[\[SUGGEST_PLAN:\s*([^\[\]]+?)\s*\]\]", combined_answer)
         if plan_match:

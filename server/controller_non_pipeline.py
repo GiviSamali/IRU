@@ -553,6 +553,7 @@ async def process_non_pipeline_command(
                     if is_answer_text_tool(fn_name):
                         answer_payload = validate_answer_text_payload(fn_args_preview, commands_log)
                         answer_payload = sanitize_system_list_tools_answer(answer_payload, commands_log)
+                        audit_details = {}
                         audit_ok, audit_reason, audit_infra_error = await audit_answer_payload(
                             client=client,
                             cfg=cfg,
@@ -560,6 +561,8 @@ async def process_non_pipeline_command(
                             user_request=user_message,
                             current_run_journal=commands_log,
                             answer_payload=answer_payload,
+                            audit_details=audit_details,
+                            request_context=chat_history,
                             usage_context={**(usage_context or {}), "phase": "browser_bridge.answer_auditor" if browser_only else "answer_auditor"},
                         )
                         if audit_infra_error:
@@ -594,7 +597,7 @@ async def process_non_pipeline_command(
                             hostname=device_info.get("hostname") or target_device,
                             iteration=iteration + 1,
                         )
-                        receipt = audited_task_receipt(answer_payload, audited=answer_auditor_enabled(cfg))
+                        receipt = audited_task_receipt(answer_payload, audited=answer_auditor_enabled(cfg), audit_details=audit_details)
                         audited_receipt = {"task_receipt": receipt} if receipt else {}
                         return {
                             **audited_receipt,
@@ -1173,6 +1176,12 @@ async def process_non_pipeline_command(
                         tool_result,
                         iteration + 1,
                     ))
+                if tool_result.get('error') in {'confirmed_transport_outcome_unknown','confirmation_expired'}:
+                    try:
+                        from .run_journal import confirmed_unknown_answer
+                    except ImportError:
+                        from run_journal import confirmed_unknown_answer
+                    return confirmed_unknown_answer(commands_log,target_device,tool_result['error'])
                 if arg_warnings and isinstance(commands_log[-1].get("result"), dict):
                     existing_warnings = list(commands_log[-1]["result"].get("arg_warnings") or [])
                     commands_log[-1]["result"]["arg_warnings"] = existing_warnings + arg_warnings

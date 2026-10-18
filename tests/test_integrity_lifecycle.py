@@ -204,7 +204,10 @@ async def capture(world,task,number,expected,device,phases=None):
     assert await voice.spoken_parts(tasks[tid])==spoken
     if device:
         journal_operations=[c for c in stable['commands'] or [] if c.get('status')!='terminal']
-        assert len(device.calls)==len(journal_operations)
+        nondispatched=[c for c in journal_operations if c.get('tool_name')=='task.cancel'
+            or (c.get('result') or {}).get('error')=='Task cancellation requested during confirmation']
+        assert len(device.calls)==len(journal_operations)-len(nondispatched)
+        assert not nondispatched or expected=='cancelled'
     else:
         assert all(c.get('status')=='terminal' for c in stable['commands'] or [])
     record={'number':number,'expected':expected,'api':stable,'restored':restored,'operations':ops,'history':history,
@@ -407,7 +410,9 @@ def test_confirmed_command_keeps_known_partial_or_uncertainty_visible(world,unce
     client,owner,key,monkeypatch=world
     goal='Удалить тестовый файл, затем создать отчёт'
     steps=[shell('Remove-Item C:/Temp/denied.txt','OK: deletion_verified')]
-    device,_=install(world,steps,terminal('Все действия выполнены.',action=True),114)
+    text=('Команда могла выполниться; её исход не подтверждён. Отчёт не создан.' if uncertain
+          else 'Тестовый файл удалён. Отчёт не создан, задача выполнена частично.')
+    device,_=install(world,steps,terminal(text,kind='partial_report',action=not uncertain,sufficient=False),114)
     device.transport_error=uncertain
     async def scenario():
         scheduler=WorkerScheduler()
@@ -419,11 +424,11 @@ def test_confirmed_command_keeps_known_partial_or_uncertainty_visible(world,unce
             assert response.status_code==200
             await scheduler.runners[owner['id']]
             assert len(device.calls)==1 and not device.steps
-            record=await capture(world,task,114 if not uncertain else 115,'blocked',device)
-            assert record['api']['task_receipt']['command_outcome']==('unknown' if uncertain else 'success')
+            record=await capture(world,task,114 if not uncertain else 115,'unknown' if uncertain else 'partial',device)
+            assert record['api']['task_receipt']['task_status']==('unknown' if uncertain else 'partial')
             assert record['api']['task_receipt']['goal_completed'] is False
             assert record['api']['conversational_response']==record['api']['answer']
             if uncertain:assert 'могла выполниться' in record['api']['conversational_response']
-            else:assert 'Подтверждённая команда выполнена' in record['api']['conversational_response']
+            else:assert 'Тестовый файл удалён. Отчёт не создан' in record['api']['conversational_response']
         finally:await scheduler.shutdown()
     asyncio.run(scenario())

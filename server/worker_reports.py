@@ -73,13 +73,20 @@ def build_worker_report(task):
                      and receipt.get("task_status")=="completed"
                      and all(positive_evidence(c, observation=True) for c in observations))
     # Require both operation evidence and the existing original-goal answer audit.
+    try:
+        from .run_journal import audited_action_evidence
+    except ImportError:
+        from run_journal import audited_action_evidence
+    action_evidence=receipt.get('action_evidence')
+    matched_action_evidence=(isinstance(action_evidence,dict) and action_evidence == audited_action_evidence(
+        answer_payload,commands,task.get('original_request') or task.get('message') or '',action_evidence))
     confirmed = informational or (grounded and bool(observations)
                 and receipt.get("answer_source") == "audited_terminal"
                 and receipt.get("task_status") in {"completed", "completed_with_recovery"}
                 and receipt.get("goal_completed") is True
                 and receipt.get("final_verification_status") == "verified"
                 and all(positive_evidence(c, observation=True) for c in observations)
-                and any(positive_evidence(c) for c in observations))
+                and (any(positive_evidence(c) for c in observations) or matched_action_evidence))
     native_basis = observations if grounded else evidence
     native_evidence = bool(native_basis) and all(
         positive_evidence(c) and (c.get("tool_name") or c.get("action")) not in {"execute_cmd", "write_content"}
@@ -91,7 +98,11 @@ def build_worker_report(task):
         or (grounded and bool(observations) and all(positive_evidence(c) for c in observations))))
     terminal=next((c for c in reversed(commands) if c.get("status")=="terminal"),{})
     payload=terminal.get("result") if isinstance(terminal.get("result"),dict) else {}
+    clarification=(terminal.get('tool_name')=='answer.ask_clarification'
+                   and isinstance(payload.get('question'),str) and payload['question'].strip()
+                   and payload['question']==task.get('answer'))
     terminal_negative={"partial_report":"partial","error_report":"failed","failure":"failed","clarification":"blocked"}.get(payload.get("answer_type"))
+    if clarification:terminal_negative='blocked'
     if task.get("plan_suggestion"):status="blocked"
     elif raw == "queued": status = "queued"
     elif raw == "confirm": status = "waiting_confirmation"
@@ -126,8 +137,13 @@ def build_worker_report(task):
         "waiting_input":"Задача ожидает выбора окна.", "running":"Задача выполняется.", "waiting_confirmation":"Задача ожидает решения пользователя."}
     error_code=(task.get("worker_error_code") or receipt.get("terminal_reason")) if status!="success" else None
     if not isinstance(error_code, str):error_code=None
+    if clarification and status=='blocked':error_code='clarification_required'
+    if status=='unknown' and not error_code:
+        if grounded and receipt.get('answer_source')=='audited_terminal':error_code='action_evidence_unconfirmed'
+        elif terminal.get('tool_name')=='answer.text':error_code='goal_not_completed'
+        elif any(c.get('tool_name')=='tool_only_protocol' for c in commands):error_code='terminal_answer_missing'
     report = {"schema_version":1, "task_id":task["task_id"], "worker_id":"worker-1", "status":status,
-        "goal_completed":status == "success", "summary":payload["text"][:2000] if (terminal_negative or confirmed) and isinstance(payload.get("text"),str) and payload["text"] == task.get("answer") else summaries[status],
+        "goal_completed":status == "success", "summary":payload['question'][:2000] if clarification and status=='blocked' else payload["text"][:2000] if (terminal_negative or confirmed) and isinstance(payload.get("text"),str) and payload["text"] == task.get("answer") else summaries[status],
         "target_device_ids":[_short_did(d) for d in task.get("device_ids") or []], "artifacts":artifacts,
         "evidence_refs":refs, "requires_user_action":status in {"waiting_confirmation","waiting_input","blocked"},
         "error_code":error_code}

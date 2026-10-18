@@ -113,17 +113,18 @@ async def process_onboarding_message(
             if strict_worker and fn.get("name")=="answer_text":
                 try:
                     payload=validate_answer_text_payload(json.loads(fn.get("arguments") or "{}"),commands)
+                    audit_details={}
                     async with httpx.AsyncClient(timeout=httpx.Timeout(120.0,connect=10.0)) as audit_client:
                         valid, reason, infra_error = await audit_answer_payload(client=audit_client,cfg=cfg,
                             chat_completion_request_fn=_chat_completion_request,user_request=user_message,
-                            current_run_journal=commands,answer_payload=payload,
+                            current_run_journal=commands,answer_payload=payload,audit_details=audit_details,
                             usage_context={**usage_ctx,'phase':'onboarding.answer_auditor'})
                     if infra_error:
                         return {"answer":"Не удалось проверить конечный ответ Worker.","commands":commands}
                     if not valid:
                         raise ValueError(reason)
                     append_answer_step(commands,"answer_text",payload,target_device_id="server")
-                    receipt=audited_task_receipt(payload,audited=answer_auditor_enabled(cfg))
+                    receipt=audited_task_receipt(payload,audited=answer_auditor_enabled(cfg),audit_details=audit_details)
                     return {"answer":payload["text"],"commands":commands,
                             **({"task_receipt":receipt} if receipt else {})}
                 except (ValueError,TypeError) as exc:
