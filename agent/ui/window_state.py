@@ -15,13 +15,15 @@ def rectangle(value):
 def load_window_state(path: Path):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return {mode: rectangle(data.get(mode)) for mode in ("compact", "expanded")}
+        return {**{mode: rectangle(data.get(mode)) for mode in ("compact", "expanded")},
+                "manual_compact": data.get("manual_compact") is True}
     except (OSError, ValueError, TypeError, AttributeError):
         return {}
 
 
 def save_window_state(path: Path, data):
     safe = {mode: rectangle(data.get(mode)) for mode in ("compact", "expanded")}
+    safe["manual_compact"] = data.get("manual_compact") is True
     temporary = path.with_name(path.name + ".tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

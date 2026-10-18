@@ -161,18 +161,7 @@ class AgentRuntime:
                     )
                     await ws.send(json.dumps({"type": "register", "payload": system_info}))
 
-                    while not self._stop_event.is_set():
-                        try:
-                            raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
-                        except asyncio.TimeoutError:
-                            continue
-
-                        data = json.loads(raw)
-                        if data.get("type") != "command":
-                            continue
-
-                        payload = await self._handle_command(data.get("payload", {}))
-                        await ws.send(json.dumps({"type": "result", "payload": payload}))
+                    await self._serve_commands(ws)
 
             except websockets.ConnectionClosed as exc:
                 if self._stop_event.is_set():
@@ -195,6 +184,59 @@ class AgentRuntime:
 
         self._state.mark_disconnected("stopped")
         self._logger.info("[agent] runtime stopped")
+
+    async def _serve_commands(self, ws) -> None:
+        """Keep receiving speech while one ordinary command executes.
+
+        Queues and replies belong to this connection. Never replay an accepted
+        command on another socket, or reconnect while its thread still runs.
+        """
+        ordinary = asyncio.Queue(maxsize=32)
+        speech = asyncio.Queue(maxsize=1)
+        sending = asyncio.Lock()
+
+        async def reply(payload):
+            async with sending:
+                await ws.send(json.dumps({"type": "result", "payload": payload}))
+
+        async def consume(queue):
+            while True:
+                cmd = await queue.get()
+                if cmd is None or self._stop_event.is_set():
+                    return
+                payload = await self._handle_command(cmd)
+                await reply(payload)
+
+        consumers = [asyncio.create_task(consume(ordinary)), asyncio.create_task(consume(speech))]
+        try:
+            while not self._stop_event.is_set():
+                for consumer in consumers:
+                    if consumer.done():
+                        consumer.result()  # Propagate a failed send to connection cleanup.
+                        raise RuntimeError("agent command consumer stopped")
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+                data = json.loads(raw)
+                if data.get("type") != "command":
+                    continue
+                cmd = data.get("payload", {})
+                queue = speech if cmd.get("action") == "voice.synthesize" else ordinary
+                try:
+                    queue.put_nowait(cmd)
+                except asyncio.QueueFull:
+                    # Definite rejection before execution; never claim success.
+                    await reply({"id": cmd.get("id", ""), "status": "error",
+                                 "error": "voice_busy" if queue is speech else "agent_busy"})
+        finally:
+            # Drop only commands that have not started. Cancelling to_thread
+            # would leave its real action running across a reconnect.
+            for queue in (ordinary, speech):
+                while not queue.empty():
+                    queue.get_nowait()
+                queue.put_nowait(None)
+            await asyncio.gather(*consumers, return_exceptions=True)
 
     async def _handle_command(self, cmd: dict) -> dict:
         cmd_id = cmd.get("id", "")

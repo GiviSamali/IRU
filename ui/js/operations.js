@@ -5,6 +5,8 @@ window.IRUOperations = (() => {
   const key=()=>`iru-operations-open:${state.user?.id}`;
   const renderedRows=new Map(), presentedCommands=new WeakMap();let renderedOwner=null;
   let chat=null, mirrorClosed=null, mirrorHTML='', stale=false, manualSelection=false, mirrorTask=null, selectedStatus=null;
+  let surfaceExpanded=null;
+  const surface=()=>document.documentElement.classList.contains('iru-mini');
   const validCommandConfirmation=(task,id)=>task?.task_id===id && task.status==='confirm' && !task.plan_review
     && typeof task.confirm_data?.confirmation_id==='string'
     && task.confirm_data.confirmation_id.trim().length>0 && task.confirm_data.confirmation_id.length<=64
@@ -18,7 +20,7 @@ window.IRUOperations = (() => {
   const scopedItems=()=>items.filter(i=>String(i.chat_id)===String(state.currentChatId));
   function contextChanged() {
     if(owner!==state.user?.id || chat!==state.currentChatId) {
-      chat=state.currentChatId;selected=null;detail=null;mirrorClosed=null;mirrorHTML='';manualSelection=false;mirrorTask=null;selectedStatus=null;
+      chat=state.currentChatId;selected=null;detail=null;mirrorClosed=null;mirrorHTML='';manualSelection=false;mirrorTask=null;selectedStatus=null;surfaceExpanded=null;
       if(owner!==state.user?.id){items=[];stale=false;}
       render();
     }
@@ -51,22 +53,31 @@ window.IRUOperations = (() => {
   }
   function renderMirror() {
     const i=scopedItems().find(item=>item.task_id===selected);
-    const visible=Boolean(i && mirrorClosed!==selected);
+    const visible=Boolean(i && (surface() || mirrorClosed!==selected));
     const mirror=document.getElementById('operationMirror'), toggle=document.getElementById('mirrorToggle');
     mirror.hidden=!visible;toggle.hidden=!i;toggle.setAttribute('aria-expanded',String(visible));
     if(!visible)return;
     const status=IRUSmartUI.normalizeStatus(i.status)||'unknown';
     const label=i.status==='waiting_input'?'Нужно выбрать окно':i.status==='waiting_confirmation'?'Нужно подтверждение':i.status==='queued'?'В очереди':IRUSmartUI.LABELS[status];
-    const html=`<article data-task-id="${a(i.task_id)}" data-status="${a(status)}"><div class="mirror-object"><span class="mirror-object-icon" aria-hidden="true">▣</span><h2>${e(i.title)}</h2></div><div class="operation-devices">${e(i.device_ids.join(', ')||'Сервер')}</div><span class="smart-status">${e(label)}</span>${stale?'<p role="status">Последнее известное состояние. Соединение потеряно.</p>':''}${i.can_cancel?'<div class="operation-actions"><button data-operation="cancel">Отменить задачу</button></div>':''}${detailMarkup(i,status)}</article>`;
+    const attention=detail?.status==='confirm' || detail?.status==='waiting_input';
+    const others=scopedItems().filter(item=>item.task_id!==i.task_id);
+    const compactView=IRUSmartUI.adapt({role:'assistant',_taskId:i.task_id,taskStatus:i.status,taskTitle:i.title,workerReport:detail?.worker_report},0,state.currentChatId);
+    const compactStatus=IRUSmartUI.render({...compactView,blocks:compactView.blocks.filter(block=>block.type==='task').map(block=>({...block,compact:false,label}))},{});
+    const extraAttention=others.filter(item=>item.waiting_confirmation || item.status==='waiting_input');
+    const html=surface()
+      ? `<article class="surface-operation" data-task-id="${a(i.task_id)}" data-status="${a(status)}">${compactStatus}<div class="surface-operation-actions"><button data-operation="surface-toggle" aria-expanded="${surfaceExpanded===i.task_id}">${surfaceExpanded===i.task_id?'Свернуть':'Результат и подробности'}</button>${i.can_cancel?'<button data-operation="cancel">Отменить</button>':''}</div>${stale?'<p role="status">Последнее известное состояние. Соединение потеряно.</p>':''}${attention || surfaceExpanded===i.task_id?detailMarkup(i,status):''}${extraAttention.map(item=>`<p class="surface-attention" role="status">Требует ответа: <button data-operation="details" data-surface-task="${a(item.task_id)}">${e(item.title)}</button></p>`).join('')}${others.length?`<details class="surface-others"><summary>Ещё ${others.length} · задачи и результаты</summary>${others.map(item=>`<button data-operation="details" data-surface-task="${a(item.task_id)}">${e(item.title)} · ${e(IRUSmartUI.LABELS[IRUSmartUI.normalizeStatus(item.status)]||'Исход не подтверждён')}</button>`).join('')}</details>`:''}</article>`
+      : `<article data-task-id="${a(i.task_id)}" data-status="${a(status)}"><div class="mirror-object"><span class="mirror-object-icon" aria-hidden="true">▣</span><h2>${e(i.title)}</h2></div><div class="operation-devices">${e(i.device_ids.join(', ')||'Сервер')}</div><span class="smart-status">${e(label)}</span>${stale?'<p role="status">Последнее известное состояние. Соединение потеряно.</p>':''}${i.can_cancel?'<div class="operation-actions"><button data-operation="cancel">Отменить задачу</button></div>':''}${detailMarkup(i,status)}</article>`;
     if(html!==mirrorHTML) {
-      const container=document.getElementById('mirrorContent'), wasOpen=mirrorTask===i.task_id && container.querySelector('details')?.open;
+      const container=document.getElementById('mirrorContent'), wasOpen=mirrorTask===i.task_id && container.querySelector('.operation-detail details')?.open;
+      const othersOpen=container.querySelector('.surface-others')?.open;
       container.innerHTML=html;mirrorHTML=html;mirrorTask=i.task_id;
-      if(container.querySelector('details'))container.querySelector('details').open=Boolean(wasOpen);
+      if(container.querySelector('.operation-detail details'))container.querySelector('.operation-detail details').open=Boolean(wasOpen);
+      if(container.querySelector('.surface-others'))container.querySelector('.surface-others').open=Boolean(othersOpen);
       if(validCommandConfirmation(detail,i.task_id))for(const button of container.querySelectorAll('[data-operation="confirm"], [data-operation="deny"]'))
         presentedCommands.set(button,{nonce:detail.confirm_data.confirmation_id,command:detail.confirm_data.command});
       if(detail?.plan_review)for(const button of container.querySelectorAll('[data-operation="approve"], [data-operation="revise"]'))
         presentedCommands.set(button,{revision:detail.plan_review.revision});
-      if(stale)for(const button of container.querySelectorAll('[data-operation]'))button.disabled=true;
+      if(stale)for(const button of container.querySelectorAll('[data-operation]'))if(!['details','surface-toggle'].includes(button.dataset.operation))button.disabled=true;
     }
   }
   function render() {
@@ -150,16 +161,17 @@ window.IRUOperations = (() => {
   async function show(id) {
     await refresh();
     if(!scopedItems().some(item=>item.task_id===id))throw Error('Задача не принадлежит текущему чату.');
-    selected=id;manualSelection=true;mirrorClosed=null;selectedStatus=null;detail=null;render();
+    selected=id;manualSelection=true;mirrorClosed=null;selectedStatus=null;detail=null;if(surface())surfaceExpanded=id;render();
     const who=state.user?.id;
     const r=await apiFetch(`${API}/api/tasks/${encodeURIComponent(id)}`);
     if(!r.ok)throw Error('Подробности недоступны.');const data=await r.json();
     if(state.user?.id!==who||selected!==id||String(data.task?.chat_id)!==String(state.currentChatId))return;
     detail=data.task;await refresh();render();
-    document.querySelector(`#operationsItems [data-task-id="${CSS.escape(id)}"]`)?.scrollIntoView({block:'nearest'});
+    if(!surface())document.querySelector(`#operationsItems [data-task-id="${CSS.escape(id)}"]`)?.scrollIntoView({block:'nearest'});
   }
   async function act(action,id,presented={}) {
     if(busy)return;
+    if(action==='surface-toggle'){surfaceExpanded=surfaceExpanded===id?null:id;renderMirror();return;}
     if(action==='details'){await show(id);return;}
     if(stale)throw Error('Обновите состояние задачи перед действием.');
     busy=true;document.getElementById("operationsItems").setAttribute("aria-busy","true");
@@ -208,18 +220,24 @@ window.IRUOperations = (() => {
     document.getElementById('mirrorToggle').addEventListener('click',()=>{mirrorClosed=mirrorClosed===selected?null:selected;renderMirror();});
     document.getElementById('operationsToggle').addEventListener('click',()=>{setOpen(!open);refresh();});
     for(const element of ['operationsItems','mirrorContent'])document.getElementById(element).addEventListener('click',event=>{
+      if(event.target.closest('[data-action]'))return;
       const button=event.target.closest('[data-operation]'), row=button?.closest('[data-task-id]')||event.target.closest('.operation-item');
-      if(row)act(button?.dataset.operation||'details',row.dataset.taskId,button?presentedCommands.get(button)||{}:{}).catch(err=>showToast(err.message,true));
+      if(row)act(button?.dataset.operation||'details',button?.dataset.surfaceTask||row.dataset.taskId,button?presentedCommands.get(button)||{}:{}).catch(err=>showToast(err.message,true));
     });
     bindChatMessageActions(document.getElementById('mirrorContent'));
     bindProductV2ExecutionCards(document.getElementById('mirrorContent'));
     bindChatMessageActions(document.getElementById('operationsItems'));
     bindProductV2ExecutionCards(document.getElementById('operationsItems'));
+    // In compact mode Mirror lives inside chatMessages. Its existing delegated
+    // handlers own these events; don't let the outer chat execute them twice.
+    for(const type of ['click','keydown'])document.getElementById('mirrorContent').addEventListener(type,event=>{
+      if(surface())event.stopPropagation();
+    });
     refresh();timer=setInterval(()=>{if(!document.hidden)refresh();},2500);
   });
   window.addEventListener('online',refresh);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
   window.addEventListener('pagehide',()=>{clearInterval(timer);timer=null;});
   window.addEventListener('pageshow',()=>{if(!timer)timer=setInterval(()=>{if(!document.hidden)refresh();},2500);refresh();});
-  return Object.freeze({refresh,show,contextChanged});
+  return Object.freeze({refresh,show,contextChanged,surfaceChanged(){mirrorHTML='';synchronizeSelection();renderMirror();}});
 })();

@@ -599,9 +599,41 @@ function restoreMessagePresentation(container, snapshot) {
   }
 }
 
+// Presentation only: keep the same messages, composer, task polling and voice session.
+function setAdaptiveSurface(enabled) {
+  const root=document.documentElement, messages=document.getElementById('chatMessages');
+  if (!messages || root.classList.contains('iru-mini')===enabled && Boolean(document.getElementById('adaptiveBody'))===enabled) return;
+  const mirror=document.getElementById('operationMirror');
+  root.classList.toggle('iru-mini',enabled);
+  if (enabled) {
+    const body=document.createElement('div');body.id='adaptiveBody';
+    const conversation=document.createElement('div');conversation.id='adaptiveConversation';
+    messages.replaceChildren(body);body.append(mirror,conversation);
+  } else {
+    document.getElementById('operationsDock').before(mirror);
+    messages.replaceChildren();
+  }
+  window.IRUOperations?.surfaceChanged();
+  renderMessages();
+}
+window.setAdaptiveSurface=setAdaptiveSurface;
+
+function adaptiveMessageIndexes() {
+  const indexes=new Set();
+  let lastUser=-1;
+  state.messages.forEach((message,index)=>{if(message.role==='user')lastUser=index;});
+  if(lastUser>=0)indexes.add(lastUser);
+  state.messages.forEach((message,index)=>{
+    if(message.role==='user' || message.taskKind==='worker')return;
+    if(index>lastUser || message.confirmTaskId || message.planReview || message.taskStatus==='waiting_input')indexes.add(index);
+  });
+  return indexes;
+}
+
 function renderMessages() {
   window.IRUOperations?.contextChanged();
-  const container = document.getElementById('chatMessages');
+  const compact=document.documentElement.classList.contains('iru-mini');
+  const container = document.getElementById('adaptiveConversation') || document.getElementById('chatMessages');
   const presentation = captureMessagePresentation(container);
 
   if (state.messages.length === 0) {
@@ -629,7 +661,9 @@ function renderMessages() {
   }
 
   let html = '';
+  const visible=compact ? adaptiveMessageIndexes() : null;
   for (let mi = 0; mi < state.messages.length; mi++) {
+    if(visible && !visible.has(mi))continue;
     const m = state.messages[mi];
     if (m.hideAfterPlanChoice) continue;
     // The admitted delegation already has its own Worker UI status.
@@ -640,6 +674,10 @@ function renderMessages() {
     const active = state.pendingTasks.find(item => item.task_id === m._taskId && item.kind !== 'orchestrator');
     const view = IRUSmartUI.adapt({ ...m, cancelAvailable:Boolean(m.loading && active && active.task_id === m._taskId && !active.cancelRequested) }, mi, state.currentChatId);
     const workerInDock = m.taskKind === 'worker';
+    if(compact && !workerInDock && m.loading && !m.confirmTaskId && !m.planReview) {
+      view.blocks=view.blocks.filter(block=>block.type!=='task');
+      if(!view.blocks.some(block=>block.type==='text'))view.blocks.unshift({type:'text',key:view.key+'-working',text:'Отвечаю…',long:false});
+    }
     const resultFiles = workerInDock ? view.blocks.filter(block => block.type === 'file') : [];
     if (workerInDock) view.blocks = view.blocks.filter(block => block.type !== 'task' && block.type !== 'file' && (block.type !== 'action' || m.planSuggestion || m.suggestedFact));
     let bodyHTML = IRUSmartUI.render(view, {
@@ -653,11 +691,23 @@ function renderMessages() {
       const status = IRUSmartUI.taskState(m, m.tasks || [], m.commands || []);
       bodyHTML += `<button type="button" class="operation-reference" data-action="show-operation" data-task-id="${escapeAttr(m._taskId)}">${escapeHTML(IRUSmartUI.LABELS[status])} · Операции ↗</button>`;
     }
-    if (typeof renderMessageUsage === 'function') bodyHTML += renderMessageUsage(m);
+    if (!compact && typeof renderMessageUsage === 'function') bodyHTML += renderMessageUsage(m);
     html += `<div class="msg ${role}${m.loading ? ' msg-thinking' : ''}" data-message-key="${escapeAttr(view.key)}"><div class="msg-role">${role === 'user' ? 'вы' : 'иру'}</div><div class="msg-body">${bodyHTML}</div></div>`;
   }
 
-  container.innerHTML = html;
+  if(compact) {
+    // Reconcile by existing message identity: a Worker tick must not replace a
+    // conversation node, selection or an unchanged confirmation editor.
+    const template=document.createElement('template');template.innerHTML=html;
+    const current=new Map([...container.children].map(node=>[node.dataset.messageKey,node]));
+    [...template.content.children].forEach((next,index)=>{
+      let node=current.get(next.dataset.messageKey);
+      current.delete(next.dataset.messageKey);
+      if(!node || node.outerHTML!==next.outerHTML){if(node)node.replaceWith(next);node=next;}
+      if(container.children[index]!==node)container.insertBefore(node,container.children[index]||null);
+    });
+    for(const node of current.values())node.remove();
+  } else container.innerHTML = html;
   restoreMessagePresentation(container, presentation);
   updateStopButton();
 }

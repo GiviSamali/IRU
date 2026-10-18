@@ -280,6 +280,7 @@ def launch_windows_shell(
         tray_menu = QtWidgets.QMenu()
         tray_menu.addAction("Открыть ИРУ", main_window.show_iru)
         tray_menu.addAction("Компактное окно", lambda: (main_window.set_compact(True), main_window.show_iru()))
+        tray_menu.addAction("Размер по содержимому", lambda: (main_window._resume_surface_size(), main_window.show_iru()))
         tray_menu.addAction("Развернуть окно", lambda: (main_window.set_compact(False), main_window.show_iru()))
         tray_menu.addAction("Скрыть ИРУ", main_window.hide)
         tray_menu.addAction("Сообщение окна", main_window.show_notice)

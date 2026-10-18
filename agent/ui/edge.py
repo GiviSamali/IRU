@@ -96,6 +96,7 @@ class EdgeWebView(QtWidgets.QWidget):
         self.profile_path.mkdir(parents=True, exist_ok=True)
         self.core = None
         self._disposed = False
+        self._document_generation = 0
         self._dialogs = []
         self._microphone_allowed = False
         self._speech_marker = "IRU_SPEECH_ERROR_" + os.urandom(16).hex()
@@ -233,6 +234,7 @@ class EdgeWebView(QtWidgets.QWidget):
         self.speechFailed.emit(code)
 
     def _navigation_starting(self, sender, args):
+        self._document_generation += 1
         address = str(args.Uri)
         destination = origin(address)
         if destination is None:
@@ -355,6 +357,38 @@ class EdgeWebView(QtWidgets.QWidget):
             else:
                 callback(json.loads(str(task.Result)))
         poll()
+
+    def measure_surface(self, callback):
+        """Host-owned, bounded layout observation; no document-to-agent bridge."""
+        if self._disposed or origin(self.current_url()) != self.site_origin:
+            callback(None)
+            return
+        generation, address = self._document_generation, self.current_url()
+
+        def measured(value):
+            if (self._disposed or generation != self._document_generation
+                    or self.current_url() != address or origin(address) != self.site_origin):
+                callback(None)
+            else:
+                callback(value)
+
+        site = json.dumps(self.site_url)
+        script = """(() => {
+          if (window !== window.top || location.origin !== new URL(SITE).origin) return null;
+          const body=document.getElementById('adaptiveBody');
+          const input=document.querySelector('.chat-input-area');
+          if (!body || !input || !document.documentElement.classList.contains('iru-mini')) return null;
+          if (!body.getClientRects().length || !input.getClientRects().length) return null;
+          const selection=window.getSelection();
+          const editing=document.activeElement?.matches('textarea,input') && Boolean(document.activeElement.value);
+          return {version:1, height:Math.ceil(body.getBoundingClientRect().height + input.getBoundingClientRect().height + 24),
+            viewport:window.innerHeight, hold:Boolean(editing || selection && !selection.isCollapsed)};
+        })()""".replace("SITE", site)
+        try:
+            self.evaluate(script, measured, timeout=2)
+        except Exception:
+            LOG.debug("[desktop] surface measurement unavailable", exc_info=True)
+            callback(None)
 
     def _resize_native(self):
         if self._disposed:
