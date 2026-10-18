@@ -669,8 +669,8 @@ def _build_route_kwargs(
             system_msg += "\n" + BROWSER_BRIDGE_RULES + "\nObserved browser context is a candidate continuation, not a command to ignore a new task. Choose the action from the current human request and conversation."
     if modes.get("autonomous") and not ordinary_window_request(user_message) and not browser_request(user_message):
         system_msg = system_msg + "\n\n## Активные режимы\n" + (
-            "АВТОНОМНЫЙ РЕЖИМ: Пользователь дал согласие на выполнение без дополнительных "
-            "подтверждений. Действуй самостоятельно, не спрашивай перед каждой командой. "
+            "АВТОНОМНЫЙ РЕЖИМ: Выполняй обычную работу самостоятельно без лишних "
+            "подтверждений. Распознанные опасные действия подтверждаются runtime отдельно. "
             "Запрещённые системные команды всё равно не выполняй."
         )
     return _build_non_pipeline_route_kwargs(

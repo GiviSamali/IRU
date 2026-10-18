@@ -63,10 +63,12 @@ def test_deny_is_bound_only_to_original_task_and_new_request_requires_confirm_ag
             }]
         }
 
-    async def fake_send_command_to_agent(device_id, action, params, user_id=None, skip_confirm=False):
+    executed = []
+    async def fake_send_command_to_agent(device_id, action, params, user_id=None, skip_confirm=False, confirmation=None):
         assert device_id == device_key
         assert action == "execute_cmd"
-        if skip_confirm:
+        if confirmation is not None:
+            executed.append(params["command"])
             return {"stdout": "", "stderr": "", "returncode": 0}
         raise RuntimeError("CONFIRM_REQUIRED: Команда требует подтверждения пользователя.")
 
@@ -94,17 +96,17 @@ def test_deny_is_bound_only_to_original_task_and_new_request_requires_confirm_ag
 
     first_task = _wait_for_task_status(client, headers, first_task_id, "confirm")
     assert first_task["confirm_data"]["device_id"] == "device-1"
-    assert "подтверждения" in (first_task["answer"] or "").lower()
+    assert first_task["confirm_data"]["kind"] == "deletion"
 
     deny_response = client.post(f"/api/tasks/{first_task_id}/deny", headers=headers)
     assert deny_response.status_code == 200
     assert deny_response.json()["status"] == "ok"
 
     denied_task = _wait_for_task_status(client, headers, first_task_id, "cancelled")
-    assert denied_task["answer"] == "Команда отменена пользователем."
+    assert denied_task["answer"] == "Остановлено пользователем."
     assert denied_task["confirm_data"] is None
     assert denied_task["worker_report"]["status"] == "cancelled"
-    assert denied_task["task_receipt"]["command_outcome"] == "not_executed"
+    assert executed == []
 
     second_response = client.post(
         "/api/chat",

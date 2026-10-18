@@ -167,7 +167,7 @@ def test_pipeline_confirmation_resumes_same_task_or_cancels(monkeypatch, choice)
     rt.devices[did] = {"user_id": 1, "info": {"hostname": "pc", "os": "Windows"}, "pending": {}}
     dispatched = []
     async def send(device, action, params, **kwargs):
-        if params["command"] == "needs approval" and not kwargs.get("skip_confirm"):
+        if params["command"] == "needs approval" and not kwargs.get("confirmation"):
             raise RuntimeError("CONFIRM_REQUIRED")
         dispatched.append(params["command"])
         return {"returncode": 0, "stdout": "OK: result"}
@@ -193,9 +193,9 @@ def test_pipeline_confirmation_resumes_same_task_or_cancels(monkeypatch, choice)
             await asyncio.sleep(0)
         assert rt.tasks[tid]["status"] == "confirm" and not dispatched
         if choice == "confirm":
-            await routes.api_confirm_task(tid, None)
+            await routes.api_confirm_task(tid, None, confirmation_id=rt.tasks[tid].get("confirm_data", {}).get("confirmation_id"))
             with pytest.raises(HTTPException):
-                await routes.api_confirm_task(tid, None)
+                await routes.api_confirm_task(tid, None, confirmation_id=rt.tasks[tid].get("confirm_data", {}).get("confirmation_id"))
         elif choice == "deny":
             await routes.api_deny_task(tid, None)
         else:

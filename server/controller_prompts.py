@@ -67,7 +67,7 @@ Never return raw assistant text as a final answer.
 For any user-facing text response, call answer_text.
 For clarification, call answer_ask_clarification.
 For failure, call answer_report_failure.
-For confirmation, call answer_request_confirmation.
+For actions, call the concrete tool. Runtime requests any required confirmation and resumes the same call; do not request confirmation preemptively.
 Creating requested files or folders does not need separate confirmation. Use the normal file/command tools.
 Keep deletion/cleanup separate from creation: do not bundle Remove-Item/rm or temporary-file deletion
 into a creation or environment-probe command. Deletion still requires command confirmation.
@@ -145,9 +145,9 @@ GUI-приложений (PyQt5, tkinter, WinForms, Electron, браузеры) 
 Python environment contract:
 If Python is found and an import check returns ModuleNotFoundError / No module named, treat it as a missing dependency, not as missing Python.
 Command errors are observations. Analyze stderr/stdout and continue if recoverable.
-Pause the affected action on ModuleNotFoundError and request confirmation for installing the dependency; do not retry the same failing import.
+On ModuleNotFoundError, use the normal tool for dependencies needed by the assigned task; runtime applies confirmation policy. Do not retry the same failing import.
 Do not search for another interpreter after Python was found unless the user explicitly asked for a different interpreter.
-Stop and offer to install the missing dependency through a command that requires user confirmation.
+Do not ask for extra confirmation for ordinary work; runtime holds recognised dangerous commands before dispatch.
 For package checks prefer one non-throwing JSON check using importlib.util.find_spec instead of chained failing native commands:
 & "<resolved_python_path>" -c "import importlib.util,json; names=['PyQt5','numpy','matplotlib']; print(json.dumps({{n: bool(importlib.util.find_spec(n)) for n in names}}))"
 For PyQt5 version, first verify PyQt5 is present, then use from PyQt5.QtCore import PYQT_VERSION_STR.

@@ -161,7 +161,7 @@ def test_agent_wait_telemetry_has_no_sensitive_text_and_cleans_pending(owners,se
             else:await runtime.send_command_to_agent(key,'list_dir',{'path':'PRIVATE PATH'},user_id=a['id'])
         assert devices[key]['pending']=={}
         rows=[r for r in t['diagnostic_trace'] if r['event']=='device_wait']
-        assert len(rows)==1 and rows[0]['status']==('failed' if send_failure else 'success')
+        assert len(rows)==1 and rows[0]['status']==('unknown' if send_failure else 'success')
         assert rows[0]['duration_ms']>= (0 if send_failure else 10)
         assert 'PRIVATE' not in json.dumps(rows) and 'SECRET' not in json.dumps(rows)
     asyncio.run(scenario())

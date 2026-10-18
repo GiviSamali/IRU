@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 import base64
 import inspect
 import json
@@ -12,8 +13,8 @@ from datetime import datetime, timezone
 import httpx
 
 try:
-    from .command_confirmation import command_confirmation
-    from .api_support import _is_admin, is_command_safe, needs_confirmation
+    from .command_confirmation import command_confirmation, ConfirmedAction
+    from .api_support import _is_admin, assess_action, action_fingerprint, ActionConfirmationRequired, is_recovery_observation
     from .controller import (
         ConfirmationRequired,
         classify_task_complexity,
@@ -59,8 +60,8 @@ try:
     )
     from .tool_registry import compact_device_passport
 except ImportError:
-    from command_confirmation import command_confirmation
-    from api_support import _is_admin, is_command_safe, needs_confirmation
+    from command_confirmation import command_confirmation, ConfirmedAction
+    from api_support import _is_admin, assess_action, action_fingerprint, ActionConfirmationRequired, is_recovery_observation
     from controller import (
         ConfirmationRequired,
         classify_task_complexity,
@@ -263,12 +264,17 @@ async def _probe_python_toolchain_if_needed(
         logger.info("[python_toolchain] probe skipped/failed for %s user=%s: %s", device_id, user_id, exc)
 
 
+class AgentOutcomeUnknown(RuntimeError):
+    """Delivery may have happened; never use this error to retry an action."""
+
+
 async def send_command_to_agent(
     device_id: str,
     action: str,
     params: dict,
     user_id: int | None = None,
     skip_confirm: bool = False,
+    confirmation: ConfirmedAction | None = None,
 ) -> dict:
     """Send a command to a конкретный agent and wait for the response."""
     dev = devices.get(device_id)
@@ -301,16 +307,13 @@ async def send_command_to_agent(
                     "Поиск в интернете через Invoke-WebRequest/curl/wget запрещён. "
                     "Используй инструмент web_search."
                 )
-        if not is_command_safe(cmd_text):
-            raise RuntimeError(
-                "BLOCKED: Команда запрещена на этапе бета-тестирования. "
-                "Сообщи пользователю, что эта команда недоступна в бета-версии."
-            )
-        if needs_confirmation(cmd_text):
-            if skip_confirm:
-                logger.info("[security] skip_confirm=True, command_chars=%s", len(cmd_text))
-            else:
-                raise RuntimeError("CONFIRM_REQUIRED: Команда требует подтверждения пользователя.")
+        # skip_confirm is retained for old callers, but is never authority.
+        assessment = (confirmation.consume(device_id, action, params) if isinstance(confirmation, ConfirmedAction)
+                      else assess_action(action, params))
+        if assessment["decision"] == "DENY":
+            raise RuntimeError("BLOCKED: Команда запрещена на этапе бета-тестирования.")
+        if assessment["decision"] == "CONFIRM" and not isinstance(confirmation, ConfirmedAction):
+            raise ActionConfirmationRequired(assessment)
 
     elif action == "write_content":
         path = str(params.get("path", "")).strip()
@@ -349,14 +352,16 @@ async def send_command_to_agent(
     if not dev:
         raise RuntimeError(f"Устройство '{device_id}' не подключено")
 
+    ws = dev.get("ws")
+    if not callable(getattr(ws, "send_text", None)):
+        raise RuntimeError("agent_connection_unavailable")
     cmd_id = str(uuid.uuid4())[:8]
-    future = asyncio.get_event_loop().create_future()
-    dev["pending"][cmd_id] = future
-
     msg = json.dumps({
         "type": "command",
         "payload": {"id": cmd_id, "action": action, "params": params},
     })
+    future = asyncio.get_event_loop().create_future()
+    dev["pending"][cmd_id] = future
     wait_timeout = 60.0
     if action.startswith("file.transfer_"):
         wait_timeout = 1560.0
@@ -374,8 +379,17 @@ async def send_command_to_agent(
     wait_started=time.monotonic()
     wait_state="success"
     try:
-        await dev["ws"].send_text(msg)
+        await ws.send_text(msg)
         result = await asyncio.wait_for(future, timeout=wait_timeout)
+        if isinstance(result, dict) and (
+                str(result.get("error") or "").startswith("AGENT_DISCONNECTED:")
+                or result.get("status") == "unknown" or result.get("completion_state") == "unknown"
+                or result.get("returncode") == -1 and result.get("error")):
+            raise AgentOutcomeUnknown("agent_response_outcome_unknown")
+    except AgentOutcomeUnknown:
+        wait_state = "unknown"
+        dev["pending"].pop(cmd_id, None)
+        raise
     except asyncio.CancelledError:
         wait_state="cancelled"
         dev["pending"].pop(cmd_id, None)
@@ -383,9 +397,11 @@ async def send_command_to_agent(
     except asyncio.TimeoutError:
         wait_state="unknown"
         dev["pending"].pop(cmd_id, None)
-        raise RuntimeError("Таймаут ожидания ответа от агента")
+        raise AgentOutcomeUnknown("Таймаут ожидания ответа от агента")
     except Exception:
-        wait_state="failed";dev["pending"].pop(cmd_id,None);raise
+        wait_state="unknown"
+        dev["pending"].pop(cmd_id, None)
+        raise AgentOutcomeUnknown("agent_transport_outcome_unknown") from None
     finally:
         record_lifecycle_event("device_wait",tool_name=action,status=wait_state,duration_ms=int((time.monotonic()-wait_started)*1000))
 
@@ -875,7 +891,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         # Broadcast starts each ordinary task afresh: no paths/results from another device.
         chat_history = task.get("worker_context") or ([] if is_broadcast else get_messages(chat_id, limit=50))
         device_profile = get_device_profile(_short_did(device_id), user_id=user_id)
-        autonomous_flag = bool(task_modes.get("autonomous")) and not task_modes.get("pipeline")
         all_devices_info.setdefault(_short_did(device_id), {
             "user_id": user_id,
             "info": device_info,
@@ -900,19 +915,37 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         browser_policy = BrowserTaskPolicy(message, _short_did(device_id), chat_history,
                                            authorized_device_ids=set(all_devices_info))
         browser_page_seen = False
-        async def confirm_browser_effect(target, params):
-            # The static extension has rejected the effect BEFORE activation.
-            # No interpretation of the user's wording and no additional LLM call.
+        async def send_owned_command(target, action, params, **kwargs):
+            try:
+                return await send_command_to_agent(target, action, params, **kwargs)
+            except AgentOutcomeUnknown:
+                task["_action_outcome_unknown"] = True
+                raise
+
+        async def wait_for_confirmation(target, action, params, assessment, command):
+            snapshot = deepcopy(params)
+            fingerprint = action_fingerprint(action, snapshot)
             decision = asyncio.get_running_loop().create_future()
+            card = command_confirmation({"command": command, "device_id": target,
+                "params": snapshot, "chat_id": chat_id, "user_id": user_id}, assessment)
             task["_pipeline_confirm_future"] = decision
-            task["confirm_data"] = command_confirmation({
-                "command": f"Загрузка исполняемого файла из браузера на {target}",
-                "device_id": target, "params": {**params, "risk": "dangerous"},
-                "chat_id": chat_id, "user_id": user_id})
+            task["confirm_data"] = card
             task["status"] = "confirm"
             try:
                 accepted = await asyncio.wait_for(decision, timeout=300)
-                return bool(accepted) and not is_task_cancel_requested(task_id)
+                if (not accepted or is_task_cancel_requested(task_id)):
+                    raise RuntimeError("Task cancellation requested during confirmation")
+                if (tasks.get(task_id) is not task or task.get("user_id") != user_id
+                        or task.get("chat_id", chat_id) != chat_id
+                        or task.get("confirm_data") is not card
+                        or time.time() >= card["expires_at"]
+                        or action_fingerprint(action, params) != fingerprint
+                        or action_fingerprint(action, card["params"]) != fingerprint):
+                    return False
+                target_key = _dk(user_id, target) if ":" not in target else target
+                if task.get("worker_id") and target_key not in task["device_ids"]:
+                    return False
+                return True
             except asyncio.TimeoutError:
                 return False
             finally:
@@ -923,6 +956,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
 
         async def send_fn(target_device_id, action, params):
             nonlocal browser_page_seen
+            if task.get("_action_outcome_unknown") and not is_recovery_observation(action, params):
+                return {"status":"blocked", "error":"mutation_blocked_after_unknown"}
             if task.get("worker_id"):
                 target_key=_dk(user_id,target_device_id) if isinstance(target_device_id,str) and ":" not in target_device_id else target_device_id
                 if target_key not in task["device_ids"]:return {"status":"failed","error":"device_outside_worker_assignment"}
@@ -942,7 +977,9 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 result = await execute_browser_action(user_id, task_id, _short_did(target_device_id), action, params,
                     external_action=action == "web.activate", cancelled=lambda: is_task_cancel_requested(task_id))
                 if action == "web.activate" and result.get("status") == "failed" and result.get("error") == "browser_confirmation_required":
-                    if not await confirm_browser_effect(_short_did(target_device_id), params):
+                    assessment = {"findings": [{"kind": "dangerous"}], "confirmation_channel": "button"}
+                    if not await wait_for_confirmation(_short_did(target_device_id), action, params, assessment,
+                            f"Загрузка исполняемого файла из браузера на {target_device_id}"):
                         return {"status": "failed", "error": "browser_confirmation_declined"}
                     # Revalidate ownership, connection and the exact DOM identity after approval.
                     result = await execute_browser_action(user_id, task_id, _short_did(target_device_id), action, params,
@@ -959,8 +996,11 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     from .file_transfer import transfer_file
                 except ImportError:
                     from file_transfer import transfer_file
-                return await transfer_file(user_id, task_id, params, send_command_to_agent,
-                                           lambda: is_task_cancel_requested(task_id))
+                result = await transfer_file(user_id, task_id, params, send_owned_command,
+                                             lambda: is_task_cancel_requested(task_id))
+                if task.get("_action_outcome_unknown"):
+                    return {**result, "status": "unknown", "error": "confirmed_transport_outcome_unknown"}
+                return result
             if is_task_cancel_requested(task_id):
                 raise RuntimeError("Task cancellation requested before starting next device command")
             target_dk = _dk(user_id, target_device_id) if ":" not in target_device_id else target_device_id
@@ -970,39 +1010,45 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if not target_dev or target_dev.get("user_id") != user_id:
                 raise RuntimeError(f"Нет доступа к устройству '{target_device_id}'")
             try:
-                return await send_command_to_agent(target_dk, action, params, user_id=user_id,
-                                                   skip_confirm=autonomous_flag)
+                result = await send_owned_command(target_dk, action, params, user_id=user_id)
+
+                return result
             except RuntimeError as exc:
+                if isinstance(exc, AgentOutcomeUnknown):
+                    task["_action_outcome_unknown"] = True
+                    return {"status":"unknown","error":"confirmed_transport_outcome_unknown"}
                 if "CONFIRM_REQUIRED" not in str(exc):
                     raise
-                # Keep this bounded worker alive; confirmation resumes the pending call.
-                decision = asyncio.get_running_loop().create_future()
-                task["_pipeline_confirm_future"] = decision
-                task["confirm_data"] = command_confirmation({"command": params.get("command", ""), "device_id": target_device_id,
-                                        "params": params, "chat_id": chat_id, "user_id": user_id})
-                task["status"] = "confirm"
+                assessment = getattr(exc, "assessment", None)
+                if assessment is None:  # Compatible custom transports; production supplies its decision.
+                    assessment = assess_action(action, params)
+                pending = ConfirmedAction(target_dk, action, params, assessment)
+                connection = target_dev.get("ws")
+                if not await wait_for_confirmation(target_device_id, action, params, assessment, params.get("command", "")):
+                    return {"status":"blocked", "error":"confirmation_expired"}
+                # Repeat mutable boundaries after the human wait, without reclassifying risk.
+                if devices.get(target_dk) is not target_dev or target_dev.get("ws") is not connection:
+                    return {"status":"blocked", "error":"confirmation_expired"}
+                if task.get("worker_id") and target_dk not in task["device_ids"]:
+                    return {"status":"failed", "error":"device_outside_worker_assignment"}
+                if browser_page_seen or browser_policy.browser_only:
+                    return {"status":"failed", "error":"untrusted_web_content_cannot_authorize_device_action"}
                 try:
-                    accepted = await asyncio.wait_for(decision,timeout=300)
-                except asyncio.TimeoutError:
-                    task['status']='running'
-                    return {'status':'blocked','error':'confirmation_expired'}
-                finally:
-                    task.pop("_pipeline_confirm_future", None)
-                    task.pop("confirm_data", None)
-                if not accepted or is_task_cancel_requested(task_id):
-                    raise RuntimeError("Task cancellation requested during confirmation")
-                task["status"] = "running"
-                try:
-                    result = await send_command_to_agent(target_dk, action, params, user_id=user_id, skip_confirm=True)
-                except Exception:
-                    # Dispatch may have taken effect. Stop this run rather than letting the model repeat it.
+                    result = await send_owned_command(target_dk, action, params, user_id=user_id,
+                                                         confirmation=pending)
+                except AgentOutcomeUnknown:
+                    task["_action_outcome_unknown"] = True
                     return {"status":"unknown","completion_state":"unknown","error":"confirmed_transport_outcome_unknown"}
-                if isinstance(result,dict) and result.get('returncode') == -1 and result.get('error'):
-                    return {**result,"status":"unknown","completion_state":"unknown","error":"confirmed_transport_outcome_unknown"}
+                except (RuntimeError, ValueError) as exc:
+                    # Local revalidation failed before delivery; no action was sent.
+                    return {"status":"blocked", "error":"confirmed_action_not_dispatched", "reason": str(exc)}
+
                 return result
 
 
         def file_link(dev_id: str, path: str) -> str:
+            if task.get("_action_outcome_unknown"):
+                raise RuntimeError("mutation_blocked_after_unknown")
             if browser_page_seen:
                 raise RuntimeError("untrusted_web_content_cannot_authorize_file_download")
             target_key = dev_id if ":" in dev_id else _dk(user_id, dev_id)
@@ -1012,6 +1058,14 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             return get_file_link_fn(dev_id, path, user_id=user_id)
 
         async def device_tool_fn(tool_name: str, args: dict) -> dict:
+            try:
+                return await device_tool_impl(tool_name, args)
+            except AgentOutcomeUnknown:
+                return {"status": "unknown", "error": "confirmed_transport_outcome_unknown"}
+
+        async def device_tool_impl(tool_name: str, args: dict) -> dict:
+            if task.get("_action_outcome_unknown") and not is_recovery_observation(tool_name, args):
+                return {"status":"blocked", "error":"mutation_blocked_after_unknown"}
             if browser_page_seen:
                 return {"status": "failed", "error": "untrusted_web_content_cannot_authorize_device_action"}
             if is_task_cancel_requested(task_id):
@@ -1042,12 +1096,11 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 }
             if tool_name in {"device_activate", "device_repair_activation"}:
                 mode = "repair" if tool_name == "device_repair_activation" else "soft"
-                receipt = await send_command_to_agent(
+                receipt = await send_owned_command(
                     target_key,
                     "device.activate",
                     {"mode": mode, "device_id": target_short},
                     user_id=user_id,
-                    skip_confirm=autonomous_flag,
                 )
                 if not isinstance(receipt, dict) or receipt.get("error"):
                     return {"status": "failed", "device_id": target_short, "error": receipt.get("error") if isinstance(receipt, dict) else "missing activation receipt"}
@@ -1074,7 +1127,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     mode = "prepare"
                 elif tool_name == "device_repair_runtime":
                     mode = "repair"
-                receipt = await send_command_to_agent(
+                receipt = await send_owned_command(
                     target_key,
                     "device.prepare_runtime",
                     {
@@ -1084,7 +1137,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                         "device_id": target_short,
                     },
                     user_id=user_id,
-                    skip_confirm=autonomous_flag,
                 )
                 if not isinstance(receipt, dict) or receipt.get("error"):
                     return {"status": "failed", "device_id": target_short, "error": receipt.get("error") if isinstance(receipt, dict) else "missing Python runtime receipt"}
@@ -1134,6 +1186,9 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if is_task_cancel_requested(task_id):
                 return cancellation_payload(result.get("commands", []))
             task_receipt = result.get("task_receipt")
+            if task.get("_action_outcome_unknown") and not (task_receipt or {}).get("task_status"):
+                task_receipt = {**(task_receipt or {}), "task_status": "partial", "goal_completed": False,
+                                "terminal_reason": "agent_outcome_unknown"}
             if activation_markers:
                 task_receipt = dict(task_receipt or {})
                 task_receipt["warnings"] = sorted(set((task_receipt.get("warnings") or []) + activation_markers))

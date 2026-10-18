@@ -54,7 +54,7 @@ try:
         TOKEN_TTL,
     )
     from ..python_toolchain import PythonToolchainReceipt, validate_toolchain_fact_against_receipt
-    from ..task_runtime import run_nl_task, run_onboarding_task, send_command_to_agent
+    from ..task_runtime import run_nl_task, run_onboarding_task, send_command_to_agent, AgentOutcomeUnknown
 except ImportError:
     from api_support import _is_admin, check_ip_rate_limit, check_rate_limit, get_current_user
     from database import (
@@ -96,15 +96,17 @@ except ImportError:
         TOKEN_TTL,
     )
     from python_toolchain import PythonToolchainReceipt, validate_toolchain_fact_against_receipt
-    from task_runtime import run_nl_task, run_onboarding_task, send_command_to_agent
+    from task_runtime import run_nl_task, run_onboarding_task, send_command_to_agent, AgentOutcomeUnknown
 
 
 try:
-    from ..command_confirmation import confirmed_command_outcome
+    from ..command_confirmation import confirmed_command_outcome, ConfirmedAction
+    from ..api_support import assess_action
     from ..tool_completion import execute_cmd_outcome_marker
     from ..run_journal import make_run_step, append_tool_step, append_answer_step, validate_answer_text_payload, diagnostic_context_for_task
 except ImportError:
-    from command_confirmation import confirmed_command_outcome
+    from command_confirmation import confirmed_command_outcome, ConfirmedAction
+    from api_support import assess_action
     from tool_completion import execute_cmd_outcome_marker
     from run_journal import make_run_step, append_tool_step, append_answer_step, validate_answer_text_payload, diagnostic_context_for_task
 
@@ -683,6 +685,11 @@ async def api_confirm_task(task_id: str, request: Request, confirmation_id: str 
         raise HTTPException(409, detail="Подтверждение устарело. Запустите исходную задачу заново.")
     decision = task.get("_pipeline_confirm_future")
     if decision is not None:
+        expires = (task.get("confirm_data") or {}).get("expires_at")
+        if expires is not None and time.time() >= expires:
+            raise HTTPException(409, "Подтверждение устарело.")
+        if is_task_cancel_requested(task_id):
+            raise HTTPException(409, "Задача отменена.")
         if not confirmation_id or (task.get("confirm_data") or {}).get("confirmation_id") != confirmation_id:
             raise HTTPException(409, "Подтвердите именно текущую команду через command-decision.")
         if decision.done():
@@ -790,10 +797,14 @@ async def api_confirm_task(task_id: str, request: Request, confirmation_id: str 
             try:
                 with diagnostic_context_for_task(task_id,task):
                     result = await send_command_to_agent(confirm_dk, "execute_cmd", params,
-                                                         user_id=user["id"], skip_confirm=True)
-            except Exception:
-                # A transport exception can occur after dispatch. Never retry blindly.
+                                                         user_id=user["id"], skip_confirm=True,
+                                                         confirmation=ConfirmedAction(confirm_dk, "execute_cmd", params,
+                                                             assess_action("execute_cmd", params)))
+            except AgentOutcomeUnknown:
                 finish(None, "unknown", "confirmed_transport_outcome_unknown")
+                return
+            except (RuntimeError, ValueError):
+                finish(None, "failed", "confirmed_action_not_dispatched")
                 return
             outcome = confirmed_command_outcome(result)
             finish(result, outcome, "confirmation_continuation_unavailable" if outcome == "success"

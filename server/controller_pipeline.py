@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 import httpx
 
 try:
+    from .api_support import is_recovery_observation
+    from .controller_tools import recovery_observation_tools
     from .controller_prompts import DYNAMIC_CONTEXT_RULES
     from .pipeline_plan_review import review_pipeline_plan
     from .pipeline_step_control import StepProgress, completion_matches, step_handoff
@@ -36,7 +38,7 @@ try:
         blocked_memory_write_result,
         memory_permissions_from_human_request,
     )
-    from .runtime_state import is_task_cancel_requested  # type: ignore
+    from .runtime_state import is_task_cancel_requested, tasks as runtime_tasks  # type: ignore
     from .task_summary import get_last_run_summary  # type: ignore
     from .tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from .tool_completion import (  # type: ignore
@@ -70,6 +72,8 @@ try:
         is_answer_clarification_tool,
     )
 except ImportError:
+    from api_support import is_recovery_observation
+    from controller_tools import recovery_observation_tools
     from controller_prompts import DYNAMIC_CONTEXT_RULES
     from pipeline_plan_review import review_pipeline_plan
     from pipeline_step_control import StepProgress, completion_matches, step_handoff
@@ -97,7 +101,7 @@ except ImportError:
         blocked_memory_write_result,
         memory_permissions_from_human_request,
     )
-    from runtime_state import is_task_cancel_requested  # type: ignore
+    from runtime_state import is_task_cancel_requested, tasks as runtime_tasks  # type: ignore
     from task_summary import get_last_run_summary  # type: ignore
     from tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from tool_completion import (  # type: ignore
@@ -181,6 +185,7 @@ PIPELINE_TERMINAL_TOOL_NAMES = {"answer_text", "answer_report_failure"}
 PIPELINE_DEVICE_TOOL_NAMES = {"device_refresh_state", "device_check_runtime", "device_prepare_runtime"}
 PIPELINE_MEMORY_TOOL_NAMES = MEMORY_TOOL_NAMES
 PIPELINE_APP_WINDOW_ACTIONS = {
+    "list_dir": "list_dir",
     "web_focus": "web.focus",
     "web_tabs": "web.tabs",
     "web_read": "web.read",
@@ -1158,6 +1163,9 @@ async def run_pipeline_worker(
     })
 
     commands_log = []
+    recovery_only = bool(runtime_tasks.get(poll_task_id, {}).get("_action_outcome_unknown"))
+    if recovery_only:
+        worker_tools = recovery_observation_tools(worker_tools or DEFAULT_CONTROLLER_TOOLS)
     tool_schemas = {
         tool.get("function", {}).get("name"): tool
         for tool in [*DEVICE_TOOL_SCHEMAS, *DEFAULT_CONTROLLER_TOOLS, *(worker_tools or [])]
@@ -1218,7 +1226,7 @@ async def run_pipeline_worker(
             }
         if browser_answer_start is not None and iteration >= browser_answer_start + 2:
             break
-        if iteration and not browser_answer_phase:
+        if iteration and not browser_answer_phase and not recovery_only:
             decision, reason = progress_guard.observe(commands_log)
             if decision == "stop":
                 stop_reason = reason
@@ -1411,6 +1419,13 @@ async def run_pipeline_worker(
                 f" parameter_count={len(fn_args)} -> device={target_device}"
             )
 
+            if recovery_only and not is_recovery_observation(fn_name, fn_args):
+                entry = append_step_command(fn_name, "[blocked after unknown]", target_device,
+                    {"status": "blocked", "error": "mutation_blocked_after_unknown"}, status="blocked")
+                messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": serialize_tool_result_for_llm(entry)})
+                messages.append({"role": "user", "content": "Use only recovery observations or report partial; never repeat the possibly executed action."})
+                continue
+
             canonical_browser_tool = PIPELINE_APP_WINDOW_ACTIONS.get(fn_name, fn_name)
             if browser_policy.browser_only or shared.get("browser_page_seen") or canonical_browser_tool.startswith("web."):
                 allowed, reason = browser_policy.allows(canonical_browser_tool, target_device, fn_args)
@@ -1585,7 +1600,7 @@ async def run_pipeline_worker(
                         tool_result["missing_packages"] = command_error["missing_packages"]
 
                 append_step_command(fn_name, fn_args.get("command", ""), target_device, tool_result)
-                if tool_result.get('error') in {'confirmed_transport_outcome_unknown','confirmation_expired'}:
+                if tool_result.get('error') == 'confirmation_expired':
                     try:
                         from .run_journal import confirmed_unknown_answer
                     except ImportError:
@@ -1789,6 +1804,11 @@ async def run_pipeline_worker(
                 or commands_log[-1].get("action") != fn_name
             ):
                 append_step_command(fn_name, f"[tool] {fn_name}", target_device, tool_result)
+            if tool_result.get('error') == 'confirmed_transport_outcome_unknown':
+                recovery_only = True
+                worker_tools = recovery_observation_tools(worker_tools or DEFAULT_CONTROLLER_TOOLS)
+                tool_schemas.update({tool['function']['name']: tool for tool in worker_tools})
+                messages.append({"role": "user", "content": "Action outcome is unknown. Do not repeat it or use another mutating tool. Observe with recovery tools, or report partial."})
             if arg_warnings and isinstance(commands_log[-1].get("result"), dict):
                 existing_warnings = list(commands_log[-1]["result"].get("arg_warnings") or [])
                 commands_log[-1]["result"]["arg_warnings"] = existing_warnings + arg_warnings
@@ -1822,7 +1842,7 @@ async def run_pipeline_worker(
 
     if is_task_cancel_requested(poll_task_id):
         return {"status": "cancelled", "answer": "Остановлено пользователем.", "commands": commands_log}
-    if stop_reason == "iteration_limit" and not browser_answer_phase:
+    if stop_reason == "iteration_limit" and not browser_answer_phase and not recovery_only:
         decision, reason = progress_guard.observe(commands_log)
         if decision == "stop":
             stop_reason = reason

@@ -28,6 +28,33 @@ WRITE_CONTENT_DESCRIPTION = (
     "content_preview, and an OK/NO/ERROR-style summary."
 )
 
+
+RECOVERY_LIST_DIR = {"type": "function", "function": {
+    "name": "list_dir", "description": "Observe directory entries after an unknown action outcome; never repeat the action.",
+    "parameters": {"type": "object", "properties": {"path": {"type": "string"},
+                   "device_id": {"type": "string"}}, "required": ["path"]}}}
+
+
+def recovery_observation_tools(tools):
+    """Reuse existing observation tools and the agent's internal directory reader."""
+    from copy import deepcopy
+    try:
+        from .api_support import is_recovery_observation
+    except ImportError:
+        from api_support import is_recovery_observation
+    result = []
+    for tool in [*tools, RECOVERY_LIST_DIR]:
+        name = tool["function"]["name"]
+        if name == "window_control":
+            tool = deepcopy(tool)
+            tool["function"]["parameters"]["properties"]["action"]["enum"] = ["active", "list", "find", "monitors"]
+        elif not is_recovery_observation(name, {}) and name not in {
+                "answer_text", "answer_ask_clarification", "answer_report_failure"}:
+            continue
+        if not any(item["function"]["name"] == name for item in result):
+            result.append(tool)
+    return result
+
 TOOLS = [
     *DEVICE_TOOL_SCHEMAS,
     {
@@ -242,7 +269,7 @@ PLAN_TRACKING_TOOL_NAMES = {
 }
 NON_PIPELINE_TOOLS = [
     tool for tool in TOOLS
-    if tool["function"]["name"] not in PLAN_TRACKING_TOOL_NAMES
+    if tool["function"]["name"] not in PLAN_TRACKING_TOOL_NAMES | {"answer_request_confirmation"}
 ]
 
 WORKER_TOOL_NAMES = {

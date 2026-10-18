@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 import httpx
 
 try:
+    from .api_support import is_recovery_observation
+    from .controller_tools import recovery_observation_tools
     from . import database as db  # type: ignore
     from .answer_auditor import audit_answer_payload, answer_auditor_enabled  # type: ignore
     from .answer_repair import run_answer_only_repair_turn  # type: ignore
@@ -34,7 +36,7 @@ try:
         blocked_memory_write_result,
         memory_permissions_from_human_request,
     )
-    from .runtime_state import is_task_cancel_requested  # type: ignore
+    from .runtime_state import is_task_cancel_requested, tasks as runtime_tasks  # type: ignore
     from .task_summary import get_last_run_summary  # type: ignore
     from .tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from .tool_completion import (  # type: ignore
@@ -102,7 +104,7 @@ except ImportError:
         blocked_memory_write_result,
         memory_permissions_from_human_request,
     )
-    from runtime_state import is_task_cancel_requested  # type: ignore
+    from runtime_state import is_task_cancel_requested, tasks as runtime_tasks  # type: ignore
     from task_summary import get_last_run_summary  # type: ignore
     from tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from tool_completion import (  # type: ignore
@@ -195,6 +197,7 @@ def _allow_followup_after_terminal_sufficient(entry: dict | None, next_tool_name
 
 
 APP_WINDOW_ACTIONS = {
+    "list_dir": "list_dir",
     "web_focus": "web.focus",
     "web_tabs": "web.tabs",
     "web_read": "web.read",
@@ -282,6 +285,9 @@ async def process_non_pipeline_command(
         messages.extend(build_chat_messages(chat_history[:-1], filter_onboarding=True))
     messages.append({"role": "user", "content": user_message})
     commands_log = []
+    recovery_only = bool(runtime_tasks.get(poll_task_id, {}).get("_action_outcome_unknown"))
+    if recovery_only:
+        non_pipeline_tools = recovery_observation_tools(non_pipeline_tools or DEFAULT_CONTROLLER_TOOLS)
     tool_schemas = {
         tool.get("function", {}).get("name"): tool
         for tool in [*DEFAULT_CONTROLLER_TOOLS, *(non_pipeline_tools or [])]
@@ -642,6 +648,10 @@ async def process_non_pipeline_command(
                             "training_context": _training_context(device_info),
                         }
                     if is_answer_confirmation_tool(fn_name):
+                        if not any(tool.get("function", {}).get("name") == fn_name for tool in non_pipeline_tools):
+                            raise ProtocolValidationError(
+                                "Preview-only confirmation is not available in this worker toolset",
+                                "Call the concrete action tool with exact parameters. Runtime will wait for required confirmation and resume this Worker.")
                         payload = validate_answer_confirmation_payload(fn_args_preview, commands_log)
                         append_answer_step(
                             commands_log,
@@ -778,6 +788,13 @@ async def process_non_pipeline_command(
                     f"[llm] tool_call: {fn_name} parameter_count={len(fn_args)} "
                     f"-> device={target_device}"
                 )
+
+                if recovery_only and not is_recovery_observation(fn_name, fn_args):
+                    entry = append_entry(_command_log_entry(fn_name, "[blocked after unknown]", target_device,
+                        device_info, {"status": "blocked", "error": "mutation_blocked_after_unknown"}, iteration + 1))
+                    append_tool_message(tool_call["id"], entry)
+                    add_correction("The action may already have executed. Use only recovery observation tools or report a partial result; never repeat it.")
+                    continue
 
                 canonical_browser_tool = APP_WINDOW_ACTIONS.get(fn_name, fn_name)
                 if browser_only or browser_page_seen or canonical_browser_tool.startswith("web."):
@@ -1176,7 +1193,12 @@ async def process_non_pipeline_command(
                         tool_result,
                         iteration + 1,
                     ))
-                if tool_result.get('error') in {'confirmed_transport_outcome_unknown','confirmation_expired'}:
+                if tool_result.get('error') == 'confirmed_transport_outcome_unknown':
+                    recovery_only = True
+                    non_pipeline_tools = recovery_observation_tools(non_pipeline_tools or DEFAULT_CONTROLLER_TOOLS)
+                    tool_schemas.update({tool['function']['name']: tool for tool in non_pipeline_tools})
+                    add_correction("Action outcome is unknown. Do not repeat it or use another mutating tool. Observe with recovery tools, or report partial.")
+                if tool_result.get('error') == 'confirmation_expired':
                     try:
                         from .run_journal import confirmed_unknown_answer
                     except ImportError:

@@ -1,5 +1,7 @@
 import re
 import time
+import hashlib
+import json
 
 from fastapi import HTTPException, Request
 
@@ -110,6 +112,53 @@ def is_command_safe(command: str) -> bool:
 def needs_confirmation(command: str) -> bool:
     """Return True if the command should be user-confirmed."""
     return any(pattern.search(command) for pattern in _confirm_re)
+
+
+def action_fingerprint(action, params):
+    return hashlib.sha256(json.dumps([action, params], sort_keys=True, ensure_ascii=False,
+                                    separators=(",", ":")).encode()).hexdigest()
+
+
+def assess_action(action, params, inspection=None):
+    """Classify the existing command patterns; opaque code remains allowed.
+
+    inspection is reserved for trusted observations, never Worker-provided risk.
+    Script analysis and specialised-tool effect expansion are deliberately excluded.
+    """
+    command = str(params.get("command") or "") if action == "execute_cmd" else ""
+    denied = any(pattern.search(command) for pattern in _dangerous_re)
+    deletion = any(pattern.search(command) for pattern in _delete_re)
+    confirm = deletion or any(pattern.search(command) for pattern in _confirm_re)
+    decision = "DENY" if denied else "CONFIRM" if confirm else "ALLOW"
+    kind = "deletion" if deletion else "dangerous" if denied or confirm else "command"
+    return {"decision": decision, "reason_code": "command_forbidden" if denied else
+            "command_confirmation_required" if confirm else "allowed",
+            "findings": [{"kind": kind}] if denied or confirm else [],
+            "fingerprint": action_fingerprint(action, params),
+            "confirmation_channel": "button" if denied or confirm else "voice_or_button"}
+
+
+class ActionConfirmationRequired(RuntimeError):
+    def __init__(self, assessment):
+        super().__init__("CONFIRM_REQUIRED: Команда требует подтверждения пользователя.")
+        self.assessment = assessment
+
+
+def is_recovery_observation(action, params):
+    """Known observations only; shell/launch and Worker risk labels prove nothing."""
+    try:
+        from .tool_registry import canonical_tool_name
+    except ImportError:
+        from tool_registry import canonical_tool_name
+    action = canonical_tool_name(action)
+    if action == "window.control":
+        return params.get("action") in {"active", "list", "find", "monitors"}
+    if action == "device.refresh_state":
+        return params.get("mode", "snapshot") == "snapshot"
+    return action in {"list_dir", "get_file_content", "device.get_cached_passport", "device.get_passport",
+                      "window.list", "window.find", "window.verify", "app.verify_launch",
+                      "web.tabs", "web.read", "web.elements", "web.wait", "memory.get_stats",
+                      "memory.list_facts", "system.list_tools", "system.get_last_run_summary"}
 
 
 def get_current_user(request: Request) -> dict:

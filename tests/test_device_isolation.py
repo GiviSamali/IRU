@@ -108,7 +108,7 @@ def setup_broadcast(monkeypatch, failures=(), confirmation=False):
     monkeypatch.setattr(rt, "get_messages", lambda *a, **kw: [{"role": "assistant", "content": "/home/alice/private"}])
     monkeypatch.setattr(rt, "add_message", lambda *a, **kw: None)
     async def send(target, action, params, **kw):
-        if confirmation and not kw.get("skip_confirm"):
+        if confirmation and not kw.get("confirmation"):
             raise RuntimeError("CONFIRM_REQUIRED")
         sent.append((target, params["command"]))
         return {"returncode": 1 if target[-1] in failures else 0, "stdout": target}
@@ -145,6 +145,8 @@ def test_broadcast_confirmation_resumes_same_device_or_cancels(monkeypatch, owne
     seen, sent = setup_broadcast(monkeypatch, confirmation=True)
     monkeypatch.setattr(routes, "get_current_user", lambda request: {"id": 1})
     async def run():
+        import time
+        rt.tasks["broadcast"]["created_at"] = time.time()
         work = asyncio.create_task(rt.run_nl_task("broadcast", 1, "list desktop", ["1:a", "1:b"], 1))
         for did in ("a", "b"):
             for _ in range(100):
@@ -154,7 +156,7 @@ def test_broadcast_confirmation_resumes_same_device_or_cancels(monkeypatch, owne
             if cancel:
                 await routes.api_cancel_task("broadcast", None)
                 break
-            await routes.api_confirm_task("broadcast", None)
+            await routes.api_confirm_task("broadcast", None, confirmation_id=rt.tasks["broadcast"]["confirm_data"]["confirmation_id"])
         await asyncio.wait_for(work, 3)
     asyncio.run(run())
     assert seen == (["a"] if cancel else ["a", "b"])

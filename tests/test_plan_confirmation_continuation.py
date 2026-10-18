@@ -109,7 +109,7 @@ def test_three_step_plan_survives_confirmation_with_same_task_and_context(monkey
         return {"choices": [{"message": {"tool_calls": [call]}}]}
     async def send(device, action, params, **kwargs):
         command = params["command"]
-        if command == "probe" and not kwargs.get("skip_confirm"):
+        if command == "probe" and not kwargs.get("confirmation"):
             raise RuntimeError("CONFIRM_REQUIRED")
         # Both the UI task and the whole pipeline must still be running here.
         assert runtime.tasks[tid]["status"] == "running"
