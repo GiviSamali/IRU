@@ -2,7 +2,11 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>IRU</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="IRU — экспериментальный ИИ-ассистент для подключённых компьютеров: текстовый и голосовой диалог, поручения, PLAN, инструменты и проверяемые результаты.">
+    <meta property="og:title" content="IRU — ИИ-ассистент для компьютера">
+    <meta property="og:description" content="Общение, поручения на подключённых устройствах и прозрачные результаты. Экспериментальная бета IRU.">
+    <title>IRU — ИИ-ассистент для компьютера</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
@@ -147,80 +151,84 @@
                 <img src="assets/IruIcon.ico" alt="Логотип ИРУ" class="hero-logo">
             </div>
             <div class="hero-text">
-                <span class="hero-top-text">AgentOS для компьютеров</span>
+                <span class="hero-top-text">ИИ-ассистент для подключённых компьютеров</span>
                 <h1 class="hero-title">
                     <span>ПК, которому</span>
                     <span>можно ставить</span>
                     <span class="accent">задачи.</span>
                 </h1>
-                <p>ИРУ соединяет сервер, локальных агентов, инструменты, память, Device Passport и человека-оператора в одну управляемую экосистему.</p>
+                <p>Общайтесь с ИРУ текстом или голосом, поручайте действия на подключённых устройствах и получайте результаты с историей выполнения. За диалогом работают Orchestrator, очередь Worker, инструменты и проверка фактического результата.</p>
             </div>
             <div class="hero-system-strip" aria-label="Связанные узлы ИРУ">
-                <span>Server</span>
-                <span>Local Agent</span>
-                <span>Tools</span>
-                <span>Memory</span>
-                <span>Devices</span>
-                <span>Human Operator</span>
+                <span>Диалог</span>
+                <span>Orchestrator</span>
+                <span>Worker</span>
+                <span>PLAN</span>
+                <span>Устройства</span>
+                <span>Результат</span>
             </div>
             <div class="hero-actions">
-                <a href="https://irumode.ru" class="hero-cta">Перейти на irumode.ru</a>
+                <a href="https://irumode.ru" class="hero-cta">Открыть IRU Web UI</a>
             </div>
         </div>
     </section>
     <section class="benefits">
         <div class="benefits-inner">
-            <h2 class="benefits-title">Один организм управления</h2>
+            <h2 class="benefits-title">Что умеет IRU сейчас</h2>
             <div class="benefits-grid">
                 <div class="benefit-card">
-                    <h3>Локальный агент владеет состоянием</h3>
-                    <p>Устройство хранит свой паспорт, runtime, snapshot и локальный cache. Сервер оркестрирует, но не притворяется владельцем локальной правды.</p>
+                    <h3>Разговор текстом и голосом</h3>
+                    <p>Чат и голосовой цикл с обращением «Иру» и командой «усни». Распознавание зависит от браузера и речевого сервиса, озвучивание — от настроенного TTS.</p>
                 </div>
                 <div class="benefit-card">
-                    <h3>Видимые инструменты и evidence</h3>
-                    <p>Каждое действие проходит через tool-only протокол, журнал шагов и used tools. Ответы о реальном мире опираются на текущие наблюдения.</p>
+                    <h3>Поручения и очередь</h3>
+                    <p>Orchestrator различает разговор и задачу. Scheduler передаёт поручения Worker и ставит следующие в очередь. Принятая задача ещё не означает выполненную.</p>
                 </div>
                 <div class="benefit-card">
-                    <h3>Pipeline, Stop и контроль</h3>
-                    <p>ИРУ может строить шаги, показывать прогресс, останавливать выполнение и честно сообщать, где есть результат, а где нужна проверка.</p>
+                    <h3>PLAN и несколько устройств</h3>
+                    <p>PLAN разбивает сложную задачу на шаги с согласованием. Broadcast позволяет распределять работу по подключённым устройствам — с учётом их доступности и полномочий.</p>
+                </div>
+                <div class="benefit-card">
+                    <h3>Инструменты на компьютере</h3>
+                    <p>Файлы, приложения, окна и системные команды через локального агента. Основной сценарий — Windows; есть Linux-агент. Действия в браузере требуют отдельного Browser Bridge.</p>
+                </div>
+                <div class="benefit-card">
+                    <h3>Память и состояние</h3>
+                    <p>История диалога, сохранённые факты, задачи и Device Passport помогают учитывать контекст. Кэш устройства не подменяет свежие наблюдения.</p>
+                </div>
+                <div class="benefit-card">
+                    <h3>Проверка результата</h3>
+                    <p>Журнал инструментов, доказательства, квитанции и Worker Report позволяют посмотреть, что произошло. Если цель не подтверждена, IRU должна обозначить неопределённость.</p>
                 </div>
             </div>
         </div>
     </section>
     <section class="audience">
         <div class="audience-inner">
-            <h2 class="audience-title">ИРУ подходит</h2>
+            <h2 class="audience-title">Для каких задач создаётся IRU</h2>
         </div>
         <div class="audience-marquee audience-marquee--top">
-            <span>Сисадмин</span><span>Разработчик</span><span>Фрилансер</span><span>IT‑поддержка</span>
-            <span>Сын в другом городе</span><span>DevOps</span><span>Power‑user</span>
-            <span>Удалённый админ</span><span>Настройка ПК для родных</span>
-            <span>Админ малого бизнеса</span><span>Инженер по автоматизации</span>
-            <span>Админ школы</span><span>Админ университета</span>
-            <span>Админ в госкомпании</span><span>Техспециалист на аутсорсе</span>
+            <span>Работа с файлами</span><span>Поиск информации на ПК</span><span>Состояние устройства</span>
+            <span>Создание документов</span><span>Рабочие папки</span><span>Запуск приложений</span>
+            <span>Повседневные задачи</span><span>Автоматизация рутины</span>
         </div>
         <div class="audience-marquee audience-marquee--middle">
-            <span>Техподдержка</span><span>Тимлид</span><span>IT‑инфраструктура</span>
-            <span>Домашний ПК</span><span>Удалённая работа</span><span>Малый бизнес</span>
-            <span>Офисный ноутбук</span><span>Сервер в дата‑центре</span>
-            <span>Ноутбук на работе</span><span>ПК родителей</span>
-            <span>ПК в другом городе</span><span>Рабочий ноутбук в офисе</span>
-            <span>Компьютер на даче</span><span>ПК ребёнка</span><span>ПК в кабинете директора</span>
+            <span>Разработчики</span><span>Технические пользователи</span><span>Личный компьютер</span>
+            <span>Несколько своих устройств</span><span>Домашняя экосистема</span><span>Удалённый компьютер</span>
+            <span>Ноутбук и рабочая станция</span><span>Эксперименты с агентами</span>
         </div>
         <div class="audience-marquee audience-marquee--bottom">
-            <span>IT‑админ</span><span>Инженер</span><span>Гейминг‑ПК</span>
-            <span>Ноутбук в офисе</span><span>Сервер</span><span>Рабочая станция</span>
-            <span>Helpdesk</span><span>Техдиректор</span><span>Старший админ</span>
-            <span>Сетевой инженер</span><span>DevRel</span><span>Security‑инженер</span>
-            <span>IT‑консультант</span><span>Админ филиала</span><span>Дежурный по смене</span>
+            <span>Диалог с ПК</span><span>Голосовые поручения</span><span>PLAN</span>
+            <span>Broadcast</span><span>Очередь задач</span><span>Инструменты Windows</span>
+            <span>Linux-агент</span><span>Browser Bridge</span><span>Проверка результата</span>
         </div>
     </section>
 
     <!-- ── ARCHITECTURE DIAGRAM ── -->
     <section class="arch-section">
         <div class="arch-inner">
-            <h2 class="arch-title">Как работает ИРУ</h2>
-            <p class="arch-subtitle">Наведите на узел — увидите подробности</p>
+            <h2 class="arch-title">Как IRU подключается к устройству</h2>
+            <p class="arch-subtitle">Упрощённая сетевая схема: Web UI → сервер → локальный агент → ОС. Внутри сервера работают Orchestrator, Scheduler, Worker и проверка результата. Наведите на узел для деталей.</p>
             <div class="arch-canvas-wrap">
                 <canvas id="arch-canvas" height="560"></canvas>
                 <div class="arch-tooltip" id="arch-tooltip"></div>
@@ -244,26 +252,27 @@
 
     <section class="cta-bottom">
         <div class="cta-inner">
-            <h2 class="cta-title">Подключите первый узел экосистемы</h2>
-            <p class="cta-text">Установите локального агента на Windows 10 или 11, активируйте устройство и управляйте задачами через Web UI с видимыми инструментами, паспортом устройства и журналом действий.</p>
-            <button class="cta-button" onclick="window.scrollTo({ top: 0, behavior: 'smooth' });">Вернуться к скачиванию</button>
+            <h2 class="cta-title">Попробуйте IRU на своём компьютере</h2>
+            <p class="cta-text">Откройте веб-интерфейс IRU, подключите локального агента на Windows и попробуйте простое поручение: узнать состояние компьютера или найти файл. Подтверждайте рискованные операции и проверяйте их результаты.</p>
+            <p class="cta-note">IRU — экспериментальная бета-версия для тестирования. Возможности зависят от версии агента, доступности устройств и настроенных сервисов.</p>
+            <a class="cta-button" href="https://irumode.ru">Открыть IRU Web UI</a>
         </div>
     </section>
     <section class="security">
         <div class="security-inner">
-            <h2 class="security-title">Контроль, журнал и границы</h2>
+            <h2 class="security-title">Контроль и границы возможностей</h2>
             <div class="security-grid">
                 <div class="security-item">
-                    <h3>Почему это не обычный чат-бот?</h3>
-                    <p>ИРУ выбирает typed tools, получает результат, пишет шаг в журнал и только потом формирует ответ. Старый контекст помогает понять задачу, но не является evidence.</p>
+                    <h3>Чат — не доказательство действия</h3>
+                    <p>IRU использует разрешённые инструменты и журнал выполнения. Внешние факты требуют текущих наблюдений и проверки цели: уверенный ответ модели не заменяет результат.</p>
                 </div>
                 <div class="security-item">
-                    <h3>Кто принимает финальное решение?</h3>
-                    <p>Человек остаётся оператором. ИРУ выполняет управляемые действия, показывает used tools, умеет ждать подтверждение и может быть остановлена кнопкой Stop.</p>
+                    <h3>Полномочия и подтверждения</h3>
+                    <p>Доступ ограничен аккаунтом и устройством. Для рискованных операций предусмотрены подтверждения. Stop запрашивает отмену, но текущий инструмент может завершиться не сразу.</p>
                 </div>
                 <div class="security-item">
-                    <h3>Что делает локальный агент?</h3>
-                    <p>Агент работает на устройстве, выполняет file/window/app/runtime tools, обновляет Device Passport и возвращает серверу проверяемые результаты вместо догадок.</p>
+                    <h3>Экспериментальная бета-версия</h3>
+                    <p>IRU активно разрабатывается и тестируется. Это не готовая корпоративная система безопасности и не исполнитель любых команд. Полноценная sandbox и саморасширение — направление развития.</p>
                 </div>
             </div>
         </div>
@@ -274,18 +283,18 @@
                 <div class="founder-copy">
                     <span class="founder-eyebrow">Создатель / оператор экосистемы</span>
                     <h2 class="founder-title">Руслан Сайгушкин</h2>
-                    <p class="founder-lead">Я строю ИРУ как AgentOS: систему, где сервер оркестрирует, локальный агент владеет состоянием устройства, а каждое действие проходит через инструменты и остаётся видимым.</p>
-                    <p class="founder-secondary">Моя цель — не ещё один чат-бот. Я собираю управляемую экосистему для компьютеров: с Device Passport, памятью, pipeline, кнопкой Stop, журналом used tools и будущими пользовательскими инструментами.</p>
+                    <p class="founder-lead">Я развиваю ИРУ как управляемого ИИ-ассистента: человек общается с системой, Orchestrator понимает запрос, Worker выполняет разрешённые действия на устройствах, а проверка результата отделяется от слов модели.</p>
+                    <p class="founder-secondary">Моя цель — не ещё один чат-бот, а личная экосистема работы с устройствами. Уже существуют голосовой и текстовый интерфейсы, Scheduler, PLAN, Broadcast, Device Passport и журнал операций; безопасное расширение инструментов — следующий шаг.</p>
                     <div class="founder-chips" aria-label="Модули экосистемы ИРУ">
-                        <span>AgentOS</span>
-                        <span>Local Agent</span>
-                        <span>Tool Registry</span>
-                        <span>Evidence</span>
+                        <span>Orchestrator</span>
+                        <span>Worker</span>
+                        <span>Scheduler</span>
+                        <span>Voice</span>
+                        <span>PLAN</span>
+                        <span>Broadcast</span>
                         <span>Device Passport</span>
-                        <span>Memory</span>
-                        <span>Pipeline</span>
-                        <span>Stop</span>
-                        <span>Sandbox / Review / Test</span>
+                        <span>Browser Bridge</span>
+                        <span>Worker Report</span>
                     </div>
                     <div class="founder-actions">
                         <a href="https://t.me/chat_IRU" target="_blank" rel="noopener noreferrer">Следить за развитием</a>
@@ -297,7 +306,7 @@
                     <img class="founder-portrait-image" src="assets/founder/i_fon.jpg" alt="Руслан Сайгушкин">
                     <div class="founder-status">
                         <span class="status-dot"></span>
-                        <span>Разработка AgentOS / локальных агентов / прозрачной автоматизации ПК</span>
+                        <span>Экспериментальная бета · ИИ-ассистент и автоматизация подключённых ПК</span>
                     </div>
                 </div>
             </div>
@@ -306,17 +315,17 @@
                 <div class="founder-node">
                     <span class="node-kicker">ядро</span>
                     <h3>ИРУ / AgentOS</h3>
-                    <p>Прототип управляемой экосистемы, где задачи проходят через сервер, локального агента, инструменты и evidence.</p>
+                    <p>Диалог и маршрутизация намерений, Worker, инструменты и отчёты о подтверждённом результате в одной экосистеме.</p>
                 </div>
                 <div class="founder-node">
                     <span class="node-kicker">устройство</span>
                     <h3>Локальный агент</h3>
-                    <p>Направление разработки для владения локальным состоянием, runtime, Device Passport и действиями на ПК.</p>
+                    <p>Действующий локальный агент для операций и состояния устройства. Windows — основной сценарий, есть и Linux-реализация.</p>
                 </div>
                 <div class="founder-node">
                     <span class="node-kicker">протокол</span>
                     <h3>Tool-only protocol</h3>
-                    <p>Экспериментальный слой, где обычный ответ тоже является tool, а реальные утверждения требуют basis.</p>
+                    <p>Для исполнительных задач предусмотрены инструментальный протокол, журнал и структурированный конечный ответ с основаниями.</p>
                 </div>
                 <div class="founder-node">
                     <span class="node-kicker">desktop</span>
@@ -326,17 +335,17 @@
                 <div class="founder-node">
                     <span class="node-kicker">работа</span>
                     <h3>Документные и офисные сценарии</h3>
-                    <p>Прототипы задач для файлов, Word/Excel-планов, проектов на рабочем столе и честной проверки результата.</p>
+                    <p>Сценарии работы с файлами и документами; возможности офисных приложений зависят от инструментов и окружения ПК.</p>
                 </div>
                 <div class="founder-node">
                     <span class="node-kicker">ПК</span>
                     <h3>Автоматизация ПК</h3>
-                    <p>Разработка typed tools для файлов, приложений, окон, runtime и наблюдаемого запуска GUI-приложений.</p>
+                    <p>Инструменты для файлов, команд, приложений и окон; Browser Bridge расширяет действия на вкладки браузера при отдельном подключении.</p>
                 </div>
                 <div class="founder-node founder-node-wide">
                     <span class="node-kicker">следующий слой</span>
                     <h3>User tools / sandbox future</h3>
-                    <p>Направление для пользовательских инструментов, review/test контуров и более безопасного расширения возможностей ИРУ.</p>
+                    <p>Планируемое развитие пользовательских инструментов и изолированных проверок. Sandbox и саморасширение пока не заявлены готовыми.</p>
                 </div>
             </div>
 
@@ -394,9 +403,9 @@
     let W, H, dpr;
 
     const NODES = [
-        { id: 'user',   label: 'Браузер / Телефон', sublabel: 'Вы',                  icon: '🖥',  xr: 0.08, yr: 0.46, color: '#00d4ff', tip: 'Веб-интерфейс · любое устройство\nJWT авторизация · HTTPS' },
+        { id: 'user',   label: 'Web UI',           sublabel: 'Браузер / телефон',                  icon: '🖥',  xr: 0.08, yr: 0.46, color: '#00d4ff', tip: 'Web UI и мобильный браузер\nДоступ через HTTPS и авторизацию' },
         { id: 'caddy',  label: 'Caddy',             sublabel: 'Reverse Proxy + SSL', icon: '🔒',  xr: 0.33, yr: 0.46, color: '#00d4ff', tip: 'Терминирует TLS/SSL\nПроксирует на FastAPI :8000\nАвтоматический HTTPS-сертификат' },
-        { id: 'server', label: 'FastAPI',           sublabel: 'Сервер на VPS',       icon: '⚡',  xr: 0.58, yr: 0.46, color: '#00d4ff', tip: 'FastAPI + Uvicorn · порт 8000\nDeepSeek LLM · SQLite\nJWT · WebSocket-хаб · Rate Limiting' },
+        { id: 'server', label: 'FastAPI',           sublabel: 'Оркестрация',       icon: '⚡',  xr: 0.58, yr: 0.46, color: '#00d4ff', tip: 'Orchestrator → Scheduler → Worker\nLLM, инструменты, Worker Report\nSQLite · JWT · WebSocket' },
         { id: 'agent',  label: 'Агент ИРУ',         sublabel: 'Windows / Linux ПК',  icon: '🤖',  xr: 0.82, yr: 0.46, color: '#00ff9d', tip: 'agent.py · Python\nПостоянное WebSocket-соединение\nHeartbeat · автообновление' },
         { id: 'os',     label: 'ОС',                sublabel: 'PowerShell / bash',   icon: '⚙',  xr: 0.82, yr: 0.80, color: '#ff6b35', tip: 'PowerShell (Windows)\nbash (Linux)\nWMI · системные вызовы' },
     ];

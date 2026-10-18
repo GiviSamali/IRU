@@ -1250,3 +1250,7 @@ main .hero {
         transform: none !important;
     }
 }
+
+/* The secondary CTA now navigates to the existing IRU web interface. */
+.cta-button { display: inline-block; text-decoration: none; }
+.cta-note { max-width: 760px; margin: 0 auto 22px; color: rgba(255,255,255,.58); font-size: 13px; line-height: 1.65; }
