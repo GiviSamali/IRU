@@ -720,6 +720,7 @@ function renderMessages() {
     });
     for(const node of current.values())node.remove();
   } else container.innerHTML = html;
+  if(compact)window.IRUOperations?.syncSurfaceCommand();
   restoreMessagePresentation(container, presentation, scrollContainer);
   updateStopButton();
 }

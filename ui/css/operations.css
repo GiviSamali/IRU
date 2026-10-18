@@ -119,6 +119,17 @@
 .iru-mini .app .surface-operation .smart-task-heading { flex-direction:column; gap:5px; }
 .iru-mini .app .surface-operation .smart-status { max-width:none; }
 .iru-mini .app .surface-operation-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.iru-mini .app .msg.user.surface-command-duplicate { display:none; }
+.iru-mini .app .surface-operation-brief {
+  display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px;
+  padding:4px 0; border:0; border-radius:0; background:transparent;
+}
+.iru-mini .app .surface-operation-brief > .smart-blocks { flex:1; min-width:0; }
+.iru-mini .app .surface-operation-brief .smart-task-heading { flex-direction:row; align-items:baseline; gap:8px; }
+.iru-mini .app .surface-operation-brief .smart-task-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.iru-mini .app .surface-operation-brief .surface-operation-actions { margin-top:0; }
+.iru-mini .app .surface-operation-brief .smart-task-summary { display:none; }
+.iru-mini .app .surface-operation[data-attention="true"] .surface-operation-actions > [data-operation="surface-toggle"] { display:none; }
 .iru-mini .app #adaptiveQueue { padding:6px 10px; border-left:2px solid var(--accent); color:var(--text-muted); font-size:12px; overflow-wrap:anywhere; }
 .iru-mini .app .msg-worker-result .smart-text.collapsible:not(.expanded) .smart-text-content {
   display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden;
