@@ -565,9 +565,9 @@ function renderMessageActions(m, mi) {
   return confirmBtns + suggestHTML + planHTML + cancel;
 }
 
-function captureMessagePresentation(container) {
-  const snapshot = { top:container.scrollTop, bottom:container.scrollHeight-container.scrollTop-container.clientHeight < 48, open:[], edits:[], focus:document.activeElement?.id };
-  const bounds = container.getBoundingClientRect();
+function captureMessagePresentation(container, scrollContainer = container) {
+  const snapshot = { top:scrollContainer.scrollTop, bottom:scrollContainer.scrollHeight-scrollContainer.scrollTop-scrollContainer.clientHeight < 48, open:[], edits:[], focus:document.activeElement?.id };
+  const bounds = scrollContainer.getBoundingClientRect();
   for (const message of container.querySelectorAll('[data-message-key]')) {
     const rect = message.getBoundingClientRect();
     if (!snapshot.anchor && rect.bottom > bounds.top) snapshot.anchor = { key:message.dataset.messageKey, offset:rect.top-bounds.top };
@@ -581,7 +581,7 @@ function captureMessagePresentation(container) {
   return snapshot;
 }
 
-function restoreMessagePresentation(container, snapshot) {
+function restoreMessagePresentation(container, snapshot, scrollContainer = container) {
   const messages = [...container.querySelectorAll('[data-message-key]')];
   for (const item of snapshot.open) {
     const node = messages.find(message => message.dataset.messageKey === item.key)?.querySelectorAll(item.selector)[item.index];
@@ -591,11 +591,11 @@ function restoreMessagePresentation(container, snapshot) {
     const node = document.getElementById(edit.id);
     if (node) { node.value=edit.value; node.parentElement.hidden=edit.hidden; if (snapshot.focus===edit.id) { node.focus({preventScroll:true}); node.setSelectionRange(edit.start,edit.end); } }
   }
-  if (snapshot.bottom) container.scrollTop = container.scrollHeight;
+  if (snapshot.bottom) scrollContainer.scrollTop = scrollContainer.scrollHeight;
   else {
     const anchor = messages.find(message => message.dataset.messageKey === snapshot.anchor?.key);
-    if (anchor) container.scrollTop += anchor.getBoundingClientRect().top-container.getBoundingClientRect().top-snapshot.anchor.offset;
-    else container.scrollTop = snapshot.top;
+    if (anchor) scrollContainer.scrollTop += anchor.getBoundingClientRect().top-scrollContainer.getBoundingClientRect().top-snapshot.anchor.offset;
+    else scrollContainer.scrollTop = snapshot.top;
   }
 }
 
@@ -640,8 +640,10 @@ function adaptiveMessageIndexes() {
 function renderMessages() {
   window.IRUOperations?.contextChanged();
   const compact=document.documentElement.classList.contains('iru-mini');
-  const container = document.getElementById('adaptiveConversation') || document.getElementById('chatMessages');
-  const presentation = captureMessagePresentation(container);
+  // Compact messages render inside a wrapper, but the shared chat viewport scrolls.
+  const scrollContainer = document.getElementById('chatMessages');
+  const container = document.getElementById('adaptiveConversation') || scrollContainer;
+  const presentation = captureMessagePresentation(container, scrollContainer);
 
   if (state.messages.length === 0) {
     const hasDevices = Object.keys(state.devices).length > 0;
@@ -715,7 +717,7 @@ function renderMessages() {
     });
     for(const node of current.values())node.remove();
   } else container.innerHTML = html;
-  restoreMessagePresentation(container, presentation);
+  restoreMessagePresentation(container, presentation, scrollContainer);
   updateStopButton();
 }
 
