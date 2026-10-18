@@ -38,6 +38,10 @@ class IruMainWindow(QtWidgets.QMainWindow):
         self._surface_measurement_pending = False
         self._surface_candidate = None
         self._interactive_size = None
+        self._surface_animation = QtCore.QVariantAnimation(self)
+        self._surface_animation.setDuration(190)
+        self._surface_animation.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+        self._surface_animation.valueChanged.connect(self._apply_surface_size)
         self._surface_timer = QtCore.QTimer(self)
         self._surface_timer.setInterval(400)
         self._surface_timer.timeout.connect(self._measure_surface)
@@ -47,6 +51,7 @@ class IruMainWindow(QtWidgets.QMainWindow):
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(300)
         self._save_timer.timeout.connect(self._save_geometry)
+        self._surface_animation.finished.connect(self._save_timer.start)
         self.setMinimumSize(320, 160)
         self.resize(360, 400)
 
@@ -164,6 +169,7 @@ class IruMainWindow(QtWidgets.QMainWindow):
     def set_compact(self, compact):
         if self.is_compact == compact:
             return
+        self._surface_animation.stop()
         self._remember_geometry()
         self._changing_geometry = True
         try:
@@ -187,6 +193,8 @@ class IruMainWindow(QtWidgets.QMainWindow):
 
     def changeEvent(self, event):
         super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.WindowStateChange and hasattr(self, "_surface_animation"):
+            self._surface_animation.stop()
         if (event.type() == QtCore.QEvent.Type.WindowStateChange
                 and self.isMaximized() and getattr(self, "is_compact", False)
                 and not getattr(self, "_changing_geometry", False)):
@@ -202,10 +210,16 @@ class IruMainWindow(QtWidgets.QMainWindow):
         super().showEvent(event)
         self._schedule_clamp()
 
+    def hideEvent(self, event):
+        self._surface_animation.stop()
+        super().hideEvent(event)
+
     def nativeEvent(self, event_type, message):
         if os.name == "nt":
             msg = wintypes.MSG.from_address(int(message))
             if msg.message == 0x0231:  # WM_ENTERSIZEMOVE, real title-bar interaction
+                self._surface_animation.stop()
+                self._surface_candidate = None
                 self._interactive_size = self.size()
             elif msg.message == 0x0214 and self.is_compact:  # WM_SIZING, never programmatic resize
                 self._surface_manual = True
@@ -228,8 +242,18 @@ class IruMainWindow(QtWidgets.QMainWindow):
         self.set_compact(True)
         self._measure_surface()
 
+    def _apply_surface_size(self, size):
+        changing = self._changing_geometry
+        self._changing_geometry = True
+        try:
+            self.resize(size)
+            self.clamp_to_screen()
+        finally:
+            self._changing_geometry = changing
+
     def _measure_surface(self):
         if (not self.is_compact or self._surface_manual or self._surface_measurement_pending
+                or self._surface_animation.state() == QtCore.QAbstractAnimation.State.Running
                 or self._interactive_size is not None or not self.isVisible()
                 or self.isMinimized() or self.isMaximized() or self.web_view is None):
             return
@@ -256,15 +280,19 @@ class IruMainWindow(QtWidgets.QMainWindow):
             if abs(target - self.height()) < 8 or target < self.height() and value["hold"]:
                 self._surface_candidate = None
                 return
-            if self._surface_candidate != target:
+            urgent = value.get("urgent") is True
+            if self._surface_candidate != target and not urgent:
                 self._surface_candidate = target
                 return  # two stable observations, no resize feedback loop
-            self._changing_geometry = True
-            try:
-                self.resize(min(self.width(), max(320, int(area.width() * .85))), target)
-                self.clamp_to_screen()
-            finally:
-                self._changing_geometry = False
+            size = QtCore.QSize(min(self.width(), max(320, int(area.width() * .85))), target)
+            self._save_timer.stop()
+            if urgent:
+                # Confirmation/input controls must not wait for a visual transition.
+                self._apply_surface_size(size)
+            else:
+                self._surface_animation.setStartValue(self.size())
+                self._surface_animation.setEndValue(size)
+                self._surface_animation.start()
             self._surface_candidate = None
 
         self.web_view.measure_surface(measured)
@@ -302,6 +330,7 @@ class IruMainWindow(QtWidgets.QMainWindow):
         self.activateWindow()
 
     def closeEvent(self, event):
+        self._surface_animation.stop()
         self._save_geometry()
         if self.tray_available:
             event.ignore()
@@ -347,6 +376,7 @@ class IruMainWindow(QtWidgets.QMainWindow):
         self._set_notice(f"Голос: {reason} ({code if code in reasons else 'unknown'}). Подробности в логе агента.")
 
     def dispose_browser(self):
+        self._surface_animation.stop()
         self._surface_timer.stop()
         self._save_timer.stop()
         self._save_geometry()

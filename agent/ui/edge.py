@@ -381,8 +381,10 @@ class EdgeWebView(QtWidgets.QWidget):
           if (!body.getClientRects().length || !input.getClientRects().length) return null;
           const selection=window.getSelection();
           const editing=document.activeElement?.matches('textarea,input') && Boolean(document.activeElement.value);
+          const urgent=Array.from(body.querySelectorAll('.confirm-actions, [data-surface-attention="true"]'))
+            .some(node=>node.getClientRects().length);
           return {version:1, height:Math.ceil(body.getBoundingClientRect().height + input.getBoundingClientRect().height + 24),
-            viewport:window.innerHeight, hold:Boolean(editing || selection && !selection.isCollapsed)};
+            viewport:window.innerHeight, urgent, hold:Boolean(editing || urgent || selection && !selection.isCollapsed)};
         })()""".replace("SITE", site)
         try:
             self.evaluate(script, measured, timeout=2)

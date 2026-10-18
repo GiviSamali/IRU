@@ -85,6 +85,14 @@
 }
 .iru-mini .app .voice-btn svg,
 .iru-mini .app .btn-send svg { width: 16px; height: 16px; }
+.iru-mini .app .btn-stop-task {
+  width: 28px; height: 28px; min-width: 28px; min-height: 28px;
+  padding: 0; font-size: 0;
+}
+.iru-mini .app .btn-stop-task::before {
+  content: ''; width: 10px; height: 10px; border-radius: 2px;
+  background: currentColor;
+}
 .iru-mini .app .chat-welcome { min-height: 0; padding: 10px; }
 .iru-mini .app .chat-welcome img { display: none; }
 
