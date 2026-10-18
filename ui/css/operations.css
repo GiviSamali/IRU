@@ -59,16 +59,21 @@
 .iru-mini .app .char-count,
 .iru-mini .app .mobile-plus-popover { display: none !important; }
 
-.iru-mini .app .chat-messages { padding: 10px 12px; gap: 12px; scroll-padding-bottom: 10px; }
-.iru-mini .app .msg { width: 100% !important; margin: 0 !important; }
-.iru-mini .app .msg + .msg {
-  border-top: 1px solid rgba(173, 194, 211, 0.12); padding-top: 10px;
-}
+/* Compact surface: command and response are prose, not messenger bubbles. */
+.iru-mini .app .chat-messages { padding: 8px 10px; gap: 8px; scroll-padding-bottom: 8px; }
+.iru-mini .app .msg { width: 100% !important; margin: 0 !important; gap: 0; align-items: stretch; }
+.iru-mini .app .msg-role { display: none !important; }
+.iru-mini .app .msg + .msg { border: 0; padding-top: 0; }
 .iru-mini .app .chat-view .msg .msg-body {
   width: 100% !important; max-width: none !important;
   padding: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none;
   font-size: 13px; line-height: 1.55;
 }
+.iru-mini .app .msg .smart-text-content { font-family: "Segoe UI", system-ui, sans-serif; }
+.iru-mini .app .msg.user .smart-text-content { color: var(--text-muted); font-size: 12px; font-weight: 400; line-height: 1.45; }
+.iru-mini .app .msg.assistant .smart-text-content.formatted { line-height: 1.5; }
+.iru-mini .app .msg.assistant .smart-text-content.formatted p:not(:last-child) { margin-bottom: 8px; }
+.iru-mini .app .msg .smart-blocks { gap: 8px; }
 .iru-mini .app .smart-text.collapsible:not(.expanded) .smart-text-content {
   display: block; -webkit-line-clamp: unset; overflow: visible;
 }
@@ -101,8 +106,8 @@
 .iru-mini .app .content { flex-wrap:nowrap; }
 .iru-mini .app .content > .chat-view { flex:1 1 0; width:100%; height:100%; }
 .iru-mini .app .chat-messages { display:block; overflow:auto; }
-#adaptiveBody { display:flex; flex-direction:column; gap:12px; min-width:0; }
-#adaptiveConversation { display:flex; flex-direction:column; gap:12px; min-width:0; }
+.iru-mini .app #adaptiveBody { display:flex; flex-direction:column; gap:10px; min-width:0; }
+.iru-mini .app #adaptiveConversation { display:flex; flex-direction:column; gap:8px; min-width:0; }
 .iru-mini .app .operation-mirror {
   position:static; width:auto; flex:none; overflow:visible; border:0;
   background:transparent; box-shadow:none; backdrop-filter:none;
