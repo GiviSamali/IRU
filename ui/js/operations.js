@@ -52,6 +52,13 @@ window.IRUOperations = (() => {
     return html;
   }
   function renderMirror() {
+    const queue=document.getElementById('adaptiveQueue');
+    if(queue) {
+      const queued=items.filter(item=>item.status==='queued');
+      queue.hidden=!queued.length;
+      const text=queued.length ? `${stale?'Последнее состояние · ':''}В очереди: ${queued.length} · Следующая: ${queued[0].title}` : '';
+      if(queue.textContent!==text)queue.textContent=text;
+    }
     const i=scopedItems().find(item=>item.task_id===selected);
     const visible=Boolean(i && (surface() || mirrorClosed!==selected));
     const mirror=document.getElementById('operationMirror'), toggle=document.getElementById('mirrorToggle');
@@ -66,14 +73,12 @@ window.IRUOperations = (() => {
     const extraAttention=others.filter(item=>item.waiting_confirmation || item.status==='waiting_input');
     mirror.dataset.surfaceAttention=String(Boolean(attention || i.waiting_confirmation || i.status==='waiting_input' || extraAttention.length));
     const html=surface()
-      ? `<article class="surface-operation" data-task-id="${a(i.task_id)}" data-status="${a(status)}">${compactStatus}<div class="surface-operation-actions"><button data-operation="surface-toggle" aria-expanded="${surfaceExpanded===i.task_id}">${surfaceExpanded===i.task_id?'Свернуть':'Результат и подробности'}</button>${i.can_cancel?'<button data-operation="cancel">Отменить</button>':''}</div>${stale?'<p role="status">Последнее известное состояние. Соединение потеряно.</p>':''}${attention || surfaceExpanded===i.task_id?detailMarkup(i,status):''}${extraAttention.map(item=>`<p class="surface-attention" role="status">Требует ответа: <button data-operation="details" data-surface-task="${a(item.task_id)}">${e(item.title)}</button></p>`).join('')}${others.length?`<details class="surface-others"><summary>Ещё ${others.length} · задачи и результаты</summary>${others.map(item=>`<button data-operation="details" data-surface-task="${a(item.task_id)}">${e(item.title)} · ${e(IRUSmartUI.LABELS[IRUSmartUI.normalizeStatus(item.status)]||'Исход не подтверждён')}</button>`).join('')}</details>`:''}</article>`
+      ? `<article class="surface-operation" data-task-id="${a(i.task_id)}" data-status="${a(status)}">${compactStatus}<div class="surface-operation-actions"><button data-operation="surface-toggle" aria-expanded="${surfaceExpanded===i.task_id}">${surfaceExpanded===i.task_id?'Свернуть':'Результат и подробности'}</button>${i.can_cancel?'<button data-operation="cancel">Отменить</button>':''}</div>${stale?'<p role="status">Последнее известное состояние. Соединение потеряно.</p>':''}${attention || surfaceExpanded===i.task_id?detailMarkup(i,status):''}${extraAttention.map(item=>`<p class="surface-attention" role="status">Требует ответа: <button data-operation="details" data-surface-task="${a(item.task_id)}">${e(item.title)}</button></p>`).join('')}</article>`
       : `<article data-task-id="${a(i.task_id)}" data-status="${a(status)}"><div class="mirror-object"><span class="mirror-object-icon" aria-hidden="true">▣</span><h2>${e(i.title)}</h2></div><div class="operation-devices">${e(i.device_ids.join(', ')||'Сервер')}</div><span class="smart-status">${e(label)}</span>${stale?'<p role="status">Последнее известное состояние. Соединение потеряно.</p>':''}${i.can_cancel?'<div class="operation-actions"><button data-operation="cancel">Отменить задачу</button></div>':''}${detailMarkup(i,status)}</article>`;
     if(html!==mirrorHTML) {
       const container=document.getElementById('mirrorContent'), wasOpen=mirrorTask===i.task_id && container.querySelector('.operation-detail details')?.open;
-      const othersOpen=container.querySelector('.surface-others')?.open;
       container.innerHTML=html;mirrorHTML=html;mirrorTask=i.task_id;
       if(container.querySelector('.operation-detail details'))container.querySelector('.operation-detail details').open=Boolean(wasOpen);
-      if(container.querySelector('.surface-others'))container.querySelector('.surface-others').open=Boolean(othersOpen);
       if(validCommandConfirmation(detail,i.task_id))for(const button of container.querySelectorAll('[data-operation="confirm"], [data-operation="deny"]'))
         presentedCommands.set(button,{nonce:detail.confirm_data.confirmation_id,command:detail.confirm_data.command});
       if(detail?.plan_review)for(const button of container.querySelectorAll('[data-operation="approve"], [data-operation="revise"]'))

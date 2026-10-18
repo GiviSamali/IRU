@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import ctypes
 import os
 from ctypes import wintypes
 from pathlib import Path
@@ -32,6 +33,7 @@ class IruMainWindow(QtWidgets.QMainWindow):
         self.setWindowIcon(icon)
         self._preferences_path = config_dir / "window.json"
         self._rectangles = load_window_state(self._preferences_path)
+        self._always_on_top = self._rectangles.get("always_on_top", False)
         self.is_compact = True
         self._changing_geometry = False
         self._surface_manual = self._rectangles.get("manual_compact", False)
@@ -62,6 +64,10 @@ class IruMainWindow(QtWidgets.QMainWindow):
         menu.addAction("Компактное окно", lambda: self.set_compact(True))
         menu.addAction("Размер по содержимому", self._resume_surface_size)
         menu.addAction("Развернуть окно", lambda: self.set_compact(False))
+        self.always_on_top_action = menu.addAction("Всегда сверху")
+        self.always_on_top_action.setCheckable(True)
+        self.always_on_top_action.setChecked(self._always_on_top)
+        self.always_on_top_action.toggled.connect(self.set_always_on_top)
         if tray_available:
             menu.addAction("Скрыть в tray", self.hide)
         menu.addAction("Сообщение окна", self.show_notice)
@@ -110,6 +116,7 @@ class IruMainWindow(QtWidgets.QMainWindow):
                 width, height = 360, 400
             self._rectangles["compact" if self.is_compact else "expanded"] = [r.x(), r.y(), width, height]
             self._rectangles["manual_compact"] = self._surface_manual
+            self._rectangles["always_on_top"] = self._always_on_top
 
     def _save_geometry(self):
         changing = self._changing_geometry
@@ -208,7 +215,32 @@ class IruMainWindow(QtWidgets.QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._apply_always_on_top()
         self._schedule_clamp()
+
+    def _apply_always_on_top(self):
+        if os.name == "nt":
+            # Keep the existing HWND: changing Qt window flags recreates the
+            # WebView2 parent window and can interrupt the conversation/voice.
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+            user32.SetWindowPos.restype = wintypes.BOOL
+            if not user32.SetWindowPos(int(self.winId()), -1 if self._always_on_top else -2,
+                                      0, 0, 0, 0, 0x0013):  # NOSIZE | NOMOVE | NOACTIVATE
+                logging.getLogger("iru_agent").warning("[desktop] cannot change topmost: %s", ctypes.get_last_error())
+                return False
+        return True
+
+    def set_always_on_top(self, enabled):
+        previous = self._always_on_top
+        self._always_on_top = bool(enabled)
+        if not self._apply_always_on_top():
+            self._always_on_top = previous
+            with QtCore.QSignalBlocker(self.always_on_top_action):
+                self.always_on_top_action.setChecked(previous)
+            return
+        self._save_geometry()
 
     def hideEvent(self, event):
         self._surface_animation.stop()

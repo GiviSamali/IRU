@@ -607,8 +607,9 @@ function setAdaptiveSurface(enabled) {
   root.classList.toggle('iru-mini',enabled);
   if (enabled) {
     const body=document.createElement('div');body.id='adaptiveBody';
+    const queue=document.createElement('div');queue.id='adaptiveQueue';queue.hidden=true;queue.setAttribute('role','status');
     const conversation=document.createElement('div');conversation.id='adaptiveConversation';
-    messages.replaceChildren(body);body.append(mirror,conversation);
+    messages.replaceChildren(body);body.append(queue,mirror,conversation);
   } else {
     document.getElementById('operationsDock').before(mirror);
     messages.replaceChildren();
@@ -631,7 +632,8 @@ function adaptiveMessageIndexes() {
   state.messages.forEach((message,index)=>{if(message.role==='user')lastUser=index;});
   if(lastUser>=0)indexes.add(lastUser);
   state.messages.forEach((message,index)=>{
-    if(message.role==='user' || message.taskKind==='worker')return;
+    if(message.role==='user')return;
+    if(message.taskKind==='worker' && (message.loading || !isTaskTerminalStatus(message.taskStatus)))return;
     if(index>lastUser || message.confirmTaskId || message.planReview || message.taskStatus==='waiting_input')indexes.add(index);
   });
   return indexes;
@@ -701,7 +703,8 @@ function renderMessages() {
       bodyHTML += `<button type="button" class="operation-reference" data-action="show-operation" data-task-id="${escapeAttr(m._taskId)}">${escapeHTML(IRUSmartUI.LABELS[status])} · Операции ↗</button>`;
     }
     if (!compact && typeof renderMessageUsage === 'function') bodyHTML += renderMessageUsage(m);
-    html += `<div class="msg ${role}${m.loading ? ' msg-thinking' : ''}" data-message-key="${escapeAttr(view.key)}"><div class="msg-role">${role === 'user' ? 'вы' : 'иру'}</div><div class="msg-body">${bodyHTML}</div></div>`;
+    const briefResult=workerInDock && IRUSmartUI.taskState(m,m.tasks||[],m.commands||[])==='success';
+    html += `<div class="msg ${role}${m.loading ? ' msg-thinking' : ''}${briefResult ? ' msg-worker-result' : ''}" data-message-key="${escapeAttr(view.key)}"><div class="msg-role">${role === 'user' ? 'вы' : 'иру'}</div><div class="msg-body">${bodyHTML}</div></div>`;
   }
 
   if(compact) {
