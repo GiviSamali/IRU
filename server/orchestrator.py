@@ -24,13 +24,26 @@ except ImportError:
     from worker_scheduler import init_worker_storage, owned_job, restore_task, scheduler
 
 MAX_CONTEXT_CHARS = 14000
+MAX_ANSWER_CHARS = 6000
 
 
 class Decision(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     intent: Literal["conversation","delegate","task_status","cancel","clarify"]
-    answer: str = Field(default="", max_length=2000)
+    answer: str = Field(default="", max_length=MAX_ANSWER_CHARS)
     spoken_response: str = Field(default="", max_length=420)
+
+    @model_validator(mode="before")
+    @classmethod
+    def bound_conversation_answer(cls, value):
+        # Only presentation text may be shortened; routing and permissions stay strict.
+        if isinstance(value, dict) and value.get("intent") == "conversation":
+            answer = value.get("answer")
+            if isinstance(answer, str) and len(answer) > MAX_ANSWER_CHARS:
+                suffix = "\n\n[Ответ сокращён.]"
+                head = answer[:MAX_ANSWER_CHARS - len(suffix)].rstrip()
+                return {**value, "answer": head + suffix}
+        return value
 
     @field_validator("spoken_response", mode="before")
     @classmethod
@@ -62,7 +75,8 @@ TOOL = {"type":"function", "function":{"name":"orchestrator_decision", "descript
 SYSTEM = """Ты ИРУ: единственный пользовательский Оркестратор. Веди краткий естественный разговор.
 Для conversation/clarify сформируй также spoken_response в этом же decision: отдельную устную реплику
 к текущей реплике человека и истории разговора. answer остаётся полноценным письменным ответом.
-Письменный answer оформляй абзацами; при необходимости используй # Заголовок и **жирный текст**.
+Письменный answer — не более 6000 символов; это предел, не рекомендуемая длина.
+Оформляй его абзацами; при необходимости используй # Заголовок и **жирный текст**.
 Короткому ответу заголовок не нужен. Не используй HTML-теги и не выделяй весь ответ жирным.
 Говори по-русски, понятно, короткими полноценными предложениями. Для простого вопроса достаточно пары слов;
 420 символов — предел, не цель заполнения. Не пересказывай экран, не читай списки, не повторяй обязательно начало answer.
