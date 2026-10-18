@@ -3,9 +3,9 @@ import re
 
 import httpx
 try:
-    from .run_journal import append_answer_step, append_tool_step, audited_task_receipt, validate_answer_text_payload
+    from .run_journal import append_answer_step, append_tool_step, audited_task_receipt, validate_answer_text_payload, build_terminal_answer_repair_prompt, record_lifecycle_event
 except ImportError:
-    from run_journal import append_answer_step, append_tool_step, audited_task_receipt, validate_answer_text_payload
+    from run_journal import append_answer_step, append_tool_step, audited_task_receipt, validate_answer_text_payload, build_terminal_answer_repair_prompt, record_lifecycle_event
 
 try:
     from .web_search import run_web_search
@@ -77,7 +77,15 @@ async def process_onboarding_message(
         "phase": (usage_context or {}).get("phase") or "onboarding",
     }
 
-    for iteration in range(4):
+    last_rejection = "No accepted terminal answer."
+
+    def rejected(reason_code, reason, iteration):
+        nonlocal last_rejection
+        last_rejection = str(reason)[:600]
+        record_lifecycle_event("recovery", source="protocol_recovery", status="failed",
+                               terminal_reason=reason_code, iteration=iteration + 1)
+
+    for iteration in range(5 if strict_worker else 4):
         # Import lazily: controller initialization also loads worker modules.
         try:
             from .controller import _chat_completion_request
@@ -86,9 +94,13 @@ async def process_onboarding_message(
             from controller import _chat_completion_request
             from answer_auditor import answer_auditor_enabled, audit_answer_payload
         turn_tools=search_tools
-        if strict_worker and iteration==3:
+        if strict_worker and iteration>=3:
             turn_tools=[tool for tool in search_tools if tool['function']['name']=='answer_text']
-            messages.append({"role":"user","content":"Final turn: call answer_text using current step_id/basis. No more searches or memory changes. If evidence is insufficient, return partial_report explaining the missing data; do not claim the goal completed."})
+            if iteration == 4:
+                messages.append({"role":"user","content":build_terminal_answer_repair_prompt(user_message, commands)
+                                 + "\nLast rejection: " + last_rejection})
+            else:
+                messages.append({"role":"user","content":"Final turn: call answer_text using current step_id/basis. No more searches or memory changes. If evidence is insufficient, return partial_report explaining the missing data; do not claim the goal completed."})
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
             data = await _chat_completion_request(client=client, cfg=cfg, model=cfg['model'],
                 messages=messages, tools=turn_tools, max_tokens=cfg.get('max_tokens',4096),
@@ -98,6 +110,10 @@ async def process_onboarding_message(
         calls = message.get("tool_calls")
         content = message.get("content") or ""
         if not calls:
+            if strict_worker:
+                rejected("missing_tool_call", "Call exactly one answer_text tool; raw text is not a terminal answer.", iteration)
+                if iteration >= 3:
+                    continue
             if re.search(r"<\/?tool_call\b", content, re.I):
                 messages.append({"role": "user", "content": "Не печатай вызовы инструментов текстом. Используй настоящий tool_calls для web_search."})
                 continue
@@ -105,12 +121,19 @@ async def process_onboarding_message(
                 return {"answer":"Не получен подтверждённый итог Worker.","commands":commands}
             return {"answer": content, "commands": commands}
         if len(calls) != 1:
+            if strict_worker:
+                rejected("multiple_tool_calls", "Call exactly one tool per iteration.", iteration)
             messages.append({"role":"user","content":"Call exactly one tool per iteration."})
             continue
         messages.append(message)
         for call in calls:
             fn = call.get("function") or {}
+            if strict_worker and fn.get("name") not in {tool['function']['name'] for tool in turn_tools}:
+                rejected("unexpected_tool", "Tool is unavailable on this turn; use the advertised tools only.", iteration)
+                messages.append({"role":"tool","tool_call_id":call["id"],"content":last_rejection})
+                continue
             if strict_worker and fn.get("name")=="answer_text":
+                rejection_code = "invalid_terminal_payload"
                 try:
                     payload=validate_answer_text_payload(json.loads(fn.get("arguments") or "{}"),commands)
                     audit_details={}
@@ -122,12 +145,14 @@ async def process_onboarding_message(
                     if infra_error:
                         return {"answer":"Не удалось проверить конечный ответ Worker.","commands":commands}
                     if not valid:
+                        rejection_code = "terminal_audit_rejected"
                         raise ValueError(reason)
                     append_answer_step(commands,"answer_text",payload,target_device_id="server")
                     receipt=audited_task_receipt(payload,audited=answer_auditor_enabled(cfg),audit_details=audit_details)
                     return {"answer":payload["text"],"commands":commands,
                             **({"task_receipt":receipt} if receipt else {})}
                 except (ValueError,TypeError) as exc:
+                    rejected(rejection_code, exc, iteration)
                     messages.append({"role":"tool","tool_call_id":call["id"],"content":"Terminal answer rejected: " + str(exc)[:600] + ". Use actual current step_id; if the requested facts are missing, return partial_report."})
                     continue
             result = {"error": "Инструмент недоступен без подключённого устройства"}

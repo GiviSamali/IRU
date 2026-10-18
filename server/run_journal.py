@@ -30,7 +30,8 @@ _TRACE_LABELS = frozenset({"nl", "onboarding", "pipeline", "non_pipeline", "broa
     "classification_fallback", "plan_keyword", "window_policy", "classification_model", "explicit_pipeline",
     "plan_declined", "orchestrator_decision", "protocol_recovery", "ordinary_task", "other", "grounded_report", "partial_report",
     "ask_clarification", "report_failure", "request_confirmation", "dialogue", "conversation", "factual_answer",
-    "history", "iteration_limit", "no_progress", "success_criteria", "browser_answer_unavailable", "completed_successfully"})
+    "history", "iteration_limit", "no_progress", "success_criteria", "browser_answer_unavailable", "completed_successfully",
+    "missing_tool_call", "multiple_tool_calls", "unexpected_tool", "invalid_terminal_payload", "terminal_audit_rejected"})
 
 
 

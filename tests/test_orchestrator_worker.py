@@ -621,6 +621,68 @@ def test_server_worker_reserves_existing_last_turn_for_honest_partial_answer(own
     assert not responses
 
 
+@pytest.mark.parametrize('repair', ['valid', 'invalid', 'search', 'audit_rejected'])
+def test_server_worker_has_one_terminal_repair_without_repeating_search(owners, monkeypatch, repair):
+    from server import controller, controller_onboarding as onboarding
+    from server.run_journal import diagnostic_context_for_task
+    a, _ = owners
+
+    def call(name, args, ident):
+        return {'tool_calls': [{'id': ident, 'function': {'name': name, 'arguments': json.dumps(args)}}]}
+
+    text = 'Найдены страницы. Цена и нужное число деталей не подтверждены.'
+    payload = {'answer_type': 'partial_report', 'text': text, 'basis': ['step_1', 'step_2'],
+               'self_check': {'depends_on_current_external_state': True, 'claims_completed_action': False,
+                              'has_sufficient_evidence': False, 'missing_evidence_question': 'Нет цены.'}}
+    final = call('answer_text', payload if repair != 'invalid' else {}, 'repair')
+    if repair == 'search':
+        final = call('web_search', {'query': 'must not execute'}, 'repair')
+    replies = [call('web_search', {'query': 'first'}, 's1'),
+               call('web_search', {'query': 'second'}, 's2'),
+               call('answer_text', {}, 'bad1'), call('answer_text', {}, 'bad2'), final]
+    if repair in {'valid', 'audit_rejected'}:
+        replies.append({'content': json.dumps({'valid': repair == 'valid', 'reason': 'Evidence check'})})
+    requests, searches = [], []
+
+    async def completion(**kwargs):
+        requests.append({**kwargs, 'messages': list(kwargs['messages'])})
+        return {'choices': [{'message': replies.pop(0)}]}
+
+    async def search(query, limit):
+        searches.append(query)
+        return {'results': [{'title': 'Source', 'url': 'https://example.invalid', 'content': 'No price'}]}
+
+    monkeypatch.setattr(controller, '_chat_completion_request', completion)
+    monkeypatch.setattr(onboarding, 'run_web_search', search)
+    task_state = {}
+    with diagnostic_context_for_task('terminal-repair-test', task_state):
+        result = asyncio.run(onboarding.process_onboarding_message('Find current facts',
+            usage_context={'user_id': a['id'], 'worker_execution': True},
+            load_llm_config_fn=lambda: {'model': 'mock-model', 'answer_auditor_enabled': True},
+            current_datetime_msk_fn=lambda: '2026-10-18'))
+
+    worker_requests = [request for request in requests if request['phase'] == 'onboarding']
+    assert len(worker_requests) == 5 and not replies
+    assert searches == ['first', 'second']
+    assert [tool['function']['name'] for tool in worker_requests[4]['tools']] == ['answer_text']
+    prompt = worker_requests[4]['messages'][-1]['content']
+    assert 'Terminal answer repair turn' in prompt and 'step_1' in prompt and 'step_2' in prompt
+    assert 'missing required fields' in prompt
+    reasons = [event.get('terminal_reason') for event in task_state['diagnostic_trace']]
+    assert 'invalid_terminal_payload' in reasons
+    if repair == 'valid':
+        assert result['answer'] == text
+        assert result['task_receipt']['task_status'] == 'partial'
+        assert result['commands'][-1]['tool_name'] == 'answer.text'
+    else:
+        assert 'task_receipt' not in result
+        assert len(result['commands']) == 2
+        if repair == 'search':
+            assert 'unexpected_tool' in reasons
+        if repair == 'audit_rejected':
+            assert 'terminal_audit_rejected' in reasons
+
+
 def test_routing_context_filters_owner_and_chat_before_limit(owners):
     a,b=owners
     other_chat=db.create_chat(a['id'],'other')['id']
