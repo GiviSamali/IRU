@@ -181,6 +181,7 @@ class RunPlanBody(BaseModel):
     device_id: Optional[str] = None
     confirmed: bool = False
     voice_source_task_id: str | None = None
+    source_task_id: str | None = None
 
 
 class MemoryFactDeleteBody(BaseModel):
@@ -942,9 +943,12 @@ async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
         logger.warning("[run_plan] REJECT 404: чат не найден. chat_id=%s user_id=%s", chat_id, user.get("id"))
         raise HTTPException(status_code=404, detail="Чат не найден")
 
+    if body.source_task_id and body.voice_source_task_id and body.source_task_id != body.voice_source_task_id:
+        raise HTTPException(400, detail="Conflicting plan source identifiers")
+    source_id = body.source_task_id or body.voice_source_task_id
     source_task = None
-    if body.voice_source_task_id is not None:
-        source_task = tasks.get(body.voice_source_task_id)
+    if source_id is not None:
+        source_task = tasks.get(source_id)
         if (not source_task or source_task.get("user_id") != user["id"]
                 or source_task.get("chat_id") != chat_id):
             raise HTTPException(404, detail="Предложение плана не найдено")
@@ -982,7 +986,7 @@ async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
 
     try:
         task=await submit_worker(user,chat_id,body.original_request,target_ids,{"pipeline":True,"autonomous":False},
-            request_key="plan:"+body.voice_source_task_id if body.voice_source_task_id else None,
+            request_key="plan:"+source_id if source_id else None,
             objective=(source_task.get("proposed_objective") or body.original_request) if source_task and source_task.get("orchestrated") else "",
             context_summary=(source_task.get("proposed_context_summary") or "") if source_task else "",broadcast=bool(source_task and source_task.get("broadcast")),
             source_task_ids=source_task.get("source_task_ids") or [] if source_task else ())

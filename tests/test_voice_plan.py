@@ -37,9 +37,10 @@ def test_name_admin_does_not_grant_admin_plan_access(client, monkeypatch):
                        json={"original_request": "Отчёт", "confirmed": True}).status_code == 403
 
 
-def test_voice_consent_keeps_safety_confirmation_and_is_one_shot(client, monkeypatch):
+@pytest.mark.parametrize('source_field', ['voice_source_task_id', 'source_task_id'])
+def test_voice_consent_keeps_safety_confirmation_and_is_one_shot(client, monkeypatch, source_field):
     headers, chat, uid = prepare(client, monkeypatch, admin=True)
-    body = {"original_request": "Отчёт", "confirmed": True, "voice_source_task_id": "offer"}
+    body = {"original_request": "Отчёт", "confirmed": True, source_field: "offer"}
     response = client.post(f"/api/run_plan/{chat}", headers=headers, json=body)
     assert response.status_code == 200
     assert tasks[response.json()["task_id"]]["modes"] == {"pipeline": True, "autonomous": False}
@@ -49,11 +50,12 @@ def test_voice_consent_keeps_safety_confirmation_and_is_one_shot(client, monkeyp
 @pytest.mark.parametrize("change,code", [({"user_id": -1}, 404), ({"chat_id": -1}, 404),
     ({"status": "running"}, 409), ({"plan_declined": True}, 409), ({"plan_suggestion": ""}, 409),
     ({"plan_original_request": "Другой запрос"}, 409)])
-def test_voice_consent_requires_current_owned_offer(client, monkeypatch, change, code):
+@pytest.mark.parametrize('source_field', ['voice_source_task_id', 'source_task_id'])
+def test_voice_consent_requires_current_owned_offer(client, monkeypatch, change, code, source_field):
     headers, chat, uid = prepare(client, monkeypatch, admin=True)
     tasks["offer"].update(change)
     response = client.post(f"/api/run_plan/{chat}", headers=headers,
-        json={"original_request": "Отчёт", "confirmed": True, "voice_source_task_id": "offer"})
+        json={"original_request": "Отчёт", "confirmed": True, source_field: "offer"})
     assert response.status_code == code
 
 
@@ -100,3 +102,31 @@ def test_ow_plan_offer_never_ignores_explicit_invalid_device(client, monkeypatch
         'original_request':'Отчёт','confirmed':True,'voice_source_task_id':'offer','device_id':'foreign-or-missing'})
     assert response.json()=={'status':'error','error':'device_not_owned_or_unavailable'}
     assert not tasks['offer'].get('voice_plan_started')
+
+
+def test_button_plan_keeps_original_sources_and_objective(client, monkeypatch):
+    from server.routers import tasks as routes
+    headers, chat, uid = prepare(client, monkeypatch, admin=True)
+    tasks['offer'].update(orchestrated=True, source_task_ids=['saved-research'],
+                          proposed_objective='Prepare remaining documents', proposed_context_summary='Reuse completed research')
+    captured = []
+    async def submit(*args, **kwargs):
+        captured.append((args, kwargs))
+        return {'task_id': 'new-continuation', 'status': 'queued'}
+    monkeypatch.setattr(routes, 'submit_worker', submit)
+    response = client.post(f'/api/run_plan/{chat}', headers=headers, json={
+        'original_request': 'Отчёт', 'confirmed': True, 'source_task_id': 'offer'})
+    assert response.status_code == 200
+    args, handoff = captured[0]
+    assert args[2] == 'Отчёт'
+    assert handoff['source_task_ids'] == ['saved-research']
+    assert handoff['objective'] == 'Prepare remaining documents'
+    assert handoff['context_summary'] == 'Reuse completed research'
+    assert handoff['request_key'] == 'plan:offer'
+
+
+def test_plan_rejects_conflicting_source_aliases(client, monkeypatch):
+    headers, chat, uid = prepare(client, monkeypatch, admin=True)
+    response = client.post(f'/api/run_plan/{chat}', headers=headers, json={
+        'original_request': 'Отчёт', 'confirmed': True, 'source_task_id': 'offer', 'voice_source_task_id': 'different'})
+    assert response.status_code == 400

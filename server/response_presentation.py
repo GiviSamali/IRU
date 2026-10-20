@@ -93,14 +93,13 @@ def _reason(task, report):
 
 
 def saved_step_reports(task):
-    """Read accepted informational terminals, without replay or whole-goal success claims."""
+    """Read accepted step terminals as historical material, never new execution proof."""
     commands = task.get("commands") or []
     reports = []
     for index, command in enumerate(commands):
         payload = command.get("result") or {}
         if (_tool(command) != "answer.text" or command.get("status") != "terminal"
-                or not isinstance(payload, dict) or payload.get("answer_type") not in {"grounded_report", "pure_text", "partial_report"}
-                or (payload.get("self_check") or {}).get("claims_completed_action") is not False):
+                or not isinstance(payload, dict) or payload.get("answer_type") not in {"grounded_report", "pure_text", "partial_report"}):
             continue
         text = payload.get("text")
         validator = has_grounded_terminal_answer if payload.get("answer_type") == "grounded_report" else has_validated_terminal_answer

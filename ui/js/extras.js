@@ -349,14 +349,14 @@ async function declineSuggestedFact(taskId, el, msgIndex = null) {
 }
 
 // ── PLAN SUGGESTION ───────────────────────────────────────
-async function runPlan(chatId, originalRequest, voiceSourceTaskId = null) {
+async function runPlan(chatId, originalRequest, sourceTaskId = null) {
   const voiceTicket = window.iruVoice?.beginRequest();
   let voiceTaskId = null;
   try {
     const resp = await apiFetch(`${API}/api/run_plan/${chatId}`, {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({ original_request: originalRequest, confirmed: true,
-        ...(voiceSourceTaskId ? { voice_source_task_id: voiceSourceTaskId } : {}) }),
+        ...(sourceTaskId ? { source_task_id: sourceTaskId } : {}) }),
     });
     const data = await resp.json();
     if (!resp.ok || !data.task_id) {
@@ -395,12 +395,14 @@ function acceptPlanSuggestion(el) {
   const mi = parseInt(el.dataset.index || el.id.replace('ps-', ''), 10);
   if (state.messages[mi]?.hideAfterPlanChoice) return;
   const originalRequest = state.messages[mi]?.planOriginalRequest || el.dataset.origReq || '';
+  const sourceTaskId = state.messages[mi]?._taskId;
+  if (!sourceTaskId) { showToast('Предложение плана устарело. Обновите чат.', true); return; }
   if (state.messages[mi]) {
     state.messages[mi].planDismissed = true;
     state.messages[mi].hideAfterPlanChoice = true;
   }
   renderMessages();
-  runPlan(chatId, originalRequest);
+  runPlan(chatId, originalRequest, sourceTaskId);
 }
 
 function declinePlanSuggestion(el) {

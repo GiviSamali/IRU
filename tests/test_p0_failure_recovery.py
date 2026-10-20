@@ -157,6 +157,16 @@ def test_report_text_without_accepted_terminal_is_not_recovered():
     assert not saved_step_reports(task)
 
 
+def test_legacy_research_action_claim_does_not_hide_accepted_step_report():
+    task = failed_task(2, 88)
+    task['commands'][1]['result']['self_check']['claims_completed_action'] = True
+    text = task['commands'][1]['result']['text']
+    assert saved_step_reports(task)[0]['text'] == text
+    report = build_worker_report(task)
+    assert report['status'] == 'failed' and not report['goal_completed']
+    assert text in failure_explanation(task, report, include_reports=True)
+
+
 @pytest.mark.parametrize("question,view", [("Что случилось?", "summary"), ("Что получилось?", "summary"),
                                            ("Покажи промежуточный отчёт", "saved_report")])
 def test_status_and_report_paths_do_not_admit_worker(stored, monkeypatch, question, view):
