@@ -82,6 +82,25 @@ def test_failure_explanation_uses_code_not_arbitrary_error_text(owner):
     assert worker_presentation(task)['conversational_response']=='Не получилось завершить задачу.'
 
 
+def test_running_plan_explains_completed_and_current_stage_without_claiming_files(owner):
+    task = completed(owner)
+    task.update(status="running", answer="untrusted generated progress", commands=[], task_receipt={}, tasks=[{
+        "steps": [{"title": "Исследование", "status": "done"},
+                  {"title": "Создать Word", "status": "running"},
+                  {"title": "Презентация", "status": "pending"}]}])
+    before = json.dumps(task, ensure_ascii=False)
+    text = worker_presentation(task)["conversational_response"]
+    assert "Завершены этапы: Исследование" in text
+    assert "Текущий этап: Создать Word" in text
+    assert "Презентация" not in text and "untrusted" not in text
+    assert "готов" not in text.lower()
+    assert json.dumps(task, ensure_ascii=False) == before
+    task["answer"] = "Работа ещё идёт."
+    task["history_metadata"] = {"workerReport": build_worker_report(task),
+        "conversationalResponse": task["answer"], "executionDetails": ""}
+    assert "Текущий этап: Создать Word" in worker_presentation(task)["conversational_response"]
+
+
 def test_informational_tool_results_remain_full_instead_of_generic_done(owner):
     task=completed(owner)
     text='Подробное объяснение устройства сети. '*80

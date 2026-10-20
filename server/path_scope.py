@@ -70,6 +70,8 @@ def build_target_device_block(device_id: str, device_info: dict | None, profile:
 
 def validate_write_path_for_device(path: str, device_info: dict | None, profile: dict | None) -> None:
     target = str(path or "").strip()
+    if re.search(r"(?i)\$env:|\$\{|%[A-Z_][A-Z0-9_]*%|^~(?:[/\\]|$)|^\$(?:HOME|USERPROFILE)(?:[/\\]|$)", target):
+        raise ValueError("unresolved_write_path: write_content принимает готовый путь, а не выражение оболочки. Получите абсолютный путь на целевом устройстве через execute_cmd; затем передайте его буквально. Запись не отправлена.")
     if not target:
         return
     win_path = PureWindowsPath(target)

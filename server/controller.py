@@ -242,7 +242,7 @@ def _thinking_request_fields(
 ) -> dict:
     """Return provider thinking fields for the selected DeepSeek V4 model."""
     request_phase = phase or (usage_context or {}).get("phase")
-    if (request_phase or "").endswith(".truncation_recovery") and model.startswith("deepseek-"):
+    if (request_phase or "").endswith((".truncation_recovery", ".structured_output")) and model.startswith("deepseek-"):
         # Documented Chat Completions toggle; do not combine disabled thinking with effort.
         return {"thinking": {"type": "disabled"}}
     if (request_phase or "").startswith(("window_control.", "browser_bridge.")) or request_phase in {"pipeline.plan", "pipeline.plan.retry"}:

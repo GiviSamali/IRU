@@ -154,6 +154,24 @@ def normalized_worker_report(task, report=None):
     return report
 
 
+def running_progress(task):
+    """Project existing PLAN progress; never infer it from generated answer text."""
+    steps = [step for plan in task.get("tasks") or [] if isinstance(plan, dict)
+             for step in plan.get("steps") or [] if isinstance(step, dict)]
+    done = [str(step["title"])[:200] for step in steps
+            if step.get("status") in {"done", "completed", "recovered"} and step.get("title")]
+    current = next((str(step["title"])[:200] for step in steps
+                    if step.get("status") == "running" and step.get("title")), "")
+    parts = ["Работа ещё идёт."]
+    if done:
+        parts.append("Завершены этапы: " + "; ".join(done[:8]) + ".")
+    if current:
+        parts.append("Текущий этап: " + current + ".")
+    elif isinstance(task.get("current_step"), str) and task["current_step"].strip():
+        parts.append("Сейчас: " + task["current_step"].strip()[:300])
+    return "\n\n".join(parts)
+
+
 def worker_presentation(task, report=None):
     """Keep raw protocol text unchanged; derive prose only from normalized evidence."""
     report=normalized_worker_report(task,report)
@@ -169,7 +187,7 @@ def worker_presentation(task, report=None):
             and has_validated_terminal_answer(answer,task.get('commands') or [])):
         return {'conversational_response':answer,'execution_details':''}
     saved=task.get("history_metadata")
-    if isinstance(saved,dict) and saved.get("workerReport")==report and isinstance(saved.get("conversationalResponse"),str):
+    if report["status"] != "running" and isinstance(saved,dict) and saved.get("workerReport")==report and isinstance(saved.get("conversationalResponse"),str):
         details=saved.get("executionDetails") or ""
         if (details or saved["conversationalResponse"])==answer:
             return {"conversational_response":saved["conversationalResponse"],"execution_details":details}
@@ -183,7 +201,7 @@ def worker_presentation(task, report=None):
     elif status=="waiting_input":human=answer or "Какое окно выбрать?"
     elif status=="waiting_confirmation":human="Нужно твоё подтверждение, прежде чем продолжить."
     elif status=="queued":human="Поручение в очереди. Начну после текущей задачи."
-    elif status=="running":human="Работа ещё идёт."
+    elif status=="running":human=running_progress(task)
     elif status=="success":
         terminal=next((c for c in reversed(commands) if _tool(c)=="answer.text" and c.get("status")=="terminal"),{})
         payload=terminal.get("result") if isinstance(terminal.get("result"),dict) else {}

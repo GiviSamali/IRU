@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import logging
 import ntpath
@@ -485,7 +486,10 @@ Tool-only protocol:
 3. Действуй только в рамках текущего шага.
 4. Если шаг завершён — вызови answer_text с итогом и evidence; никогда не возвращай raw assistant text.
 5. Если шаг не удаётся — верни краткое описание проблемы и на чём остановился.
-6. Для длинных текстов и файлов используй write_content.
+6. Для длинных текстов и файлов используй write_content, не более 4000 символов content за вызов.
+   Сначала запиши небольшой исполняемый каркас и данные отдельными секциями/файлами; затем
+   добавляй завершённые части через append=true только после успешной предыдущей записи.
+   Выполняй скрипт после сборки всех частей; проверь итоговые документы, не только helper.
    Разделяй объёмные материалы на небольшие завершённые операции: секции/файлы, затем сборка
    и проверка. Не пытайся вместить весь пакет документов в один tool call. Все требования шага
    остаются обязательными; промежуточная секция не означает завершение шага.
@@ -511,6 +515,9 @@ Tool-only protocol:
 Для запуска GUI-приложения используй typed tool `app_launch`, а не ручную проверку окна или screenshot.
 7. Для подготовки Python используй device_prepare_runtime/device_check_runtime, а не ручной venv через execute_cmd.
 8. Временные helper scripts для Word/Excel/PowerPoint/PDF/docx/xlsx/pptx создавай только в `%LOCALAPPDATA%\\IRU\\scripts\\helpers` или `~/.iru/scripts/helpers` и предлагай удаление только отдельной командой с подтверждением пользователя. Без подтверждения оставь helper в этой папке. Итоговые пользовательские документы сохраняй там, где просил пользователь.
+   Это обозначения каталогов, не готовые пути для write_content. Сначала получи абсолютный путь
+   на целевом устройстве (например, PowerShell Join-Path $env:LOCALAPPDATA 'IRU/scripts/helpers').
+   В write_content передавай только полученный буквальный путь, без $env:, %VARIABLE% или ~.
 
 Общая цель:
 {overall_goal}
@@ -973,12 +980,16 @@ def build_pipeline_task_receipt(
     receipt_dicts: list[dict | None],
 ) -> dict:
     artifacts_created = []
+    try:
+        from .worker_reports import positive_evidence
+    except ImportError:
+        from worker_reports import positive_evidence
     files_verified = []
     created_file_evidence = []
     commands_failed = []
     for command in commands:
         result = command.get("result") or {}
-        if isinstance(result, dict):
+        if isinstance(result, dict) and positive_evidence(command, observation=True):
             result_artifacts = _collect_result_paths(result, (
                 "artifacts_created",
                 "created_artifacts",
@@ -1113,6 +1124,12 @@ async def run_pipeline_worker(
         return await completion_fn(**kwargs)
 
     chat_completion_request_fn = bounded_completion
+    # Local schema copy: limit structured output without changing ordinary Worker tools.
+    worker_tools = copy.deepcopy(worker_tools)
+    for tool in worker_tools:
+        function = tool.get("function") or {}
+        if function.get("name") == "write_content":
+            function["parameters"]["properties"]["content"]["maxLength"] = 4000
     try:
         from .browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_partial_read, browser_failure_text
     except ImportError:
@@ -1258,7 +1275,7 @@ async def run_pipeline_worker(
                 tools=worker_tools,
                 tool_choice="required",
                 usage_context={**(usage_context or {}), "phase": f"pipeline.worker.step_{step_index + 1}.iteration.{iteration + 1}"},
-                phase=f"pipeline.worker.step_{step_index + 1}.iteration.{iteration + 1}" + (".truncation_recovery" if compact_output else ""),
+                phase=f"pipeline.worker.step_{step_index + 1}.iteration.{iteration + 1}" + (".truncation_recovery" if compact_output else ".structured_output"),
             )
         except Exception as exc:
             if not truncation_pending:
@@ -1739,6 +1756,8 @@ async def run_pipeline_worker(
             elif fn_name == "write_content":
                 set_current_step(poll_task_id, f"Создаю файл для шага: {step.get('title', '')[:50]}")
                 try:
+                    if len(fn_args.get("content", "")) > 4000:
+                        raise ValueError("write_chunk_too_large: запись не отправлена. Разделите content на части до 4000 символов; создайте первую часть, затем append=true после успешной записи. Не запускайте незавершённый скрипт.")
                     tool_result = await send_command_fn(target_device, "write_content", fn_args)
                     tool_result = compact_write_content_result(fn_args, tool_result)
                 except Exception as exc:

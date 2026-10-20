@@ -346,8 +346,8 @@ async def send_command_to_agent(
         profile = get_device_profile(_short_did(device_id), user_id=user_id)
         try:
             validate_write_path_for_device(path, (dev or {}).get("info", {}), profile)
-        except ValueError:
-            raise RuntimeError(f"BLOCKED: {PATH_SCOPE_ERROR}")
+        except ValueError as exc:
+            raise RuntimeError(f"BLOCKED: {exc}") from exc
 
     if not dev:
         raise RuntimeError(f"Устройство '{device_id}' не подключено")

@@ -18,31 +18,39 @@ from server.worker_context import source_references
 from test_controller_pipeline_budget import _shared_context, _execute_call, _answer_call
 
 
+@pytest.fixture(autouse=True)
+def isolated_pipeline_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "pipeline.sqlite")
+    db.init_db()
+
+
 def response(call=None, finish="tool_calls"):
     return {"choices": [{"finish_reason": finish, "message": {"content": "", "tool_calls": [call] if call else []}}],
             "usage": {"prompt_tokens": 18916, "completion_tokens": 4096,
                       "completion_tokens_details": {"reasoning_tokens": 4096}}}
 
 
-def run_worker(responses):
+def run_worker(responses, send_results=None, tools=None):
     sent, requests = [], []
     async def complete(**kwargs):
         if "auditor" in kwargs.get("phase", ""):
             return {"choices": [{"message": {"content": '{"valid":true,"reason":"fixture result"}'}}]}
-        requests.append(copy.deepcopy({k: v for k, v in kwargs.items() if k in {"phase", "messages", "cfg"}}))
+        requests.append(copy.deepcopy({k: v for k, v in kwargs.items() if k in {"phase", "messages", "cfg", "tools"}}))
         value = responses.pop(0)
         if isinstance(value, Exception):
             raise value
         return value
     async def send(device, action, params):
         sent.append((action, params))
+        if send_results is not None:
+            return send_results.pop(0)
         return {"returncode": 0, "stdout": "observation", "stderr": ""}
     async def run():
         async with httpx.AsyncClient() as client:
             return await run_pipeline_worker(client, {"model_reasoner": "deepseek-v4-pro", "max_tokens": 4096},
                 "deepseek-v4-pro", _shared_context(), "Create the complete requested package",
                 {"title": "Prepare package", "instruction": "ten scenarios plus application", "device_id": "device-1"},
-                [], [], send, lambda *_: "unused", None, None, None, chat_completion_request_fn=complete, worker_tools=[])
+                [], [], send, lambda *_: "unused", None, None, None, chat_completion_request_fn=complete, worker_tools=tools or [])
     return asyncio.run(run()), sent, requests
 
 
@@ -65,6 +73,45 @@ def test_recovery_completes_small_operation_without_replaying_prior_action():
     assert [p["command"] for _, p in sent] == ["observe once", "next small operation"]
     assert result["status"] == "ok"
     assert len(requests) == 4
+
+
+def test_pipeline_reserves_budget_for_structured_output_from_first_call():
+    from server.controller_tools import WORKER_TOOLS
+    original = copy.deepcopy(WORKER_TOOLS)
+    _, _, requests = run_worker([response(_answer_call("end", "No action requested"))], tools=WORKER_TOOLS)
+    assert _thinking_request_fields({}, "deepseek-v4-pro", phase=requests[0]["phase"]) == {"thinking": {"type": "disabled"}}
+    write = next(t["function"] for t in requests[0]["tools"] if t["function"]["name"] == "write_content")
+    assert write["parameters"]["properties"]["content"]["maxLength"] == 4000
+    assert WORKER_TOOLS == original
+    assert requests[0]["cfg"]["max_tokens"] == 4096
+
+
+def test_oversized_write_is_not_dispatched_and_small_parts_are_written_once():
+    path = r"C:\Users\Owner\AppData\Local\IRU\scripts\helpers\build.ps1"
+    def write(key, text, append=False):
+        return {"id": key, "function": {"name": "write_content", "arguments": json.dumps({
+            "path": path, "content": text, "append": append})}}
+    result, sent, _ = run_worker([
+        response(write("large", "x" * 4001)),
+        response(write("first", "# first\n")), response(write("second", "# second\n", True)),
+        response(_answer_call("end", "Sections saved; document is not yet assembled"))],
+        send_results=[{"path": path, "bytes_written": 8}, {"path": path, "bytes_written": 9}])
+    assert [(p["content"], p["append"]) for _, p in sent] == [("# first\n", False), ("# second\n", True)]
+    assert "write_chunk_too_large" in result["commands"][0]["result"]["error"]
+
+
+@pytest.mark.parametrize("status,result", [
+    ("error", {"error": "WinError 123", "path": "bad.ps1"}),
+    ("unknown", {"status": "unknown", "path": "maybe.docx"}),
+    ("success", {"status": "unknown", "path": "maybe.docx"}),
+    ("success", {"path": "requested-only.docx"}),
+])
+def test_receipt_rejects_paths_without_successful_write_evidence(status, result):
+    receipt = build_pipeline_task_receipt(task_status="failed", commands=[{
+        "action": "write_content", "tool_name": "write_content", "step_id": "step_12", "status": status,
+        "result": {**result, "created_files": ["not-created.docx"], "files_verified": ["not-created.docx"]}}],
+        step_results=[], recovery_warnings=[], receipt_dicts=[])
+    assert receipt["created_files"] == receipt["created_file_evidence"] == receipt["files_verified"] == []
 
 
 def test_unavailable_provider_recovery_does_not_loop_or_dispatch():
@@ -184,6 +231,31 @@ def test_status_and_report_paths_do_not_admit_worker(stored, monkeypatch, questi
         assert saved_step_reports(task)[0]["text"] in result["answer"]
     assert not result.get("worker_task_id")
     assert owned_job("source", user["id"])["state"] == "failed"
+
+
+def test_running_stage_survives_restore_and_status_does_not_dispatch(stored, monkeypatch):
+    from server import orchestrator as orch
+    user, chat, task = stored
+    task.update(status="running", task_receipt={}, answer="", tasks=[{"steps": [
+        {"title": "Research", "status": "done"}, {"title": "Word", "status": "running"},
+        {"title": "Slides", "status": "pending"}]}])
+    task["commands"] = task["commands"][:2]
+    task["worker_report"] = build_worker_report(task)
+    task.pop("history_metadata", None)
+    with db.get_db() as c:
+        c.execute("UPDATE worker_jobs SET state='running',payload=?,report=NULL WHERE task_id='source'",
+                  (json.dumps(task),))
+    async def decide(*args, **kwargs):
+        return orch.Decision(intent="task_status", reference="explicit", task_id="source"), {}
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("Status must not dispatch or admit a Worker")
+    monkeypatch.setattr(orch, "decide", decide)
+    cmd = SimpleNamespace(message="На каком этапе?", request_id="stage", device_id="", modes={}, broadcast=False)
+    result = asyncio.run(orch.run_turn(cmd, user, chat, forbidden))
+    assert "Завершены этапы: Research" in result["answer"]
+    assert "Текущий этап: Word" in result["answer"]
+    assert "Slides" not in result["answer"]
+    assert owned_job("source", user["id"])["state"] == "running"
 
 
 def test_new_action_and_continuation_use_delegate_not_old_worker(stored, monkeypatch):

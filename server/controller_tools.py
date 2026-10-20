@@ -19,6 +19,7 @@ EXECUTE_CMD_DESCRIPTION = (
 )
 
 WRITE_CONTENT_DESCRIPTION = (
+    "Path is literal: resolve environment/home variables on the target device first; never pass $env:, %VAR% or ~. "
     "Canonical tool for creating text content or performing an explicitly requested full replacement. Prefer it for long, multiline, or generated new content. "
     "For a limited edit, prefer a reliable local transformation of the current original using existing tools; do not reconstruct unchanged elements in the LLM. "
     "Overwrite replaces the entire file; neither overwrite nor append guarantees preservation. Verify the requested change and preservation against the original before claiming success. "

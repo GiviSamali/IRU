@@ -53,6 +53,18 @@ def test_agent_dispatch_allows_creation_but_holds_deletion(monkeypatch):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("path", [r"$env:LOCALAPPDATA\IRU\scripts\helpers\build.ps1",
+    r"%LOCALAPPDATA%\IRU\scripts\helpers\build.ps1", "~/.iru/scripts/helpers/build.py", "${HOME}/build.py"])
+def test_unresolved_write_path_fails_before_dispatch(monkeypatch, path):
+    class WS:
+        async def send_text(self, message):
+            pytest.fail("Unresolved path must never reach the agent")
+    monkeypatch.setitem(runtime.devices, "1:pc", {"info": {"os": "Windows"}, "pending": {}, "ws": WS()})
+    monkeypatch.setattr(runtime, "get_device_profile", lambda *a, **kw: None)
+    with pytest.raises(RuntimeError, match="unresolved_write_path"):
+        asyncio.run(runtime.send_command_to_agent("1:pc", "write_content", {"path": path, "content": "text"}))
+
+
 @pytest.mark.parametrize("pipeline", [True, False])
 @pytest.mark.parametrize("accepted", [True, False])
 def test_decision_binds_user_and_command_and_is_one_shot(monkeypatch, pipeline, accepted):
