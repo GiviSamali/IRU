@@ -35,9 +35,17 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
             shell_cmd = ["cmd", "/c", f"chcp 65001 >nul & {command}"]
         else:
             # auto и powershell — оба идут через PowerShell
+            # Surface nested executable failures instead of shell exit 0.
+            guarded = (
+                "$global:LASTEXITCODE=0; $ErrorActionPreference='Stop'; "
+                "try { " + command + "; "
+                "if ($global:LASTEXITCODE -is [int] -and $global:LASTEXITCODE -ne 0) "
+                "{ exit $global:LASTEXITCODE } "
+                "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }"
+            )
             shell_cmd = [
                 "powershell", "-NoProfile", "-NonInteractive",
-                "-Command", ps_prefix + command
+                "-Command", ps_prefix + guarded
             ]
 
         env = os.environ.copy()

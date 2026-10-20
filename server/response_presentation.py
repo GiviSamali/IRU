@@ -27,6 +27,9 @@ FILE_TYPES = {".pptx":"Презентация", ".ppt":"Презентация",
               ".xlsx":"Таблица", ".xls":"Таблица", ".html":"Страница сайта", ".pdf":"PDF-документ"}
 ERRORS = {
     "model_output_truncated":"Модель исчерпала выходной бюджет; ответ был обрезан и не исполнялся.",
+    "recovery_exhausted":"Попытки исправления ошибки шага исчерпаны.",
+    "confirmation_expired":"Время подтверждения истекло; команда не выполнялась.",
+    "iteration_limit":"Шаг исчерпал бюджет итераций.",
     "no_progress":"Выполнение остановлено: новые результаты не получены. Более точная причина в сохранённом результате отсутствует.",
     "permission_denied":"Нет доступа к файлу или папке.", "access_denied":"Нет доступа к файлу или папке.",
     "source_not_found":"Не удалось найти исходный файл.", "file_not_found":"Не удалось найти файл.",
@@ -122,6 +125,14 @@ def failure_explanation(task, report=None, *, include_reports=False):
     if failed: lines.append("Остановка на этапе: " + "; ".join(filter(None, failed)) + ".")
     reason = _reason(task, report or {})
     lines.append("Причина: " + (reason or "точная причина в сохранённых данных не указана."))
+    failed_commands = receipt.get("commands_failed") or []
+    if failed_commands:
+        last = failed_commands[-1]
+        if isinstance(last, dict):
+            detail = last.get("error_type") or last.get("error") or (
+                f"returncode={last['returncode']}" if last.get("returncode") not in (None, 0, "0") else "")
+            if detail:
+                lines.append("Последняя ошибка инструмента: " + str(detail)[:260])
     if pending: lines.append("Не выполнялись: " + "; ".join(filter(None, pending)) + ".")
     reports = saved_step_reports(task)
     if reports:

@@ -22,12 +22,16 @@ class StepProgress:
         self.recovery_used = False
         self.recovery_active = False
         self.repeated = 0
+        self.failure_recoveries = 0
+        self.last_failure_key = None
+        self.max_failure_recoveries = 3
 
     def observe(self, journal):
         entries = journal[self.cursor:]
         self.cursor = len(journal)
         progress = False
         failed = False
+        failure_key = None
         for entry in entries:
             result = entry.get("result") or {}
             if not isinstance(result, dict):
@@ -37,20 +41,27 @@ class StepProgress:
                        or bool(result.get("error")) or result.get("returncode") not in (None, 0, "0"))
             failed = failed or failure
             key = json.dumps(_stable(result), sort_keys=True, ensure_ascii=False, default=str)
+            if failure:
+                failure_key = json.dumps([entry.get("action") or entry.get("tool_name"),
+                                          entry.get("command"), key], ensure_ascii=False)
             if key in self.seen:
                 self.repeated += 1
             elif not failure:
                 progress = True
             self.seen.add(key)
         if failed:
-            if self.recovery_used:
+            if (failure_key == self.last_failure_key
+                    or self.failure_recoveries >= self.max_failure_recoveries):
                 return "stop", "recovery_exhausted"
+            self.failure_recoveries += 1
+            self.last_failure_key = failure_key
             self.recovery_used = self.recovery_active = True
             self.stalled = 0
             return "recover", "tool_failure"
         self.stalled = 0 if progress else self.stalled + 1
         if progress:
             self.recovery_active = False
+            self.last_failure_key = None
         if self.stalled >= 3:
             if self.recovery_used:
                 return "stop", "no_progress"

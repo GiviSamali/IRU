@@ -288,18 +288,14 @@ async def send_command_to_agent(
             validate_execute_command_paths_for_device(cmd_text, (dev or {}).get("info", {}), profile)
         except ValueError:
             raise RuntimeError(f"BLOCKED: {PATH_SCOPE_ERROR}")
-        if len(cmd_text) > 2000:
+        if len(cmd_text) > 4000:
             raise RuntimeError(
-                "Команда слишком длинная (>2000 символов). "
+                "Команда слишком длинная (>4000 символов). "
                 "Используй write_content для создания текстовых файлов, "
                 "а не PowerShell-строки."
             )
         low = cmd_text.lower()
-        if "word.application" in low and ("typetext" in low or "typeparagraph" in low):
-            raise RuntimeError(
-                "Создание текстовых файлов через Word.Application/TypeText запрещено. "
-                "Используй инструмент write_content — он создаёт файл напрямую и безопасно."
-            )
+        # Word COM is allowed when the normal action/path/confirmation policy allows it.
         if "invoke-webrequest" in low or "iwr " in low or "curl " in low or "wget " in low:
             search_hosts = ("duckduckgo.com", "google.com/search", "bing.com/search", "yandex.ru/search")
             if any(host in low for host in search_hosts):

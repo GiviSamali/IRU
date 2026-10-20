@@ -89,7 +89,13 @@ def write_content(path: str, content: str, append: bool = False, encoding: str =
         file_path = Path(path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         mode = "a" if append else "w"
-        with open(file_path, mode, encoding=encoding, newline="") as handle:
+        # Windows PowerShell 5.1 requires a BOM for UTF-8 .ps1 scripts.
+        # Appends must not introduce an additional BOM into the middle of a file.
+        actual_encoding = ("utf-8-sig" if platform_mod.name == "Windows"
+                           and file_path.suffix.lower() == ".ps1"
+                           and encoding.lower().replace("_", "-") == "utf-8"
+                           and not append else encoding)
+        with open(file_path, mode, encoding=actual_encoding, newline="") as handle:
             handle.write(content)
         return {
             "path": str(file_path),
