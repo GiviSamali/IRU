@@ -645,6 +645,7 @@ function renderMessages() {
   // Compact messages render inside a wrapper, but the shared chat viewport scrolls.
   const scrollContainer = document.getElementById('chatMessages');
   const container = document.getElementById('adaptiveConversation') || scrollContainer;
+  const existingMessageKeys = new Set([...container.children].map(node => node.dataset.messageKey));
   const presentation = captureMessagePresentation(container, scrollContainer);
 
   if (state.messages.length === 0) {
@@ -704,7 +705,7 @@ function renderMessages() {
     }
     if (!compact && typeof renderMessageUsage === 'function') bodyHTML += renderMessageUsage(m);
     const briefResult=workerInDock && IRUSmartUI.taskState(m,m.tasks||[],m.commands||[])==='success';
-    html += `<div class="msg ${role}${m.loading ? ' msg-thinking' : ''}${briefResult ? ' msg-worker-result' : ''}" data-message-key="${escapeAttr(view.key)}"><div class="msg-role">${role === 'user' ? 'вы' : 'иру'}</div><div class="msg-body">${bodyHTML}</div></div>`;
+    html += `<div class="msg ${role}${!compact && !existingMessageKeys.has(view.key) ? ' msg-enter' : ''}${m.loading ? ' msg-thinking' : ''}${briefResult ? ' msg-worker-result' : ''}" data-message-key="${escapeAttr(view.key)}"><div class="msg-role">${role === 'user' ? 'вы' : 'иру'}</div><div class="msg-body">${bodyHTML}</div></div>`;
   }
 
   if(compact) {
