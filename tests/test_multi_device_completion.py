@@ -125,7 +125,8 @@ def test_plan_reports_each_device_despite_missing_summary_tool(monkeypatch, vali
         assert "b: Open on b — не выполнено." in result["answer"]
         assert "not found" in result["answer"]
     assert not any(x.get("action") == "tool_only_protocol" for x in result["commands"])
-    assert phases.count("pipeline.final") == 2
+    # A known failed PLAN is explained from its saved steps, without another synthesis call.
+    assert phases.count("pipeline.final") == (0 if fail_second else 2)
 
 
 def test_other_device_success_cannot_hide_failed_device():

@@ -73,6 +73,8 @@ async def run_answer_only_repair_turn(
         return {"ok": False, "reason": f"repair request failed: {type(exc).__name__}: {exc}"}
 
     choice = data["choices"][0]
+    if choice.get("finish_reason") == "length":
+        return {"ok": False, "reason": "model_output_truncated"}
     assistant_msg = choice.get("message") or {}
     tool_calls = assistant_msg.get("tool_calls")
     try:

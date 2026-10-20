@@ -128,7 +128,10 @@ def test_restart_explicitly_terminates_unstarted_and_uncertain_jobs_without_repl
         assert owned_job(first['task_id'],a['id'])['state']=='unknown'
         assert owned_job(second['task_id'],a['id'])['state']=='cancelled'
         assert calls==[first['task_id']] and not restarted.runners
-        assert db.get_messages(a['chat_id'])[-1]['taskStatus']=='cancelled'
+        # Recovery queries have no ordering contract; bind each outcome to its task.
+        messages={m.get('_taskId'):m for m in db.get_messages(a['chat_id'])}
+        assert messages[first['task_id']]['taskStatus']=='unknown'
+        assert messages[second['task_id']]['taskStatus']=='cancelled'
     asyncio.run(scenario())
 
 

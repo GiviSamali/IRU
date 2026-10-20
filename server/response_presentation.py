@@ -26,6 +26,8 @@ OBSERVATION_TOOLS = {
 FILE_TYPES = {".pptx":"Презентация", ".ppt":"Презентация", ".docx":"Документ", ".doc":"Документ",
               ".xlsx":"Таблица", ".xls":"Таблица", ".html":"Страница сайта", ".pdf":"PDF-документ"}
 ERRORS = {
+    "model_output_truncated":"Модель исчерпала выходной бюджет; ответ был обрезан и не исполнялся.",
+    "no_progress":"Выполнение остановлено: новые результаты не получены. Более точная причина в сохранённом результате отсутствует.",
     "permission_denied":"Нет доступа к файлу или папке.", "access_denied":"Нет доступа к файлу или папке.",
     "source_not_found":"Не удалось найти исходный файл.", "file_not_found":"Не удалось найти файл.",
     "target_exists":"Файл с таким именем уже есть. Он не перезаписан.",
@@ -88,6 +90,49 @@ def _reason(task, report):
             if isinstance(code,str) and code in ERRORS:return ERRORS[code]
         break
     return ""
+
+
+def saved_step_reports(task):
+    """Read accepted informational terminals, without replay or whole-goal success claims."""
+    commands = task.get("commands") or []
+    reports = []
+    for index, command in enumerate(commands):
+        payload = command.get("result") or {}
+        if (_tool(command) != "answer.text" or command.get("status") != "terminal"
+                or not isinstance(payload, dict) or payload.get("answer_type") not in {"grounded_report", "pure_text", "partial_report"}
+                or (payload.get("self_check") or {}).get("claims_completed_action") is not False):
+            continue
+        text = payload.get("text")
+        validator = has_grounded_terminal_answer if payload.get("answer_type") == "grounded_report" else has_validated_terminal_answer
+        if isinstance(text, str) and validator(text, commands[:index + 1]):
+            reports.append({"step_id": command.get("step_id"), "text": text,
+                            "device_id": command.get("target_device_id") or command.get("device_id"),
+                            "observed_at": command.get("collected_at") or command.get("created_at")})
+    return reports
+
+
+def failure_explanation(task, report=None, *, include_reports=False):
+    """Explain persisted steps. Historical content is material, never fresh execution proof."""
+    receipt = task.get("task_receipt") or {}
+    steps = receipt.get("step_results") or [s for plan in task.get("tasks") or [] for s in plan.get("steps") or []]
+    done = [s.get("title") or s.get("description") for s in steps if s.get("status") in {"done", "recovered"}]
+    failed = [s.get("title") or s.get("description") for s in steps if s.get("status") == "failed"]
+    pending = [s.get("title") or s.get("description") for s in steps if s.get("status") in {"blocked", "pending"}]
+    lines = ["Задачу закончить не удалось; исходное поручение не завершено."]
+    if done: lines.append("Завершённые этапы: " + "; ".join(filter(None, done)) + ".")
+    if failed: lines.append("Остановка на этапе: " + "; ".join(filter(None, failed)) + ".")
+    reason = _reason(task, report or {})
+    lines.append("Причина: " + (reason or "точная причина в сохранённых данных не указана."))
+    if pending: lines.append("Не выполнялись: " + "; ".join(filter(None, pending)) + ".")
+    reports = saved_step_reports(task)
+    if reports:
+        lines.append("Доступен сохранённый промежуточный отчёт. Это исходный материал; достоверность каждого утверждения отдельно не подтверждается.")
+        if include_reports:
+            lines.extend(r["text"] for r in reports)
+    artifacts = _artifacts(task, report) if report else []
+    if artifacts: lines.append("Подтверждённые при выполнении файлы: " + "; ".join(a["path"] for a in artifacts) + ". Перед открытием нужна текущая проверка.")
+    else: lines.append("Подтверждённых созданных файлов в результате нет.")
+    return "\n\n".join(lines)
 
 
 def normalized_worker_report(task, report=None):
@@ -205,6 +250,8 @@ def worker_presentation(task, report=None):
             return {"conversational_response":answer,"execution_details":""}
         reason=_reason(task,report)
         if reason:human+=" "+reason
+    if status in {"partial", "failed"} and ((receipt.get("step_results") or task.get("tasks"))):
+        human = failure_explanation(task, report)
     return {"conversational_response":human,"execution_details":answer if answer!=human else ""}
 
 

@@ -905,9 +905,12 @@ async def process_non_pipeline_command(
                 elif fn_name == "system_get_last_run_summary":
                     tool_result = get_last_run_summary(
                         user_id=user_id,
-                        chat_id=int(fn_args.get("chat_id") or chat_id) if (fn_args.get("chat_id") or chat_id) else None,
+                        chat_id=int(chat_id) if chat_id else None,
                         include_success=bool(fn_args.get("include_success", True)),
                         exclude_task_id=poll_task_id,
+                        source_task_id=fn_args.get("source_task_id"),
+                        report_offset=fn_args.get("report_offset", 0),
+                        allowed_devices={str(target_device).split(":")[-1]},
                     )
                     append_entry(tool_log_entry(
                         fn_name,

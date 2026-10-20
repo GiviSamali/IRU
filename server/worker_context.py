@@ -63,10 +63,25 @@ def source_references(owner, chat_id, source_ids, allowed_devices):
             and bool(report.get('target_device_ids'))
             and set(report['target_device_ids']).issubset(allowed_devices)) else ''
         summary_verified=report.get('status') in {'success','partial'} and bool(summary)
+        if report.get('status') == 'failed' and report.get('target_device_ids') and set(report['target_device_ids']).issubset(allowed_devices):
+            try:
+                from .response_presentation import saved_step_reports
+            except ImportError:
+                from response_presentation import saved_step_reports
+            saved = saved_step_reports(restored)
+            # Only accepted terminals from the owned source; no old commands become new-run basis.
+            if saved:
+                summary = 'Сохранённые промежуточные материалы failed-задачи (не подтверждение всей цели или каждого факта):\n' + '\n\n'.join(r['text'] for r in saved)
+                summary_verified = False
         if not summary and report.get('status')=='unknown' and report.get('target_device_ids') and set(report['target_device_ids']).issubset(allowed_devices):
             unverified=restored.get('execution_details') or restored.get('answer') or ''
             if unverified:summary='Неподтверждённый исторический ответ; только для разрешения ссылок, не доказательство исполнения: '+unverified
         references.append({'summary_verified':summary_verified,'task_id':source_id,'status':row['state'],'observed_at':row['updated_at'],
+            'source_objective':clip_context_text(restored.get('original_request') or restored.get('message'),800),
+            'completed_steps':[(s.get('title') or s.get('description') or '')[:120]
+                               for plan in restored.get('tasks') or [] for s in plan.get('steps') or []
+                               if s.get('status') in {'done','recovered'}][:12],
+            'full_report_tool':'system_get_last_run_summary(source_task_id='+source_id+')',
             'source_device_ids':report.get('target_device_ids') or [],
             'summary':clip_context_text(summary,1600),'summary_truncated':len(summary)>1600,'artifacts':artifacts[:6],
             'artifacts_truncated':len(artifacts)>6})

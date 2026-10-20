@@ -486,6 +486,9 @@ Tool-only protocol:
 4. Если шаг завершён — вызови answer_text с итогом и evidence; никогда не возвращай raw assistant text.
 5. Если шаг не удаётся — верни краткое описание проблемы и на чём остановился.
 6. Для длинных текстов и файлов используй write_content.
+   Разделяй объёмные материалы на небольшие завершённые операции: секции/файлы, затем сборка
+   и проверка. Не пытайся вместить весь пакет документов в один tool call. Все требования шага
+   остаются обязательными; промежуточная секция не означает завершение шага.
    Обычное создание запрошенных файлов/папок не требует отдельного подтверждения.
    Удаление временных файлов и очистку выполняй отдельной командой с подтверждением, не добавляй
    Remove-Item/rm в команду создания или проверки среды. Не удаляй что-либо ради проверки записи.
@@ -1030,6 +1033,9 @@ def build_pipeline_task_receipt(
 
     return {
         "task_status": task_status,
+        "terminal_reason": next((s.get("terminal_reason") for s in reversed(step_results) if s.get("terminal_reason")), None),
+        "step_results": [{k: s[k] for k in ("idx", "title", "device_id", "status", "summary", "terminal_reason") if k in s}
+                         for s in step_results],
         "artifacts_created": _unique(artifacts_created),
         "project_path": _common_artifact_parent(_unique(artifacts_created)),
         "created_files": _unique(artifacts_created),
@@ -1163,6 +1169,9 @@ async def run_pipeline_worker(
     })
 
     commands_log = []
+    truncation_metrics = []
+    compact_output = False
+    truncation_pending = False
     recovery_only = bool(runtime_tasks.get(poll_task_id, {}).get("_action_outcome_unknown"))
     if recovery_only:
         worker_tools = recovery_observation_tools(worker_tools or DEFAULT_CONTROLLER_TOOLS)
@@ -1226,7 +1235,7 @@ async def run_pipeline_worker(
             }
         if browser_answer_start is not None and iteration >= browser_answer_start + 2:
             break
-        if iteration and not browser_answer_phase and not recovery_only:
+        if iteration and not browser_answer_phase and not recovery_only and not truncation_pending:
             decision, reason = progress_guard.observe(commands_log)
             if decision == "stop":
                 stop_reason = reason
@@ -1240,16 +1249,25 @@ async def run_pipeline_worker(
             f"[pipeline/worker] iteration {iteration + 1}/{PIPELINE_WORKER_MAX_ITERATIONS}, "
             f"step_index={step_index}"
         )
-        data = await chat_completion_request_fn(
-            client=client,
-            cfg=cfg,
-            model=model,
-            messages=messages,
-            tools=worker_tools,
-            tool_choice="required",
-            usage_context={**(usage_context or {}), "phase": f"pipeline.worker.step_{step_index + 1}.iteration.{iteration + 1}"},
-            phase=f"pipeline.worker.step_{step_index + 1}.iteration.{iteration + 1}",
-        )
+        try:
+            data = await chat_completion_request_fn(
+                client=client,
+                cfg=cfg,
+                model=model,
+                messages=messages,
+                tools=worker_tools,
+                tool_choice="required",
+                usage_context={**(usage_context or {}), "phase": f"pipeline.worker.step_{step_index + 1}.iteration.{iteration + 1}"},
+                phase=f"pipeline.worker.step_{step_index + 1}.iteration.{iteration + 1}" + (".truncation_recovery" if compact_output else ""),
+            )
+        except Exception as exc:
+            if not truncation_pending:
+                raise
+            append_step_command("pipeline_guard", "[system] model_output_truncated", step_device_id,
+                                {"error": "model_output_truncated", "attempts": truncation_metrics,
+                                 "recovery_error_type": type(exc).__name__, "recovery_status": "unavailable"}, status="blocked")
+            return {"status": "error", "answer": "Ответ модели обрезан; ограниченная попытка восстановления недоступна. Выполненные операции сохранены.",
+                    "commands": commands_log, "terminal_reason": "model_output_truncated"}
         choice = data["choices"][0]
         assistant_msg = choice["message"]
         finish_reason = choice.get("finish_reason", "?")
@@ -1262,12 +1280,35 @@ async def run_pipeline_worker(
         )
 
         if finish_reason == "length":
-            if tool_calls and iteration < PIPELINE_WORKER_MAX_ITERATIONS - 1:
-                messages.append({
-                    "role": "user",
-                    "content": "Предыдущий ответ был обрезан. Продолжи короче и точнее.",
-                })
-                continue
+            usage = data.get("usage") or {}
+            truncation_metrics.append({
+                "iteration": iteration + 1, "step_index": step_index,
+                "model": model, "completion_tokens": usage.get("completion_tokens"),
+                "reasoning_tokens": (usage.get("completion_tokens_details") or {}).get("reasoning_tokens"),
+                "prompt_tokens": usage.get("prompt_tokens"),
+                "tool_argument_chars": sum(len(c.get("function", {}).get("arguments") or "") for c in (tool_calls or [])),
+            })
+            # Never parse or dispatch ANY part of a truncated response.
+            record_lifecycle_event("recovery", source="model_output_truncated",
+                                   **{k: v for k, v in truncation_metrics[-1].items() if k != "model"})
+            if len(truncation_metrics) > 1 or not model.startswith("deepseek-") or iteration >= PIPELINE_WORKER_MAX_ITERATIONS - 2:
+                append_step_command("pipeline_guard", "[system] model_output_truncated", step_device_id,
+                                    {"error": "model_output_truncated", "attempts": truncation_metrics}, status="blocked")
+                return {"status": "error", "answer": "Ответ модели обрезан из-за исчерпания выходного бюджета. Шаг не завершён; полученные результаты сохранены.",
+                        "commands": commands_log, "terminal_reason": "model_output_truncated"}
+            compact_output = True
+            truncation_pending = True
+            messages.append({"role": "user", "content": (
+                "The previous response exhausted the output budget and was discarded in full; no tool from it ran. "
+                "Thinking is disabled for recovery. Preserve ALL assigned requirements and existing evidence. "
+                "Perform only the next small complete operation (one tool); do not regenerate completed actions. "
+                "For long deliverables use several small complete write_content operations, one section/file at a time, "
+                "then assemble and verify through the existing tools. Do not claim the whole step is complete until all "
+                "requirements are met. Keep each tool payload compact; never send an incomplete JSON fragment."
+            )})
+            continue
+
+        truncation_pending = False
 
         if not tool_calls:
             if browser_policy.browser_only and commands_log and commands_log[-1].get("tool_name") == "web.read" and commands_log[-1].get("result", {}).get("status") == "success":
@@ -1555,7 +1596,7 @@ async def run_pipeline_worker(
                 except (TypeError, ValueError):
                     summary_user_id = None
                 try:
-                    summary_chat_id = int(fn_args.get("chat_id") or (usage_context or {}).get("chat_id")) if (fn_args.get("chat_id") or (usage_context or {}).get("chat_id")) else None
+                    summary_chat_id = int((usage_context or {}).get("chat_id")) if (usage_context or {}).get("chat_id") else None
                 except (TypeError, ValueError):
                     summary_chat_id = None
                 tool_result = get_last_run_summary(
@@ -1563,6 +1604,9 @@ async def run_pipeline_worker(
                     chat_id=summary_chat_id,
                     include_success=bool(fn_args.get("include_success", True)),
                     exclude_task_id=poll_task_id,
+                    source_task_id=fn_args.get("source_task_id"),
+                    report_offset=fn_args.get("report_offset", 0),
+                    allowed_devices={step_device_id.split(":")[-1]},
                 )
                 append_step_command(
                     fn_name,
@@ -1866,7 +1910,7 @@ async def run_pipeline_worker(
         target_device_id=step_device_id,
         hostname=shared.get("current_hostname") or step_device_id,
         iteration=PIPELINE_WORKER_MAX_ITERATIONS,
-        usage_context={**(usage_context or {}), "phase": f"browser_bridge.step_{step_index + 1}.answer_repair" if browser_answer_phase else f"pipeline.worker.step_{step_index + 1}.answer_repair"},
+        usage_context={**(usage_context or {}), "phase": (f"browser_bridge.step_{step_index + 1}.answer_repair" if browser_answer_phase else f"pipeline.worker.step_{step_index + 1}.answer_repair") + (".truncation_recovery" if compact_output else "")},
     )
     if repair_result.get("ok"):
         return {
@@ -1874,6 +1918,12 @@ async def run_pipeline_worker(
             "answer": repair_result["answer"],
             "commands": commands_log,
         }
+
+    if repair_result.get("reason") == "model_output_truncated":
+        append_step_command("pipeline_guard", "[system] model_output_truncated", step_device_id,
+                            {"error": "model_output_truncated", "phase": "answer_repair"}, status="blocked")
+        return {"status": "error", "answer": "Итоговый ответ шага обрезан. Выполненные операции сохранены; шаг не подтверждён.",
+                "commands": commands_log, "terminal_reason": "model_output_truncated"}
 
     if browser_answer_phase:
         payload=validate_answer_text_payload(browser_partial_read(commands_log),commands_log)
@@ -2223,6 +2273,7 @@ async def process_pipeline_subagents(
                 "status": step_status,
                 "summary": step_summary,
                 "validated_answer": _result_has_validated_answer_text(step_commands),
+                "terminal_reason": worker_result.get("terminal_reason"),
             }
             step_record["handoff"] = step_handoff(step_summary, step_commands, step_status)
             if step_status == "recovered":
@@ -2261,6 +2312,10 @@ async def process_pipeline_subagents(
             failure_reason = failure_reason or "План выполнен не полностью: остались невыполненные шаги."
             for pending_idx in range(len(step_results), len(normalized_plan["steps"])):
                 db.update_step(db_task_id, pending_idx, "blocked", summary="Предыдущий шаг не завершён.")
+                pending_step = normalized_plan["steps"][pending_idx]
+                step_results.append({"idx": pending_idx, "title": pending_step["title"],
+                                     "device_id": pending_step.get("device_id"), "status": "blocked",
+                                     "summary": "Предыдущий шаг не завершён."})
 
         task_status = "cancelled" if pipeline_cancelled else ("failed" if pipeline_failed else (
             "completed_with_recovery"
@@ -2295,6 +2350,12 @@ async def process_pipeline_subagents(
                 "task_receipt": receipt,
             }
 
+        if pipeline_failed:
+            # An optional final model summary cannot overwrite a known incomplete PLAN.
+            receipt["answer_source"] = "pipeline_step_report"
+            return {"answer": format_pipeline_step_report(step_results, task_status), "commands": all_commands,
+                    "tasks": collect_tasks(created_task_ids), "task_receipt": receipt}
+
         summary_payload = {
             "original_request": user_message,
             "approved_plan": normalized_plan,
@@ -2327,6 +2388,9 @@ async def process_pipeline_subagents(
                     usage_context={**(usage_context or {}), "phase": "pipeline.final"},
                     phase="pipeline.final",
                 )
+                if summary_data["choices"][0].get("finish_reason") == "length":
+                    receipt["summary_warning"] = "model_output_truncated"
+                    break
                 assistant_msg = summary_data["choices"][0]["message"]
                 try:
                     tool_call = validate_tool_call_batch(assistant_msg.get("tool_calls"))
@@ -2391,7 +2455,7 @@ async def process_pipeline_subagents(
                     summary_messages.append({"role": "user", "content": "Use answer_text for final user-facing pipeline summary."})
                 except ProtocolValidationError as exc:
                     summary_messages.append({"role": "user", "content": exc.correction})
-            if not final_answer:
+            if not final_answer and not receipt.get("summary_warning"):
                 receipt["summary_warning"] = "model_did_not_select_answer_tool"
         except Exception as exc:
             logger.warning("Pipeline summary unavailable: %s", type(exc).__name__)

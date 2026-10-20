@@ -95,7 +95,35 @@ def get_last_run_summary(
     chat_id: int | None = None,
     include_success: bool = True,
     exclude_task_id: str | None = None,
+    source_task_id: str | None = None,
+    report_offset: int = 0,
+    allowed_devices: set[str] | None = None,
 ) -> dict[str, Any]:
+    if source_task_id:
+        # Explicit persisted source: ownership/chat/device boundaries precede all content access.
+        try:
+            from .worker_scheduler import owned_job, restore_task
+            from .response_presentation import saved_step_reports
+        except ImportError:
+            from worker_scheduler import owned_job, restore_task
+            from response_presentation import saved_step_reports
+        row = owned_job(source_task_id, user_id) if user_id is not None else None
+        if not row or chat_id is None or row['chat_id'] != chat_id or source_task_id == exclude_task_id:
+            return {"status": "blocked", "error": "source_task_not_owned_or_in_chat"}
+        source = restore_task(row)
+        report = source.get('worker_report') or {}
+        if not allowed_devices or not report.get('target_device_ids') or not set(report['target_device_ids']).issubset(allowed_devices):
+            return {"status": "blocked", "error": "source_device_out_of_scope"}
+        saved = saved_step_reports(source)
+        text = '\n\n'.join(r['text'] for r in saved)
+        offset = max(0, report_offset)
+        end = min(len(text), offset + 4000)
+        return {"status": "success", "source_status": row['state'], "source_task_id": source_task_id,
+                "last_task_id": source_task_id,
+                "historical_material_only": True, "current_execution_evidence": False,
+                "report_text": text[offset:end], "report_offset": offset,
+                "next_offset": end if end < len(text) else None,
+                "total_chars": len(text), "saved_report_refs": [r['step_id'] for r in saved]}
     candidates = []
     for task in tasks.values():
         if user_id is not None and task.get("user_id") != user_id:

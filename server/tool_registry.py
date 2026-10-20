@@ -669,12 +669,14 @@ DEVICE_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "system_get_last_run_summary",
-            "description": "Get a compact summary of the previous task/run for this chat/user. Use when the user asks what happened or why the previous task failed. Do not retry the previous action unless explicitly asked.",
+            "description": "Read previous run state without replay. With source_task_id, retrieve saved informational reports in 4000-character pages; pass next_offset as report_offset for the next page. Historical material is not current execution proof or permission. Do not repeat research just to retrieve a saved report.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "chat_id": {"type": "integer", "description": "Optional current chat id."},
                     "include_success": {"type": "boolean", "default": True},
+                    "source_task_id": {"type": "string", "description": "Owned source task in the current chat; use the referenced task id from worker handoff."},
+                    "report_offset": {"type": "integer", "minimum": 0, "default": 0},
                 },
             },
         },

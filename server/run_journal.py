@@ -31,7 +31,7 @@ _TRACE_LABELS = frozenset({"nl", "onboarding", "pipeline", "non_pipeline", "broa
     "plan_declined", "orchestrator_decision", "protocol_recovery", "ordinary_task", "other", "grounded_report", "partial_report",
     "ask_clarification", "report_failure", "request_confirmation", "dialogue", "conversation", "factual_answer",
     "history", "iteration_limit", "no_progress", "success_criteria", "browser_answer_unavailable", "completed_successfully",
-    "missing_tool_call", "multiple_tool_calls", "unexpected_tool", "invalid_terminal_payload", "terminal_audit_rejected"})
+    "missing_tool_call", "multiple_tool_calls", "unexpected_tool", "invalid_terminal_payload", "terminal_audit_rejected", "model_output_truncated"})
 
 
 
@@ -60,7 +60,7 @@ def record_lifecycle_event(event: str, **metadata) -> None:
             if key in metadata:
                 value = metadata[key]
                 row[key] = value if isinstance(value,str) and value in _TRACE_LABELS else "other"
-        for key in ("tool_count", "device_count", "iteration", "step_index"):
+        for key in ("tool_count", "device_count", "iteration", "step_index", "completion_tokens", "reasoning_tokens", "prompt_tokens", "tool_argument_chars"):
             if type(metadata.get(key)) is int:
                 row[key] = max(0, min(metadata[key], 100000))
         if type(metadata.get("duration_ms")) is int:
