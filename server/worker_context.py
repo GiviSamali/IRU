@@ -29,7 +29,7 @@ def clip_context_text(text, limit):
 def capture_history(chat_id):
     """Freeze only bounded fields needed for handoff, never a complete old loop."""
     frozen=[]
-    for row in db.get_messages(chat_id,limit=8):
+    for row in db.get_messages(chat_id,limit=8,include_result_first_workers=False):
         record={key:row.get(key) for key in ('id','role','taskKind','_taskId','assignmentDeviceIds')}
         record['content']=clip_context_text(row.get('executionDetails') or row.get('content'),1000)
         record['content_truncated']=len(str(row.get('executionDetails') or row.get('content') or ''))>1000
