@@ -627,6 +627,7 @@ class WorkerScheduler:
                         "original_request": original, "message": original,
                         "proposed_objective": assignment["objective"], "status": state,
                         "assigned_artifacts": assignment.get("artifacts") or [],
+                        "result_first": True,
                         "created_at": now, "worker_id": "worker-1", "orchestrated": True,
                         "orchestrator_execution_mode": "simple", "modes": dict(template.get("modes") or {})}
                 if assignment.get("replaces_source_task_id"):
