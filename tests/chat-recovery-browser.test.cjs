@@ -235,3 +235,36 @@ test('Owner-scoped endpoint refusal prevents opening another user task',async()=
   assert.equal(f.writes.length,0);
  }finally{await p.close();}
 });
+
+
+test('Result First shows one Goal answer and no sibling Worker chat messages',async()=>{
+ const f=await setup(),p=f.page;
+ try{
+  f.setDetails({turn:{
+   task_id:'turn',chat_id:1,status:'done',kind:'goal',goal_id:'one-goal',
+   message:'Create two documents',device_ids:[],answer:'Готово. Подтверждены все 2 результата.',
+   conversational_response:'Готово. Подтверждены все 2 результата.',
+   presentation_status:'success',commands:[],tasks:[]
+  }});
+  await p.route('**/nl_command',route=>route.fulfill({json:{
+   status:'ok',response_type:'orchestrator',task_id:'turn',goal_id:'one-goal',
+   worker_task_ids:['word-task','slides-task'],worker_task_id:'word-task',chat_id:1
+  }}));
+  await p.evaluate(async()=>{
+   document.querySelector('#chatInput').value='Create two documents';
+   await sendMessage();
+  });
+  await p.waitForFunction(()=>!taskPollLoops.has('turn') &&
+   state.messages.some(m=>m._taskId==='turn' && m.content?.includes('Готово.')));
+  const observed=await p.evaluate(()=>({
+   assistant:state.messages.filter(m=>m.role==='assistant').map(m=>({id:m._taskId,kind:m.taskKind,content:m.content})),
+   pending:state.pendingTasks.map(m=>m.task_id)
+  }));
+  assert.equal(observed.assistant.length,1);
+  assert.equal(observed.assistant[0].id,'turn');
+  assert.ok(observed.assistant[0].content.includes('2 результата'));
+  assert.equal(observed.assistant.filter(m=>m.kind==='worker').length,0);
+  assert.equal(observed.pending.length,0);
+  assert.deepEqual(f.errors,[]);
+ }finally{await p.close();}
+});
