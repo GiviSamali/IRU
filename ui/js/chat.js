@@ -967,6 +967,7 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
       const smartTaskMetadata = { goalId:task.goal_id, assignmentRevision:task.assignment_revision, taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind,inputRequired:task.input_required,conversationalResponse:task.conversational_response,executionDetails:task.execution_details };
       const pendingTask = state.pendingTasks.find(t => t.task_id === taskId);
       if (pendingTask && task.kind) pendingTask.kind=task.kind;
+      if (pendingTask && task.goal_id) pendingTask.goalId=task.goal_id;
       if (pendingTask && String(task.status || '').trim().toLowerCase() === 'cancelling') {
         pendingTask.cancelRequested = true;
       }
@@ -1117,7 +1118,9 @@ function restoreActiveChatTasks(chatId) {
     let msgIndex=state.messages.findIndex(message=>message._taskId===item.taskId);
     if (msgIndex<0) {msgIndex=state.messages.length;state.messages.push({role:'assistant',content:'',loading:true,currentStatus:'restoring',liveTasks:[],liveCommands:[],_taskId:item.taskId});}
     else Object.assign(state.messages[msgIndex],{loading:true,currentStatus:'restoring'});
-    state.pendingTasks.push({task_id:item.taskId,msgIndex,chatId,kind:state.messages[msgIndex].taskKind || 'worker'});
+    state.pendingTasks.push({task_id:item.taskId,msgIndex,chatId,
+      kind:state.messages[msgIndex].taskKind || 'worker',
+      goalId:state.messages[msgIndex].goalId || null});
     added = true;
   }
 
