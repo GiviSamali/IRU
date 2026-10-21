@@ -402,13 +402,14 @@ async def api_operations(request: Request):
         task = live if live and live.get("user_id") == user["id"] else restore_task(job)
         report = normalized_worker_report(task, task.get("worker_report"))
         goal_id = task.get("goal_id")
-        if goal_id and goal_id not in goal_cache:
+        goal_key = (goal_id, job["chat_id"])
+        if goal_id and goal_key not in goal_cache:
             try:
                 from ..worker_scheduler import goal_view
             except ImportError:
                 from worker_scheduler import goal_view
             try:
-                goal_cache[goal_id] = goal_view(goal_id, user["id"], job["chat_id"])
+                goal_cache[goal_key] = goal_view(goal_id, user["id"], job["chat_id"])
             except ValueError as exc:
                 if str(exc) != "goal_not_owned_or_in_chat":
                     raise
@@ -417,8 +418,8 @@ async def api_operations(request: Request):
                 logging.getLogger("iru.operations").warning(
                     "goal_reference_unavailable task_id=%s goal_id=%s",
                     job["task_id"], goal_id)
-                goal_cache[goal_id] = None
-        goal = goal_cache.get(goal_id)
+                goal_cache[goal_key] = None
+        goal = goal_cache.get(goal_key)
         member = next((item for item in goal["tasks"] if item["task_id"] == job["task_id"]), {}) if goal else {}
         items.append({"task_id": job["task_id"], "chat_id": job["chat_id"],
             "title": (task.get("proposed_objective") or task.get("message") or "Задача")[:160],
