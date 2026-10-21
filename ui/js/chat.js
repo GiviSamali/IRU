@@ -880,19 +880,23 @@ async function sendMessage(options = {}) {
       if (!state.pendingTasks.some(item => item.task_id === data.task_id)) state.pendingTasks.push({task_id:data.task_id,msgIndex,chatId:sourceChatId,kind:data.response_type === 'orchestrator' ? 'orchestrator' : 'worker'});
       updateStopButton();
       pollTask(data.task_id,msgIndex,voiceTicket,sourceChatId);
-      const workerIds = Array.isArray(data.worker_task_ids) ? [...new Set(data.worker_task_ids)] : data.worker_task_id ? [data.worker_task_id] : [];
-      for (const workerId of workerIds) {
-        if (typeof workerId !== 'string' || !workerId) continue;
-        let workerIndex = state.currentChatId === sourceChatId ? state.messages.findIndex(message => message._taskId === workerId) : -1;
-        if (workerIndex < 0 && state.currentChatId === sourceChatId) {
-          workerIndex=state.messages.length;
-          state.messages.push({role:'assistant',_taskId:workerId,goalId:data.goal_id,taskKind:'worker',content:'',loading:true,taskStatus:'queued',currentStatus:'queued',liveTasks:[],liveCommands:[]});
-          renderMessages();
+      // Result First: one Orchestrator message follows the whole Goal. Internal
+      // Workers stay in Operations; do not create chat messages or voice turns.
+      if (!data.goal_id) {
+        const workerIds = Array.isArray(data.worker_task_ids) ? [...new Set(data.worker_task_ids)] : data.worker_task_id ? [data.worker_task_id] : [];
+        for (const workerId of workerIds) {
+          if (typeof workerId !== 'string' || !workerId) continue;
+          let workerIndex = state.currentChatId === sourceChatId ? state.messages.findIndex(message => message._taskId === workerId) : -1;
+          if (workerIndex < 0 && state.currentChatId === sourceChatId) {
+            workerIndex=state.messages.length;
+            state.messages.push({role:'assistant',_taskId:workerId,goalId:data.goal_id,taskKind:'worker',content:'',loading:true,taskStatus:'queued',currentStatus:'queued',liveTasks:[],liveCommands:[]});
+            renderMessages();
+          }
+          if (!state.pendingTasks.some(item => item.task_id === workerId)) state.pendingTasks.push({task_id:workerId,msgIndex:workerIndex,chatId:sourceChatId,kind:'worker'});
+          window.iruVoice?.watchTask(workerId,undefined,true);
+          pollTask(workerId,workerIndex,undefined,sourceChatId);
         }
-        if (!state.pendingTasks.some(item => item.task_id === workerId)) state.pendingTasks.push({task_id:workerId,msgIndex:workerIndex,chatId:sourceChatId,kind:'worker'});
-        window.iruVoice?.watchTask(workerId,undefined,true);
-        pollTask(workerId,workerIndex,undefined,sourceChatId);
-      }
+        }
     } else {
       // Ошибка до запуска задачи
       if (msgIndex >= 0) state.messages[msgIndex] = {role:'assistant',content:`Ошибка: ${data.error || 'Неизвестная ошибка'}`};
