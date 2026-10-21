@@ -280,7 +280,7 @@ def context_for(user_id, chat_id, message, selected):
     except ImportError:
         from worker_context import clip_context_text
     history=[];budget=5000
-    for row in reversed(db.get_messages(chat_id,limit=12)):
+    for row in reversed(db.get_messages(chat_id,limit=12,include_result_first_workers=False)):
         text=(row.get("executionDetails") or row["content"]) if row.get("taskKind")=="worker" else row["content"]
         content=clip_context_text(text,min(1000,budget)) if budget>0 else ""
         if not content or budget<=0:continue
