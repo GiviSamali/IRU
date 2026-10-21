@@ -52,7 +52,7 @@ def goal_presentation(goal: dict) -> dict:
     seen = set()
     for member in finished:
         report = member.get("report") or {}
-        expected = [str(item).casefold().replace("\\\\", "/")
+        expected = [str(item).casefold().replace("\\", "/")
                     for item in member.get("expected_artifacts") or [] if isinstance(item, str)]
         for file in report.get("artifacts") or []:
             if not isinstance(file, dict) or file.get("verified") is not True:
@@ -70,7 +70,7 @@ def goal_presentation(goal: dict) -> dict:
             artifacts.append(artifact)
             # A helper generator (.py, scripts/helpers) is not the deliverable
             # unless the assignment explicitly identifies that file as output.
-            canonical_path = path.casefold().replace("\\\\", "/")
+            canonical_path = path.casefold().replace("\\", "/")
             canonical_name = str(name).casefold()
             if expected:
                 user_output = any(value == canonical_path or value == canonical_name
