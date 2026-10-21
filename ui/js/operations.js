@@ -1,6 +1,6 @@
 /* Own SQLite jobs are the source of truth. Polling here never starts a Worker. */
 window.IRUOperations = (() => {
-  let owner=null, items=[], selected=null, detail=null, inFlight=null, followUp=null, busy=false, timer=null, open=false;
+  let owner=null, items=[], selected=null, detail=null, historicalItem=null, inFlight=null, followUp=null, busy=false, timer=null, open=false;
   const e=escapeHTML, a=escapeAttr, terminal=s=>['success','partial','failed','blocked','unknown','cancelled'].includes(s);
   const key=()=>`iru-operations-open:${state.user?.id}`;
   const renderedRows=new Map(), presentedCommands=new WeakMap();let renderedOwner=null;
@@ -18,16 +18,31 @@ window.IRUOperations = (() => {
     if(state.user)sessionStorage.setItem(key(),String(value));
   }
   const scopedItems=()=>items.filter(i=>String(i.chat_id)===String(state.currentChatId));
+  // The global Operations snapshot is bounded; an owner-authorized historical task
+  // can be viewed even when it is absent from that snapshot or from this chat.
+  const historicalPreview=task=>({
+    task_id:task.task_id,chat_id:task.chat_id,
+    title:String(task.assigned_objective||task.message||'Задача').slice(0,160),
+    status:task.presentation_status||task.worker_report?.status||task.status||'unknown',
+    device_ids:Array.isArray(task.device_ids)?task.device_ids:[],
+    summary:task.conversational_response||task.answer||'',
+    goal_id:task.goal_id||null,can_cancel:false,waiting_confirmation:false
+  });
+  const displayedTask=()=>scopedItems().find(item=>item.task_id===selected)
+    || (historicalItem?.task_id===selected?historicalItem:null);
   function contextChanged() {
     if(owner!==state.user?.id || chat!==state.currentChatId) {
-      chat=state.currentChatId;selected=null;detail=null;mirrorClosed=null;mirrorHTML='';manualSelection=false;mirrorTask=null;selectedStatus=null;surfaceExpanded=null;
+      chat=state.currentChatId;selected=null;detail=null;historicalItem=null;mirrorClosed=null;mirrorHTML='';manualSelection=false;mirrorTask=null;selectedStatus=null;surfaceExpanded=null;
       if(owner!==state.user?.id){items=[];stale=false;}
       render();
     }
   }
   function synchronizeSelection() {
     const scoped=scopedItems();
-    if(selected && !scoped.some(i=>i.task_id===selected)){selected=null;detail=null;mirrorClosed=null;}
+    if(historicalItem && (historicalItem.task_id!==selected || scoped.some(i=>i.task_id===selected)))historicalItem=null;
+    if(selected && !scoped.some(i=>i.task_id===selected) && historicalItem?.task_id!==selected){selected=null;detail=null;mirrorClosed=null;}
+    // A manually opened historical card must not be displaced by background polling.
+    if(historicalItem?.task_id===selected){selectedStatus=historicalItem.status;return;}
     const current=scoped.find(i=>i.waiting_confirmation)||scoped.find(i=>!terminal(i.status));
     if(current && (!selected || (!manualSelection && terminal(scoped.find(i=>i.task_id===selected)?.status)))) {
       selected=current.task_id;detail=null;mirrorClosed=null;selectedStatus=null;
@@ -49,15 +64,21 @@ window.IRUOperations = (() => {
   }
   function detailMarkup(i,status) {
     if(!detail)return '<p class="operation-prose">Загружаются сведения задачи…</p>';
+    const readOnly=historicalItem?.task_id===i.task_id;
     const cd=detail.confirm_data||{};
     const answer=IRUSmartUI.REGISTRY.text({key:'mirror-result-'+i.task_id,text:detail.conversational_response||detail.answer||i.summary||'',long:false},{formatAssistantText:true});
     let html=`<div class="operation-detail"><div class="operation-prose mirror-answer">${answer}</div>`;
+    if(readOnly){
+      const source=state.chats?.find(chat=>String(chat.id)===String(detail.chat_id));
+      const label=source?.title||'Чат №'+String(detail.chat_id);
+      html+='<div class="operation-prose">Источник: '+e(label)+' · Только просмотр</div>';
+    }
     if(i.goal_id) {
       const related=scopedItems().filter(item=>item.goal_id===i.goal_id);
       const dependencies=(i.dependencies||[]).map(edge=>related.find(item=>item.task_id===edge.source_task_id)?.title||'Связанное поручение');
       html+=`<div class="operation-prose"><strong>Цель:</strong> ${e(i.goal_title||'')}<br>Поручений: ${e(String(i.goal_task_count||related.length))} · ${e(IRUSmartUI.LABELS[IRUSmartUI.normalizeStatus(i.goal_status)]||i.goal_status||'')}${dependencies.length?`<br>Зависит от: ${dependencies.map(e).join('; ')}`:''}</div>`;
     }
-    if(detail.status==='confirm') {
+    if(detail.status==='confirm' && !readOnly) {
       if(validCommandConfirmation(detail,i.task_id))html+=`<div class="operation-prose operation-command-preview">${e(cd.command)}</div><button data-operation="confirm" data-confirmation-id="${a(cd.confirmation_id)}">Выполнить</button><button data-operation="deny" data-confirmation-id="${a(cd.confirmation_id)}">Отклонить</button>`;
       else html+='<p class="operation-confirmation-invalid" role="status">Обновите состояние: нет действующего подтверждения точной команды.</p>';
     }
@@ -74,7 +95,7 @@ window.IRUOperations = (() => {
       const text=queued.length ? `${stale?'Последнее состояние · ':''}В очереди: ${queued.length} · Следующая: ${queued[0].title}` : '';
       if(queue.textContent!==text)queue.textContent=text;
     }
-    const i=scopedItems().find(item=>item.task_id===selected);
+    const i=displayedTask();
     const visible=Boolean(i && (surface() || mirrorClosed!==selected));
     const mirror=document.getElementById('operationMirror'), toggle=document.getElementById('mirrorToggle');
     if(mirror.hidden!==!visible)mirror.hidden=!visible;
@@ -155,10 +176,10 @@ window.IRUOperations = (() => {
     renderMirror();
   }
   async function refresh() {
-    if(!state.user) {owner=null;items=[];selected=null;detail=null;render();return;}
+    if(!state.user) {owner=null;items=[];selected=null;detail=null;historicalItem=null;render();return;}
     contextChanged();
     const id=state.user.id;
-    if(owner!==id){owner=id;items=[];selected=null;detail=null;setOpen(sessionStorage.getItem(key())==='true');render();}
+    if(owner!==id){owner=id;items=[];selected=null;detail=null;historicalItem=null;setOpen(sessionStorage.getItem(key())==='true');render();}
     if(inFlight) {
       // A caller after a decision needs a read newer than the current request.
       // Coalesce overlapping callers without discarding their refresh promise.
@@ -174,26 +195,41 @@ window.IRUOperations = (() => {
       const data=await r.json();if(state.user?.id!==id)return;
       items=Array.isArray(data.operations)?data.operations:[];
       synchronizeSelection();
-      if(selected && items.some(i=>i.task_id===selected)) {
+      if(selected && (items.some(i=>i.task_id===selected) || historicalItem?.task_id===selected)) {
         const selectedId=selected;
         const response=await apiFetch(`${API}/api/tasks/${encodeURIComponent(selectedId)}`);
         if(!response.ok)throw Error('Подробности задачи недоступны.');
-        if(response.ok){const fresh=await response.json();if(state.user?.id===id&&selected===selectedId&&String(fresh.task?.chat_id)===String(state.currentChatId))detail=fresh.task;}
+        if(response.ok){
+          const fresh=await response.json();
+          if(state.user?.id===id && selected===selectedId && fresh.task?.task_id===selectedId
+              && (String(fresh.task.chat_id)===String(state.currentChatId) || historicalItem?.task_id===selectedId)){
+            detail=fresh.task;
+            if(historicalItem?.task_id===selectedId)historicalItem=historicalPreview(fresh.task);
+          }
+        }
       }
       if(state.user?.id!==id)return;
       stale=false;document.getElementById('operationsError').textContent='';render();
     } catch(err) {if(state.user?.id===id){stale=true;document.getElementById('operationsError').textContent='Соединение потеряно. Показано последнее состояние.';render();}}
   }
   async function show(id) {
+    const who=state.user?.id, openedChat=state.currentChatId;
     await refresh();
-    if(!scopedItems().some(item=>item.task_id===id))throw Error('Задача не принадлежит текущему чату.');
-    selected=id;manualSelection=true;mirrorClosed=null;selectedStatus=null;detail=null;if(surface())surfaceExpanded=id;render();
-    const who=state.user?.id;
+    if(state.user?.id!==who || state.currentChatId!==openedChat)return;
+    // Only the owner-checked task endpoint decides whether a task is readable.
+    // The recent Operations list is a presentation snapshot, not an access list.
     const r=await apiFetch(`${API}/api/tasks/${encodeURIComponent(id)}`);
-    if(!r.ok)throw Error('Подробности недоступны.');const data=await r.json();
-    if(state.user?.id!==who||selected!==id||String(data.task?.chat_id)!==String(state.currentChatId))return;
-    detail=data.task;await refresh();render();
-    if(!surface())document.querySelector(`#operationsItems [data-task-id="${CSS.escape(id)}"]`)?.scrollIntoView({block:'nearest'});
+    if(!r.ok)throw Error('Задача недоступна или не найдена.');
+    const data=await r.json();
+    if(!data.task || data.task.task_id!==id)throw Error('Некорректные сведения задачи.');
+    if(state.user?.id!==who || state.currentChatId!==openedChat)return;
+    selected=id;manualSelection=true;mirrorClosed=null;selectedStatus=null;detail=data.task;
+    historicalItem=scopedItems().some(item=>item.task_id===id)?null:historicalPreview(data.task);
+    if(surface())surfaceExpanded=id;
+    render();
+    await refresh();
+    if(state.user?.id===who && state.currentChatId===openedChat && selected===id && !surface())
+      document.querySelector(`#operationsItems [data-task-id="${CSS.escape(id)}"]`)?.scrollIntoView({block:'nearest'});
   }
   async function act(action,id,presented={}) {
     if(busy)return;
