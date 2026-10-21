@@ -249,9 +249,9 @@ async def process_non_pipeline_command(
     usage_context: dict | None = None,
 ) -> dict:
     try:
-        from .controller_shared import worker_assignment_scope, pinned_material_pending, worker_window_scope, validate_reconnaissance_result
+        from .controller_shared import worker_assignment_scope, pinned_material_pending, worker_window_scope
     except ImportError:
-        from controller_shared import worker_assignment_scope, pinned_material_pending, worker_window_scope, validate_reconnaissance_result
+        from controller_shared import worker_assignment_scope, pinned_material_pending, worker_window_scope
     assigned_objective, assignment_block = worker_assignment_scope(poll_task_id)
     system_msg += assignment_block
     try:
@@ -291,7 +291,6 @@ async def process_non_pipeline_command(
         messages.extend(build_chat_messages(chat_history[:-1], filter_onboarding=True))
     messages.append({"role": "user", "content": user_message})
     commands_log = []
-    reconnaissance_rejections = {}
     recovery_only = bool(runtime_tasks.get(poll_task_id, {}).get("_action_outcome_unknown"))
     if recovery_only:
         non_pipeline_tools = recovery_observation_tools(non_pipeline_tools or DEFAULT_CONTROLLER_TOOLS)
@@ -532,7 +531,6 @@ async def process_non_pipeline_command(
                 try:
                     if is_answer_text_tool(fn_name):
                         answer_payload = validate_answer_text_payload(fn_args_preview, commands_log)
-                        validate_reconnaissance_result(runtime_tasks.get(poll_task_id) or {}, answer_payload, commands_log)
                         if pinned_material_pending(runtime_tasks.get(poll_task_id) or {}) and answer_payload.get("answer_type") not in {"partial_report","error_report","failure"}:
                             raise ProtocolValidationError("Read every pinned dependency page before completion; otherwise return partial_report.", GROUNDED_CORRECTION)
                         answer_payload = sanitize_system_list_tools_answer(answer_payload, commands_log)
@@ -658,15 +656,6 @@ async def process_non_pipeline_command(
                         )
                 except ProtocolValidationError as exc:
                     print(f"[tool-only] invalid answer tool: {exc.message}")
-                    if exc.message == "reconnaissance_contract_incomplete":
-                        key = (exc.correction, len(commands_log))
-                        reconnaissance_rejections[key] = reconnaissance_rejections.get(key, 0) + 1
-                        if reconnaissance_rejections[key] >= 3:
-                            return {"answer":"Подготовленные результаты сохранены, но разведка не прошла проверку. Зависимые задания не запущены.",
-                                "commands":commands_log, "tasks":[],
-                                "task_receipt":{"task_status":"partial", "goal_completed":False,
-                                    "final_verification_status":"unverified", "answer_source":"server_fallback",
-                                    "terminal_reason":"reconnaissance_contract_incomplete"}}
                     add_correction(exc.correction)
                     continue
 
