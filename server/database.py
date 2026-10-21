@@ -492,6 +492,7 @@ def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
         "taskStatus": task.get("status"), "taskReceipt": saved_receipt,
         "overallStatus": task.get("overall_status"), "taskTitle": task.get("current_step") or task.get("proposed_objective") or task.get("message"),
         "tasks": task.get("tasks") or [], "_taskId": task_id or task.get("task_id"),
+        "resultFirst":task.get("result_first") is True,
         "taskMode": "ordinary" if task.get("goal_id") else "plan" if (task.get("modes") or {}).get("pipeline") or (saved_receipt or {}).get("answer_source") == "pipeline_step_report" else "conversation" if task.get("device_ids") == [] else "ordinary",
         "goalId":task.get("goal_id"), "assignmentRevision":task.get("assignment_revision",1) if task.get("goal_id") else None,
         "taskElapsedMs": elapsed, "workerReport": task.get("worker_report"), "taskKind":task.get("kind"),
@@ -509,7 +510,7 @@ def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
 def _message_metadata(value) -> dict:
     if not isinstance(value, dict):
         return {}
-    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs", "workerReport", "taskKind", "planSuggestion", "planOriginalRequest", "orchestrated", "proposedObjective", "proposedContextSummary", "conversationalResponse", "executionDetails", "assignmentDeviceIds", "sourceTaskIds", "diagnosticTrace", "workerStartedAt", "orchestratorMetrics", "dialogueIntent", "spokenResponse", "spokenResponseAnswer", "fullSpeechRequested", "inputRequired")
+    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs", "workerReport", "taskKind", "planSuggestion", "planOriginalRequest", "orchestrated", "proposedObjective", "proposedContextSummary", "conversationalResponse", "executionDetails", "assignmentDeviceIds", "sourceTaskIds", "diagnosticTrace", "workerStartedAt", "orchestratorMetrics", "dialogueIntent", "spokenResponse", "spokenResponseAnswer", "fullSpeechRequested", "inputRequired", "resultFirst")
     return {key: value[key] for key in (*allowed, "goalId", "assignmentRevision") if key in value}
 
 
@@ -538,12 +539,12 @@ def add_message(chat_id: int, role: str, content: str, commands: list | None = N
         return result
 
 
-def get_messages(chat_id: int, limit: int = 50, *, include_worker_commands: bool = True) -> list[dict]:
+def get_messages(chat_id: int, limit: int = 50, *, include_worker_commands: bool = True, include_result_first_workers: bool = True) -> list[dict]:
     with get_db() as conn:
         rows = conn.execute(
             """SELECT * FROM messages WHERE chat_id = ?
                ORDER BY created_at DESC LIMIT ?""",
-            (chat_id, limit)
+            (chat_id, limit if include_result_first_workers else min(limit * 10, 1000))
         ).fetchall()
         messages = []
         for row in reversed(rows):
@@ -552,6 +553,9 @@ def get_messages(chat_id: int, limit: int = 50, *, include_worker_commands: bool
                 metadata = _message_metadata(json.loads(msg.get("task_metadata") or "null"))
             except (ValueError, TypeError):
                 metadata = {}
+            # New Goal workers are internal; their reports remain in Operations.
+            if not include_result_first_workers and metadata.get("resultFirst") and metadata.get("taskKind") == "worker":
+                continue
             # Worker journals are fetched through the existing Operations panel.
             if not include_worker_commands and metadata.get("taskKind") == "worker":
                 msg["commands"] = None
@@ -568,7 +572,7 @@ def get_messages(chat_id: int, limit: int = 50, *, include_worker_commands: bool
                 "commands":   msg["commands"],
                 "created_at": msg["created_at"],
             })
-        return messages
+        return messages[-limit:]
 
 
 def get_message_count(chat_id: int) -> int:
