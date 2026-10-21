@@ -40,7 +40,9 @@ class Assignment(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     key: str = Field(min_length=1, max_length=80)
     objective: str = Field(min_length=1, max_length=4000)
-    stage: Literal["reconnaissance", "execution"] = "execution"
+    stage: Literal["reconnaissance", "analysis", "creation", "execution"] = "execution"
+    source_requirements: list[str] = Field(default_factory=list, max_length=16)
+    artifacts: list[str] = Field(default_factory=list, max_length=16)
     depends_on: list[str] = Field(default_factory=list, max_length=15)
     required_source_task_ids: list[str] = Field(default_factory=list, max_length=8)
     replaces_source_task_id: str | None = Field(default=None, min_length=1, max_length=64)
@@ -196,7 +198,16 @@ move_monitor, close). Это ограничения результата, не �
 Без значения задача наследует общий список. Исследование новостей может быть серверным,
 а документы — на выбранном ПК. Не выбирай новое устройство из предположений.
 Один неделимый результат — одна задача; технические операции остаются внутри Worker.
-Первый этап новой составной цели — РАЗВЕДКА, stage=reconnaissance; остальные — stage=execution.
+Первый этап новой составной цели — РАЗВЕДКА, stage=reconnaissance.
+Содержательный анализ — stage=analysis; создание/наполнение файлов — stage=creation.
+Для creation обязательно перечисли artifacts: имена или однозначные названия всех выходных файлов.
+Creation получает разведку на том же наборе устройств; серверная разведка не создаёт файлы на ПК.
+Для разведки перечисли source_requirements: какие существующие файлы/источники нужно найти;
+если существующие источники не нужны (например объяснение общеизвестной темы), оставь список пустым.
+При анализе с последующим созданием зависимости обязательны: разведка → анализ → creation.
+Разведка готовит ОБА конца: находит и проверяет исходные файлы И создаёт пустые валидные выходные файлы.
+Не назначай «ничего не создавать» разведке, подготавливающей создание документов.
+Не назначай создание заготовок исполнителю creation: он наполняет уже подготовленные файлы.
 Разведка готовит проверяемую основу для следующих результатов, а не выполняет их за другие Workers.
 При создании файлов: определить структуру, создать нужные папки и пустые именованные файлы.
 Для Office создай валидные открываемые пустые документы соответствующего формата, не нулевые байты.

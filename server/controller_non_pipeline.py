@@ -249,9 +249,9 @@ async def process_non_pipeline_command(
     usage_context: dict | None = None,
 ) -> dict:
     try:
-        from .controller_shared import worker_assignment_scope, pinned_material_pending, worker_window_scope
+        from .controller_shared import worker_assignment_scope, pinned_material_pending, worker_window_scope, validate_reconnaissance_result
     except ImportError:
-        from controller_shared import worker_assignment_scope, pinned_material_pending, worker_window_scope
+        from controller_shared import worker_assignment_scope, pinned_material_pending, worker_window_scope, validate_reconnaissance_result
     assigned_objective, assignment_block = worker_assignment_scope(poll_task_id)
     system_msg += assignment_block
     try:
@@ -531,6 +531,7 @@ async def process_non_pipeline_command(
                 try:
                     if is_answer_text_tool(fn_name):
                         answer_payload = validate_answer_text_payload(fn_args_preview, commands_log)
+                        validate_reconnaissance_result(runtime_tasks.get(poll_task_id) or {}, answer_payload, commands_log)
                         if pinned_material_pending(runtime_tasks.get(poll_task_id) or {}) and answer_payload.get("answer_type") not in {"partial_report","error_report","failure"}:
                             raise ProtocolValidationError("Read every pinned dependency page before completion; otherwise return partial_report.", GROUNDED_CORRECTION)
                         answer_payload = sanitize_system_list_tools_answer(answer_payload, commands_log)

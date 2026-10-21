@@ -370,20 +370,66 @@ async def nl_command(cmd: NLCommand, request: Request):
             if assignment.target_device_ids is not None:
                 item["target_device_ids"] = [_dk(user["id"], did) for did in assignment.target_device_ids]
             assignments.append(item)
+        by_key = {item["key"]: item for item in assignments}
+        def assignment_devices(item):
+            return set(targets if item["target_device_ids"] is None else item["target_device_ids"])
+        def ancestors(key, visited=None):
+            visited = set() if visited is None else visited
+            if key in visited or key not in by_key:
+                return set()
+            return {key} | set().union(*(ancestors(source, visited | {key})
+                for source in by_key[key]["depends_on"]))
         if not choice.goal_id and len(assignments) > 1:
             # A composed goal must have a real reconnaissance prerequisite,
             # not merely an early folder task that also fills every deliverable.
             if assignments[0]["stage"] != "reconnaissance" or assignments[0]["depends_on"] or assignments[0]["required_source_task_ids"]:
                 raise ValueError("goal_reconnaissance_required")
-            by_key = {item["key"]: item for item in assignments}
             def has_reconnaissance(key, visited):
                 if key in visited or key not in by_key:
                     return False
                 item = by_key[key]
                 return item["stage"] == "reconnaissance" or any(
                     has_reconnaissance(source, visited | {key}) for source in item["depends_on"])
-            if any(item["stage"] == "execution" and not has_reconnaissance(item["key"], set()) for item in assignments):
+            if any(item["stage"] != "reconnaissance" and not has_reconnaissance(item["key"], set()) for item in assignments):
                 raise ValueError("goal_reconnaissance_required")
+        analysis_keys = {item["key"] for item in assignments if item["stage"] == "analysis"}
+        for item in assignments:
+            if item["stage"] == "creation":
+                if not item["artifacts"] or (analysis_keys and not ancestors(item["key"]).intersection(analysis_keys)):
+                    raise ValueError("goal_reconnaissance_required")
+                if not choice.goal_id and not any(by_key[key]["stage"] == "reconnaissance"
+                        and assignment_devices(by_key[key]) == assignment_devices(item)
+                        for key in ancestors(item["key"])):
+                    raise ValueError("goal_reconnaissance_required")
+            if item["stage"] != "reconnaissance":
+                roots = [key for key in ancestors(item["key"])
+                    if key != item["key"] and by_key[key]["stage"] == "reconnaissance"]
+                item["depends_on"] = list(dict.fromkeys([*item["depends_on"], *sorted(roots)]))
+        for item in assignments:
+            if item["stage"] != "reconnaissance":
+                continue
+            outputs = list(dict.fromkeys(artifact for consumer in assignments
+                if consumer["stage"] == "creation" and item["key"] in ancestors(consumer["key"])
+                and assignment_devices(item) == assignment_devices(consumer)
+                for artifact in consumer["artifacts"]))
+            sources = list(dict.fromkeys([*item["source_requirements"], *(source
+                for consumer in assignments if item["key"] in ancestors(consumer["key"])
+                and assignment_devices(item) == assignment_devices(consumer)
+                for source in consumer["source_requirements"])]))
+            item["reconnaissance_contract"] = {"sources": sources, "outputs": outputs}
+            # The same complete contract is the Worker's and the auditor's
+            # objective; a narrow model-written objective cannot omit outputs.
+            item["objective"] = (
+                "Разведка для цели: " + choice.objective
+                + ". Найти и проверить доступность перечисленных исходных файлов/источников. "
+                "Подготовить все перечисленные выходные файлы: создать валидные пустые заготовки "
+                "в согласованном расположении, проверить повторным открытием и чтением содержимого. "
+                "Не перезаписывать заполненные файлы; выбрать свободное имя. Не выполнять содержательный "
+                "анализ и не наполнять документы. Вернуть подтверждённую карту: источники → будущий результат "
+                "→ точный выходной путь. Для каждого локального файла нужны текущие наблюдения нативных API; "
+                "константы, код возврата и утверждения модели не заменяют проверку файла. "
+                "Если список выходов пуст, ничего не создавать. Обязательный контракт: "
+                + json.dumps(item["reconnaissance_contract"], ensure_ascii=False))
         return await submit_worker(user,chat_id,cmd.message,targets,cmd.modes,request_key=request_key,
             context_summary=choice.context_summary,objective=choice.objective,broadcast=cmd.broadcast,
             execution_mode=choice.execution_mode,source_task_ids=choice.source_task_ids,history_snapshot=history_snapshot,

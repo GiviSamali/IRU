@@ -424,15 +424,124 @@ def worker_assignment_scope(task_id):
         block += ("\nRECONNAISSANCE ONLY. Determine the structure and locate the exact relevant files. "
                   "For a creation goal, prepare only the requested folders and empty named files; "
                   "Office placeholders must be valid openable documents, not zero-byte files. "
-                  "Never overwrite existing content. For an analysis goal, inspect paths, formats and "
-                  "accessibility without creating files. Return a verified inventory of exact paths, "
+                  "Never overwrite existing content. For analysis-only goals with no output contract, inspect "
+                  "paths, formats and accessibility without creating files. Mixed analysis-and-creation goals "
+                  "require both verified sources and empty output files. Return a verified inventory of exact paths, "
                   "their purpose, structure and limitations for dependent Workers. Do not fill documents, "
                   "write substantive analysis, create final deliverables or complete sibling assignments.\n")
+        contract = task.get("reconnaissance_contract")
+        if contract is not None:
+            block += ("\nMANDATORY RECONNAISSANCE CONTRACT: " + json.dumps(contract, ensure_ascii=False)
+                + "\nThe contract is part of your assigned objective even if a narrower objective says only inspect. "
+                "Prepare every required output as a valid empty file, reusing an existing valid empty file; "
+                "preserve occupied files and choose a new free name. Do not write/delete probes when inspection suffices. "
+                "Inspect required sources without modifying them. Verify each file with native filesystem and format APIs. "
+                "Print one JSON object per file in execute_cmd stdout with path (absolute), exists=true, readable=true; "
+                "for outputs also empty=true, format_valid=true. Derive these values from actual file inspection, "
+                "never print invented constants as verification. Empty Office files must reopen successfully and contain "
+                "no substantive paragraphs, slides or cell values. "
+                "For server web sources, cite URLs actually returned by web_search, without claiming full-file access. "
+                "Return answer_text.reconnaissance with sources and outputs arrays of {name,path,purpose,basis}, "
+                "using exact contract names and current observation step_ids; routes is an array of "
+                "{source_paths,output_path,result}, linking each output to its inputs and intended result. "
+                "If verification or preparation is incomplete, return partial_report; do not claim completion.\n")
+    elif task.get("assignment_stage") == "analysis":
+        block += ("\nANALYSIS STAGE. Read the verified sources from pinned reconnaissance and perform "
+                  "the assigned substantive analysis. Return the analysis, source references and conclusions "
+                  "as your result for dependent creation Workers. Do not fill the prepared output files "
+                  "or execute sibling deliverables. Missing sources mean a partial result, not success.\n")
     else:
         block += ("\nUse the pinned reconnaissance inventory and prepared files when supplied. "
                   "Fill only your assigned deliverable; preserve the shared structure and other files. "
+                  "Before filling a prepared file, verify that it is still the empty placeholder assigned "
+                  "to you; do not overwrite unrelated or unexpectedly populated files. "
                   "Do not claim creation when you only inspected an existing file.\n")
     return objective, block
+
+
+def validate_reconnaissance_result(task, payload, journal):
+    """A model's completion claim cannot replace the required observed inventory."""
+    contract = task.get("reconnaissance_contract")
+    if task.get("assignment_stage") != "reconnaissance" or contract is None:
+        return
+    if payload.get("answer_type") in {"partial_report", "error_report", "failure", "clarification"}:
+        return
+    try:
+        from .run_journal import ProtocolValidationError
+    except ImportError:
+        from run_journal import ProtocolValidationError
+    def reject():
+        raise ProtocolValidationError("reconnaissance_contract_incomplete",
+            "Complete the mandatory reconnaissance contract: verify all required sources and empty valid outputs, "
+            "provide answer_text.reconnaissance with observation basis and routes; otherwise return partial_report.")
+    manifest = payload.get("reconnaissance")
+    if not isinstance(manifest, dict):
+        reject()
+    entries = {str(step.get("step_id")): step for step in journal if step.get("step_id")}
+    paths = {}
+    for kind, required in (("sources", contract["sources"]), ("outputs", contract["outputs"])):
+        records = manifest.get(kind)
+        if not isinstance(records, list) or len(records) > 64:
+            reject()
+        names = set()
+        paths[kind] = set()
+        for record in records:
+            if not isinstance(record, dict):
+                reject()
+            name, path = record.get("name"), record.get("path")
+            if (not isinstance(name, str) or not name.strip() or not isinstance(path, str) or not path.strip()
+                    or not isinstance(record.get("purpose"), str) or not record["purpose"].strip()
+                    or not isinstance(record.get("basis"), list) or not record["basis"]):
+                reject()
+            verified = False
+            for ref in record["basis"]:
+                if not isinstance(ref, str) or ref not in (payload.get("basis") or []):
+                    reject()
+                step = entries.get(ref) or {}
+                result = step.get("result") or {}
+                if not isinstance(result, dict) or result.get("error") or step.get("status") != "success":
+                    continue
+                tool = step.get("action") or step.get("tool_name")
+                if kind == "sources" and tool == "web_search" and path.startswith(("https://", "http://")):
+                    verified |= path in json.dumps(result, ensure_ascii=False)
+                if tool != "execute_cmd" or result.get("returncode") != 0:
+                    continue
+                for line in str(result.get("stdout") or "").splitlines():
+                    try:
+                        observation = json.loads(line)
+                    except (ValueError, TypeError):
+                        continue
+                    if (isinstance(observation, dict) and observation.get("path") == path
+                            and observation.get("exists") is True and observation.get("readable") is True
+                            and (kind == "sources" or (observation.get("empty") is True
+                                 and observation.get("format_valid") is True))):
+                        from pathlib import PureWindowsPath, PurePosixPath
+                        verified |= PureWindowsPath(path).is_absolute() or PurePosixPath(path).is_absolute()
+            if not verified:
+                reject()
+            names.add(name)
+            paths[kind].add(path)
+        if not set(required).issubset(names):
+            reject()
+        if kind == "outputs" and (names != set(required) or len(paths[kind]) != len(records)):
+            reject()
+    if paths["sources"].intersection(paths["outputs"]):
+        reject()
+    routes = manifest.get("routes")
+    if not isinstance(routes, list) or len(routes) > 64:
+        reject()
+    routed = set()
+    for route in routes:
+        if (not isinstance(route, dict) or not isinstance(route.get("source_paths"), list)
+                or not all(isinstance(path, str) for path in route["source_paths"])
+                or not set(route["source_paths"]).issubset(paths["sources"])
+                or (contract["sources"] and not route["source_paths"])
+                or not isinstance(route.get("output_path"), str) or route["output_path"] not in paths["outputs"]
+                or not isinstance(route.get("result"), str) or not route["result"].strip()):
+            reject()
+        routed.add(route["output_path"])
+    if routed != paths["outputs"]:
+        reject()
 
 
 def worker_window_scope(task_id):

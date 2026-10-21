@@ -983,6 +983,16 @@ DEVICE_TOOL_SCHEMAS = [
                     },
                     "text": {"type": "string"},
                     "basis": {"type": "array", "items": {"type": "string"}},
+                    "reconnaissance": {
+                        "type": "object",
+                        "description": "Required for successful reconnaissance. sources/outputs: records with name (exact contract name), path, purpose, basis (current observation step_ids). routes: records with source_paths, output_path, result (what to produce). Each local path must have a native verification JSON observation in the referenced execute_cmd stdout.",
+                        "properties": {
+                            "sources": {"type": "array", "items": {"type": "object"}},
+                            "outputs": {"type": "array", "items": {"type": "object"}},
+                            "routes": {"type": "array", "items": {"type": "object"}},
+                        },
+                        "required": ["sources", "outputs", "routes"],
+                    },
                     "self_check": {
                         "type": "object",
                         "properties": {

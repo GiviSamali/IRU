@@ -328,6 +328,22 @@ def _final_snapshot(task, report, previous):
 
 
 def persist_report(task, *, include_report_column=True):
+    if task.get("reconnaissance_contract") is not None and build_worker_report(task)["status"] == "success":
+        try:
+            from .controller_shared import validate_reconnaissance_result
+        except ImportError:
+            from controller_shared import validate_reconnaissance_result
+        journal = task.get("commands") or []
+        terminal = next((step.get("result") for step in reversed(journal)
+            if (step.get("action") or step.get("tool_name")) in {"answer_text", "answer.text"}), None)
+        try:
+            validate_reconnaissance_result(task, terminal or {}, journal)
+        except ValueError:
+            task.update(status="partial", worker_error_code="reconnaissance_contract_incomplete",
+                answer="Разведка не завершена: необходимые источники, заготовки или связи между ними не подтверждены. Следующие задания не запущены.",
+                task_receipt={"task_status":"partial", "goal_completed":False,
+                    "final_verification_status":"unverified", "answer_source":"server_fallback",
+                    "terminal_reason":"reconnaissance_contract_incomplete"})
     report=build_worker_report(task);task["worker_report"]=report
     if task.get("input_required"):
         try:
@@ -623,6 +639,7 @@ class WorkerScheduler:
                         "original_request": original, "message": original,
                         "proposed_objective": assignment["objective"], "status": state,
                         "assignment_stage": assignment.get("stage", "execution"),
+                        "reconnaissance_contract": assignment.get("reconnaissance_contract"),
                         "created_at": now, "worker_id": "worker-1", "orchestrated": True,
                         "orchestrator_execution_mode": "simple", "modes": dict(template.get("modes") or {})}
                 if assignment.get("replaces_source_task_id"):
