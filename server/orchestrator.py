@@ -443,7 +443,8 @@ async def run_turn(cmd, user, chat_id, delegate):
             if cmd.modes.get("pipeline") or choice.execution_mode=="plan":
                 raise ValueError("execution_mode_unsupported")
             worker=await delegate(choice,request_key="turn:"+key)
-            # Admission is acknowledged by actual persisted tasks and existing UI.
+            task.update(goal_id=worker.get("goal_id"),result_first=True)
+            # One Goal is presented to the human; members are internal Operations.
             answer=""
         elif choice.intent == "cancel" and choice.cancel_scope in {"goal", "chat"}:
             result = await scheduler.cancel_group(owner, chat_id, scope=choice.cancel_scope,
