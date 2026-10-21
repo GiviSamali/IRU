@@ -603,7 +603,9 @@ def restore_dialogue(task_id, owner):
         "history_metadata":metadata,"execution_details":metadata.get("executionDetails") or "",
         "worker_report":metadata.get("workerReport"),"task_receipt":metadata.get("taskReceipt"),
         "current_step":metadata.get("taskTitle"),"plan_suggestion":metadata.get("planSuggestion"),"plan_original_request":metadata.get("planOriginalRequest"),
-        "orchestrated":metadata.get("orchestrated") is True,"proposed_objective":metadata.get("proposedObjective") or "",
+        "orchestrated":metadata.get("orchestrated") is True,
+        "result_first":metadata.get("resultFirst") is True, "goal_id":metadata.get("goalId"),
+        "proposed_objective":metadata.get("proposedObjective") or "",
         "proposed_context_summary":metadata.get("proposedContextSummary") or ""}
 
 
