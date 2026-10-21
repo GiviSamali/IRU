@@ -49,12 +49,16 @@ window.IRUOperations = (() => {
   }
   function detailMarkup(i,status) {
     if(!detail)return '<p class="operation-prose">Загружаются сведения задачи…</p>';
-    const cd=detail.confirm_data||{}, review=detail.plan_review;
+    const cd=detail.confirm_data||{};
     const answer=IRUSmartUI.REGISTRY.text({key:'mirror-result-'+i.task_id,text:detail.conversational_response||detail.answer||i.summary||'',long:false},{formatAssistantText:true});
     let html=`<div class="operation-detail"><div class="operation-prose mirror-answer">${answer}</div>`;
+    if(i.goal_id) {
+      const related=scopedItems().filter(item=>item.goal_id===i.goal_id);
+      const dependencies=(i.dependencies||[]).map(edge=>related.find(item=>item.task_id===edge.source_task_id)?.title||'Связанное поручение');
+      html+=`<div class="operation-prose"><strong>Цель:</strong> ${e(i.goal_title||'')}<br>Поручений: ${e(String(i.goal_task_count||related.length))} · ${e(IRUSmartUI.LABELS[IRUSmartUI.normalizeStatus(i.goal_status)]||i.goal_status||'')}${dependencies.length?`<br>Зависит от: ${dependencies.map(e).join('; ')}`:''}</div>`;
+    }
     if(detail.status==='confirm') {
-      if(review && typeof review.revision==='string' && review.revision.length>0 && review.revision.length<=64 && Array.isArray(review.steps))html+=`<div class="operation-prose">${e(review.steps.map((step,n)=>`${n+1}. ${step.title}\n${step.instruction}`).join('\n'))}</div><button data-operation="approve">Выполнить план</button><button data-operation="revise">Изменить план</button>`;
-      else if(validCommandConfirmation(detail,i.task_id))html+=`<div class="operation-prose operation-command-preview">${e(cd.command)}</div><button data-operation="confirm" data-confirmation-id="${a(cd.confirmation_id)}">Выполнить</button><button data-operation="deny" data-confirmation-id="${a(cd.confirmation_id)}">Отклонить</button>`;
+      if(validCommandConfirmation(detail,i.task_id))html+=`<div class="operation-prose operation-command-preview">${e(cd.command)}</div><button data-operation="confirm" data-confirmation-id="${a(cd.confirmation_id)}">Выполнить</button><button data-operation="deny" data-confirmation-id="${a(cd.confirmation_id)}">Отклонить</button>`;
       else html+='<p class="operation-confirmation-invalid" role="status">Обновите состояние: нет действующего подтверждения точной команды.</p>';
     }
     // Files remain subordinate to the result prose; no helper is inferred to be the main object.
@@ -65,7 +69,7 @@ window.IRUOperations = (() => {
   function renderMirror() {
     const queue=document.getElementById('adaptiveQueue');
     if(queue) {
-      const queued=items.filter(item=>item.status==='queued');
+      const queued=items.filter(item=>['queued','waiting_dependency'].includes(item.status));
       queue.hidden=!queued.length;
       const text=queued.length ? `${stale?'Последнее состояние · ':''}В очереди: ${queued.length} · Следующая: ${queued[0].title}` : '';
       if(queue.textContent!==text)queue.textContent=text;
@@ -73,17 +77,20 @@ window.IRUOperations = (() => {
     const i=scopedItems().find(item=>item.task_id===selected);
     const visible=Boolean(i && (surface() || mirrorClosed!==selected));
     const mirror=document.getElementById('operationMirror'), toggle=document.getElementById('mirrorToggle');
-    mirror.hidden=!visible;toggle.hidden=!i;toggle.setAttribute('aria-expanded',String(visible));
+    if(mirror.hidden!==!visible)mirror.hidden=!visible;
+    if(toggle.hidden!==!i)toggle.hidden=!i;
+    if(toggle.getAttribute('aria-expanded')!==String(visible))toggle.setAttribute('aria-expanded',String(visible));
     syncSurfaceCommand();
     if(!visible)return;
     const status=IRUSmartUI.normalizeStatus(i.status)||'unknown';
-    const label=i.status==='waiting_input'?'Нужно выбрать окно':i.status==='waiting_confirmation'?'Нужно подтверждение':i.status==='queued'?'В очереди':IRUSmartUI.LABELS[status];
+    const label=i.status==='waiting_input'?'Нужно выбрать окно':i.status==='waiting_confirmation'?'Нужно подтверждение':i.status==='waiting_dependency'?'Ждёт связанного результата':i.status==='queued'?'В очереди':IRUSmartUI.LABELS[status];
     const attention=i.waiting_confirmation || i.status==='waiting_input' || detail?.status==='confirm' || detail?.status==='waiting_input';
     const others=scopedItems().filter(item=>item.task_id!==i.task_id);
     const compactView=IRUSmartUI.adapt({role:'assistant',_taskId:i.task_id,taskStatus:i.status,taskTitle:i.title,workerReport:detail?.worker_report},0,state.currentChatId);
     const compactStatus=IRUSmartUI.render({...compactView,blocks:compactView.blocks.filter(block=>block.type==='task').map(block=>({...block,compact:false,label}))},{});
     const extraAttention=others.filter(item=>item.waiting_confirmation || item.status==='waiting_input');
-    mirror.dataset.surfaceAttention=String(Boolean(attention || i.waiting_confirmation || i.status==='waiting_input' || extraAttention.length));
+    const surfaceAttention=String(Boolean(attention || i.waiting_confirmation || i.status==='waiting_input' || extraAttention.length));
+    if(mirror.dataset.surfaceAttention!==surfaceAttention)mirror.dataset.surfaceAttention=surfaceAttention;
     const expanded=attention || surfaceExpanded===i.task_id;
     const brief=!expanded && ['success','running','waiting'].includes(status);
     const resultLabel=status==='success'?'Результат':['blocked','failed','partial','unknown'].includes(status)?'Причина и результат':'Подробности';
@@ -96,8 +103,6 @@ window.IRUOperations = (() => {
       if(container.querySelector('.operation-detail details'))container.querySelector('.operation-detail details').open=Boolean(wasOpen);
       if(validCommandConfirmation(detail,i.task_id))for(const button of container.querySelectorAll('[data-operation="confirm"], [data-operation="deny"]'))
         presentedCommands.set(button,{nonce:detail.confirm_data.confirmation_id,command:detail.confirm_data.command});
-      if(detail?.plan_review)for(const button of container.querySelectorAll('[data-operation="approve"], [data-operation="revise"]'))
-        presentedCommands.set(button,{revision:detail.plan_review.revision});
       if(stale)for(const button of container.querySelectorAll('[data-operation]'))if(!['details','surface-toggle'].includes(button.dataset.operation))button.disabled=true;
     }
   }
@@ -111,12 +116,12 @@ window.IRUOperations = (() => {
     const presentation=captureMessagePresentation(document.getElementById('operationsItems'));
     const disclosures=new Map(Array.from(container.querySelectorAll('.operation-item')).map(row=>[row.dataset.taskId,row.querySelector('.operation-detail details')?.open]));
     const scroll=document.getElementById('operationsList').scrollTop;
-    const group=i=>i.waiting_confirmation?0:i.status==='running'?1:i.status==='queued'?2:i.status==='partial'?3:['failed','blocked','unknown'].includes(i.status)?4:5;
+    const group=i=>i.waiting_confirmation?0:i.status==='running'?1:['queued','waiting_dependency'].includes(i.status)?2:i.status==='partial'?3:['failed','blocked','unknown'].includes(i.status)?4:5;
     const groups=['Нужно подтверждение','Выполняются','Очередь','Частично выполнены','Требуют внимания','Завершены'];
     let previousGroup=null;
     const rows=[...scoped].sort((left,right)=>group(left)-group(right)).map(i=>{
       const status=IRUSmartUI.normalizeStatus(i.status)||'unknown';
-      const label=i.status==='waiting_input'?'Нужно выбрать окно':i.status==='waiting_confirmation'?'Нужно подтверждение':i.status==='queued'?'В очереди':IRUSmartUI.LABELS[status];
+      const label=i.status==='waiting_input'?'Нужно выбрать окно':i.status==='waiting_confirmation'?'Нужно подтверждение':i.status==='waiting_dependency'?'Ждёт связанного результата':i.status==='queued'?'В очереди':IRUSmartUI.LABELS[status];
       const number=group(i), heading=number!==previousGroup?`<div class="operation-group">${e(groups[number])}</div>`:'';previousGroup=number;
       return {id:i.task_id,html:`<article class="operation-item${selected===i.task_id?' selected':''}" data-message-key="dock-${a(i.task_id)}" data-task-id="${a(i.task_id)}" data-status="${a(status)}">${heading}<div class="operation-heading"><strong>${e(i.title)}</strong><span class="smart-status">${e(label)}</span></div><div class="operation-devices">${e(i.device_ids.join(', ')||'Сервер')}</div><div class="operation-actions"><button data-operation="details" aria-pressed="${selected===i.task_id}">${selected===i.task_id?'Выбрана':'Показать'}</button>${i.can_cancel?'<button data-operation="cancel">Отменить</button>':''}</div></article>`};
     });
@@ -214,22 +219,10 @@ window.IRUOperations = (() => {
           throw Error('Команда или подтверждение изменились. Обновите состояние и проверьте команду заново.');
         }
         endpoint='command-decision';body={confirmation_id:presented.nonce,accepted:action==='confirm',via_voice:false};
-      } else if(['approve','revise'].includes(action)) {
-        const who=state.user?.id;
-        const response=await apiFetch(`${API}/api/tasks/${encodeURIComponent(id)}`);
-        if(!response.ok)throw Error('Обновите состояние плана.');
-        const fresh=(await response.json()).task;
-        if(state.user?.id!==who || selected!==id || String(fresh?.chat_id)!==String(state.currentChatId))throw Error('Контекст задачи изменился.');
-        detail=fresh;render();
-        if(fresh.status!=='confirm' || !fresh.plan_review || presented.revision!==fresh.plan_review.revision)
-          throw Error('План изменился. Проверьте обновлённый план перед решением.');
-        const changes=action==='revise'?window.prompt('Что изменить в плане?'):'';if(action==='revise'&&!changes)return;
-        endpoint='review-plan';body={revision:presented.revision,action,changes};
       } else if(action!=='cancel')throw Error('Неизвестное действие операции.');
       const r=await apiFetch(`${API}/api/tasks/${encodeURIComponent(id)}/${endpoint}`,{method:'POST',headers:{...authHeaders(),'Content-Type':'application/json'},body:JSON.stringify(body)});
       if(!r.ok)throw Error('Решение устарело или не принято. Обновите операцию.');
       if(endpoint==='command-decision')window.iruVoice?.commandDecisionResolved?.(id);
-      if(endpoint==='review-plan')window.iruVoice?.planReviewResolved?.(id);
       const index=state.messages.findIndex(m=>m._taskId===id);
       if(index>=0){state.messages[index].confirmTaskId=null;state.messages[index].planReview=null;state.messages[index].loading=true;renderMessages();pollTask(id,index);}
       await show(id);

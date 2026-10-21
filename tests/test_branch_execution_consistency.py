@@ -107,24 +107,24 @@ def test_provider_failure_preserves_observed_journal_and_artifact(monkeypatch):
     assert build_worker_report(worker_task(result))['artifacts'][0]['path']=='C:/Temp/kept.txt'
 
 
-def test_stale_pipeline_confirmation_cannot_approve_next_command(owners,monkeypatch):
+def test_stale_command_confirmation_cannot_approve_next_command(owners,monkeypatch):
     from server.routers import tasks as routes
     from server.runtime_state import tasks
     from server.command_confirmation import command_confirmation
     a,_=owners
     monkeypatch.setattr(routes,'get_current_user',lambda request:a)
     async def scenario():
-        task={'task_id':'nonce-task','user_id':a['id'],'status':'confirm','created_at':time.time(),'modes':{'pipeline':True}}
+        task={'task_id':'nonce-task','user_id':a['id'],'status':'confirm','created_at':time.time(),'modes':{}}
         task['confirm_data']=command_confirmation({'command':'first','params':{'command':'first'}})
-        first=task['confirm_data']['confirmation_id'];task['_pipeline_confirm_future']=asyncio.get_running_loop().create_future()
+        first=task['confirm_data']['confirmation_id'];task['_command_confirm_future']=asyncio.get_running_loop().create_future()
         tasks[task['task_id']]=task
         with pytest.raises(Exception) as error:await routes.api_confirm_task(task['task_id'],None)
-        assert getattr(error.value,'status_code',None)==409 and not task['_pipeline_confirm_future'].done()
+        assert getattr(error.value,'status_code',None)==409 and not task['_command_confirm_future'].done()
         await routes.api_command_decision(task['task_id'],routes.CommandDecisionBody(confirmation_id=first,accepted=True),None)
-        assert task['_pipeline_confirm_future'].result() is True
+        assert task['_command_confirm_future'].result() is True
         task['status']='confirm';task['confirm_data']=command_confirmation({'command':'second','params':{'command':'second'}})
-        task['_pipeline_confirm_future']=asyncio.get_running_loop().create_future()
+        task['_command_confirm_future']=asyncio.get_running_loop().create_future()
         with pytest.raises(Exception) as error:
             await routes.api_command_decision(task['task_id'],routes.CommandDecisionBody(confirmation_id=first,accepted=True),None)
-        assert getattr(error.value,'status_code',None)==409 and not task['_pipeline_confirm_future'].done()
+        assert getattr(error.value,'status_code',None)==409 and not task['_command_confirm_future'].done()
     asyncio.run(scenario())

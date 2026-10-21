@@ -31,6 +31,12 @@ def test_deny_is_bound_only_to_original_task_and_new_request_requires_confirm_ag
     import server.task_runtime as task_runtime
 
     user, headers = _create_and_login_user(client)
+    request_text = r"Удали файл C:\Temp\demo.txt"
+    from server import orchestrator as orch
+    async def semantic_decision(message, context, **kwargs):
+        assert message == request_text
+        return orch.Decision(intent="delegate",objective=message,scope="device",target_device_ids=["device-1"]),{}
+    monkeypatch.setattr(orch,"decide",semantic_decision)
     device_key = f"{user['id']}:device-1"
     monkeypatch.setattr(tasks_router, "devices", runtime_state.devices)
     monkeypatch.setattr(task_runtime, "devices", runtime_state.devices)
@@ -38,6 +44,7 @@ def test_deny_is_bound_only_to_original_task_and_new_request_requires_confirm_ag
         "user_id": user["id"],
         "info": {"hostname": "workstation", "os": "Windows", "os_version": "11"},
         "pending": {},
+        "ws": object(),
     }
 
     llm_calls = {"count": 0}
@@ -81,18 +88,18 @@ def test_deny_is_bound_only_to_original_task_and_new_request_requires_confirm_ag
     async def fake_classify_task_complexity(message):
         return ("SIMPLE", "")
 
-    monkeypatch.setattr(task_runtime, "classify_task_complexity", fake_classify_task_complexity)
+
     monkeypatch.setattr(controller, "_chat_completion_request", fake_chat_completion_request)
     monkeypatch.setattr(task_runtime, "send_command_to_agent", fake_send_command_to_agent)
 
     first_response = client.post(
         "/api/chat",
         headers=headers,
-        json={"message": "Удали файл C:\\Temp\\demo.txt", "device_id": "device-1"},
+        json={"message": request_text, "device_id": "device-1"},
     )
     assert first_response.status_code == 200
     first_payload = first_response.json()
-    first_task_id = first_payload["task_id"]
+    first_task_id = first_payload["worker_task_ids"][0]
 
     first_task = _wait_for_task_status(client, headers, first_task_id, "confirm")
     assert first_task["confirm_data"]["device_id"] == "device-1"
@@ -111,11 +118,11 @@ def test_deny_is_bound_only_to_original_task_and_new_request_requires_confirm_ag
     second_response = client.post(
         "/api/chat",
         headers=headers,
-        json={"message": "Удали файл C:\\Temp\\demo.txt", "device_id": "device-1"},
+        json={"message": request_text, "device_id": "device-1"},
     )
     assert second_response.status_code == 200
     second_payload = second_response.json()
-    second_task_id = second_payload["task_id"]
+    second_task_id = second_payload["worker_task_ids"][0]
 
     assert second_task_id != first_task_id
 

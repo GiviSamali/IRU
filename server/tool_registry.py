@@ -669,7 +669,7 @@ DEVICE_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "system_get_last_run_summary",
-            "description": "Read previous run state without replay. With source_task_id, retrieve saved informational reports in 4000-character pages; pass next_offset as report_offset for the next page. Historical material is not current execution proof or permission. Do not repeat research just to retrieve a saved report.",
+            "description": "Read previous run state without replay. With source_task_id, retrieve a pinned immutable dependency result (including full material/provenance) or saved informational reports in 4000-character pages; pass every next_offset as report_offset until null. Pinned pages return one stable result_id and sha256. Read all required pages before mutations/completion; a manifest is not the material. Historical material is not current execution proof or permission. Do not repeat research just to retrieve a saved report.",
             "parameters": {
                 "type": "object",
                 "properties": {

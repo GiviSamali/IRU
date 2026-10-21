@@ -24,6 +24,46 @@ async function setup(width=1280){
 }
 const item=(id,status='running',chat_id=1)=>({task_id:id,chat_id,title:'Работа с документом '+id,status,device_ids:['Second'],summary:'Данные API',waiting_confirmation:status==='waiting_confirmation',can_cancel:['running','queued','waiting_confirmation'].includes(status)});
 const task=(id,status='running',chat_id=1)=>({task_id:id,chat_id,status,kind:'worker',worker_id:'worker-1',message:'Работа с документом',device_ids:['Second'],answer:'Результат API',conversational_response:'Результат API',commands:[],tasks:[]});
+test('Goal dependency wait survives a suspended-tab clock gap',async()=>{
+ const f=await setup(),p=f.page;let reads=0;
+ try{
+  await p.route('**/api/tasks/queue-pause',route=>{
+   reads++;return route.fulfill({json:{status:'ok',task:task('queue-pause',reads===1?'waiting_dependency':'success')}});
+  });
+  await p.evaluate(()=>{
+   state.messages=[{role:'assistant',_taskId:'queue-pause',content:'',loading:true}];
+   state.pendingTasks=[{task_id:'queue-pause',chatId:1,kind:'worker'}];
+   window.queueVoice={finished:0,lost:0};
+   window.iruVoice={watchTask(){},taskFinished(){queueVoice.finished++;},taskLost(){queueVoice.lost++;}};
+   pollTask('queue-pause',0,undefined,1);
+   const suspendedTime=Date.now()+2*3600000;
+   Date.now=()=>suspendedTime;
+  });
+  await p.waitForFunction(()=>!taskPollLoops.has('queue-pause'));
+  assert.equal(reads,2);
+  assert.deepEqual(await p.evaluate(()=>queueVoice),{finished:1,lost:0});
+  assert.equal(await p.evaluate(()=>state.messages[0].content),'Результат API');
+  assert.deepEqual(f.errors,[]);
+ }finally{await p.close();}
+});
+test('Background goal completion releases voice tracking after a chat switch',async()=>{
+ const f=await setup(),p=f.page;
+ try{
+  await p.route('**/api/tasks/other-chat-result',route=>route.fulfill({json:{status:'ok',task:task('other-chat-result','success')}}));
+  await p.evaluate(()=>{
+   state.currentChatId=2;state.messages=[];
+   state.pendingTasks=[{task_id:'other-chat-result',chatId:1,kind:'worker'}];
+   window.queueVoice={finished:0,lost:0};
+   window.iruVoice={watchTask(){},taskFinished(){queueVoice.finished++;},taskLost(){queueVoice.lost++;}};
+   pollTask('other-chat-result',-1,undefined,1);
+  });
+  await p.waitForFunction(()=>!taskPollLoops.has('other-chat-result'));
+  assert.deepEqual(await p.evaluate(()=>queueVoice),{finished:1,lost:0});
+  assert.equal(await p.evaluate(()=>state.messages.length),0);
+  assert.equal(await p.evaluate(()=>state.pendingTasks.length),0);
+  assert.deepEqual(f.errors,[]);
+ }finally{await p.close();}
+});
 for(const width of [1280,360])test(`P0 conversation, mirror, tasks and isolation at ${width}px`,async()=>{
  const f=await setup(width),p=f.page;try{
   assert.equal(await p.locator('#operationMirror').isVisible(),false);
@@ -67,13 +107,39 @@ test('P0 command decision uses viewed nonce and refuses changed command',async()
   assert.deepEqual(f.writes[0],{id:'confirm',path:'command-decision',body:{confirmation_id:'new',accepted:false,via_voice:false}});
  }finally{await p.close();}
 });
-test('P0 plan approval refuses changed revision',async()=>{
- const f=await setup(),p=f.page;try{
-  const d={...task('plan','confirm'),plan_review:{revision:'r1',steps:[{title:'Read',instruction:'Read selected file'}]}};
-  await f.snapshot([item('plan','waiting_confirmation')],{plan:d});
-  f.setDetails({plan:{...d,plan_review:{revision:'r2',steps:[{title:'Changed',instruction:'Different operation'}]}}});
-  await p.locator('#mirrorContent [data-operation="approve"]').click();
-  await p.waitForTimeout(100);assert.equal(f.writes.length,0);
+test('Historical PLAN review has no executable UI controls',async()=>{
+ const f=await setup(),p=f.page;
+ try{
+  const historical={...task('legacy-plan','confirm'),plan_review:{revision:'r1',steps:[{title:'Read',instruction:'Read selected file'}]}};
+  await f.snapshot([item('legacy-plan','waiting_confirmation')],{'legacy-plan':historical});
+  await p.locator('#mirrorContent .operation-confirmation-invalid').waitFor();
+  for(const action of ['approve','revise','confirm','deny'])
+   assert.equal(await p.locator(`#mirrorContent [data-operation="${action}"]`).count(),0);
+  assert.ok((await p.locator('#mirrorContent').innerText()).includes('Результат API'));
+  assert.equal(f.writes.length,0);
+  assert.deepEqual(f.errors,[]);
+ }finally{await p.close();}
+});
+
+test('Goal details show related tasks and dependencies without aggregate success',async()=>{
+ const f=await setup(),p=f.page;
+ try{
+  const common={goal_id:'goal-one',goal_title:'Research and documents',goal_status:'waiting_dependency',goal_task_count:3};
+  const rows=[{...item('research','failed'),...common,title:'Research'},
+   {...item('word','waiting_dependency'),...common,title:'Word document',dependencies:[{source_task_id:'research'}]},
+   {...item('slides','waiting_dependency'),...common,title:'Slides',dependencies:[{source_task_id:'research'}]}];
+  await f.snapshot(rows,{research:task('research','failed'),word:task('word','waiting_dependency'),slides:task('slides','waiting_dependency')});
+  await p.locator('#operationsToggle').click();
+  await p.locator('#operationsItems [data-task-id="word"] [data-operation="details"]').click();
+  await p.locator('#mirrorContent [data-task-id="word"]').waitFor();
+  await p.waitForFunction(()=>document.querySelector('#mirrorContent')?.textContent.includes('Зависит от: Research'));
+  const text=await p.locator('#mirrorContent').innerText();
+  assert.ok(text.includes('Research and documents'));
+  assert.ok(text.includes('Поручений: 3'));
+  assert.ok(text.includes('Зависит от: Research'));
+  assert.equal(await p.locator('#mirrorContent article').getAttribute('data-status'),'waiting');
+  assert.equal(f.writes.length,0);
+  assert.deepEqual(f.errors,[]);
  }finally{await p.close();}
 });
 

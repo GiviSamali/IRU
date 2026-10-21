@@ -1,7 +1,7 @@
 /* One deterministic presentation adapter. No requests, execution or voice lifecycle. */
 const IRUSmartUI = (() => {
   const STATUS = Object.freeze({
-    pending: 'waiting', waiting: 'waiting', queued: 'waiting', confirm: 'waiting', waiting_confirmation:'waiting', waiting_input:'waiting',
+    pending: 'waiting', waiting: 'waiting', queued: 'waiting', waiting_dependency: 'waiting', confirm: 'waiting', waiting_confirmation:'waiting', waiting_input:'waiting',
     thinking: 'running', running: 'running', running_tool: 'running', waiting_agent: 'running',
     preparing_runtime: 'running', refreshing_state: 'running', writing_file: 'running',
     launching_app: 'running', restoring: 'running', cancelling: 'running',
@@ -59,7 +59,7 @@ const IRUSmartUI = (() => {
     const report=message.workerReport || message.worker_report;
     // WorkerReport is the server's validated outcome. Legacy step snapshots are
     // details and cannot re-decide it in the presentation layer.
-    if (report?.schema_version === 1 && ['queued','running','waiting_confirmation','waiting_input','success','partial','blocked','failed','cancelled','unknown'].includes(report.status)) return normalizeStatus(report.status);
+    if (report?.schema_version === 1 && ['queued','waiting_dependency','running','waiting_confirmation','waiting_input','success','partial','blocked','failed','cancelled','unknown'].includes(report.status)) return normalizeStatus(report.status);
     const explicit = [report?.status,message.taskStatus,message.task_status,receipt.task_status,message.overallStatus];
     const states = explicit.map(normalizeStatus).filter(Boolean);
     const finalConfirmed = normalizeStatus(receipt.task_status) === 'success'
@@ -184,8 +184,7 @@ const IRUSmartUI = (() => {
       }
     }
     blocks.push(...files.map((file,i)=>({...file,key:id+'-file-'+i})));
-    if (m.confirmTaskId || m.planReview || (m.suggestedFact?.text && !m.suggestedFactDeclined)
-      || (m.planSuggestion && !m.planDismissed && !m.planDeclined) || m.cancelAvailable) {
+    if (m.confirmTaskId || (m.suggestedFact?.text && !m.suggestedFactDeclined) || m.cancelAvailable) {
       blocks.push({ type:'action', key:id+'-action', index, critical:Boolean(m.confirmTaskId), message:m });
     }
     return { key:id, blocks };

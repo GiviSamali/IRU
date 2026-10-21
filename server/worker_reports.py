@@ -7,8 +7,8 @@ class WorkerReport(BaseModel):
     model_config=ConfigDict(extra="forbid",strict=True)
     schema_version: Literal[1]
     task_id: str
-    worker_id: Literal["worker-1"]
-    status: Literal["queued","running","waiting_confirmation","waiting_input","success","partial","blocked","failed","cancelled","unknown"]
+    worker_id: str = Field(pattern=r"^worker-[1-4]$")
+    status: Literal["queued","waiting_dependency","running","waiting_confirmation","waiting_input","success","partial","blocked","failed","cancelled","unknown"]
     goal_completed: bool
     summary: str = Field(max_length=2000)
     target_device_ids: list[str]
@@ -79,7 +79,8 @@ def build_worker_report(task):
         from run_journal import audited_action_evidence
     action_evidence=receipt.get('action_evidence')
     matched_action_evidence=(isinstance(action_evidence,dict) and action_evidence == audited_action_evidence(
-        answer_payload,commands,task.get('original_request') or task.get('message') or '',action_evidence))
+        answer_payload,commands,(task.get('proposed_objective') or task.get('message') or '') if task.get('goal_id')
+        else task.get('original_request') or task.get('message') or '',action_evidence))
     confirmed = informational or (grounded and bool(observations)
                 and receipt.get("answer_source") == "audited_terminal"
                 and receipt.get("task_status") in {"completed", "completed_with_recovery"}
@@ -105,6 +106,7 @@ def build_worker_report(task):
     if clarification:terminal_negative='blocked'
     if task.get("plan_suggestion"):status="blocked"
     elif raw == "queued": status = "queued"
+    elif raw == "waiting_dependency": status = "waiting_dependency"
     elif raw == "confirm": status = "waiting_confirmation"
     elif raw == "waiting_input": status = "waiting_input"
     elif raw not in TERMINAL: status = "running"
@@ -134,6 +136,7 @@ def build_worker_report(task):
     summaries = {"success":"Задача выполнена по подтверждённым результатам.", "partial":"Задача выполнена частично.",
         "blocked":"Выполнение заблокировано.", "failed":"Задача завершилась с ошибкой.", "cancelled":"Задача отменена.",
         "unknown":"Исход задачи не подтверждён; автоматически её не повторяю.", "queued":"Задача ожидает освобождения Worker.",
+        "waiting_dependency":"Задача ожидает подтверждённого результата другой задачи.",
         "waiting_input":"Задача ожидает выбора окна.", "running":"Задача выполняется.", "waiting_confirmation":"Задача ожидает решения пользователя."}
     error_code=(task.get("worker_error_code") or receipt.get("terminal_reason")) if status!="success" else None
     if not isinstance(error_code, str):error_code=None
@@ -142,7 +145,7 @@ def build_worker_report(task):
         if grounded and receipt.get('answer_source')=='audited_terminal':error_code='action_evidence_unconfirmed'
         elif terminal.get('tool_name')=='answer.text':error_code='goal_not_completed'
         elif any(c.get('tool_name')=='tool_only_protocol' for c in commands):error_code='terminal_answer_missing'
-    report = {"schema_version":1, "task_id":task["task_id"], "worker_id":"worker-1", "status":status,
+    report = {"schema_version":1, "task_id":task["task_id"], "worker_id":task.get("worker_id") or "worker-1", "status":status,
         "goal_completed":status == "success", "summary":payload['question'][:2000] if clarification and status=='blocked' else payload["text"][:2000] if (terminal_negative or confirmed) and isinstance(payload.get("text"),str) and payload["text"] == task.get("answer") else summaries[status],
         "target_device_ids":[_short_did(d) for d in task.get("device_ids") or []], "artifacts":artifacts,
         "evidence_refs":refs, "requires_user_action":status in {"waiting_confirmation","waiting_input","blocked"},

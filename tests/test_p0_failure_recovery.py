@@ -9,18 +9,19 @@ import pytest
 
 from server import database as db
 from server.controller import _thinking_request_fields
-from server.controller_pipeline import run_pipeline_worker, build_pipeline_task_receipt
+from server import controller_non_pipeline as worker_controller
+from server.controller_tools import NON_PIPELINE_TOOLS
 from server.response_presentation import failure_explanation, saved_step_reports, worker_presentation
 from server.worker_reports import build_worker_report
 from server.worker_scheduler import init_worker_storage, owned_job, persist_report, restore_task
 from server.task_summary import get_last_run_summary
 from server.worker_context import source_references
-from test_controller_pipeline_budget import _shared_context, _execute_call, _answer_call
+from test_tool_only_protocol import _execute_call, _answer_call
 
 
 @pytest.fixture(autouse=True)
-def isolated_pipeline_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "pipeline.sqlite")
+def isolated_worker_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "worker.sqlite")
     db.init_db()
 
 
@@ -46,11 +47,12 @@ def run_worker(responses, send_results=None, tools=None):
             return send_results.pop(0)
         return {"returncode": 0, "stdout": "observation", "stderr": ""}
     async def run():
-        async with httpx.AsyncClient() as client:
-            return await run_pipeline_worker(client, {"model_reasoner": "deepseek-v4-pro", "max_tokens": 4096},
-                "deepseek-v4-pro", _shared_context(), "Create the complete requested package",
-                {"title": "Prepare package", "instruction": "ten scenarios plus application", "device_id": "device-1"},
-                [], [], send, lambda *_: "unused", None, None, None, chat_completion_request_fn=complete, worker_tools=tools or [])
+        return await worker_controller.process_non_pipeline_command(user_message="Create the complete requested package",
+            device_id="device-1",device_info={"os":"Windows"},send_command_fn=send,get_file_link_fn=lambda *a:"unused",
+            chat_history=[],user_id=None,chat_id=None,modes={},poll_task_id=None,
+            cfg={"model":"deepseek-v4-pro","model_reasoner":"deepseek-v4-pro","max_tokens":4096,"answer_auditor_enabled":False},
+            system_msg="system",machine_guid=None,mem_user_id=None,non_pipeline_tools=tools or NON_PIPELINE_TOOLS,
+            max_iterations=6,pick_model_fn=lambda *a:"deepseek-v4-pro",chat_completion_request_fn=complete)
     return asyncio.run(run()), sent, requests
 
 
@@ -59,7 +61,7 @@ def run_worker(responses, send_results=None, tools=None):
 def test_repeated_truncation_dispatches_nothing_and_keeps_metrics(truncated):
     result, sent, requests = run_worker([response(truncated, "length"), response(_execute_call("also-cut", "no"), "length")])
     assert not sent and len(requests) == 2
-    assert result["terminal_reason"] == "model_output_truncated"
+    assert result["task_receipt"]["terminal_reason"] == "model_output_truncated"
     assert requests[1]["phase"].endswith(".truncation_recovery")
     assert requests[1]["cfg"]["max_tokens"] == 4096
     assert result["commands"][-1]["result"]["attempts"][1]["reasoning_tokens"] == 4096
@@ -71,11 +73,11 @@ def test_recovery_completes_small_operation_without_replaying_prior_action():
         response(_execute_call("first", "observe once")), response(_execute_call("cut", "must not run"), "length"),
         response(_execute_call("next", "next small operation")), response(_answer_call("end", "Prepared content"))])
     assert [p["command"] for _, p in sent] == ["observe once", "next small operation"]
-    assert result["status"] == "ok"
+    assert result["answer"] == "Prepared content"
     assert len(requests) == 4
 
 
-def test_pipeline_reserves_budget_for_structured_output_from_first_call():
+def test_common_worker_reserves_budget_for_structured_output_from_first_call():
     from server.controller_tools import WORKER_TOOLS
     original = copy.deepcopy(WORKER_TOOLS)
     _, _, requests = run_worker([response(_answer_call("end", "No action requested"))], tools=WORKER_TOOLS)
@@ -107,29 +109,29 @@ def test_oversized_write_is_not_dispatched_and_small_parts_are_written_once():
     ("success", {"path": "requested-only.docx"}),
 ])
 def test_receipt_rejects_paths_without_successful_write_evidence(status, result):
-    receipt = build_pipeline_task_receipt(task_status="failed", commands=[{
-        "action": "write_content", "tool_name": "write_content", "step_id": "step_12", "status": status,
-        "result": {**result, "created_files": ["not-created.docx"], "files_verified": ["not-created.docx"]}}],
-        step_results=[], recovery_warnings=[], receipt_dicts=[])
-    assert receipt["created_files"] == receipt["created_file_evidence"] == receipt["files_verified"] == []
+    report=build_worker_report({"task_id":"invalid-write","status":"failed","message":"Create document",
+        "device_ids":["1:pc"],"commands":[{
+            "action":"write_content","tool_name":"write_content","device_id":"pc","step_id":"step_12","status":status,
+            "result":{**result,"created_files":["not-created.docx"],"files_verified":["not-created.docx"]}}]})
+    assert report["artifacts"]==[] and not report["goal_completed"]
 
 
 def test_unavailable_provider_recovery_does_not_loop_or_dispatch():
     result, sent, requests = run_worker([response(_execute_call("cut", "no"), "length"), RuntimeError("provider rejected request")])
     assert not sent and len(requests) == 2
-    assert result['terminal_reason'] == 'model_output_truncated'
+    assert result['task_receipt']['terminal_reason'] == 'model_output_truncated'
     assert result['commands'][-1]['result']['recovery_status'] == 'unavailable'
 
 
 def test_cancel_between_truncation_and_recovery_stops_without_dispatch(monkeypatch):
-    from server import controller_pipeline as pipeline
+    from server import controller_non_pipeline as common
     checks = []
     def cancelled(_):
         checks.append(True)
-        return len(checks) >= 3
-    monkeypatch.setattr(pipeline, 'is_task_cancel_requested', cancelled)
+        return len(checks) >= 2
+    monkeypatch.setattr(common, 'is_task_cancel_requested', cancelled)
     result, sent, requests = run_worker([response(_execute_call("cut", "no"), "length")])
-    assert result['status'] == 'cancelled' and not sent and len(requests) == 1
+    assert result['cancelled'] is True and not sent and len(requests) == 1
 
 
 def failed_task(owner, chat):
@@ -146,8 +148,10 @@ def failed_task(owner, chat):
     steps = [{"idx": 0, "title": "Research", "status": "done", "summary": text},
              {"idx": 1, "title": "Scenarios", "status": "failed", "terminal_reason": "model_output_truncated"},
              {"idx": 2, "title": "Documents", "status": "blocked"}]
-    receipt = build_pipeline_task_receipt(task_status="failed", commands=commands, step_results=steps,
-                                          recovery_warnings=[], receipt_dicts=[])
+    # Historical persisted PLAN schema is fixture data, not an executable receipt builder.
+    receipt={"task_status":"failed","goal_completed":False,"terminal_reason":"model_output_truncated",
+        "answer_source":"pipeline_step_report","step_results":steps,"created_files":[],
+        "created_file_evidence":[],"files_verified":[],"final_verification_status":"unverified"}
     return {"task_id": "source", "user_id": owner, "chat_id": chat, "status": "failed", "kind": "worker",
             "message": "Original package", "device_ids": ["pc"], "commands": commands, "task_receipt": receipt,
             "answer": "Plan incomplete", "tasks": [], "created_at": time.time(), "worker_id": "worker-1"}
@@ -302,34 +306,14 @@ def test_truncated_answer_only_repair_is_not_accepted():
     assert not result["ok"] and result["reason"] == "model_output_truncated"
 
 
-def test_plan_propagates_step_reason_without_final_success_rewrite(stored, monkeypatch):
-    from server import controller_pipeline as pipeline
-    user, chat, source = stored
-    calls = []
-    async def complete(**kwargs):
-        calls.append(kwargs["phase"])
-        assert kwargs["phase"] == "pipeline.plan", "Known failed PLAN must not ask a model to invent final success"
-        return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({"goal": "package", "steps": [
-            {"title": "Research", "instruction": "research", "device_id": "pc"},
-            {"title": "Scenarios", "instruction": "write", "device_id": "pc"},
-            {"title": "Documents", "instruction": "save", "device_id": "pc"}]})}}]}
-    async def worker(**kwargs):
-        if kwargs['step_index'] == 0:
-            return {"status": "ok", "answer": source['commands'][1]['result']['text'], "commands": copy.deepcopy(source['commands'][:2])}
-        return {"status": "error", "answer": "Output truncated", "terminal_reason": "model_output_truncated",
-                "commands": [copy.deepcopy(source['commands'][-1])]}
-    monkeypatch.setattr(pipeline, "run_pipeline_worker", worker)
-    async def forbidden(*args, **kwargs):
-        raise AssertionError("No agent operation in this test")
-    result = asyncio.run(pipeline.process_pipeline_subagents("Create package", "pc", {"hostname": "pc", "os": "Windows"},
-        {"pc": {"info": {"hostname": "pc", "os": "Windows"}}}, forbidden, lambda *_: None,
-        user_id=user['id'], chat_id=chat, load_llm_config_fn=lambda: {"model": "mock", "max_tokens": 4096},
-        pick_model_fn=lambda *_: "mock", chat_completion_request_fn=complete, worker_tools=[], windows_rules="", linux_rules=""))
-    assert result['task_receipt']['terminal_reason'] == 'model_output_truncated'
-    assert result['task_receipt']['step_results'][0]['status'] == 'done'
-    assert result['task_receipt']['step_results'][2]['status'] == 'blocked'
-    assert result['task_receipt']['task_status'] == 'failed'
-    assert saved_step_reports(result)[0]['text'] == saved_step_reports(source)[0]['text']
+def test_historical_failure_keeps_step_reason_without_final_success_rewrite(stored):
+    user,chat,source=stored
+    restored=restore_task(owned_job("source",user["id"]))
+    assert restored["task_receipt"]["terminal_reason"]=="model_output_truncated"
+    assert restored["task_receipt"]["step_results"][0]["status"]=="done"
+    assert restored["task_receipt"]["step_results"][2]["status"]=="blocked"
+    assert not build_worker_report(restored)["goal_completed"]
+    assert saved_step_reports(restored)[0]["text"]==saved_step_reports(source)[0]["text"]
 
 
 def test_recovery_wire_request_disables_thinking_without_changing_budget():
@@ -343,7 +327,7 @@ def test_recovery_wire_request_disables_thinking_without_changing_budget():
             await _chat_completion_request(client, {"model": "deepseek-v4-flash", "model_reasoner": "deepseek-v4-pro",
                 "base_url": "https://api.deepseek.com", "api_key": "test-only", "max_tokens": 4096, "reasoning_effort": "high"},
                 "deepseek-v4-pro", [{"role": "user", "content": "next small operation"}], tools=[],
-                phase="pipeline.worker.step_2.iteration.2.truncation_recovery")
+                phase="non_pipeline.iteration.2.truncation_recovery")
     asyncio.run(run())
     assert captured[0]['thinking'] == {'type': 'disabled'}
     assert 'reasoning_effort' not in captured[0] and captured[0]['max_tokens'] == 4096

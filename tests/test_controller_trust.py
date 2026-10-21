@@ -417,6 +417,10 @@ def test_chat_broadcast_executes_independently_on_all_devices(client, monkeypatc
     import server.task_runtime as task_runtime
     from server.database import create_user
 
+    from server import orchestrator as orch
+    async def decide(message, context, **kwargs):
+        return orch.Decision(intent="delegate", objective=message, target_device_ids=["device-1", "device-2"]), {}
+    monkeypatch.setattr(orch, "decide", decide)
     user = create_user("broadcast-guard-user")
     auth_response = client.post("/api/auth", json={"token": user["token"]})
     headers = {"Authorization": f"Bearer {auth_response.json()['access_token']}"}
@@ -430,12 +434,12 @@ def test_chat_broadcast_executes_independently_on_all_devices(client, monkeypatc
     runtime_state.devices[first_key] = {
         "user_id": user["id"],
         "info": {"hostname": "one", "os": "Windows"},
-        "pending": {},
+        "pending": {}, "ws": object(),
     }
     runtime_state.devices[second_key] = {
         "user_id": user["id"],
         "info": {"hostname": "two", "os": "Windows"},
-        "pending": {},
+        "pending": {}, "ws": object(),
     }
 
     async def fake_classify_task_complexity(message):
@@ -460,7 +464,7 @@ def test_chat_broadcast_executes_independently_on_all_devices(client, monkeypatc
         replayed.append((device_id, action, params["command"]))
         return {"returncode": 0, "stdout": "two", "stderr": ""}
 
-    monkeypatch.setattr(task_runtime, "classify_task_complexity", fake_classify_task_complexity)
+
     monkeypatch.setattr(task_runtime, "process_nl_command", fake_process_nl_command)
     monkeypatch.setattr(task_runtime, "send_command_to_agent", fake_send_command_to_agent)
 
@@ -470,9 +474,9 @@ def test_chat_broadcast_executes_independently_on_all_devices(client, monkeypatc
         json={"message": "whoami", "broadcast": True},
     )
     assert created.status_code == 200
-    assert set(created.json()["device_ids"]) == {first_key, second_key}
+    assert created.json()["worker_task_ids"]
 
-    task_id = created.json()["task_id"]
+    task_id = created.json()["worker_task_ids"][0]
     task = None
     for _ in range(30):
         response = client.get(f"/api/tasks/{task_id}", headers=headers)

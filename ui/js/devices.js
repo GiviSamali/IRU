@@ -439,14 +439,11 @@ function renderInputModeBtn() {
   const badges = document.getElementById('inputModeBadges');
   if (!btn || !badges) return;
   const active = [];
-  if (state.modes.pipeline)   active.push('План');
   if (state.modes.autonomous) active.push('Авто');
   btn.classList.toggle('active', active.length > 0);
   badges.textContent = active.join(' · ');
   // Синхронизируем чекбоксы с state (на случай внешнего изменения)
-  const p = document.getElementById('modePipeline');
   const a = document.getElementById('modeAutonomous');
-  if (p) p.checked = !!state.modes.pipeline;
   if (a) a.checked = !!state.modes.autonomous;
 }
 

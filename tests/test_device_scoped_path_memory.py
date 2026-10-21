@@ -4,7 +4,6 @@ import asyncio
 import pytest
 
 from server.controller import LLMRuntimeContext, _build_non_pipeline_system_prompt
-from server.controller_pipeline import build_pipeline_worker_context, pipeline_worker_prompt
 from server.controller_prompts import SYSTEM_PROMPT_TEMPLATE
 from server.controller_shared import build_memory_block
 from server.path_scope import PATH_SCOPE_ERROR, filter_memory_facts_for_device, resolve_relative_preference
@@ -51,18 +50,16 @@ def test_user_memory_absolute_path_is_not_exposed_to_worker_prompt(client):
         }
     }
 
-    shared, _ = build_pipeline_worker_context(
-        target_device_id="device-new",
-        current_device_id="device-new",
-        current_device_info=all_devices["device-new"]["info"],
-        all_devices=all_devices,
-        current_device_profile=_target_profile(user["id"]),
-        mem_user_id=str(user["id"]),
-        windows_rules="windows",
-        linux_rules="linux",
-    )
-    prompt = pipeline_worker_prompt(shared, "goal", {"title": "step", "instruction": "do it"}, [])
-
+    from server.controller_shared import build_device_profile_block
+    from server.path_scope import build_target_device_block
+    profile = _target_profile(user["id"])
+    info = all_devices["device-new"]["info"]
+    runtime = LLMRuntimeContext(cfg={}, os_info="Windows", hostname="newbox", os_version="11",
+        devices_block="device-new", profile_block=build_device_profile_block(profile),
+        memory_block=build_memory_block("machine-new",str(user["id"]),"device-new"),
+        target_device_block=build_target_device_block("device-new",info,profile), os_rules="windows",
+        current_datetime_msk="2026-10-20 12:00", machine_guid="machine-new", mem_user_id=str(user["id"]))
+    prompt = _build_non_pipeline_system_prompt(runtime=runtime,device_id="device-new")
     assert r"C:\Users\russa\TEST_IRU" not in prompt
     assert "username: User" in prompt
     assert r"home_path: C:\Users\User" in prompt

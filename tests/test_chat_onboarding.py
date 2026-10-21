@@ -14,6 +14,10 @@ def test_api_chat_uses_onboarding_mode_without_devices(client, monkeypatch):
     import server.runtime_state as runtime_state
     import server.task_runtime as task_runtime
 
+    from server import orchestrator as orch
+    async def decide(message, context, **kwargs):
+        return orch.Decision(intent="delegate", scope="server", objective=message), {}
+    monkeypatch.setattr(orch, "decide", decide)
     user, headers = _create_and_login_user(client)
 
     # Preserve the shared registry object imported by routers and task_runtime.
@@ -26,7 +30,7 @@ def test_api_chat_uses_onboarding_mode_without_devices(client, monkeypatch):
 
     called = {"onboarding": 0, "agent": 0}
 
-    async def fake_process_onboarding_message(user_message: str, chat_history=None):
+    async def fake_process_onboarding_message(user_message: str, chat_history=None, **kwargs):
         called["onboarding"] += 1
         return {"answer": f"Onboarding help: {user_message}"}
 
@@ -48,9 +52,9 @@ def test_api_chat_uses_onboarding_mode_without_devices(client, monkeypatch):
     assert payload["status"] == "ok"
     assert payload["task_id"]
     assert payload["chat_id"]
-    assert payload["device_ids"] == []
+    assert payload["worker_task_ids"]
 
-    task_id = payload["task_id"]
+    task_id = payload["worker_task_ids"][0]
     task_payload = None
     for _ in range(20):
         task_response = client.get(f"/api/tasks/{task_id}", headers=headers)

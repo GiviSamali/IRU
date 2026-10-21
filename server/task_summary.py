@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any
+import json
+import hashlib
 
 try:
     from .runtime_state import tasks
@@ -110,6 +112,42 @@ def get_last_run_summary(
         row = owned_job(source_task_id, user_id) if user_id is not None else None
         if not row or chat_id is None or row['chat_id'] != chat_id or source_task_id == exclude_task_id:
             return {"status": "blocked", "error": "source_task_not_owned_or_in_chat"}
+        consumer = owned_job(exclude_task_id, user_id) if exclude_task_id else None
+        if consumer and json.loads(consumer['payload']).get('goal_id'):
+            try:
+                from .worker_scheduler import pinned_results, _result_json
+            except ImportError:
+                from worker_scheduler import pinned_results, _result_json
+            if consumer['chat_id'] != chat_id:
+                return {"status":"blocked", "error":"dependency_consumer_not_owned"}
+            consumer_payload = json.loads(consumer['payload'])
+            device_ids = consumer_payload.get('device_ids') or []
+            allowed = {did.split(':')[-1] for did in device_ids} or {'server'}
+            if not allowed_devices or not allowed.intersection(allowed_devices):
+                return {"status":"blocked", "error":"source_device_out_of_scope"}
+            try:
+                pinned = next((item for item in pinned_results(exclude_task_id, user_id, chat_id, device_ids)
+                               if item['data']['task_id'] == source_task_id), None)
+            except ValueError as exc:
+                return {"status":"blocked", "error":str(exc)}
+            if pinned:
+                text = _result_json(pinned['data'])
+                if hashlib.sha256(text.encode('utf-8')).hexdigest() != pinned['sha256']:
+                    return {"status":"blocked", "error":"dependency_result_corrupt"}
+                if type(report_offset) is not int or not 0 <= report_offset < len(text):
+                    return {"status":"blocked", "error":"invalid_result_offset"}
+                end = min(len(text), report_offset + 4000)
+                live = tasks.get(exclude_task_id)
+                if live and live.get('user_id') == user_id and live.get('chat_id') == chat_id:
+                    progress = live.setdefault('_pinned_read_offsets', {})
+                    if report_offset <= progress.get(pinned['result_id'], 0):
+                        progress[pinned['result_id']] = max(end, progress.get(pinned['result_id'], 0))
+                return {"status":"success", "source_task_id":source_task_id,
+                    "result_id":pinned['result_id'], "sha256":pinned['sha256'], "schema_version":1,
+                    "historical_material_only":True, "current_execution_evidence":False,
+                    "representation":"immutable_result_json_page", "report_text":text[report_offset:end],
+                    "report_offset":report_offset, "next_offset":end if end < len(text) else None,
+                    "total_chars":len(text)}
         source = restore_task(row)
         report = source.get('worker_report') or {}
         if not allowed_devices or not report.get('target_device_ids') or not set(report['target_device_ids']).issubset(allowed_devices):

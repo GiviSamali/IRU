@@ -14,7 +14,7 @@ def login(client,user):
 def wait(client,headers,tid):
     for _ in range(40):
         task=client.get(f"/api/tasks/{tid}",headers=headers).json()["task"]
-        if task["status"] not in {"running","pending"}:return task
+        if task["status"] not in {"running","pending","queued","waiting_dependency","waiting_confirmation","waiting_input"}:return task
         time.sleep(.02)
     raise AssertionError("Task did not complete")
 
@@ -27,7 +27,11 @@ def test_no_device_memory_runs_through_authenticated_chat(client,monkeypatch,nam
     own_fact=db.add_user_fact(str(owner["id"]),"owner preference","preference")
     db.add_user_fact(str(other["id"]),"OTHER_PRIVATE_FACT","preference")
     args={"text":"prefers tea","category":"preference"} if name=="remember_fact" else {"fact_id":own_fact,"source":"user"} if name=="forget_fact" else {"limit":20}
-    replies=iter([{"tool_calls":[{"id":"memory-call","function":{"name":name,"arguments":json.dumps(args)}}]}, {"content":"Проверка завершена"}])
+    terminal={"answer_type":"partial_report","text":"Данные памяти обработаны; полнота результата отдельно не подтверждена.",
+        "basis":["step_1"],"self_check":{"depends_on_current_external_state":True,"claims_completed_action":False,
+            "has_sufficient_evidence":False,"missing_evidence_question":"Полный результат не проверен"}}
+    replies=iter([{"tool_calls":[{"id":"memory-call","function":{"name":name,"arguments":json.dumps(args)}}]},
+        {"tool_calls":[{"id":"terminal","function":{"name":"answer_text","arguments":json.dumps(terminal)}}]}])
     requests=[]
     class Response:
         def raise_for_status(self):pass
@@ -37,17 +41,31 @@ def test_no_device_memory_runs_through_authenticated_chat(client,monkeypatch,nam
         async def __aenter__(self):return self
         async def __aexit__(self,*a):pass
         async def post(self,url,**kw):requests.append(copy.deepcopy(kw["json"]));return Response()
-    from server import controller
+    from server import controller, orchestrator as orch
+    async def semantic_decision(message, context, **kwargs):
+        assert message==text
+        if not allowed:
+            return orch.Decision(intent="conversation",answer="Обсуждение слова не изменяет память"),{}
+        proofs=[{"operation":"remember_fact","human_quote":text}] if name=="remember_fact" else []
+        return orch.Decision(intent="delegate",objective=text,scope="server",memory_authorizations=proofs),{}
+    monkeypatch.setattr(orch,"decide",semantic_decision)
     monkeypatch.setattr(controller,"load_llm_config",lambda:{"model":"mock","base_url":"https://fixture.invalid","api_key":"test"})
     monkeypatch.setattr(onboarding.httpx,"AsyncClient",Provider)
     response=client.post("/api/chat",headers=headers,json={"message":text})
-    assert response.status_code==200 and response.json()["device_ids"]==[]
-    task=wait(client,headers,response.json()["task_id"])
-    assert task["status"]=="done", task.get("answer")
+    assert response.status_code==200
+    if not allowed:
+        assert not response.json().get("worker_task_id") and not requests
+        assert [fact["fact_text"] for fact in db.get_user_facts(str(owner["id"]))]==["owner preference"]
+        return
+    worker_id=response.json()["worker_task_ids"][0]
+    task=wait(client,headers,worker_id)
+    assert task["device_ids"]==[]
+    assert task["worker_report"]["goal_completed"] is False
+    assert task["worker_report"]["status"]=="partial"
     names={t["function"]["name"] for t in requests[0]["tools"]}
     assert {"memory_get_stats","memory_list_facts","remember_fact","forget_fact"} <= names
     assert "OTHER_PRIVATE_FACT" not in json.dumps(requests)
-    if name=="remember_fact":assert any(f["fact_text"]=="prefers tea" for f in db.get_user_facts(str(owner["id"]))) is allowed
+    if name=="remember_fact":assert any(f["fact_text"]=="prefers tea" for f in db.get_user_facts(str(owner["id"])))
     if name=="forget_fact":assert db.get_user_facts(str(owner["id"]))==[]
     assert len(db.get_user_facts(str(other["id"])))==1
     assert task["memory_stats"] is not None

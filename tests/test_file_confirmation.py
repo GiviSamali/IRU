@@ -65,9 +65,9 @@ def test_unresolved_write_path_fails_before_dispatch(monkeypatch, path):
         asyncio.run(runtime.send_command_to_agent("1:pc", "write_content", {"path": path, "content": "text"}))
 
 
-@pytest.mark.parametrize("pipeline", [True, False])
+@pytest.mark.parametrize("continuation_frame", [True, False])
 @pytest.mark.parametrize("accepted", [True, False])
-def test_decision_binds_user_and_command_and_is_one_shot(monkeypatch, pipeline, accepted):
+def test_decision_binds_user_and_command_and_is_one_shot(monkeypatch, continuation_frame, accepted):
     monkeypatch.setattr(routes, "get_current_user", lambda request: {"id": request or 1})
     monkeypatch.setattr(routes, "add_message", lambda *a, **kw: None)
     sent = []
@@ -80,10 +80,10 @@ def test_decision_binds_user_and_command_and_is_one_shot(monkeypatch, pipeline, 
         data = command_confirmation({"command": "Remove-Item report.txt", "device_id": "pc",
                                      "params": {"command": "Remove-Item report.txt"}})
         task = {"task_id": "delete", "user_id": 1, "chat_id": 1, "status": "confirm", "confirm_data": data,
-                "modes": {"pipeline": pipeline}, "created_at": time.time()}
+                "modes": {}, "created_at": time.time()}
         monkeypatch.setitem(runtime.tasks, "delete", task)
         pending = asyncio.get_running_loop().create_future()
-        if pipeline: task["_pipeline_confirm_future"] = pending
+        if continuation_frame: task["_command_confirm_future"] = pending
         body = routes.CommandDecisionBody(confirmation_id=data["confirmation_id"], accepted=accepted)
         with pytest.raises(HTTPException) as foreign:
             await routes.api_command_decision("delete", body, 2)
@@ -96,12 +96,16 @@ def test_decision_binds_user_and_command_and_is_one_shot(monkeypatch, pipeline, 
             await routes.api_command_decision("delete", body, None)
         assert duplicate.value.status_code == 409
         await asyncio.sleep(0)
-        if pipeline:
+        if continuation_frame:
             assert pending.done() and pending.result() == accepted
             assert not sent
         else:
             assert len(sent) == int(accepted)
-            if accepted: assert sent[0][2]["skip_confirm"] is True
+            if accepted:
+                assert sent[0][2]["skip_confirm"] is True
+                assert sent[0][2].get("confirmation") is not None
+                assert sent[0][0] == "1:pc"
+                assert sent[0][1] == {"command":"Remove-Item report.txt"}
     asyncio.run(scenario())
 
 
@@ -131,7 +135,7 @@ def test_risky_command_rejects_voice_but_accepts_button(monkeypatch, command):
         decision = asyncio.get_running_loop().create_future()
         data = command_confirmation({"command": command})
         monkeypatch.setitem(runtime.tasks, "danger", {"user_id": 1, "status": "confirm", "confirm_data": data,
-            "created_at": time.time(), "modes": {"pipeline": True}, "_pipeline_confirm_future": decision})
+            "created_at": time.time(), "modes": {}, "_command_confirm_future": decision})
         with pytest.raises(HTTPException) as error:
             await routes.api_command_decision("danger", routes.CommandDecisionBody(confirmation_id=data["confirmation_id"], accepted=True, via_voice=True), None)
         assert error.value.status_code == 403 and not decision.done()
@@ -147,7 +151,7 @@ def test_ordinary_command_accepts_voice_decision(monkeypatch, accepted):
         decision = asyncio.get_running_loop().create_future()
         data = command_confirmation({"command": "New-Item report.txt"})
         monkeypatch.setitem(runtime.tasks, "ordinary", {"user_id": 1, "status": "confirm", "confirm_data": data,
-            "created_at": time.time(), "modes": {"pipeline": True}, "_pipeline_confirm_future": decision})
+            "created_at": time.time(), "modes": {}, "_command_confirm_future": decision})
         await routes.api_command_decision("ordinary", routes.CommandDecisionBody(
             confirmation_id=data["confirmation_id"], accepted=accepted, via_voice=True), None)
         assert decision.done() and decision.result() is accepted

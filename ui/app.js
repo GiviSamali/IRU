@@ -44,7 +44,6 @@ function bindStaticEvents() {
   });
   bindOnce('inputDeviceBtn', 'click', toggleInputDeviceDropdown);
   bindOnce('inputModeBtn', 'click', toggleInputModeDropdown);
-  bindOnce('modePipeline', 'change', (event) => setMode('pipeline', event.target.checked));
   bindOnce('modeAutonomous', 'change', (event) => setMode('autonomous', event.target.checked));
   bindOnce('btnSend', 'click', sendMessage);
   bindOnce('btnStopTask', 'click', cancelActiveTask);

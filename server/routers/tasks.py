@@ -129,12 +129,14 @@ async def execute_worker(task):
 scheduler.execute = execute_worker
 
 
-async def submit_worker(user, chat_id, message, target_ids, modes, *, request_key=None, context_summary="", objective="", broadcast=False, execution_mode="auto", source_task_ids=(), history_snapshot=None):
+async def submit_worker(user, chat_id, message, target_ids, modes, *, request_key=None, context_summary="", objective="", broadcast=False, execution_mode="auto", source_task_ids=(), history_snapshot=None, assignments=None, goal_id=None, goal_revision=None, memory_authorizations=None, execution_scope="general", window_effects=None):
+    if (modes or {}).get("pipeline") or execution_mode == "plan":
+        raise ValueError("execution_mode_unsupported")
     if len(target_ids) != len(set(target_ids)):
         raise ValueError("duplicate_target_device")
     for did in target_ids:
         dev = devices.get(did)
-        if not dev or dev.get("user_id") != user["id"]:
+        if not dev or dev.get("user_id") != user["id"] or not dev.get("ws"):
             raise ValueError("device_not_owned_or_unavailable")
     task_id = str(uuid.uuid4())
     task = {"task_id":task_id,"user_id":user["id"],"chat_id":chat_id,"message":message,"original_request":message,"proposed_objective":objective,"proposed_context_summary":context_summary,"orchestrated":bool(objective),"broadcast":broadcast,
@@ -146,10 +148,19 @@ async def submit_worker(user, chat_id, message, target_ids, modes, *, request_ke
         from worker_context import build_worker_context, capture_history
     task['orchestrator_execution_mode']=execution_mode if objective else 'auto'
     task['source_task_ids']=list(source_task_ids)
+    task['memory_authorizations']=memory_authorizations or []
+    task['memory_authority_request']=message
+    task['execution_scope']=execution_scope
+    task['window_effects']=window_effects or []
     task['context_history']=history_snapshot if history_snapshot is not None else capture_history(chat_id)
     task['worker_context']=build_worker_context(user['id'],chat_id,message,target_ids,task['context_history'],source_task_ids,
         objective=task['proposed_objective'],context_summary=task['proposed_context_summary'])
-    return await scheduler.submit(task, request_key=request_key)
+    admitted = await scheduler.submit_goal(task, assignments or [
+        {"key": "result", "objective": objective or message, "depends_on": []}],
+        request_key=request_key or str(uuid.uuid4()), goal_id=goal_id, expected_revision=goal_revision)
+    first = admitted["tasks"][0]
+    first["goal_task_ids"] = [item["task_id"] for item in admitted["tasks"]]
+    return first
 
 
 router = APIRouter()
@@ -170,7 +181,7 @@ class NLCommand(BaseModel):
     device_ids: list[str] = []
     modes: dict = {}
     voice_provider: str = Field(default="yandex", pattern="^(yandex|piper|elevenlabs)$")
-    orchestrate: bool = False
+    orchestrate: bool = True  # Accepted for older clients; intake always uses Orchestrator.
     request_id: str | None = Field(default=None, min_length=1, max_length=64)
     input_task_id: str | None = Field(default=None, min_length=1, max_length=64)
     input_question_id: str | None = Field(default=None, min_length=32, max_length=32)
@@ -182,6 +193,12 @@ class RunPlanBody(BaseModel):
     confirmed: bool = False
     voice_source_task_id: str | None = None
     source_task_id: str | None = None
+
+
+class PendingTaskAmendment(BaseModel):
+    chat_id: int
+    expected_revision: int = Field(ge=1)
+    message: str = Field(min_length=1, max_length=4000)
 
 
 class MemoryFactDeleteBody(BaseModel):
@@ -295,6 +312,9 @@ async def direct_command(cmd: DirectCommand, request: Request):
 @router.post("/api/chat")
 async def nl_command(cmd: NLCommand, request: Request):
     user = get_current_user(request)
+    if cmd.modes.get("pipeline"):
+        raise HTTPException(status_code=422, detail={"code": "execution_mode_unsupported",
+            "message": "Режим PLAN больше не поддерживается. Передайте обычное поручение."})
     cleanup_old_tasks()
 
     client_ip = request.client.host if request.client else "unknown"
@@ -303,8 +323,6 @@ async def nl_command(cmd: NLCommand, request: Request):
     if not check_rate_limit(str(user["id"])):
         return {"status": "error", "error": "Слишком много запросов. Подождите минуту."}
 
-    if (cmd.input_task_id or cmd.input_question_id) and not cmd.orchestrate:
-        raise HTTPException(422, "Ответ на вопрос должен проходить через Orchestrator")
     user_devs = get_user_devices(user["id"])
     print(
         f"[nl_command] user_id={user['id']}, user='{user['name']}', "
@@ -322,59 +340,38 @@ async def nl_command(cmd: NLCommand, request: Request):
         if not chat:
             return {"status": "error", "error": "Чат не найден"}
 
-    if cmd.orchestrate:
-        try:
-            from ..worker_context import capture_history
-        except ImportError:
-            from worker_context import capture_history
-        history_snapshot=capture_history(chat_id)
-        async def delegate(choice, request_key):
-            if choice.scope=="device" and cmd.device_id and _dk(user["id"],cmd.device_id) not in user_devs:
-                raise ValueError("selected_device_not_owned_or_connected")
-            if cmd.modes.get("pipeline"):
-                raise ValueError("plan_requires_existing_review_flow")
-            targets=[_dk(user["id"],did) for did in choice.target_device_ids]
-            if cmd.broadcast:
-                targets=list(user_devs)
-            if choice.scope=="server":
-                if targets:raise ValueError("server_scope_has_device_targets")
-            elif not targets:
-                raise ValueError("target_device_required")
-            return await submit_worker(user,chat_id,cmd.message,targets,cmd.modes,request_key=request_key,
-                context_summary=choice.context_summary,objective=choice.objective,broadcast=cmd.broadcast,
-                execution_mode=choice.execution_mode,source_task_ids=choice.source_task_ids,history_snapshot=history_snapshot)
-        try:
-            return await run_turn(cmd,user,chat_id,delegate)
-        except ValueError:
-            return {"status":"error","error":"Повтор запроса изменён или состояние недоступно. Новое выполнение не начато."}
-
-    add_message(chat_id, "user", cmd.message)
-
-    if not user_devs and not cmd.device_id:
-        try:
-            task=await submit_worker(user,chat_id,cmd.message,[],cmd.modes or {},request_key=cmd.request_id)
-        except ValueError as exc:
-            return {"status":"error","error":str(exc)}
-        return {"status":"ok","task_id":task["task_id"],"chat_id":chat_id,"device_ids":[],"worker_id":"worker-1"}
-
-    if cmd.broadcast:
-        target_ids = list(user_devs.keys())
-    elif cmd.device_ids:
-        target_ids = [_dk(user["id"], did) for did in cmd.device_ids if _dk(user["id"], did) in user_devs]
-    else:
-        cmd_dk = _dk(user["id"], cmd.device_id)
-        if cmd_dk not in user_devs:
-            return {"status": "error", "error": f"Устройство '{cmd.device_id}' не найдено или нет доступа"}
-        target_ids = [cmd_dk]
-
-    if not target_ids:
-        return {"status": "error", "error": "Нет доступных устройств"}
-
     try:
-        task = await submit_worker(user,chat_id,cmd.message,target_ids,cmd.modes or {},request_key=cmd.request_id,broadcast=cmd.broadcast)
-    except ValueError as exc:
-        return {"status":"error","error":str(exc)}
-    return {"status":"ok","task_id":task["task_id"],"chat_id":chat_id,"device_ids":target_ids,"worker_id":"worker-1","worker_status":task["status"]}
+        from ..worker_context import capture_history
+    except ImportError:
+        from worker_context import capture_history
+    history_snapshot=capture_history(chat_id)
+    async def delegate(choice, request_key):
+        if choice.scope=="device" and cmd.device_id and _dk(user["id"],cmd.device_id) not in user_devs:
+            raise ValueError("selected_device_not_owned_or_connected")
+        targets=[_dk(user["id"],did) for did in choice.target_device_ids]
+        if cmd.broadcast:
+            targets=list(user_devs)
+        if choice.scope=="server":
+            if targets:raise ValueError("server_scope_has_device_targets")
+        elif not targets:
+            raise ValueError("target_device_required")
+        assignments = []
+        for assignment in choice.assignments:
+            item = assignment.model_dump()
+            if assignment.target_device_ids is not None:
+                item["target_device_ids"] = [_dk(user["id"], did) for did in assignment.target_device_ids]
+            assignments.append(item)
+        return await submit_worker(user,chat_id,cmd.message,targets,cmd.modes,request_key=request_key,
+            context_summary=choice.context_summary,objective=choice.objective,broadcast=cmd.broadcast,
+            execution_mode=choice.execution_mode,source_task_ids=choice.source_task_ids,history_snapshot=history_snapshot,
+            assignments=assignments,
+            goal_id=choice.goal_id,goal_revision=choice.goal_revision,
+            memory_authorizations=[proof.model_dump() for proof in choice.memory_authorizations],
+            execution_scope=choice.execution_scope,window_effects=choice.window_effects)
+    try:
+        return await run_turn(cmd,user,chat_id,delegate)
+    except ValueError:
+        return {"status":"error","error":"Повтор запроса изменён или состояние недоступно. Новое выполнение не начато."}
 
 
 @router.get("/api/operations")
@@ -388,16 +385,32 @@ async def api_operations(request: Request):
         from worker_scheduler import list_jobs
         from response_presentation import normalized_worker_report
     items = []
+    goal_cache = {}
     for job in list_jobs(user["id"], limit=20, queue_first=True):
         live = tasks.get(job["task_id"])
         task = live if live and live.get("user_id") == user["id"] else restore_task(job)
         report = normalized_worker_report(task, task.get("worker_report"))
+        goal_id = task.get("goal_id")
+        if goal_id and goal_id not in goal_cache:
+            try:
+                from ..worker_scheduler import goal_view
+            except ImportError:
+                from worker_scheduler import goal_view
+            goal_cache[goal_id] = goal_view(goal_id, user["id"], job["chat_id"])
+        goal = goal_cache.get(goal_id)
+        member = next((item for item in goal["tasks"] if item["task_id"] == job["task_id"]), {}) if goal else {}
         items.append({"task_id": job["task_id"], "chat_id": job["chat_id"],
-            "title": (task.get("message") or "Задача")[:160],
+            "title": (task.get("proposed_objective") or task.get("message") or "Задача")[:160],
             "status": report["status"], "device_ids": report["target_device_ids"],
             "summary": report["summary"],
             "created_at": job["created_at"], "updated_at": job["updated_at"],
-            "can_cancel": report["status"] in {"queued", "running", "waiting_confirmation", "waiting_input"},
+            "goal_id": task.get("goal_id"),
+            "goal_title": goal["original_request"][:160] if goal else None,
+            "goal_status": goal["status"] if goal else None,
+            "goal_task_count": len(goal["tasks"]) if goal else 1,
+            "assignment_revision": member.get("revision"),
+            "dependencies": member.get("dependencies", []),
+            "can_cancel": report["status"] in {"queued", "waiting_dependency", "running", "waiting_confirmation", "waiting_input"},
             "waiting_confirmation": report["status"] == "waiting_confirmation"})
     return {"status": "ok", "operations": items}
 
@@ -424,6 +437,32 @@ async def api_list_tasks(request: Request):
             for task in user_tasks[:20]
         ],
     }
+
+
+@router.get("/api/goals/{goal_id}")
+async def api_goal(goal_id: str, chat_id: int, request: Request):
+    user = get_current_user(request)
+    try:
+        from ..worker_scheduler import goal_view
+    except ImportError:
+        from worker_scheduler import goal_view
+    try:
+        return {"status": "ok", "goal": goal_view(goal_id, user["id"], chat_id)}
+    except ValueError:
+        raise HTTPException(status_code=404, detail="goal_not_found")
+
+
+@router.patch("/api/tasks/{task_id}/assignment")
+async def api_amend_pending_task(task_id: str, body: PendingTaskAmendment, request: Request):
+    user = get_current_user(request)
+    try:
+        result = scheduler.amend_pending(task_id, user["id"], body.chat_id,
+            expected_revision=body.expected_revision, human_request=body.message, objective=body.message)
+        return {"status": "ok", **result}
+    except ValueError as exc:
+        code = str(exc)
+        raise HTTPException(status_code=409 if code in {"task_revision_conflict", "task_already_dispatched"}
+                            else 404 if code == "task_not_owned_or_in_chat" else 422, detail=code)
 
 
 @router.get("/api/memory/stats")
@@ -548,6 +587,9 @@ async def api_get_task(task_id: str, request: Request):
         **human,
         "task_id": task["task_id"],
         "chat_id": task["chat_id"],
+        "goal_id": task.get("goal_id"),
+        "assignment_revision": task.get("assignment_revision", 1) if task.get("goal_id") else None,
+        "assigned_objective": task.get("proposed_objective"),
         "message": task["message"],
         "device_ids": task["device_ids"],
         "status": task["status"],
@@ -590,17 +632,16 @@ async def api_cancel_task(task_id: str, request: Request):
     task = tasks.get(task_id)
     if not task or task["user_id"] != user["id"]:
         raise HTTPException(status_code=404, detail="Задача не найдена")
-    if task.get("worker_id") and task.get("status") == "queued":
-        await scheduler.cancel(task_id,user["id"])
-        return {"status":"ok","task_status":"cancelled","cancel_requested":True,"message":"Ожидающая задача отменена."}
+    if task.get("worker_id") and task.get("status") in {"queued", "waiting_dependency"}:
+        cancelled = await scheduler.cancel(task_id,user["id"])
+        outcome = (cancelled.get("worker_report") or {}).get("status") or cancelled.get("status")
+        return {"status":"ok","task_status":outcome,"cancel_requested":outcome == "cancelled",
+                "message":"Ожидающая задача отменена." if outcome == "cancelled" else "Исход ранее начатой задачи не подтверждён; автоматически её не повторяю."}
     previous_status = task.get("status")
     if previous_status in {"done", "error", "completed", "completed_with_recovery", "failed", "cancelled", "blocked"}:
         return {"status": "ok", "task_status": previous_status, "cancel_requested": bool(task.get("cancel_requested"))}
     if previous_status == "confirm":
-        plan_decision = task.get("_pipeline_plan_future")
-        if plan_decision is not None and not plan_decision.done():
-            plan_decision.set_result({"action": "cancel"})
-        decision = task.get("_pipeline_confirm_future")
+        decision = task.get("_command_confirm_future")
         if decision is not None and not decision.done():
             decision.set_result(False)
         updated = mark_task_cancelled(task_id, answer="Остановлено пользователем.", commands=task.get("commands", []))
@@ -629,21 +670,8 @@ class PlanReviewBody(BaseModel):
 
 @router.post("/api/tasks/{task_id}/review-plan")
 async def api_review_plan(task_id: str, body: PlanReviewBody, request: Request):
-    user = get_current_user(request)
-    task = tasks.get(task_id)
-    if not task or task.get("user_id") != user["id"]:
-        raise HTTPException(404, "Задача не найдена")
-    review = task.get("plan_review") or {}
-    decision = task.get("_pipeline_plan_future")
-    if (task.get("status") != "confirm" or decision is None or decision.done()
-            or review.get("revision") != body.revision):
-        raise HTTPException(409, "Этот вариант плана уже не ожидает ответа. Обновите состояние задачи.")
-    changes = body.changes.strip()
-    if body.action == "revise" and not changes:
-        raise HTTPException(400, "Опишите, что нужно изменить в плане.")
-    task["status"] = "running"
-    decision.set_result({"action": body.action, "changes": changes})
-    return {"status": "ok"}
+    get_current_user(request)
+    raise HTTPException(status_code=410, detail="execution_mode_unsupported")
 
 
 class CommandDecisionBody(BaseModel):
@@ -678,13 +706,13 @@ async def api_confirm_task(task_id: str, request: Request, confirmation_id: str 
     if task["status"] != "confirm":
         raise HTTPException(status_code=400, detail="Задача не ожидает подтверждения")
 
-    if task.get("plan_review"):
-        raise HTTPException(409, "Подтвердите текущий вариант плана через карточку плана.")
+    if task.get("plan_review") or (task.get("modes") or {}).get("pipeline"):
+        raise HTTPException(410, "execution_mode_unsupported")
 
     created = task.get("created_at")
     if type(created) not in (int, float) or not 0 <= time.time() - created <= TASK_TTL:
         raise HTTPException(409, detail="Подтверждение устарело. Запустите исходную задачу заново.")
-    decision = task.get("_pipeline_confirm_future")
+    decision = task.get("_command_confirm_future")
     if decision is not None:
         expires = (task.get("confirm_data") or {}).get("expires_at")
         if expires is not None and time.time() >= expires:
@@ -698,10 +726,6 @@ async def api_confirm_task(task_id: str, request: Request, confirmation_id: str 
         task["status"] = "running"
         decision.set_result(True)
         return {"status": "ok"}
-
-    if (task.get("modes") or {}).get("pipeline"):
-        # Never use the single-command completion path for an orphaned PLAN.
-        raise HTTPException(409, detail="Продолжение PLAN недоступно. Запустите исходную задачу заново.")
 
     # Legacy ordinary confirmation: the controller frame has already unwound.
     # Never restart it, replay old actions, or equate one command with the whole goal.
@@ -868,20 +892,8 @@ async def api_decline_fact(task_id: str, request: Request):
 
 @router.post("/api/tasks/{task_id}/decline_plan")
 async def api_decline_plan_suggestion(task_id: str, request: Request):
-    user = get_current_user(request)
-    task = tasks.get(task_id)
-    if not task or task["user_id"] != user["id"]:
-        raise HTTPException(status_code=404, detail="Задача не найдена")
-
-    original_request = task.get("plan_original_request") or task.get("message") or ""
-    chat_id = task.get("chat_id")
-    if not chat_id or not original_request:
-        raise HTTPException(status_code=400, detail="Нет исходного запроса для отказа от плана")
-
-    mark_plan_declined(chat_id, original_request)
-    task.pop("plan_suggestion", None)
-    task["plan_declined"] = True
-    return {"status": "ok"}
+    get_current_user(request)
+    raise HTTPException(status_code=410, detail="execution_mode_unsupported")
 
 
 @router.post("/api/tasks/{task_id}/deny")
@@ -893,14 +905,7 @@ async def api_deny_task(task_id: str, request: Request):
     if task["status"] != "confirm":
         raise HTTPException(status_code=400, detail="Задача не ожидает подтверждения")
 
-    plan_decision = task.get("_pipeline_plan_future")
-    if plan_decision is not None:
-        request_task_cancel(task_id, user["id"])
-        if not plan_decision.done():
-            plan_decision.set_result({"action": "cancel"})
-        return {"status": "ok"}
-
-    decision = task.get("_pipeline_confirm_future")
+    decision = task.get("_command_confirm_future")
     if decision is not None:
         request_task_cancel(task_id, user["id"])
         if not decision.done():
@@ -923,79 +928,9 @@ async def api_deny_task(task_id: str, request: Request):
 
 @router.post("/api/run_plan/{chat_id}")
 async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
-    user = get_current_user(request)
-    logger.info(
-        "[run_plan] chat_id=%s user_id=%s user_name=%s confirmed=%s original_request=%r",
-        chat_id,
-        user.get("id"),
-        user.get("name"),
-        body.confirmed,
-        body.original_request[:120] if body.original_request else "<empty>",
-    )
-
-    if not body.original_request:
-        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
-        logger.warning("[run_plan] REJECT 400: пустой original_request. chat_id=%s user_id=%s payload=%r", chat_id, user.get("id"), payload)
-        raise HTTPException(status_code=400, detail="Не указан запрос")
-
-    chat = get_chat(chat_id, user["id"])
-    if not chat:
-        logger.warning("[run_plan] REJECT 404: чат не найден. chat_id=%s user_id=%s", chat_id, user.get("id"))
-        raise HTTPException(status_code=404, detail="Чат не найден")
-
-    if body.source_task_id and body.voice_source_task_id and body.source_task_id != body.voice_source_task_id:
-        raise HTTPException(400, detail="Conflicting plan source identifiers")
-    source_id = body.source_task_id or body.voice_source_task_id
-    source_task = None
-    if source_id is not None:
-        source_task = tasks.get(source_id)
-        if (not source_task or source_task.get("user_id") != user["id"]
-                or source_task.get("chat_id") != chat_id):
-            raise HTTPException(404, detail="Предложение плана не найдено")
-        if (not body.confirmed or not source_task.get("plan_suggestion")
-                or source_task.get("status") != "done" or source_task.get("plan_declined")
-                or source_task.get("voice_plan_started")
-                or source_task.get("plan_original_request") != body.original_request):
-            raise HTTPException(409, detail="Предложение плана уже закрыто или изменилось")
-
-    plan = get_user_plan(user["id"])
-    if not _is_admin(user) and plan not in ("pro", "business"):
-        if not body.confirmed:
-            logger.warning("[run_plan] REJECT 403: free без confirmed. chat_id=%s user_id=%s plan=%s", chat_id, user.get("id"), plan)
-            raise HTTPException(status_code=403, detail="Free: требуется подтверждение")
-        trial_used = get_plan_trial_used(user["id"])
-        if trial_used:
-            logger.warning("[run_plan] REJECT 403: free-trial уже использован. user_id=%s", user["id"])
-            raise HTTPException(status_code=403, detail="Режим План доступен на Pro-тарифе. Вы уже использовали пробный запуск.")
-        set_plan_trial_used(user["id"], 1)
-        logger.info("[run_plan] free-trial использован. user_id=%s", user["id"])
-
-    user_devs = {dk: dev for dk, dev in devices.items() if dev.get("user_id") == user["id"]}
-    if not user_devs:
-        return {"status": "error", "error": "Нет подключённых устройств"}
-
-    if body.device_id and _dk(user["id"], body.device_id) not in user_devs:
-        return {"status":"error","error":"device_not_owned_or_unavailable"}
-
-    if source_task is not None and source_task.get("device_ids"):
-        target_ids=list(source_task["device_ids"])
-    elif body.device_id:
-        target_ids = [_dk(user["id"], body.device_id)]
-    else:
-        target_ids = [list(user_devs.keys())[0]]
-
-    try:
-        task=await submit_worker(user,chat_id,body.original_request,target_ids,{"pipeline":True,"autonomous":False},
-            request_key="plan:"+source_id if source_id else None,
-            objective=(source_task.get("proposed_objective") or body.original_request) if source_task and source_task.get("orchestrated") else "",
-            context_summary=(source_task.get("proposed_context_summary") or "") if source_task else "",broadcast=bool(source_task and source_task.get("broadcast")),
-            source_task_ids=source_task.get("source_task_ids") or [] if source_task else ())
-    except ValueError as exc:
-        return {"status":"error","error":str(exc)}
-    task_id=task["task_id"]
-    if source_task is not None:source_task["voice_plan_started"]=task_id
-    return {"status":"ok","task_id":task_id,"chat_id":chat_id,"worker_id":"worker-1","worker_status":task["status"]}
-
+    get_current_user(request)
+    raise HTTPException(status_code=410, detail={"code": "execution_mode_unsupported",
+        "message": "Режим PLAN удалён. Передайте обычное поручение через чат."})
 
 @router.get("/api/download/{token}")
 async def download_file(token: str, request: Request):

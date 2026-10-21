@@ -640,7 +640,7 @@ def test_window_preferences_are_validated_and_do_not_store_account_state(tmp_pat
         assert module.rectangle(value) is None
     path.write_text('[]');assert module.load_window_state(path)=={}
     module.save_window_state(path, {'compact':[10,20,400,280], 'expanded':[20,30,1200,800], 'token':'secret', 'messages':['private']})
-    assert json.loads(path.read_text())=={'compact':[10,20,400,280],'expanded':[20,30,1200,800]}
+    assert json.loads(path.read_text())=={'compact':[10,20,400,280],'expanded':[20,30,1200,800],'manual_compact':False,'always_on_top':False}
     assert not path.with_name('window.json.tmp').exists()
 
 

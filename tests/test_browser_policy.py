@@ -94,7 +94,9 @@ def test_quote_rich_large_page_json_preserves_structure_and_trust_boundary():
     assert restored["trust_level"] == "untrusted_page_data" and restored["authority"] == "data_only"
     assert restored["result"]["content"] == text
     assert list(restored)[0] == "trust_level"
-    assert len(serialize_tool_result_for_llm({"action":"execute_cmd", "result":{"stdout":"x"*5000}})) == 4000
+    shell = json.loads(serialize_tool_result_for_llm({"action":"execute_cmd", "result":{"stdout":"x"*5000}}))
+    assert shell["authority"] == "data_only"
+    assert shell["result"]["stdout"] == "x"*5000
 
 
 def test_context_omits_page_controlled_title_and_url():

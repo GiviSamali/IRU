@@ -1,4 +1,4 @@
-"""Small reusable response policy and conservative ordinary-window classifier."""
+"""Observed-window context, explicit list choices and response policy; no intent keyword routing."""
 import re
 
 def silent_window_success(task):
@@ -13,61 +13,21 @@ def silent_window_success(task):
         and (c.get('result') or {}).get('response_policy') == 'silent_on_success'
         for c in actions)
 
-_OBJECT = r'(?:это окно|окно|его|word|ворд|excel|эксель|браузер|блокнот|vs code|vscode|chrome|comet|steam|gpt|chatgpt|чатгпт|проводник)'
-_DEVICE = r'(?: на (?:[\w-]+|первом пк|втором пк))?'
-_CLAUSE = re.compile(r'(?:сверни|разверни|восстанови|активируй|покажи|закрой|верни) ' + _OBJECT + r'(?: в обычный размер)?' + _DEVICE + r'|' + _OBJECT + r' (?:вправо|влево|справа|слева)' + _DEVICE + r'|поставь ' + _OBJECT + r' (?:слева|справа|на левую половину экрана|на правую половину экрана)' + _DEVICE + r'|перенеси ' + _OBJECT + r' на (?:второй|первый|\d+) монитор' + _DEVICE + r'|открой (?:gpt|chatgpt|чатгпт)' + _DEVICE)
-
-_BARE = {'сверни': 'minimize', 'разверни': 'maximize', 'восстанови': 'restore',
-         'верни': 'restore', 'разверни обратно': 'restore', 'верни обратно': 'restore',
-         'восстанови обратно': 'restore', 'на весь экран': 'maximize', 'в обычный размер': 'restore'}
-
 def normalize_window_request(message):
-    text = re.sub(r'\s+', ' ', message.lower()).strip().rstrip('.!?')
-    text = re.sub(r'^(?:(?:отлично|хорошо|ладно|а теперь|теперь|пожалуйста)[, ]+)+', '', text)
-    text = re.sub(r'^иру[, ]+', '', text)
-    return re.sub(r'^переключись на ', 'активируй ', text)
+    return re.sub(r'\s+', ' ', str(message or '')).strip().casefold()
 
-def unsupported_virtual_desktop_request(message):
-    text = normalize_window_request(message)
-    virtual = re.search(r'виртуальн\w* (?:рабоч\w* )?стол\w*', text)
-    return bool(virtual and re.match(r'(?:перенеси|перемести|отправь|переключи|поставь|проводник|окно|браузер|word|excel|gpt|chatgpt)\b', text))
 
 def ordinary_window_request(message):
-    text = normalize_window_request(message)
-    if text in _BARE or re.fullmatch(r'открой (?:gpt|chatgpt|чатгпт)' + _DEVICE, text) or unsupported_virtual_desktop_request(message):
-        return True
-    if text in {'какие окна сейчас открыты', 'какие окна открыты', 'какое окно сейчас активно', 'какое окно активно'}:
-        return True
-    text = re.sub(r'^на (?:первом пк|втором пк|[\w-]+) ', '', text)
-    clauses = re.split(r'\s*[,;]\s*(?:а\s+)?|\s+а\s+|\s+и\s+', text)
-    return bool(clauses) and all(_CLAUSE.fullmatch(c) for c in clauses)
+    """Retired route hint: natural-language intent belongs to Orchestrator."""
+    return False
 
 
 def window_action_sequence(message):
-    """Expected action order for the conservative fast path; resolution stays with LLM/agent."""
-    text = normalize_window_request(message)
-    if text in _BARE:
-        return [_BARE[text]]
-    if re.fullmatch(r'открой (?:gpt|chatgpt|чатгпт)' + _DEVICE, text):
-        return ['activate']
-    if not ordinary_window_request(message) or unsupported_virtual_desktop_request(message):
-        return []
-    text = re.sub(r'^на (?:первом пк|втором пк|[\w-]+) ', '', normalize_window_request(message))
-    clauses = re.split(r'\s*[,;]\s*(?:а\s+)?|\s+а\s+|\s+и\s+', text)
-    actions = []
-    for clause in clauses:
-        if clause.startswith('сверни '): action = 'minimize'
-        elif clause.startswith('разверни '): action = 'maximize'
-        elif clause.startswith(('верни ', 'восстанови ')): action = 'restore'
-        elif clause.startswith(('активируй ', 'покажи ', 'открой ')): action = 'activate'
-        elif clause.startswith('закрой '): action = 'close'
-        elif clause.startswith('перенеси '): action = 'move_monitor'
-        elif re.search(r'(?:вправо|справа|правую половину экрана)$', re.sub(_DEVICE + '$', '', clause)): action = 'right'
-        elif re.search(r'(?:влево|слева|левую половину экрана)$', re.sub(_DEVICE + '$', '', clause)): action = 'left'
-        else: return []
-        actions.append(action)
-    return actions
+    return []
 
+
+def unsupported_virtual_desktop_request(message):
+    return False
 
 def recent_window_context(history, *, device_id=None):
     """Keep only observed opaque IDs and device-scoped window evidence, never legacy HWNDs."""
@@ -99,25 +59,7 @@ def recent_window_context(history, *, device_id=None):
 
 
 def direct_window_action(message, history, device_id):
-    text = normalize_window_request(message)
-    if text not in _BARE:
-        return None
-    args = {'action': _BARE[text], 'target': 'current'}
-    if text in {'на весь экран', 'в обычный размер', 'верни', 'восстанови', 'разверни', 'разверни обратно', 'верни обратно', 'восстанови обратно'}:
-        # Follow-up references require one observed window from the immediately preceding assistant turn.
-        assistant = next((m for m in reversed(history or []) if m.get('role') == 'assistant'), None)
-        mutations = [command for command in (assistant or {}).get('commands', [])
-                     if (command.get('result') or {}).get('completion_state') == 'success']
-        previous_context = recent_window_context([{'role': 'assistant', 'commands': mutations}])
-        current_context = [row for row in previous_context if row['device_id'] == device_id]
-        if len(previous_context) > 1:
-            return {'action': _BARE[text], 'target': 'last', '_clarify': True}
-        if previous_context and not current_context:
-            # Let the compact LLM route resolve the previous device; never act on the current one as fallback.
-            return None
-        if len(current_context) == 1:
-            args = {'action': _BARE[text], 'window_id': current_context[0]['window_id']}
-    return args
+    return None
 
 
 def window_input_required(args, result, journal, device_id):

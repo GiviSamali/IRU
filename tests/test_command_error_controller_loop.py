@@ -1,10 +1,11 @@
 import asyncio
 import json
 
-import httpx
+import pytest
 
 from server.controller_non_pipeline import process_non_pipeline_command
-from server.controller_pipeline import run_pipeline_worker
+from server.runtime_state import tasks
+from server.controller_tools import NON_PIPELINE_TOOLS
 
 
 def _execute_call(call_id: str, command: str) -> dict:
@@ -37,7 +38,13 @@ def _answer_call(call_id: str, text: str) -> dict:
     }
 
 
-def test_non_pipeline_dependency_error_is_structured_observation():
+@pytest.mark.parametrize("goal_member", [False, True])
+def test_worker_dependency_error_is_structured_observation(monkeypatch, goal_member):
+    task_id = "dependency-error-goal" if goal_member else None
+    if goal_member:
+        monkeypatch.setitem(tasks, task_id, {"task_id": task_id, "goal_id": "goal",
+            "original_request": "check PyQt5", "proposed_objective": "check PyQt5",
+            "execution_scope": "general", "window_effects": []})
     captured_messages = []
 
     async def _send_command_fn(device_id, action, params):
@@ -83,12 +90,12 @@ def test_non_pipeline_dependency_error_is_structured_observation():
             user_id=None,
             chat_id=None,
             modes={},
-            poll_task_id=None,
+            poll_task_id=task_id,
             cfg={"model": "mock-model", "max_tokens": 512},
             system_msg="system",
             machine_guid=None,
             mem_user_id=None,
-            non_pipeline_tools=[],
+            non_pipeline_tools=NON_PIPELINE_TOOLS,
             max_iterations=4,
             pick_model_fn=lambda cfg, modes: "mock-model",
             chat_completion_request_fn=_chat_completion_request_fn,
@@ -96,84 +103,6 @@ def test_non_pipeline_dependency_error_is_structured_observation():
     )
 
     assert len(captured_messages) == 2
-    assert "budget_guard" not in [cmd.get("action") for cmd in result.get("commands", [])]
-    assert result["commands"][0]["result"]["error_type"] == "dependency_missing"
-    assert result["answer"] == "PyQt5 dependency error: missing package."
-
-
-def test_pipeline_worker_dependency_error_is_structured_observation():
-    captured_messages = []
-
-    async def _send_command_fn(device_id, action, params):
-        assert action == "execute_cmd"
-        return {
-            "returncode": 1,
-            "stdout": "",
-            "stderr": "Traceback (most recent call last):\nModuleNotFoundError: No module named 'PyQt5'\n",
-        }
-
-    async def _chat_completion_request_fn(**kwargs):
-        captured_messages.append(kwargs["messages"])
-        if len(captured_messages) == 1:
-            return {
-                "choices": [{
-                    "finish_reason": "tool_calls",
-                    "message": {"content": "", "tool_calls": [_execute_call("call-1", 'python -c "import PyQt5"')]},
-                }]
-            }
-
-        tool_messages = [msg for msg in kwargs["messages"] if msg.get("role") == "tool"]
-        assert tool_messages, "Expected execute_cmd result to be returned to the worker"
-        payload = json.loads(tool_messages[-1]["content"])
-        result = payload["result"]
-        assert result["error_type"] == "dependency_missing"
-        assert result["missing_packages"] == ["PyQt5"]
-        assert result["command_error"]["recoverable"] is True
-        return {
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "message": {"content": "", "tool_calls": [_answer_call("call-answer", "PyQt5 dependency error: missing package.")]},
-            }]
-        }
-
-    shared = {
-        "current_device_id": "device-1",
-        "current_hostname": "devbox",
-        "current_os": "Windows",
-        "current_os_version": "11",
-        "device_profile_block": "",
-        "device_memory_block": "",
-        "devices_block": "",
-        "other_devices_summary": "",
-        "target_device_id": "device-1",
-        "os_rules": "",
-        "current_datetime_msk": "2026-05-14 12:00",
-    }
-
-    async def _run():
-        async with httpx.AsyncClient() as client:
-            return await run_pipeline_worker(
-                client=client,
-                cfg={"model": "mock-model"},
-                model="mock-model",
-                shared=shared,
-                overall_goal="check PyQt5",
-                step={"title": "check", "instruction": "check PyQt5", "device_id": "device-1"},
-                completed_steps=[],
-                chat_history=[],
-                send_command_fn=_send_command_fn,
-                get_file_link_fn=lambda device_id, file_path: "/api/download/mock",
-                machine_guid=None,
-                mem_user_id=None,
-                poll_task_id=None,
-                chat_completion_request_fn=_chat_completion_request_fn,
-                worker_tools=[],
-            )
-
-    result = asyncio.run(_run())
-
-    assert len(captured_messages) == 2
-    assert result["status"] == "ok"
     assert "budget_guard" not in [cmd.get("action") for cmd in result.get("commands", [])]
     assert result["commands"][0]["result"]["error_type"] == "dependency_missing"
     assert result["answer"] == "PyQt5 dependency error: missing package."

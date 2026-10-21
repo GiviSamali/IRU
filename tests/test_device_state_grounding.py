@@ -7,7 +7,6 @@ import pytest
 from fastapi import HTTPException
 
 from server.controller_non_pipeline import process_non_pipeline_command
-from server.controller_pipeline import pipeline_worker_prompt, run_pipeline_worker
 from server.controller_shared import build_device_profile_block, build_devices_block
 from server import task_runtime
 
@@ -140,95 +139,42 @@ def test_non_pipeline_command_log_includes_target_device_id():
     assert entry["tool_label"] == "PowerShell / shell control"
 
 
-def test_pipeline_command_log_includes_target_device_id():
-    async def _send_command_fn(device_id, action, params):
-        return {"returncode": 0, "stdout": "ok", "stderr": ""}
-
-    async def _chat_completion_request_fn(**kwargs):
-        messages = kwargs["messages"]
-        if not any(msg.get("role") == "tool" for msg in messages):
-            return {
-                "choices": [{
-                    "finish_reason": "tool_calls",
-                    "message": {"content": "", "tool_calls": [_execute_call("whoami")]},
-                }]
-            }
-        return {
-            "choices": [{
-                "finish_reason": "stop",
-                "message": {"content": "ok"},
-            }]
-        }
-
-    shared = {
-        "current_device_id": "device-a",
-        "current_hostname": "alpha",
-        "current_os": "Windows",
-        "current_os_version": "11",
-        "device_profile_block": "",
-        "device_memory_block": "",
-        "devices_block": "",
-        "other_devices_summary": "",
-        "target_device_id": "device-a",
-        "os_rules": "",
-        "current_datetime_msk": "2026-05-14 12:00",
-    }
-
-    async def _run():
-        async with httpx.AsyncClient() as client:
-            return await run_pipeline_worker(
-                client=client,
-                cfg={"model": "mock"},
-                model="mock",
-                shared=shared,
-                overall_goal="run",
-                step={"title": "run", "instruction": "run", "device_id": "device-a"},
-                completed_steps=[],
-                chat_history=[],
-                send_command_fn=_send_command_fn,
-                get_file_link_fn=lambda device_id, path: "/api/download/mock",
-                machine_guid=None,
-                mem_user_id=None,
-                poll_task_id=None,
-                chat_completion_request_fn=_chat_completion_request_fn,
-                worker_tools=[],
-            )
-
-    result = asyncio.run(_run())
-    entry = result["commands"][0]
+def test_common_worker_command_log_includes_exact_target_device_id():
+    from test_controller_trust import _run_non_pipeline_case, _answer_call
+    async def send(device_id, action, params):
+        assert device_id == "device-a"
+        return {"returncode":0,"stdout":"observed","stderr":""}
+    result = _run_non_pipeline_case([
+        {"choices":[{"message":{"tool_calls":[_execute_call("whoami")]}}]},
+        {"choices":[{"message":{"tool_calls":[_answer_call("end","Recorded observation")]}}]},
+    ], send_command_fn=send, device_id="device-a")
+    entry = next(item for item in result["commands"] if item.get("tool_name") == "execute_cmd")
     assert entry["target_device_id"] == "device-a"
-    assert entry["hostname"] == "alpha"
+    assert entry["hostname"] == "devbox"
     assert entry["collected_at"]
 
 
-def test_pipeline_completed_other_device_step_not_live_state():
-    prompt = pipeline_worker_prompt(
-        {
-            "current_device_id": "device-b",
-            "current_hostname": "bravo",
-            "current_os": "Windows",
-            "current_os_version": "11",
-            "device_profile_block": "",
-            "device_memory_block": "",
-            "devices_block": "",
-            "target_device_id": "device-b",
-            "os_rules": "",
-            "current_datetime_msk": "2026-05-14 12:00",
-        },
-        "describe states",
-        {"title": "describe B", "instruction": "describe B", "device_id": "device-b"},
-        [{
-            "title": "snapshot A",
-            "summary": "GIVI cpu_usage=17%, process_count=259",
-            "device_id": "device-a",
-            "hostname": "GIVI",
-        }],
-    )
-
-    assert "OTHER DEVICE device_id=device-a hostname=GIVI" in prompt
-    assert "informational only" in prompt
-    assert "do not reuse paths as target-device paths" in prompt
-
+def test_previous_other_device_result_cannot_become_target_live_state(client):
+    from server import database as db
+    from server.worker_scheduler import init_worker_storage
+    from server.worker_context import source_references
+    init_worker_storage()
+    owner = db.create_user("state-reference-owner")
+    chat = db.create_chat(owner["id"], "states")["id"]
+    report = {"task_id":"state-on-a", "status":"success", "target_device_ids":["device-a"],
+              "summary":"device-a cpu_usage=17%, process_count=259",
+              "artifacts":[{"path":"C:/A/state.txt","device_id":"device-a","verified":True}]}
+    payload = {"task_id":"state-on-a", "message":"Observe device A", "worker_report":report,
+               "answer":report["summary"], "device_ids":[f"{owner['id']}:device-a"]}
+    with db.get_db() as c:
+        c.execute("INSERT INTO worker_jobs VALUES(?,?,?,?,?,?,?,?,?,?)", (
+            "state-on-a",owner["id"],chat,"success",json.dumps(payload),json.dumps(report),None,1,1,None))
+    references = source_references(owner["id"], chat, ["state-on-a"], {"device-b"})
+    assert references[0]["source_device_ids"] == ["device-a"]
+    assert references[0]["summary_verified"] is False
+    assert references[0]["summary"] == ""
+    assert references[0]["artifacts"] == []
+    assert "cpu_usage=17" not in json.dumps(references)
 
 @pytest.mark.parametrize("message", [
     "Создай на рабочем столе папку test_iru_state, в ней создай txt файл hello.txt с текстом Проверка ИРУ",
@@ -269,7 +215,7 @@ def test_nl_state_phrase_uses_llm_tool_flow_not_hidden_shortcut(monkeypatch, mes
 
     monkeypatch.setattr(task_runtime, "collect_device_live_snapshot", fail_collect)
     monkeypatch.setattr(task_runtime, "process_nl_command", fake_process)
-    monkeypatch.setattr(task_runtime, "classify_task_complexity", fake_classify)
+
     monkeypatch.setattr(task_runtime, "send_command_to_agent", fail_send)
     monkeypatch.setattr(task_runtime, "add_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(task_runtime, "get_messages", lambda *args, **kwargs: [])
@@ -328,7 +274,7 @@ def test_run_nl_device_refresh_state_tool_collects_and_stores_snapshot(monkeypat
 
     monkeypatch.setattr(task_runtime, "collect_device_live_snapshot", fake_collect)
     monkeypatch.setattr(task_runtime, "process_nl_command", fake_process)
-    monkeypatch.setattr(task_runtime, "classify_task_complexity", fake_classify)
+
     monkeypatch.setattr(task_runtime, "add_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(task_runtime, "get_messages", lambda *args, **kwargs: [])
     monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id, **kw: {"device_id": device_id})

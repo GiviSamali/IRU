@@ -4,6 +4,8 @@ from collections import Counter,defaultdict
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parents[3]
+if not (REPO / 'server' / 'controller_pipeline.py').is_file():
+    raise SystemExit('Historical PLAN baseline only: run this archived harness from its matching pre-refactor checkout. For Goal Queue measurements use tools/goal_queue_metrics.py on copied databases.')
 sys.path.insert(0,str(REPO))
 os.environ['IRU_ANSWER_AUDITOR_ENABLED']='1'
 import httpx

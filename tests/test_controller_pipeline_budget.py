@@ -1,14 +1,13 @@
+"""Unified Worker budget and device-context regressions; synthetic effects only."""
 import asyncio
 import json
 
-import httpx
+import pytest
 
-from server.controller_pipeline import (
-    build_pipeline_worker_context,
-    pipeline_worker_prompt,
-    process_pipeline_subagents,
-    run_pipeline_worker,
-)
+from server import controller, database as db
+from server.controller_non_pipeline import process_non_pipeline_command
+from server.controller_tools import NON_PIPELINE_TOOLS
+from server.worker_context import build_worker_context
 
 
 def _make_completion_fn(responses, captured_messages=None):
@@ -68,406 +67,113 @@ def _execute_call(call_id, command, device_id=None):
     }
 
 
-def _shared_context(device_id="device-1"):
-    return {
-        "current_device_id": device_id,
-        "current_hostname": "devbox",
-        "current_os": "Windows",
-        "current_os_version": "11",
-        "device_profile_block": "",
-        "device_memory_block": "",
-        "devices_block": "",
-        "other_devices_summary": "",
-        "target_device_id": device_id,
-        "os_rules": "",
-        "current_datetime_msk": "2026-05-02 12:00",
-    }
+def _run_worker_case(responses, send_command_fn=None):
+    async def send(device,action,params):
+        if device!="device-1":
+            raise RuntimeError("device_outside_worker_assignment")
+        if send_command_fn:return await send_command_fn(device,action,params)
+        return {"returncode":0,"stdout":"ok","stderr":""}
+    return asyncio.run(process_non_pipeline_command(user_message="Inspect the selected device",
+        device_id="device-1",device_info={"os":"Windows","hostname":"devbox"},send_command_fn=send,
+        get_file_link_fn=lambda *a:"/api/download/mock",chat_history=[],user_id=None,chat_id=None,
+        modes={},poll_task_id=None,cfg={"model":"mock-model","answer_auditor_enabled":False},system_msg="system",
+        machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=6,
+        pick_model_fn=lambda *a:"mock-model",chat_completion_request_fn=_make_completion_fn(responses)))
 
 
-def _run_worker_case(responses, send_command_fn=None, step=None):
-    async def _noop_send_command_fn(device_id, action, params):
-        return {"returncode": 0, "stdout": "ok", "stderr": ""}
-
-    def _noop_get_file_link_fn(device_id, file_path):
-        return "/api/download/mock"
-
-    async def _run():
-        async with httpx.AsyncClient() as client:
-            return await run_pipeline_worker(
-                client=client,
-                cfg={"model": "mock-model"},
-                model="mock-model",
-                shared=_shared_context(),
-                overall_goal="goal",
-                step=step or {"title": "step", "instruction": "do it", "device_id": "device-1"},
-                completed_steps=[],
-                chat_history=[],
-                send_command_fn=send_command_fn or _noop_send_command_fn,
-                get_file_link_fn=_noop_get_file_link_fn,
-                machine_guid=None,
-                mem_user_id=None,
-                poll_task_id=None,
-                chat_completion_request_fn=_make_completion_fn(responses),
-                worker_tools=[],
-            )
-
-    return asyncio.run(_run())
+def responses(calls):
+    return [{"choices":[{"message":{"tool_calls":calls}}]},
+        {"choices":[{"message":{"tool_calls":[_answer_call("answer","Observed result")]}}]}]
 
 
-def test_pipeline_worker_stops_many_commands_without_new_evidence():
-    n = 20
-    calls = [_execute_call(f"call-{idx}", f"whoami {idx}") for idx in range(n + 1)]
-    executed = []
-
-    async def _send_command_fn(device_id, action, params):
+def test_common_worker_stops_many_commands_at_its_iteration_boundary():
+    executed=[]
+    async def send(device,action,params):
         executed.append(params["command"])
-        return {"returncode": 0, "stdout": "ok", "stderr": ""}
-
-    result = _run_worker_case(
-        responses=[
-            {
-                "choices": [{
-                    "finish_reason": "tool_calls",
-                    "message": {"content": "", "tool_calls": calls},
-                }]
-            },
-            {
-                "choices": [{
-                    "finish_reason": "stop",
-                    "message": {"content": "ok"},
-                }]
-            },
-        ],
-        send_command_fn=_send_command_fn,
-    )
-
-    assert result["status"] == "error"
-    assert result["terminal_reason"] == "no_progress"
-    assert len(executed) < 12
-    assert "budget_guard" not in [c.get("action") for c in result.get("commands", [])]
+        return {"returncode":0,"stdout":"ok","stderr":""}
+    result=_run_worker_case(responses([_execute_call(str(i),f"whoami {i}") for i in range(21)]),send)
+    assert 0<len(executed)<=6
+    assert (result.get("task_receipt") or {}).get("goal_completed") is not True
 
 
-def test_pipeline_worker_does_not_stop_repeated_similar_execute_commands():
-    calls = [
-        _execute_call("call-1", "Start-Process calc.exe"),
-        _execute_call("call-2", 'Start-Process -FilePath "calc.exe"'),
-        _execute_call("call-3", "Start-Process calc"),
-        _execute_call("call-4", "Start-Process -FilePath calc.exe"),
-    ]
-    executed = []
-
-    async def _send_command_fn(device_id, action, params):
+def test_common_worker_does_not_budget_block_similar_explicit_commands():
+    commands=["Start-Process calc.exe",'Start-Process -FilePath "calc.exe"',"Start-Process calc","Start-Process -FilePath calc.exe"]
+    executed=[]
+    async def send(device,action,params):
         executed.append(params["command"])
-        return {"returncode": 0, "stdout": "ok", "stderr": ""}
-
-    result = _run_worker_case(
-        responses=[
-            {
-                "choices": [{
-                    "finish_reason": "tool_calls",
-                    "message": {"content": "", "tool_calls": calls},
-                }]
-            },
-            {
-                "choices": [{
-                    "finish_reason": "stop",
-                    "message": {"content": "ok"},
-                }]
-            },
-        ],
-        send_command_fn=_send_command_fn,
-    )
-
-    assert executed == [
-        "Start-Process calc.exe",
-        'Start-Process -FilePath "calc.exe"',
-        "Start-Process calc",
-        "Start-Process -FilePath calc.exe",
-    ]
-    assert "budget_guard" not in [c.get("action") for c in result.get("commands", [])]
-    assert result["status"] == "ok"
+        return {"returncode":0,"stdout":"ok","stderr":""}
+    result=_run_worker_case(responses([_execute_call(str(i),command) for i,command in enumerate(commands)]),send)
+    assert executed==commands
+    assert "budget_guard" not in [entry.get("action") for entry in result["commands"]]
 
 
-def test_pipeline_worker_single_execute_command_is_not_blocked():
-    executed = []
-
-    async def _send_command_fn(device_id, action, params):
-        executed.append((device_id, action, params["command"]))
-        return {"returncode": 0, "stdout": "user", "stderr": ""}
-
-    result = _run_worker_case(
-        responses=[
-            {
-                "choices": [{
-                    "finish_reason": "tool_calls",
-                    "message": {"content": "", "tool_calls": [_execute_call("call-1", "whoami")]},
-                }]
-            },
-            {
-                "choices": [{
-                    "finish_reason": "stop",
-                    "message": {"content": "ok"},
-                }]
-            },
-        ],
-        send_command_fn=_send_command_fn,
-    )
-
-    assert result["status"] == "ok"
-    assert executed == [("device-1", "execute_cmd", "whoami")]
-    assert result["answer"] == "ok"
+def test_common_worker_single_command_is_not_blocked():
+    executed=[]
+    async def send(device,action,params):
+        executed.append((device,action,params["command"]))
+        return {"returncode":0,"stdout":"user","stderr":""}
+    result=_run_worker_case(responses([_execute_call("who","whoami")]),send)
+    assert executed==[("device-1","execute_cmd","whoami")]
+    assert result["answer"]=="Observed result"
 
 
-def test_pipeline_worker_ignores_llm_device_override():
-    seen_devices = []
-
-    async def _send_command_fn(device_id, action, params):
-        seen_devices.append(device_id)
-        return {"returncode": 0, "stdout": "ok", "stderr": ""}
-
-    _run_worker_case(
-        responses=[
-            {
-                "choices": [{
-                    "finish_reason": "tool_calls",
-                    "message": {"content": "", "tool_calls": [_execute_call("call-1", "whoami", device_id="device-2")]},
-                }]
-            },
-            {
-                "choices": [{
-                    "finish_reason": "stop",
-                    "message": {"content": "ok"},
-                }]
-            },
-        ],
-        send_command_fn=_send_command_fn,
-    )
-
-    assert seen_devices == ["device-1"]
+def test_device_override_is_denied_instead_of_silently_retargeted():
+    seen=[]
+    async def send(device,action,params):
+        seen.append(device)
+        return {"returncode":0,"stdout":"wrong"}
+    result=_run_worker_case(responses([_execute_call("other","whoami","device-2")]),send)
+    assert seen==[]
+    assert result["commands"][0]["result"]["error"]=="device_outside_worker_assignment"
 
 
-def _build_device_a_worker_context(monkeypatch):
-    all_devices = {
-        "device-a": {
-            "info": {
-                "hostname": "alpha",
-                "os": "Windows",
-                "os_version": "11",
-                "desktop_path": r"C:\Users\alpha\Desktop",
-            }
-        },
-        "device-b": {
-            "info": {
-                "hostname": "bravo",
-                "os": "Windows",
-                "os_version": "10",
-                "machine_guid": "guid-b",
-                "desktop_path": r"D:\bravo\Desktop",
-                "home": r"D:\bravo",
-                "project_root": r"D:\bravo\secret-project",
-                "recent_commands": "type D:\\bravo\\secret.txt",
-                "output": "secret-output",
-            }
-        },
-    }
-
-    def _profile(device_id, **kw):
-        if device_id == "device-a":
-            return {
-                "device_id": "device-a",
-                "hostname": "alpha",
-                "os": "Windows",
-                "os_version": "11",
-                "username": "alice",
-                "desktop_path": r"C:\Users\alpha\Desktop",
-                "machine_guid": "guid-a",
-            }
-        if device_id == "device-b":
-            return {
-                "device_id": "device-b",
-                "username": "bob",
-                "desktop_path": r"D:\bravo\Desktop",
-                "machine_guid": "guid-b",
-            }
-        return None
-
-    def _memory(machine_guid, user_id, device_id):
-        assert device_id in {"device-a", "device-b"}
-        if machine_guid == "guid-a":
-            return "target memory only"
-        if machine_guid == "guid-b":
-            return r"device B memory D:\bravo\secret.txt"
-        return ""
-
-    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", _profile)
-    monkeypatch.setattr("server.controller_pipeline.build_memory_block", _memory)
-    return build_pipeline_worker_context(
-        target_device_id="device-a",
-        current_device_id="device-a",
-        current_device_info=all_devices["device-a"]["info"],
-        all_devices=all_devices,
-        current_device_profile=_profile("device-a"),
-        mem_user_id="user-1",
-        windows_rules="windows rules",
-        linux_rules="linux rules",
-    )
+@pytest.fixture
+def context_owner(tmp_path,monkeypatch):
+    monkeypatch.setattr(db,"DB_PATH",tmp_path/"context.sqlite")
+    db.init_db()
+    owner=db.create_user("context-owner")
+    owner["chat_id"]=db.create_chat(owner["id"],"context")["id"]
+    return owner
 
 
-def test_pipeline_worker_context_excludes_other_device_paths_profile_and_memory(monkeypatch):
-    shared, machine_guid = _build_device_a_worker_context(monkeypatch)
-    prompt = pipeline_worker_prompt(
-        shared,
-        "goal",
-        {"title": "step", "instruction": "do it", "device_id": "device-a"},
-        [],
-    )
-
-    assert machine_guid == "guid-a"
-    for expected in ("device-a", "alpha", "device-b", "bravo"):
-        assert expected in prompt
-    for forbidden in (
-        r"D:\bravo\Desktop",
-        r"D:\bravo\secret-project",
-        r"D:\bravo\secret.txt",
-        "guid-b",
-        "device B memory",
-        "secret-output",
-    ):
-        assert forbidden not in prompt
+def device_a_context(monkeypatch,owner):
+    profile={"device_id":"device-a","hostname":"alpha","os":"Windows","os_version":"11",
+             "desktop_path":r"C:\Users\alpha\Desktop","machine_guid":"guid-a"}
+    devices={"device-a":{"info":profile},"device-b":{"info":{"hostname":"bravo","os":"Windows",
+        "desktop_path":r"D:\bravo\Desktop","project_root":r"D:\bravo\secret-project",
+        "machine_guid":"guid-b","output":"secret-output"}}}
+    monkeypatch.setattr(controller,"load_llm_config",lambda:{"model":"mock-model"})
+    def memory(guid,user,device):
+        assert guid=="guid-a" and device=="device-a"
+        return "target memory only"
+    monkeypatch.setattr(controller,"build_memory_block",memory)
+    runtime=controller._build_runtime_context(device_id="device-a",all_devices=devices,
+        device_info=profile,device_profile=profile,user_id=owner["id"],chat_history=[])
+    return runtime,controller._build_non_pipeline_system_prompt(runtime=runtime,device_id="device-a")
 
 
-def test_pipeline_worker_llm_messages_do_not_include_other_device_paths(monkeypatch):
-    captured_messages = []
-    shared, _ = _build_device_a_worker_context(monkeypatch)
+def test_common_worker_context_excludes_other_device_paths_profile_and_memory(context_owner,monkeypatch):
+    runtime,prompt=device_a_context(monkeypatch,context_owner)
+    assert runtime.machine_guid=="guid-a"
+    assert all(value in prompt for value in ("device-a","alpha","device-b","bravo","target memory only"))
+    assert all(value not in prompt for value in (r"D:\bravo\Desktop",r"D:\bravo\secret-project","guid-b","secret-output"))
 
-    async def _run():
-        async with httpx.AsyncClient() as client:
-            return await run_pipeline_worker(
-                client=client,
-                cfg={"model": "mock-model"},
-                model="mock-model",
-                shared=shared,
-                overall_goal="goal",
-                step={"title": "step", "instruction": "do it", "device_id": "device-a"},
-                completed_steps=[],
-                chat_history=[{"role": "assistant", "content": r"use D:\bravo\secret.txt"}],
-                send_command_fn=lambda *args, **kwargs: None,
-                get_file_link_fn=lambda device_id, file_path: "/api/download/mock",
-                machine_guid="guid-a",
-                mem_user_id="user-1",
-                poll_task_id=None,
-                chat_completion_request_fn=_make_completion_fn([{
-                    "choices": [{
-                        "finish_reason": "stop",
-                        "message": {"content": "ok"},
-                    }]
-                }], captured_messages),
-                worker_tools=[],
-            )
 
-    asyncio.run(_run())
-    combined = "\n".join(msg.get("content", "") for msg in captured_messages[0])
-
-    assert "target_device=device-a" in combined
-    for forbidden in (r"D:\bravo\Desktop", r"D:\bravo\secret-project", r"D:\bravo\secret.txt", "guid-b"):
+def test_common_worker_messages_exclude_foreign_worker_paths(context_owner,monkeypatch):
+    runtime,prompt=device_a_context(monkeypatch,context_owner)
+    history=build_worker_context(context_owner["id"],context_owner["chat_id"],"Inspect A",
+        [f"{context_owner['id']}:device-a"],[{"role":"assistant","taskKind":"worker",
+          "assignmentDeviceIds":["device-b"],"_taskId":"foreign-device-job","content":r"use D:\bravo\secret.txt"}])
+    captured=[]
+    async def completion(**kw):
+        captured.append(kw["messages"])
+        return {"choices":[{"message":{"tool_calls":[_answer_call("done","Context inspected")]}}]}
+    async def send(*args):pytest.fail("No device command expected")
+    asyncio.run(process_non_pipeline_command(user_message="Inspect A",device_id="device-a",device_info={"os":"Windows"},
+        send_command_fn=send,get_file_link_fn=lambda *a:"",chat_history=history,user_id=None,chat_id=None,modes={},
+        poll_task_id=None,cfg={"model":"mock-model"},system_msg=prompt,machine_guid=None,mem_user_id=None,
+        non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=3,pick_model_fn=lambda *a:"mock-model",
+        chat_completion_request_fn=completion))
+    combined=json.dumps(captured,ensure_ascii=False)
+    for forbidden in ("secret.txt","secret-project","guid-b","secret-output"):
         assert forbidden not in combined
-
-
-def test_pipeline_completed_steps_mark_other_device_paths_as_informational():
-    prompt = pipeline_worker_prompt(
-        _shared_context("device-a"),
-        "goal",
-        {"title": "step", "instruction": "do it", "device_id": "device-a"},
-        [{
-            "title": "previous",
-            "summary": r"created D:\bravo\artifact.txt",
-            "device_id": "device-b",
-            "hostname": "bravo",
-        }],
-    )
-
-    assert "OTHER DEVICE device_id=device-b hostname=bravo" in prompt
-    assert "informational only" in prompt
-    assert "do not reuse paths as target-device paths" in prompt
-
-
-def test_pipeline_invalid_planner_device_fails_closed(monkeypatch, caplog):
-    responses = [
-        {
-            "choices": [{
-                "finish_reason": "stop",
-                "message": {
-                    "content": json.dumps({
-                        "goal": "goal",
-                        "steps": [{
-                            "title": "step",
-                            "instruction": "run command",
-                            "device_id": "missing-device",
-                        }],
-                    }),
-                },
-            }]
-        },
-        {
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "message": {"content": "", "tool_calls": [_execute_call("call-1", "whoami")]},
-            }]
-        },
-        {
-            "choices": [{
-                "finish_reason": "stop",
-                "message": {"content": "worker ok"},
-            }]
-        },
-        {
-            "choices": [{
-                "finish_reason": "stop",
-                "message": {"content": "summary ok"},
-            }]
-        },
-    ]
-    captured_messages = []
-    seen_devices = []
-
-    monkeypatch.setattr("server.controller_pipeline.db.create_task", lambda **kwargs: 1)
-    monkeypatch.setattr("server.controller_pipeline.db.update_step", lambda *args, **kwargs: True)
-    monkeypatch.setattr("server.controller_pipeline.db.finish_task", lambda *args, **kwargs: True)
-    monkeypatch.setattr("server.controller_pipeline.collect_tasks", lambda task_ids: [])
-    monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
-    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
-    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id, device_id: "")
-    monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
-
-    async def _send_command_fn(device_id, action, params):
-        seen_devices.append(device_id)
-        return {"returncode": 0, "stdout": "ok", "stderr": ""}
-
-    async def _run():
-        return await process_pipeline_subagents(
-            user_message="run command",
-            device_id="device-a",
-            device_info={"hostname": "alpha", "os": "Windows", "os_version": "11"},
-            all_devices={"device-a": {"info": {"hostname": "alpha", "os": "Windows", "os_version": "11"}}},
-            send_command_fn=_send_command_fn,
-            get_file_link_fn=lambda device_id, file_path: "/api/download/mock",
-            chat_history=[],
-            user_id=1,
-            chat_id=1,
-            device_profile=None,
-            modes={},
-            poll_task_id=None,
-            load_llm_config_fn=lambda: {"model": "mock-model", "max_tokens": 1000},
-            pick_model_fn=lambda cfg, modes: "mock-model",
-            chat_completion_request_fn=_make_completion_fn(responses, captured_messages),
-            worker_tools=[],
-            windows_rules="windows rules",
-            linux_rules="linux rules",
-        )
-
-    caplog.set_level("WARNING")
-    result = asyncio.run(_run())
-
-    assert seen_devices == []
-    assert result["task_receipt"]["task_status"] == "failed"
-    assert "target_device_not_found" in result["answer"]

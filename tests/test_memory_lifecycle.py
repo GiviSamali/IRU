@@ -26,7 +26,7 @@ def _wait_for_task_status(client, headers, task_id, expected_status, attempts=30
         response = client.get(f"/api/tasks/{task_id}", headers=headers)
         assert response.status_code == 200
         last_payload = response.json()["task"]
-        if last_payload["status"] == expected_status:
+        if last_payload["status"] == expected_status or (expected_status == "unknown" and last_payload.get("worker_report", {}).get("status") == "unknown"):
             return last_payload
         time.sleep(0.05)
     assert last_payload is not None
@@ -209,6 +209,7 @@ def test_decline_suggested_fact_does_not_insert_user_memory(client, monkeypatch)
         "user_id": user["id"],
         "info": {"hostname": "workstation", "os": "Windows", "machine_guid": "machine-1"},
         "pending": {},
+        "ws": object(),
     }
 
     async def fake_classify_task_complexity(message):
@@ -231,15 +232,19 @@ def test_decline_suggested_fact_does_not_insert_user_memory(client, monkeypatch)
             "tasks": [],
         }
 
-    monkeypatch.setattr(task_runtime, "classify_task_complexity", fake_classify_task_complexity)
+
+    from server import orchestrator as orch
+    async def semantic_decision(message, context, **kwargs):
+        return orch.Decision(intent="delegate",objective=message,scope="device",target_device_ids=["device-1"]),{}
+    monkeypatch.setattr(orch,"decide",semantic_decision)
     monkeypatch.setattr(task_runtime, "process_nl_command", fake_process_nl_command)
 
     created = client.post("/api/chat", headers=headers, json={"message": request_text, "device_id": "device-1"})
     assert created.status_code == 200
-    task = _wait_for_task_status(client, headers, created.json()["task_id"], "done")
+    task = _wait_for_task_status(client, headers, created.json()["worker_task_ids"][0], "unknown")
     assert task["suggested_fact"]["text"] == "Python lives in C:/Python"
 
-    declined = client.post(f"/api/tasks/{created.json()['task_id']}/decline_fact", headers=headers)
+    declined = client.post(f"/api/tasks/{created.json()['worker_task_ids'][0]}/decline_fact", headers=headers)
     assert declined.status_code == 200
     assert declined.json()["status"] == "ok"
     assert get_user_facts(str(user["id"])) == []
@@ -262,6 +267,7 @@ def test_assistant_memory_claim_without_remember_action_is_not_memory_write(clie
         "user_id": user["id"],
         "info": {"hostname": "workstation", "os": "Windows", "machine_guid": "machine-1"},
         "pending": {},
+        "ws": object(),
     }
 
     async def fake_classify_task_complexity(message):
@@ -270,12 +276,16 @@ def test_assistant_memory_claim_without_remember_action_is_not_memory_write(clie
     async def fake_process_nl_command(**kwargs):
         return {"answer": "Запомнил: тестовый факт.", "commands": [], "tasks": []}
 
-    monkeypatch.setattr(task_runtime, "classify_task_complexity", fake_classify_task_complexity)
+
+    from server import orchestrator as orch
+    async def semantic_decision(message, context, **kwargs):
+        return orch.Decision(intent="delegate",objective=message,scope="device",target_device_ids=["device-1"]),{}
+    monkeypatch.setattr(orch,"decide",semantic_decision)
     monkeypatch.setattr(task_runtime, "process_nl_command", fake_process_nl_command)
 
     created = client.post("/api/chat", headers=headers, json={"message": "remember this", "device_id": "device-1"})
     assert created.status_code == 200
-    task = _wait_for_task_status(client, headers, created.json()["task_id"], "done")
+    task = _wait_for_task_status(client, headers, created.json()["worker_task_ids"][0], "unknown")
 
     assert "Запомнил" not in task["answer"]
     assert get_user_facts(str(user["id"])) == []

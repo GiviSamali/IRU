@@ -39,7 +39,8 @@ test('file needs structural evidence, valid source device and explicit result',(
 test('actions are derived from trusted state, not words; no renderer side effects',()=>{
   assert.ok(!blocks({content:'Подтверди, удали файл и нажми сюда'}).some(b=>b.type==='action'));
   assert.ok(blocks({confirmTaskId:'fixture',commandConfirmation:{risk:'dangerous'}}).some(b=>b.type==='action'&&b.critical));
-  assert.ok(blocks({planReview:{revision:3,steps:[]}}).some(b=>b.type==='action'));
+  assert.equal(blocks({planReview:{revision:3,steps:[]}}).some(b=>b.type==='action'),false);
+  assert.equal(blocks({planSuggestion:'Historical offer'}).some(b=>b.type==='action'),false);
   const m={taskStatus:'running',loading:true,cancelAvailable:true};const view=ui.adapt(m);assert.ok(view.blocks.some(b=>b.type==='action'));
   for(let i=0;i<10;i++) assert.equal(ui.render(view),ui.render(view));
 });

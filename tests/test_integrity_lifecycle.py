@@ -148,15 +148,15 @@ def install(world,steps,answer,number):
     return device,audits
 
 
-async def admit(world,scheduler,goal,tid):
+async def admit(world,scheduler,goal,tid, *, execution_scope="general", window_effects=()):
     client,owner,key,monkeypatch=world
-    async def decide(*a,**kw):return orch.Decision(intent='delegate',objective=goal,scope='device',target_device_ids=['pc'],execution_mode='simple'),{}
+    async def decide(*a,**kw):return orch.Decision(intent='delegate',objective=goal,scope='device',target_device_ids=['pc'],execution_mode='simple',execution_scope=execution_scope,window_effects=list(window_effects)),{}
     monkeypatch.setattr(orch,'decide',decide)
     async def delegate(choice,**kw):
         assert choice.objective==goal
         return await scheduler.submit({'task_id':tid,'user_id':owner['id'],'chat_id':owner['chat_id'],
             'message':goal,'original_request':goal,'device_ids':[key],'modes':{},'kind':'worker',
-            'orchestrated':True,'orchestrator_execution_mode':'simple','created_at':time.time(),'status':'running','results':{}},**kw)
+            'orchestrated':True,'orchestrator_execution_mode':'simple','execution_scope':execution_scope,'window_effects':list(window_effects),'created_at':time.time(),'status':'running','results':{}},**kw)
     cmd=SimpleNamespace(message=goal,request_id=tid+'-turn',device_id='pc',modes={},broadcast=False)
     reply=await orch.run_turn(cmd,owner,owner['chat_id'],delegate)
     assert reply['worker_task_id']==tid

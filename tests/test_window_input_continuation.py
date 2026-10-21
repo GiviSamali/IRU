@@ -48,7 +48,7 @@ async def ready(world, scheduler):
     devices[key]={'user_id':owner['id'],'ws':agent,'info':{'hostname':'pc','os':'Windows'},'pending':{}}
     monkeypatch.setattr(orch,'scheduler',scheduler)
     monkeypatch.setattr(routes,'scheduler',scheduler)
-    task=await admit(world,scheduler,'Переключись на Блокнот','window-input')
+    task=await admit(world,scheduler,'Переключись на Блокнот','window-input',execution_scope='window',window_effects=['activate'])
     for _ in range(200):
         job=owned_job(task['task_id'],owner['id'])
         if job['state']=='waiting_input':
@@ -87,16 +87,17 @@ def test_connected_question_answer_continues_same_worker_and_voice(world):
             assert saved['inputRequired']['question_id']==event['question_id']
             assert client.post('/api/voice/tasks/'+task['task_id']+'/speech?question='+event['question_id'],headers=headers).status_code==200
             quota=used_commands(owner)
-            refused=client.post('/nl_command',headers=headers,json={
+            accepted=client.post('/nl_command',headers=headers,json={
                 'orchestrate':False,'device_id':'pc','chat_id':owner['chat_id'],'message':'Второе',
-                'input_task_id':task['task_id'],'input_question_id':event['question_id'],
+                'request_id':'answer-choice','input_task_id':task['task_id'],'input_question_id':event['question_id'],
             })
-            assert refused.status_code==422 and used_commands(owner)==quota
-            assert task['input_required']['phase']=='waiting' and agent.adapter.calls==[]
-            result=client.post('/nl_command',headers=headers,json={
+            assert accepted.status_code==200 and used_commands(owner)==quota
+            result=accepted.json()
+            retried=client.post('/nl_command',headers=headers,json={
                 'orchestrate':True,'device_id':'pc','chat_id':owner['chat_id'],'message':'Второе',
                 'request_id':'answer-choice','input_task_id':task['task_id'],'input_question_id':event['question_id'],
-            }).json()
+            })
+            assert retried.status_code==200 and retried.json()==result
             assert used_commands(owner)==quota
             assert result['status']=='ok' and result['worker_task_id']==task['task_id']
             assert result['answer']=='Продолжаю исходную задачу.'
@@ -211,11 +212,11 @@ def test_input_descriptor_rejects_completed_or_unknown_prior_side_effects():
     assert window_input_required({'action':'close'},result,[latest],'pc') is None
 
 
-def test_switch_wording_is_one_original_window_action_not_a_generated_scope():
+def test_switch_wording_does_not_bypass_semantic_intake():
     from server.window_policy import ordinary_window_request, window_action_sequence
-    assert ordinary_window_request('ИРУ, переключись на Блокнот')
-    assert window_action_sequence('ИРУ, переключись на Блокнот')==['activate']
-    assert not ordinary_window_request('Переключись на Блокнот и удали файлы')
+    for message in ('ИРУ, переключись на Блокнот','Переключись на Блокнот и удали файлы'):
+        assert ordinary_window_request(message) is False
+        assert window_action_sequence(message)==[]
 
 
 def test_restart_recovers_saved_question_as_unknown_without_execution(world):

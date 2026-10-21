@@ -159,7 +159,9 @@ def test_legacy_disconnect_response_is_unknown(scenario):
 
 @pytest.mark.parametrize('initial_tool', ['execute_cmd', 'write_content'])
 def test_plan_worker_can_observe_after_unknown_without_dispatching_mutations(initial_tool):
-    from test_plan_stability import worker, msg
+    from test_plan_stability import worker
+    def msg(tool_call):
+        return {"choices":[{"message":{"tool_calls":[tool_call]}}]}
     from test_pipeline_recovery_receipt import _answer_text_call
     calls, dispatched = [], []
     def call(name, args):
@@ -191,4 +193,6 @@ def test_plan_worker_can_observe_after_unknown_without_dispatching_mutations(ini
     assert result['commands'][0]['result']['status'] == 'unknown'
     assert result['commands'][1]['result']['error'] == 'mutation_blocked_after_unknown'
     assert result['commands'][2]['result']['files'] == []
-    assert result['status'] != 'ok'
+    assert result['commands'][-1]['result']['answer_type'] == 'partial_report'
+    assert result['task_receipt']['task_status'] == 'unknown'
+    assert result['task_receipt']['goal_completed'] is False

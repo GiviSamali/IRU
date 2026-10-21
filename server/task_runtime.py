@@ -17,7 +17,6 @@ try:
     from .api_support import _is_admin, assess_action, action_fingerprint, ActionConfirmationRequired, is_recovery_observation
     from .controller import (
         ConfirmationRequired,
-        classify_task_complexity,
         process_nl_command,
         process_onboarding_message,
         strip_markdown,
@@ -53,7 +52,6 @@ try:
         devices,
         get_user_devices,
         is_task_cancel_requested,
-        is_plan_declined,
         is_suggested_fact_declined,
         mark_task_cancelled,
         tasks,
@@ -64,7 +62,6 @@ except ImportError:
     from api_support import _is_admin, assess_action, action_fingerprint, ActionConfirmationRequired, is_recovery_observation
     from controller import (
         ConfirmationRequired,
-        classify_task_complexity,
         process_nl_command,
         process_onboarding_message,
         strip_markdown,
@@ -100,7 +97,6 @@ except ImportError:
         devices,
         get_user_devices,
         is_task_cancel_requested,
-        is_plan_declined,
         is_suggested_fact_declined,
         mark_task_cancelled,
         tasks,
@@ -214,10 +210,8 @@ def _attach_identity_receipt(result: dict, *, device_id: str, dev: dict | None) 
 
 
 def _should_probe_python_toolchain(message: str, device_info: dict) -> bool:
-    if "windows" not in (device_info.get("os", "") or "").lower():
-        return False
-    lowered = (message or "").lower()
-    return any(marker in lowered for marker in ("python", "pyqt", "pip", "numpy", "matplotlib", ".py"))
+    """Compatibility hint only: words never trigger implicit device commands."""
+    return False
 
 
 async def _probe_python_toolchain_if_needed(
@@ -823,7 +817,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
     task["current_step"] = "ИРУ думает..."
     is_broadcast = bool(task.get("broadcast")) if task.get("orchestrated") else len(device_ids)>1
     task_modes = task.get("modes") or {}
-    plan_declined_for_request = bool(task_modes.get("plan_declined")) or is_plan_declined(chat_id, message)
     print(f"[run_nl_task] START task={task_id[:8]}, user={user_id}, devices={device_ids}")
 
     def cancellation_payload(commands: list | None = None) -> dict:
@@ -924,7 +917,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             decision = asyncio.get_running_loop().create_future()
             card = command_confirmation({"command": command, "device_id": target,
                 "params": snapshot, "chat_id": chat_id, "user_id": user_id}, assessment)
-            task["_pipeline_confirm_future"] = decision
+            task["_command_confirm_future"] = decision
             task["confirm_data"] = card
             task["status"] = "confirm"
             try:
@@ -947,11 +940,17 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             finally:
                 if not is_task_cancel_requested(task_id):
                     task["status"] = "running"
-                task.pop("_pipeline_confirm_future", None)
+                task.pop("_command_confirm_future", None)
                 task.pop("confirm_data", None)
 
         async def send_fn(target_device_id, action, params):
             nonlocal browser_page_seen
+            try:
+                from .controller_shared import pinned_material_pending
+            except ImportError:
+                from controller_shared import pinned_material_pending
+            if pinned_material_pending(task) and not is_recovery_observation(action, params):
+                return {"status":"blocked", "error":"dependency_material_not_fully_read"}
             if task.get("_action_outcome_unknown") and not is_recovery_observation(action, params):
                 return {"status":"blocked", "error":"mutation_blocked_after_unknown"}
             if task.get("worker_id"):
@@ -1153,16 +1152,15 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             return {"status": "failed", "device_id": target_short, "error": f"unknown device tool: {tool_name}"}
 
         try:
-            if not task_modes.get("pipeline"):
-                await _probe_python_toolchain_if_needed(
-                    message=message,
-                    device_id=device_id,
-                    device_info=device_info,
-                    dev=dev,
-                    user_id=user_id,
-                    send_fn=send_fn,
-                )
-            record_lifecycle_event("controller_selected", controller="pipeline" if task_modes.get("pipeline") else "non_pipeline",
+            await _probe_python_toolchain_if_needed(
+                message=message,
+                device_id=device_id,
+                device_info=device_info,
+                dev=dev,
+                user_id=user_id,
+                send_fn=send_fn,
+            )
+            record_lifecycle_event("controller_selected", controller="non_pipeline",
                 mode="broadcast" if is_broadcast else "ordinary_task")
             result = await process_nl_command(
                 user_message=message,
@@ -1189,7 +1187,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 task_receipt = dict(task_receipt or {})
                 task_receipt["warnings"] = sorted(set((task_receipt.get("warnings") or []) + activation_markers))
             device_answer = result.get("answer", "")
-            if is_broadcast and (task_receipt or {}).get("answer_source") != "pipeline_step_report":
+            if is_broadcast:
                 device_answer = enforce_trusted_answer(device_answer, result.get("commands", []))
             return {
                 "device_id": device_id,
@@ -1233,56 +1231,10 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 "commands": [],
             }
 
-    is_pipeline = bool((task.get("modes") or {}).get("pipeline"))
     if is_task_cancel_requested(task_id):
         finish_cancelled()
         return
-    orchestrator_simple=task.get("orchestrated") and task.get("orchestrator_execution_mode")=="simple"
-    if is_pipeline or plan_declined_for_request or orchestrator_simple:
-        record_lifecycle_event("classification", classification="skipped",
-            source="explicit_pipeline" if is_pipeline else "orchestrator_decision" if orchestrator_simple else "plan_declined")
-    if not is_pipeline:
-        if not plan_declined_for_request and not orchestrator_simple:
-            if is_task_cancel_requested(task_id):
-                finish_cancelled()
-                return
-            try:
-                from .browser_policy import browser_request
-            except ImportError:
-                from browser_policy import browser_request
-            if browser_request(message):
-                kind, plan_desc = "SIMPLE", ""
-            else:
-                kind, plan_desc = await _call_with_optional_usage_context(
-                    classify_task_complexity,
-                    message,
-                    usage_context={
-                        "user_id": user_id,
-                        "chat_id": chat_id,
-                        "poll_task_id": task_id,
-                        "route": "classification",
-                        "phase": "classify_task_complexity",
-                    },
-                )
-            record_lifecycle_event("classification", classification=kind)
-            logger.info("[classify] kind=%s user_id=%s task_id=%s", kind, user_id, task_id)
-            if kind == "PLAN":
-                task["plan_suggestion"] = plan_desc
-                task["plan_original_request"] = message
-                user_plan = get_user_plan(user_id)
-                trial_used = get_plan_trial_used(user_id)
-
-                if _is_admin({"id": user_id}) or user_plan in ("pro", "business"):
-                    task["auto_plan"] = True
-                elif trial_used:
-                    logger.info("[classify] FREE TRIAL EXHAUSTED – показываем upsell, user_id=%s", user_id)
-
-                add_message(chat_id, "assistant", "Это сложная задача, нужен план.")
-                task["status"] = "done"
-                task["answer"] = ""
-                task["commands"] = []
-                return
-
+    record_lifecycle_event("classification", classification="skipped", source="goal_task_queue")
     try:
         if is_task_cancel_requested(task_id):
             finish_cancelled()
@@ -1375,25 +1327,11 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     combined_answer[:suggest_match.start()].rstrip() + combined_answer[suggest_match.end():]
                 ).strip()
 
-        plan_match = _re.search(r"\[\[SUGGEST_PLAN:\s*([^\[\]]+?)\s*\]\]", combined_answer)
-        if plan_match:
-            logger.warning(
-                "[suggest_plan] остаточный маркер в ответе LLM — вырезаю, user_id=%s, chat_id=%s",
-                user_id,
-                chat_id,
-            )
-            combined_answer = (combined_answer[:plan_match.start()].rstrip() + combined_answer[plan_match.end():]).strip()
-
-        if plan_declined_for_request and not combined_commands:
-            normalized_answer = (combined_answer or "").strip().lower().rstrip(".!")
-            if plan_match or normalized_answer in {"", "готово"}:
-                combined_answer = "План отключён для этого запроса. Продолжите без режима плана или уточните команду."
-
         if is_task_cancel_requested(task_id):
             finish_cancelled(combined_commands)
             return
         validated_terminal = has_validated_terminal_answer(combined_answer, combined_commands)
-        if validated_terminal or not ("combined_task_receipt" in locals() and (combined_task_receipt or {}).get("answer_source") in {"pipeline_step_report", "per_device_report"}):
+        if validated_terminal or not ("combined_task_receipt" in locals() and (combined_task_receipt or {}).get("answer_source") == "per_device_report"):
             before_trust_guard = combined_answer
             combined_answer = enforce_trusted_answer(combined_answer, combined_commands)
             if combined_answer != before_trust_guard:

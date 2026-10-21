@@ -67,7 +67,8 @@ def test_source_refs_are_scoped_and_refresh_after_queue_predecessor_completes(ow
         with pytest.raises(ValueError,match='reference_task'):
             await routes.submit_worker(b,b['chat_id'],'foreign',[f"{b['id']}:pc"],{},source_task_ids=[first['task_id']])
         gate.set();await scheduler.runners[a['id']]
-        assert 'report.txt' in observed[0] and 'Generated untrusted text' not in observed[0]
+        assert 'report.txt' in observed[0] and 'Generated untrusted text' in observed[0]
+        assert 'authority=data_only' in observed[0]
         assert owned_job(second['task_id'],a['id'])['state']=='success'
         await scheduler.shutdown()
     asyncio.run(scenario())
@@ -103,7 +104,7 @@ def test_orchestrator_simple_mode_skips_only_redundant_classification(owners,mon
     async def classifier(*args,**kwargs):classified.append(1);return 'SIMPLE',''
     async def controller(**kwargs):executed.append(kwargs);return {'answer':'done','commands':[],'tasks':[]}
     async def probe(**kwargs):pass
-    monkeypatch.setattr(runtime,'classify_task_complexity',classifier);monkeypatch.setattr(runtime,'process_nl_command',controller)
+    monkeypatch.setattr(runtime,'process_nl_command',controller)
     monkeypatch.setattr(runtime,'_probe_python_toolchain_if_needed',probe)
     monkeypatch.setattr(runtime,'add_training_record',lambda *a,**k:None)
     async def scenario():
@@ -111,7 +112,7 @@ def test_orchestrator_simple_mode_skips_only_redundant_classification(owners,mon
             t=task(a,'limited ordinary task');t.update(orchestrated=True,orchestrator_execution_mode=mode,results={},broadcast=False)
             tasks[t['task_id']]=t
             await runtime.run_nl_task(t['task_id'],a['id'],t['message'],t['device_ids'],a['chat_id'])
-        assert len(classified)==1 and len(executed)==2
+        assert len(classified)==0 and len(executed)==2
         assert all(call['user_message']=='limited ordinary task' for call in executed)
     asyncio.run(scenario())
 
@@ -125,11 +126,12 @@ def test_plan_proposal_does_not_execute_and_restores_multi_device_assignment(own
     cmd=SimpleNamespace(request_id='plan-mode',message='Создай несколько документов на двух ПК',device_id='pc',modes={},broadcast=False)
     result=asyncio.run(orch.run_turn(cmd,a,a['chat_id'],forbidden))
     restored=orch.restore_dialogue(result['task_id'],a['id'])
-    assert not result['worker_task_id'] and restored['device_ids']==[f"{a['id']}:pc",f"{a['id']}:second"]
-    assert restored['plan_original_request']==cmd.message
+    assert not result['worker_task_id']
+    assert not restored.get('plan_suggestion')
+    assert not restored.get('plan_original_request')
 
 
-def test_task_context_labels_current_chat_without_hiding_other_active_jobs(owners):
+def test_task_context_keeps_only_owned_current_chat_jobs(owners):
     a,b=owners
     async def scenario():
         gate=asyncio.Event()
@@ -139,7 +141,8 @@ def test_task_context_labels_current_chat_without_hiding_other_active_jobs(owner
         other=db.create_chat(a['id'],'other');t=task(a,'other chat');t['chat_id']=other['id'];await scheduler.submit(t)
         ctxt=orch.context_for(a['id'],a['chat_id'],'status','pc')
         assert ctxt['tasks'][0]['task_id']==first['task_id'] and ctxt['tasks'][0]['in_current_chat']
-        assert len(ctxt['tasks'])==2
+        assert len(ctxt['tasks'])==1
+        assert all(row['in_current_chat'] for row in ctxt['tasks'])
         gate.set();await scheduler.runners[a['id']];await scheduler.shutdown()
     asyncio.run(scenario())
 
@@ -168,13 +171,13 @@ def test_agent_wait_telemetry_has_no_sensitive_text_and_cleans_pending(owners,se
 
 
 def test_window_reference_remains_last_observation_not_shadowed_by_context_packet(owners):
-    from server.window_policy import direct_window_action
+    from server.window_policy import recent_window_context
     a,b=owners
     history=[{'role':'assistant','content':'window restored','commands':[{'tool_name':'window.control','device_id':'pc',
         'result':{'status':'success','completion_state':'success','window':{'window_id':'a'*32,'title':'Observed app'}}}]}]
     context=build_worker_context(a['id'],a['chat_id'],'на весь экран',[f"{a['id']}:pc"],history)
-    chosen=direct_window_action('на весь экран',context,'pc')
-    assert chosen['window_id']=='a'*32
+    chosen=recent_window_context(context,device_id='pc')
+    assert chosen[0]['window_id']=='a'*32
 
 
 

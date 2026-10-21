@@ -1,5 +1,9 @@
 import importlib
 
+# Pin the repository namespace before legacy tests prepend agent/ to sys.path.
+# Otherwise agent/agent.py shadows the package during full-suite collection.
+import agent  # noqa: F401
+
 import pytest
 from fastapi.testclient import TestClient
 

@@ -1,16 +1,14 @@
+"""Common Worker recovery and evidence. No model, shell or agent is run by import."""
 import asyncio
 import json
 
-import httpx
+import pytest
 
-from server.controller_pipeline import (
-    _extract_python_interpreters,
-    _verification_command_succeeded,
-    build_pipeline_task_receipt,
-    enforce_conversation_context_answer,
-    process_pipeline_subagents,
-    run_pipeline_worker,
-)
+from server.controller_non_pipeline import process_non_pipeline_command
+from server.controller_tools import NON_PIPELINE_TOOLS
+from server.controller_shared import build_recent_artifact_context, format_recent_artifact_context_block
+from server.worker_reports import build_worker_report
+from server.tool_completion import tool_result_terminal_sufficient
 
 
 def _execute_call(call_id: str, command: str) -> dict:
@@ -68,376 +66,84 @@ def _completion_fn(responses, captured_messages):
     return _chat_completion_request_fn
 
 
-def test_pipeline_recoverable_failure_later_verification_completes_with_recovery(monkeypatch):
-    responses = [
-        {
-            "choices": [{
-                "finish_reason": "stop",
-                "message": {
-                    "content": json.dumps({
-                        "goal": "create docx files",
-                        "steps": [
-                            {"title": "check python-docx", "instruction": "check dependency", "device_id": "device-a"},
-                            {"title": "verify files", "instruction": "verify created files", "device_id": "device-a"},
-                        ],
-                    }),
-                },
-            }]
-        },
-        {
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "message": {"content": "", "tool_calls": [_execute_call("call-1", 'python -c "import docx"')]},
-            }]
-        },
-        {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_failure_call("call-step0-failure", "dependency missing", ["step_1"])]}}]},
-        {
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "message": {"content": "", "tool_calls": [_execute_call("call-2", "verify generated docx files")]},
-            }]
-        },
-        {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_text_call("call-step1-answer", "files verified", ["step_1"])]}}]},
-        {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_text_call("call-final", "Готово, файлы созданы и проверены.", ["step_3"])]}}]},
-    ]
-    captured_messages = []
-    updates = []
-    finished = []
-    status_by_idx = {}
 
-    monkeypatch.setattr("server.controller_pipeline.db.create_task", lambda **kwargs: 1)
-    monkeypatch.setattr("server.controller_pipeline.db.update_step", lambda task_id, idx, status, summary=None: updates.append((idx, status, summary)) or status_by_idx.__setitem__(idx, status) or True)
-    monkeypatch.setattr("server.controller_pipeline.db.finish_task", lambda task_id, status: finished.append(status) or True)
-    monkeypatch.setattr("server.controller_pipeline.collect_tasks", lambda task_ids: [{
-        "id": 1,
-        "goal": "create docx files",
-        "status": finished[-1] if finished else "running",
-        "steps": [{"idx": idx, "status": status} for idx, status in sorted(status_by_idx.items())],
-    }])
-    monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
-    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
-    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id, device_id: "")
-    monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
-
-    async def _send_command_fn(device_id, action, params):
-        command = params.get("command", "")
-        if "import docx" in command:
-            return {
-                "returncode": 1,
-                "stdout": "",
-                "stderr": "Traceback\nModuleNotFoundError: No module named 'docx'\n",
-            }
-        return {
-            "returncode": 0,
-            "stdout": "IRU_VERIFIED=1 7 files",
-            "stderr": "",
-            "files_verified": [r"C:\Users\russa\Desktop\test\file1.docx"],
-            "artifacts_created": [r"C:\Users\russa\Desktop\test\file1.docx"],
-        }
-
-    result = asyncio.run(process_pipeline_subagents(
-        user_message="create files",
-        device_id="device-a",
-        device_info={"hostname": "alpha", "os": "Windows", "os_version": "11"},
-        all_devices={"device-a": {"info": {"hostname": "alpha", "os": "Windows", "os_version": "11"}}},
-        send_command_fn=_send_command_fn,
-        get_file_link_fn=lambda device_id, file_path: "/api/download/mock",
-        chat_history=[{"role": "user", "content": "create files"}],
-        user_id=1,
-        chat_id=1,
-        device_profile=None,
-        modes={},
-        poll_task_id=None,
-        load_llm_config_fn=lambda: {"model": "mock-model", "max_tokens": 1000},
-        pick_model_fn=lambda cfg, modes: "mock-model",
-        chat_completion_request_fn=_completion_fn(responses, captured_messages),
-        worker_tools=[],
-        windows_rules="windows rules",
-        linux_rules="linux rules",
-    ))
-
-    assert finished == ["completed_with_recovery"]
-    assert (0, "recovered") in [(idx, status) for idx, status, _summary in updates]
-    assert result["tasks"][0]["status"] == "completed_with_recovery"
-    assert result["task_receipt"]["task_status"] == "completed_with_recovery"
-    assert result["task_receipt"]["artifacts_created"] == [r"C:\Users\russa\Desktop\test\file1.docx"]
-    assert result["task_receipt"]["project_path"] == r"C:\Users\russa\Desktop\test"
-    assert result["task_receipt"]["created_files"] == [r"C:\Users\russa\Desktop\test\file1.docx"]
-    assert result["task_receipt"]["created_file_evidence"] == [{
-        "path": r"C:\Users\russa\Desktop\test\file1.docx",
-        "step_id": "step_3",
-        "tool_name": "execute_cmd",
-    }]
-    assert result["task_receipt"]["files_verified"] == [r"C:\Users\russa\Desktop\test\file1.docx"]
-    assert result["task_receipt"]["recoveries_applied"][0]["step_index"] == 0
-    assert result["task_receipt"]["commands_failed"][0]["error_type"] == "dependency_missing"
-    assert any("ModuleNotFoundError" in (cmd.get("result", {}).get("stderr") or "") for cmd in result["commands"])
+def message(call):
+    return {"choices":[{"message":{"tool_calls":[call]}}]}
 
 
-def test_pipeline_dispatches_advertised_device_runtime_tool(monkeypatch):
-    responses = [
-        {
-            "choices": [{
-                "finish_reason": "stop",
-                "message": {
-                    "content": json.dumps({
-                        "goal": "check runtime",
-                        "steps": [
-                            {"title": "check runtime", "instruction": "check managed runtime", "device_id": "device-a"},
-                        ],
-                    }),
-                },
-            }]
-        },
-        {
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "message": {
-                    "content": "",
-                    "tool_calls": [{
-                        "id": "call-runtime",
-                        "function": {"name": "device_check_runtime", "arguments": json.dumps({})},
-                    }],
-                },
-            }]
-        },
-        {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_text_call("call-step-answer", "runtime checked", ["step_1"])]}}]},
-        {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_text_call("call-final", "Runtime checked.", ["step_1"])]}}]},
-    ]
-    captured_messages = []
-    finished = []
-    status_by_idx = {}
-    device_calls = []
-
-    monkeypatch.setattr("server.controller_pipeline.db.create_task", lambda **kwargs: 1)
-    monkeypatch.setattr("server.controller_pipeline.db.update_step", lambda task_id, idx, status, summary=None: status_by_idx.__setitem__(idx, status) or True)
-    monkeypatch.setattr("server.controller_pipeline.db.finish_task", lambda task_id, status: finished.append(status) or True)
-    monkeypatch.setattr("server.controller_pipeline.collect_tasks", lambda task_ids: [{
-        "id": 1,
-        "goal": "check runtime",
-        "status": finished[-1] if finished else "running",
-        "steps": [{"idx": idx, "status": status} for idx, status in sorted(status_by_idx.items())],
-    }])
-    monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
-    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
-    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id, device_id: "")
-    monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
-
-    async def _send_command_fn(device_id, action, params):
-        raise AssertionError(f"device_check_runtime should not go through send_command_fn: {action}")
-
-    async def _device_tool_fn(name, args):
-        device_calls.append((name, args["device_id"]))
-        return {
-            "status": "ok",
-            "device_id": args["device_id"],
-            "runtime_summary": {"runtime_status": "ok", "python_version": "3.11.9", "pip_status": "ok"},
-        }
-
-    result = asyncio.run(process_pipeline_subagents(
-        user_message="check runtime",
-        device_id="device-a",
-        device_info={"hostname": "alpha", "os": "Windows", "os_version": "11"},
-        all_devices={"device-a": {"info": {"hostname": "alpha", "os": "Windows", "os_version": "11"}}},
-        send_command_fn=_send_command_fn,
-        get_file_link_fn=lambda device_id, file_path: "/api/download/mock",
-        chat_history=[{"role": "user", "content": "check runtime"}],
-        user_id=1,
-        chat_id=1,
-        device_profile=None,
-        modes={},
-        poll_task_id=None,
-        load_llm_config_fn=lambda: {"model": "mock-model", "max_tokens": 1000, "answer_auditor_enabled": False},
-        pick_model_fn=lambda cfg, modes: "mock-model",
-        chat_completion_request_fn=_completion_fn(responses, captured_messages),
-        worker_tools=[],
-        windows_rules="windows rules",
-        linux_rules="linux rules",
-        device_tool_fn=_device_tool_fn,
-    ))
-
-    assert device_calls == [("device_check_runtime", "device-a")]
-    assert finished == ["completed"]
-    runtime_command = result["commands"][0]
-    assert runtime_command["action"] == "device_check_runtime"
-    assert runtime_command["tool_name"] == "device.check_runtime"
-    assert runtime_command["tool_type"] == "typed"
-    assert runtime_command["result"]["runtime_summary"]["runtime_status"] == "ok"
-    assert "Неизвестная функция" not in json.dumps(result["commands"], ensure_ascii=False)
+def run_worker(responses,send, *, device_tool_fn=None,history=None):
+    captured=[]
+    outcome=asyncio.run(process_non_pipeline_command(user_message="Inspect the environment and prepare the requested files",
+        device_id="device-a",device_info={"os":"Windows","hostname":"alpha"},send_command_fn=send,
+        get_file_link_fn=lambda *a:"/api/download/mock",chat_history=history or [],user_id=None,chat_id=None,
+        modes={},poll_task_id=None,cfg={"model":"mock-model","answer_auditor_enabled":False},system_msg="system",
+        machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=6,
+        pick_model_fn=lambda *a:"mock-model",chat_completion_request_fn=_completion_fn(responses,captured),
+        device_tool_fn=device_tool_fn))
+    return outcome,captured
 
 
-def test_pipeline_worker_blocks_broad_desktop_scan_when_created_files_are_known(monkeypatch):
-    responses = [
-        {
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "message": {
-                    "content": "",
-                    "tool_calls": [_execute_call(
-                        "call-broad-scan",
-                        r'Get-ChildItem -Path "C:\Users\russa\Desktop" -Recurse -Filter *.docx',
-                    )],
-                },
-            }]
-        },
-        {
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "message": {
-                    "content": "",
-                    "tool_calls": [_execute_call(
-                        "call-open-exact",
-                        r'Start-Process "C:\Users\russa\Desktop\CourseLaunchKit\description.docx"',
-                    )],
-                },
-            }]
-        },
-        {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_text_call("call-answer", "opened exact file", ["step_2"])]}}]},
-    ]
-    captured_messages = []
-    sent = []
-
-    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
-    monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
-
-    async def _chat_completion_request_fn(**kwargs):
-        captured_messages.append(kwargs["messages"])
-        assert responses, "Unexpected LLM call"
-        return responses.pop(0)
-
-    async def _send_command_fn(device_id, action, params):
-        sent.append((device_id, action, params["command"]))
-        assert "Get-ChildItem" not in params["command"]
-        return {"returncode": 0, "stdout": "opened", "stderr": ""}
-
-    shared = {
-        "current_device_id": "device-a",
-        "current_hostname": "alpha",
-        "current_os": "Windows",
-        "current_os_version": "11",
-        "device_profile_block": "",
-        "device_memory_block": "",
-        "devices_block": "",
-        "other_devices_summary": "",
-        "target_device_id": "device-a",
-        "os_rules": "",
-        "current_datetime_msk": "2026-05-25 12:00",
-        "recent_artifact_context": {
-            "project_path": r"C:\Users\russa\Desktop\CourseLaunchKit",
-            "created_files": [
-                {"path": r"C:\Users\russa\Desktop\CourseLaunchKit\description.docx", "step_id": "old_step", "tool_name": "execute_cmd"},
-            ],
-        },
-    }
-
-    async def _run():
-        async with httpx.AsyncClient() as client:
-            return await run_pipeline_worker(
-                client=client,
-                cfg={"model": "mock-model", "answer_auditor_enabled": False},
-                model="mock-model",
-                shared=shared,
-                overall_goal="open created documents",
-                step={"title": "open docs", "instruction": "open known files", "device_id": "device-a"},
-                completed_steps=[],
-                chat_history=[],
-                send_command_fn=_send_command_fn,
-                get_file_link_fn=lambda device_id, file_path: "/api/download/mock",
-                machine_guid=None,
-                mem_user_id=None,
-                poll_task_id=None,
-                chat_completion_request_fn=_chat_completion_request_fn,
-                worker_tools=[],
-            )
-
-    result = asyncio.run(_run())
-
-    assert result["status"] == "ok"
-    assert sent == [(
-        "device-a",
-        "execute_cmd",
-        r'Start-Process "C:\Users\russa\Desktop\CourseLaunchKit\description.docx"',
-    )]
-    assert result["commands"][0]["status"] == "blocked"
-    assert result["commands"][0]["result"]["policy"] == "recent_artifact_scope"
-    assert "Broad recursive Desktop scan" in result["commands"][0]["result"]["error"]
-    assert result["commands"][1]["command"] == r'Start-Process "C:\Users\russa\Desktop\CourseLaunchKit\description.docx"'
+def test_common_worker_keeps_dependency_error_and_later_verification_without_false_completion():
+    responses=[message(_execute_call("import",'python -c "import docx"')),
+        message(_execute_call("verify","verify generated docx files")),
+        message(_answer_failure_call("final","The complete deliverable is unverified",["step_1","step_2"]))]
+    sent=[]
+    async def send(device,action,params):
+        sent.append(params["command"])
+        if len(sent)==1:
+            return {"returncode":1,"stdout":"","stderr":"ModuleNotFoundError: No module named 'docx'"}
+        return {"returncode":0,"stdout":"IRU_VERIFIED=1 7 files","stderr":"",
+            "files_verified":["C:/Temp/file1.docx"],"artifacts_created":["C:/Temp/file1.docx"]}
+    outcome,_=run_worker(responses,send)
+    assert len(sent)==2
+    assert outcome["commands"][0]["result"]["error_type"]=="dependency_missing"
+    assert outcome["commands"][1]["result"]["files_verified"]==["C:/Temp/file1.docx"]
+    assert outcome["commands"][-1]["tool_name"]=="answer.report_failure"
+    report=build_worker_report({"task_id":"recovery","message":"Create documents","status":"done",**outcome})
+    assert report["goal_completed"] is False
 
 
-def test_receipt_warns_on_multiple_python_interpreters():
-    receipt = build_pipeline_task_receipt(
-        task_status="completed_with_recovery",
-        commands=[
-            {"action": "execute_cmd", "command": r'& "C:\Python311\python.exe" -V', "status": "success", "result": {"returncode": 0}},
-            {"action": "execute_cmd", "command": r'& "D:\Tools\Python312\python.exe" -V', "status": "success", "result": {"returncode": 0}},
-        ],
-        step_results=[{"idx": 0, "title": "run", "status": "recovered"}],
-        recovery_warnings=[],
-        receipt_dicts=[],
-    )
-
-    assert "multiple_python_interpreters_used" in receipt["warnings"]
-    assert len(receipt["python_interpreters"]) == 2
-
-
-def test_not_ok_is_not_verification_success():
-    assert _verification_command_succeeded({
-        "action": "execute_cmd",
-        "command": "verify",
-        "status": "success",
-        "result": {"returncode": 0, "stdout": "NOT OK", "stderr": ""},
-    }) is False
+def test_common_worker_dispatches_advertised_runtime_tool_through_device_api():
+    calls=[]
+    responses=[message({"id":"runtime","function":{"name":"device_check_runtime","arguments":"{}"}}),
+        message(_answer_failure_call("final","No document has been created",["step_1"]))]
+    async def send(*args):
+        pytest.fail("Runtime tool must not use raw command transport")
+    async def device_tool(name,args):
+        calls.append((name,args["device_id"]))
+        return {"status":"ok","device_id":args["device_id"],"runtime_summary":{
+            "runtime_status":"ok","python_version":"3.11.9","pip_status":"ok"}}
+    outcome,_=run_worker(responses,send,device_tool_fn=device_tool)
+    assert calls==[("device_check_runtime","device-a")]
+    entry=outcome["commands"][0]
+    assert entry["tool_name"]=="device.check_runtime" and entry["tool_type"]=="typed"
+    assert entry["result"]["runtime_summary"]["runtime_status"]=="ok"
 
 
-def test_printed_iru_verified_marker_alone_is_not_verification_success():
-    assert _verification_command_succeeded({
-        "action": "execute_cmd",
-        "command": "verify",
-        "status": "success",
-        "result": {"returncode": 0, "stdout": "IRU_VERIFIED=1", "stderr": ""},
-    }) is False
+def test_recent_file_context_preserves_exact_paths_without_promoting_past_evidence():
+    path="C:/Users/demo/Desktop/CourseLaunchKit/description.docx"
+    history=[{"id":7,"role":"assistant","commands":[{"tool_name":"write_content","step_id":"old_step",
+        "status":"success","result":{"path":path,"bytes_written":12,"content_sha256":"a"*64}}]}]
+    context=build_recent_artifact_context(history)
+    assert [item["path"] for item in context["created_files"]]==[path]
+    block=format_recent_artifact_context_block(context)
+    assert path in block and "not current-run evidence" in block
+    sent=[]
+    async def send(device,action,params):
+        sent.append(params["command"])
+        return {"returncode":0,"stdout":"opened","stderr":""}
+    outcome,_=run_worker([message(_execute_call("exact",f'Start-Process "{path}"')),
+        message(_answer_failure_call("final","Opened state is unverified",["step_1"]))],send,history=history)
+    assert sent==[f'Start-Process "{path}"']
+    assert outcome["commands"][-1]["tool_name"]=="answer.report_failure"
 
 
-def test_complex_bare_python_command_records_bare_interpreter_not_first_token():
-    interpreters = _extract_python_interpreters(
-        [{
-            "action": "execute_cmd",
-            "command": r'Set-Location "C:\work"; python main.py',
-            "status": "success",
-            "result": {"returncode": 0},
-        }],
-        [],
-    )
-
-    assert {"path": "python", "version": None, "source": "bare_command"} in interpreters
-    assert all(item["path"] != "Set-Location" for item in interpreters)
-
-
-def test_conversation_context_replaces_false_first_request_claim():
-    answer = enforce_conversation_context_answer(
-        "Это первый запрос в сессии, предыдущих сообщений нет.",
-        {
-            "history_available": True,
-            "recent_turns_count": 2,
-            "previous_user_message": "Создай папку тест",
-            "previous_assistant_message": "Файлы созданы.",
-        },
-    )
-
-    assert "Создай папку тест" in answer
-    assert "Файлы созданы" in answer
-
-
-def test_history_unavailable_does_not_claim_first_request():
-    answer = enforce_conversation_context_answer(
-        "Это первый запрос в сессии.",
-        {
-            "history_available": False,
-            "recent_turns_count": 0,
-            "previous_user_message": None,
-            "previous_assistant_message": None,
-        },
-    )
-
-    assert answer == "В этом режиме выполнения история недоступна."
-    assert "первый запрос" not in answer.lower()
+@pytest.mark.parametrize("stdout",["NOT OK","IRU_VERIFIED=1","OK: verified"])
+def test_printed_markers_are_not_whole_goal_verification(stdout):
+    entry={"tool_name":"execute_cmd","step_id":"step_1","status":"success",
+        "result":{"returncode":0,"stdout":stdout,"stderr":""}}
+    assert not tool_result_terminal_sufficient(entry)
+    report=build_worker_report({"task_id":"printed-marker","message":"Create and verify documents",
+        "status":"done","commands":[entry],"task_receipt":{"task_status":"completed",
+            "final_verification_status":"verified","goal_completed":True}})
+    assert not report["goal_completed"]

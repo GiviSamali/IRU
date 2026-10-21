@@ -12,10 +12,10 @@
     let utterance = '', silenceTimer = null, wakeTimer = null, playback = null;
     const requests = new Set(), tasks = new Set(), finished = new Set(), backgroundTasks = new Set();
     let continuous=false, humanUntil=0, reportTimer=null;
-    let queue = [], planOffer = null, planReview = null, editingPlan = false, reviewHeard = false;
+    let queue = [];
     let commandConfirmation = null, commandHeard = false, standby = false;
     const now = io.now || Date.now, later = io.setTimeout || setTimeout, clear = io.clearTimeout || clearTimeout;
-    const readyPhases = new Set(['listening', 'awaiting_plan', 'awaiting_plan_review', 'editing_plan', 'awaiting_command']);
+    const readyPhases = new Set(['listening', 'awaiting_command']);
     function setPhase(next) {
       const previous = phase; phase = next; io.state(next);
       if (previous === next) return;
@@ -32,16 +32,6 @@
       if (commandConfirmation) {
         setPhase(commandHeard ? 'awaiting_command' : 'confirming');
         io.listen(commandHeard); clear(wakeTimer); return;
-      }
-      if (planReview) {
-        if (!editingPlan && !reviewHeard) { setPhase('confirming'); io.listen(false); return; }
-        setPhase(editingPlan ? 'editing_plan' : 'awaiting_plan_review');
-        io.listen(true); clear(wakeTimer); return;
-      }
-      if (planOffer) {
-        setPhase('awaiting_plan'); io.listen(true); clear(wakeTimer);
-        wakeTimer = later(() => { planOffer = null; resume(true); }, 30000);
-        return;
       }
       if (fresh) activeUntil = now() + 10000;
       setPhase(now() < activeUntil ? 'listening' : 'idle'); io.listen(true); clear(wakeTimer);
@@ -64,9 +54,7 @@
       try {
         await io.speak(taskId, controller.signal, () => {
           if (!controller.signal.aborted && enabled && epoch === savedEpoch) { heard = true; setPhase('speaking'); io.listen(!continuous); }
-        }, item.review || item.confirmation || item.question);
-        if (!controller.signal.aborted && enabled && epoch === savedEpoch) planOffer = heard ? item.plan : null;
-        if (item.review && !controller.signal.aborted && enabled && epoch === savedEpoch) reviewHeard = heard;
+        }, item.confirmation || item.question);
         if (item.confirmation && !controller.signal.aborted && enabled && epoch === savedEpoch) commandHeard = heard;
       } catch (error) {
         if (!controller.signal.aborted && enabled && epoch === savedEpoch) io.error(error);
@@ -76,10 +64,10 @@
     }
     function stopSpeech() {
       if (!enabled || !['speaking', 'synthesizing'].includes(phase)) return;
-      queue = []; planOffer = null; stopPlayback(); io.listen(false); resume(true);
+      queue = []; stopPlayback(); io.listen(false); resume(true);
     }
     function disable() {
-      enabled = false; epoch++; requests.clear(); tasks.clear(); backgroundTasks.clear(); finished.clear(); queue = []; clear(reportTimer); reportTimer=null; humanUntil=0; planOffer = null; planReview = null; editingPlan = false;
+      enabled = false; epoch++; requests.clear(); tasks.clear(); backgroundTasks.clear(); finished.clear(); queue = []; clear(reportTimer); reportTimer=null; humanUntil=0;
       commandConfirmation = null; commandHeard = false; standby = false;
       clearUtterance(); clear(wakeTimer); stopPlayback(); io.listen(false); setPhase('off');
     }
@@ -90,7 +78,7 @@
     }
     function beginRequest() {
       if (!enabled) return null;
-      planOffer = null; planReview = null; editingPlan = false; if (!continuous) queue = [];
+      if (!continuous) queue = [];
       commandConfirmation = null; commandHeard = false; if(!continuous)standby=false;
       const ticket={epoch};requests.add(ticket);if (!continuous || !playback) pause();return ticket;
     }
@@ -121,23 +109,22 @@
       const background=backgroundTasks.delete(taskId);
       if (commandConfirmation?.taskId === taskId) commandConfirmation = null;
       finished.add(taskId);
-      if (task?.plan_suggestion || (typeof task?.answer === 'string' && task.answer.trim())) {
-        queue.push({id:taskId,background,order:task?.created_at || now(),plan: task.plan_suggestion && !task.plan_trial_used
-          ? { taskId, chatId: task.chat_id, originalRequest: task.plan_original_request } : null });
+      if (typeof task?.answer === 'string' && task.answer.trim()) {
+        queue.push({id:taskId,background,order:task?.created_at || now()});
       }
       if(continuous)queue.sort((a,b)=>Number(a.background)-Number(b.background)||(a.order||0)-(b.order||0));
       drain();
     }
     function taskLost(taskId) {
       if(continuous && backgroundTasks.has(taskId)){tasks.delete(taskId);backgroundTasks.delete(taskId);finished.add(taskId);io.error(new Error('Связь с задачей потеряна; диалог продолжается.'));drain();return;}
-      if (tasks.has(taskId) || planReview?.taskId === taskId || commandConfirmation?.taskId === taskId) { disable(); io.error(new Error('Связь с задачей потеряна. Проверьте её состояние перед включением голоса.')); }
+      if (tasks.has(taskId) || commandConfirmation?.taskId === taskId) { disable(); io.error(new Error('Связь с задачей потеряна. Проверьте её состояние перед включением голоса.')); }
     }
     function taskPaused(taskId, confirmation) {
       if (!enabled) return;
       if (confirmation?.kind === 'command' && confirmation.voice_allowed === true && confirmation.confirmation_id) {
         if (commandConfirmation?.taskId === taskId && commandConfirmation.confirmationId === confirmation.confirmation_id) return;
         tasks.delete(taskId); if(!continuous){clearUtterance();clear(wakeTimer);stopPlayback();}
-        planOffer = null; planReview = null; editingPlan = false; commandHeard = false;
+        commandHeard = false;
         commandConfirmation = { taskId, confirmationId: confirmation.confirmation_id };
         if(continuous)queue.push({id:taskId,confirmation:commandConfirmation});else queue=[{id:taskId,confirmation:commandConfirmation}];drain();
       } else if(tasks.has(taskId)){if(continuous){resume(true);}else{pause();setPhase('confirming');}}
@@ -147,50 +134,21 @@
       if (commandConfirmation?.taskId === taskId) commandConfirmation = null;
       if(!continuous)queue=[];tasks.add(taskId);if(continuous && backgroundTasks.has(taskId))drain();else pause();
     }
-    function taskPlanReview(taskId, review) {
-      if (!enabled || (planReview?.taskId === taskId && planReview.revision === review.revision)) return;
-      tasks.delete(taskId); if(!continuous){clearUtterance();clear(wakeTimer);stopPlayback();}
-      planOffer = null; editingPlan = false;
-      reviewHeard = false;
-      planReview = { taskId, revision: review.revision };
-      if(continuous)queue.push({id:taskId,review:planReview});else queue=[{id:taskId,review:planReview}];drain();
-    }
-    function planReviewResolved(taskId) {
-      if (!enabled) return;
-      if (planReview?.taskId === taskId) { planReview = null; editingPlan = false; }
-      if(!continuous)queue=[];tasks.add(taskId);if(continuous && backgroundTasks.has(taskId))drain();else pause();
-    }
-    function editPlan(taskId) {
-      if (!enabled || planReview?.taskId !== taskId) return;
-      queue = []; stopPlayback(); clearUtterance(); editingPlan = true; resume();
-    }
-    function submitReview(changes) {
-      const review = planReview, savedEpoch = epoch;
-      if (!review) return;
-      clearUtterance(); tasks.add(review.taskId); pause();
-      Promise.resolve().then(() => {
-        if (enabled && epoch === savedEpoch) return io.reviewPlan(review, changes);
-      }).catch(error => {
-        if (enabled && epoch === savedEpoch) {
-          // A lost HTTP response may still mean the server accepted execution.
-          disable(); io.error(error);
-        }
-      });
-    }
     function transcript(text, final) {
       if(!enabled || busy())return;
       const clean=text.trim();
       if(continuous && clean && !['speaking','synthesizing'].includes(phase))humanUntil=now()+1200;
       if (final && decisionWords(clean) === 'усни') {
-        clearUtterance(); clear(wakeTimer); queue = []; planOffer = null;
+        clearUtterance(); clear(wakeTimer); queue = [];
         standby = true; activeUntil = 0; stopPlayback(); io.listen(false); resume(); return;
       }
       if (standby) {
         if (!final || !wake.test(clean)) return;
         standby = false;
-        if (planReview || commandConfirmation) {
-          const item = planReview ? { id: planReview.taskId, review: planReview } : { id: commandConfirmation.taskId, confirmation: commandConfirmation };
-          editingPlan = false; reviewHeard = false; commandHeard = false; queue = [item]; drain(); return;
+        if (commandConfirmation) {
+          commandHeard = false;
+          queue = [{id:commandConfirmation.taskId, confirmation:commandConfirmation}];
+          drain(); return;
         }
         resume(true);
       }
@@ -210,36 +168,6 @@
         });
         return;
         }
-      }
-      if (phase === 'awaiting_plan_review') {
-        if (!final) return;
-        const words = decisionWords(clean);
-        if (/^(нет|нет изменений|ничего не менять|всё устраивает|все устраивает|нет запускай|нет, запускай)$/u.test(words)) submitReview('');
-        else if (/^(да|да изменить|да, изменить|хочу изменить|изменить)$/u.test(words)) editPlan(planReview.taskId);
-        else if(continuous){planReview=null;reviewHeard=false;resume(true);}else return;
-        if(phase !== 'listening')return;
-      }
-      if (phase === 'editing_plan') {
-        const words = clean.replace(wakePrefix, '').trim();
-        if (final && hasWords(words)) utterance = [utterance, words].filter(Boolean).join(' ');
-        clear(silenceTimer);
-        silenceTimer = later(() => {
-          if (enabled && phase === 'editing_plan' && hasWords(utterance)) submitReview(utterance.trim());
-        }, 1200);
-        return;
-      }
-      if (phase === 'awaiting_plan') {
-        if (!final) return;
-        const words = decisionWords(clean);
-        const accepted = /^(да|запускай|запустить|да запускай|да, запускай)$/u.test(words);
-        if (!accepted && !/^(нет|не надо|без плана|отмена)$/u.test(words)) return;
-        const offer = planOffer, savedEpoch = epoch;
-        planOffer = null; pause();
-        Promise.resolve().then(() => {
-          if (enabled && epoch === savedEpoch) return io.choosePlan(offer, accepted);
-        }).catch(error => { if (enabled && epoch === savedEpoch) io.error(error); })
-          .finally(() => { if (enabled && epoch === savedEpoch && !busy()) resume(true); });
-        return;
       }
       if (phase === 'speaking') {
         if (decisionWords(clean) === 'стоп') stopSpeech();
@@ -267,7 +195,7 @@
       }, 1000);
     }
     return { enable, disable, beginRequest, endRequest, requestLost, watchTask, taskFinished, taskInputRequired, taskLost,
-      taskPaused, commandDecisionResolved, taskPlanReview, planReviewResolved, editPlan, transcript, stopSpeech, get enabled() { return enabled; }, get phase() { return phase; } };
+      taskPaused, commandDecisionResolved, transcript, stopSpeech, get enabled() { return enabled; }, get phase() { return phase; } };
   }
   if (typeof module !== 'undefined' && module.exports) module.exports = { createVoiceSession };
   else root.createVoiceSession = createVoiceSession;

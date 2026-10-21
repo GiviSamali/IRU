@@ -16,7 +16,7 @@ def setup_runtime(client, monkeypatch):
     tasks["guard-task"]={"task_id":"guard-task","user_id":user["id"],"status":"running","modes":{},"created_at":time.time()}
     chat=db.create_chat(user["id"])
     async def classify(*a,**kw):return "SIMPLE",""
-    monkeypatch.setattr(runtime,"classify_task_complexity",classify)
+
     return user,key,chat["id"]
 
 

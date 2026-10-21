@@ -2,6 +2,7 @@ import asyncio
 import time
 
 import httpx
+import pytest
 
 from server.llm_usage import extract_usage, estimate_deepseek_cost_usd
 
@@ -158,33 +159,16 @@ def test_chat_completion_request_records_usage_and_survives_db_failure(client, m
     assert result["choices"][0]["message"]["content"] == "ok"
 
 
-def test_classify_task_complexity_usage_is_attributed(client, monkeypatch):
+def test_route_selection_has_no_classifier_llm_usage(client, monkeypatch):
     import server.controller as controller
     from server.database import create_user, get_llm_usage_summary_for_poll_task
 
-    user = create_user("usage-classify-user")
-    monkeypatch.setattr(controller, "load_llm_config", lambda: {
-        "base_url": "https://api.deepseek.com/v1",
-        "api_key": "secret",
-        "model": "deepseek-chat",
-    })
-    monkeypatch.setattr(controller.httpx, "AsyncClient", _FakeAsyncClient)
-
-    result = asyncio.run(controller.classify_task_complexity(
-        "hello",
-        usage_context={
-            "user_id": user["id"],
-            "chat_id": 321,
-            "poll_task_id": "classify-task-1",
-            "route": "classification",
-            "phase": "classify_task_complexity",
-        },
-    ))
-
-    assert result == ("SIMPLE", "")
+    user = create_user("usage-routing-user")
+    monkeypatch.setattr(controller, "load_llm_config", lambda: pytest.fail("Routing must not call a classifier"))
+    assert not hasattr(controller, "classify_task_complexity")
+    assert controller._select_llm_route({}).name == "non_pipeline"
     summary = get_llm_usage_summary_for_poll_task(user["id"], "classify-task-1")
-    assert summary["total_tokens"] == 16
-
+    assert summary["total_tokens"] == 0
 
 class _FakeAsyncClient:
     def __init__(self, *args, **kwargs):
@@ -198,6 +182,22 @@ class _FakeAsyncClient:
 
 
 def test_no_device_onboarding_llm_usage_is_attributed_to_user(client, monkeypatch):
+    import json
+    from server import orchestrator as orch
+    async def decide(message, context, **kwargs):
+        return orch.Decision(intent="delegate", scope="server", objective=message), {}
+    monkeypatch.setattr(orch, "decide", decide)
+    class WorkerClient(_FakeClient):
+        async def post(self, url, headers=None, json=None):
+            import json as json_module
+            payload={"answer_type":"pure_text", "text":"Connection instructions", "basis":[],
+                "self_check":{"claims_completed_action":False,"has_sufficient_evidence":True,
+                    "depends_on_current_external_state":False,"missing_evidence_question":""}}
+            return _FakeResponse({"choices":[{"message":{"tool_calls":[{"id":"answer","function":{
+                "name":"answer_text","arguments":json_module.dumps(payload)}}]}}],
+                "usage":{"prompt_tokens":12,"completion_tokens":4}})
+    class WorkerAsyncClient(_FakeAsyncClient):
+        async def __aenter__(self):return WorkerClient()
     import server.controller as controller
     import server.controller_onboarding as controller_onboarding
     from server.database import create_user
@@ -206,8 +206,9 @@ def test_no_device_onboarding_llm_usage_is_attributed_to_user(client, monkeypatc
         "base_url": "https://api.deepseek.com/v1",
         "api_key": "secret",
         "model": "deepseek-chat",
+        "answer_auditor_enabled": False,
     })
-    monkeypatch.setattr(controller_onboarding.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(controller_onboarding.httpx, "AsyncClient", WorkerAsyncClient)
     user = create_user("usage-no-device-user")
     headers = _login_headers(client, user)
 
@@ -224,9 +225,9 @@ def test_no_device_onboarding_llm_usage_is_attributed_to_user(client, monkeypatc
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert payload["device_ids"] == []
+    assert payload["worker_task_ids"]
 
-    task_id = payload["task_id"]
+    task_id = payload["worker_task_ids"][0]
     for _ in range(30):
         task_response = client.get(f"/api/tasks/{task_id}", headers=headers)
         assert task_response.status_code == 200

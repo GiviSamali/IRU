@@ -2,9 +2,8 @@ import asyncio
 import json
 
 from server.controller_non_pipeline import process_non_pipeline_command
-from server.controller_pipeline import PIPELINE_WORKER_HANDLED_TOOL_NAMES
 from server.controller_prompts import SYSTEM_PROMPT_TEMPLATE
-from server.controller_tools import WORKER_TOOLS
+from server.controller_tools import WORKER_TOOLS, NON_PIPELINE_TOOLS, TOOLS
 from server.controller_shared import (
     broad_desktop_scan_error,
     build_recent_artifact_context,
@@ -353,31 +352,16 @@ def test_non_pipeline_execute_cmd_and_write_content_honor_device_id_override():
     assert seen == [("desktop", "execute_cmd"), ("desktop", "write_content")]
 
 
-def test_pipeline_worker_toolset_exposes_demo_typed_tools_without_planner_tools():
+def test_worker_toolset_includes_result_retrieval_and_existing_capabilities():
     names = {tool["function"]["name"] for tool in WORKER_TOOLS}
-
-    assert "system_list_tools" not in names
-    assert "memory_get_stats" in names
-    assert "memory_list_facts" in names
-    assert "device_get_passport" not in names
-    assert "device_activate" not in names
-    assert "device_repair_activation" not in names
-    assert "device_repair_runtime" not in names
-    assert "device_refresh_state" in names
-    assert "device_check_runtime" in names
-    assert "device_prepare_runtime" in names
-    assert "window_list" in names
-    assert "window_find" in names
-    assert "window_verify" in names
-    assert "app_launch" in names
-    assert "app_verify_launch" in names
+    assert {"system_get_last_run_summary", "memory_get_stats", "memory_list_facts", "device_refresh_state",
+            "device_check_runtime", "write_content", "execute_cmd", "transfer_file", "window_control", "answer_text"} <= names
 
 
-def test_pipeline_worker_toolset_is_handled_by_pipeline_dispatch():
-    names = {tool["function"]["name"] for tool in WORKER_TOOLS}
-
-    assert names <= PIPELINE_WORKER_HANDLED_TOOL_NAMES
-
+def test_no_separate_plan_worker_or_tracking_tools_are_advertised():
+    assert WORKER_TOOLS is NON_PIPELINE_TOOLS
+    names = {tool["function"]["name"] for tool in TOOLS}
+    assert not {"create_plan", "mark_step"}.intersection(names)
 
 def test_recent_artifact_context_uses_exact_project_files_without_demo_phrase():
     chat_history = [{
@@ -433,12 +417,12 @@ def test_prompt_contains_tool_selection_policy():
     assert "Tool selection policy:" in SYSTEM_PROMPT_TEMPLATE
     assert "Use typed tools for specialized structured operations" in SYSTEM_PROMPT_TEMPLATE
     assert "execute_cmd / PowerShell as the first-class generic control surface" in SYSTEM_PROMPT_TEMPLATE
-    assert "print OK:, NO:, or ERROR:" in SYSTEM_PROMPT_TEMPLATE
+    assert "exit code zero alone does not prove the user goal" in SYSTEM_PROMPT_TEMPLATE
     assert "Do not assume device state" in SYSTEM_PROMPT_TEMPLATE
     assert "prefer device_prepare_runtime or device_check_runtime" in SYSTEM_PROMPT_TEMPLATE
     assert "use its venv_python path" in SYSTEM_PROMPT_TEMPLATE
-    assert "do not perform visual/window verification by default" in SYSTEM_PROMPT_TEMPLATE
-    assert "Command-level acceptance or process launch evidence is sufficient" in SYSTEM_PROMPT_TEMPLATE
+    assert "Use window/app tools only when visible/focused verification is requested" in SYSTEM_PROMPT_TEMPLATE
+    assert "A successful command, an achieved goal, and absence of unrequested changes are separate claims" in SYSTEM_PROMPT_TEMPLATE
     assert "prefer app_launch + window_verify/app_verify_launch" not in SYSTEM_PROMPT_TEMPLATE
 
 

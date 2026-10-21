@@ -35,7 +35,7 @@ for(const width of [320,360,480,768,1280]){
    const confirm=page.locator('[data-action="confirm-task"]');assert.equal(await confirm.isVisible(),true);
    const bounds=await confirm.boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=width+1);
    const text=page.locator('[data-message-key="smart-1-demo-completed"] .smart-text');
-   const original=messages[2].content;assert.equal(await text.locator('.smart-text-content').textContent(),original);
+   const original=messages[2].content;assert.equal((await text.locator('.smart-text-content').innerText()).trimEnd(),original.trimEnd());
    // Messages container is narrower than viewport when desktop sidebar is visible.
    if((await page.locator('.chat-view').boundingBox()).width<=720){await text.locator('.smart-text-toggle').click();assert.equal(await text.locator('button').getAttribute('aria-expanded'),'true');await text.locator('.smart-text-toggle').click();}
    await page.locator('#chatMessages').evaluate(el=>el.scrollTop=0);
@@ -75,7 +75,7 @@ test('text injection is inert, expansion and command details survive rerender',a
  const page=await open(480);try{
   const content='Первая\n\n'+('<img src=x onerror="window.bad=1">\n<script>window.bad=2</script>\n'.repeat(15));
   await seed(page,[{role:'assistant',content,taskStatus:'blocked',commands:messages[3].commands,_taskId:'safe'}]);
-  assert.equal(await page.locator('.smart-text-content').textContent(),content);assert.equal(await page.locator('.smart-text-content img, .smart-text-content script').count(),0);
+  assert.equal((await page.locator('.smart-text-content').innerText()).trimEnd(),content.trimEnd());assert.equal(await page.locator('.smart-text-content img, .smart-text-content script').count(),0);
   await page.locator('.smart-text-toggle').click();await page.locator('.smart-task-toggle').click();
   await page.locator('.cmd-log').click();await page.locator('[data-action="toggle-cmd-entry"]').click();
   const n=effectRequests().length;await page.evaluate(()=>renderMessages());
@@ -100,15 +100,16 @@ test('confirmation uses previous endpoint once; receipt remains blocked',async()
   assert.deepEqual(page.errors,[]);
  }finally{await page.close();}
 });
-test('PLAN editing keeps draft across rerender and revision goes to previous API',async()=>{
+test('historical PLAN remains readable without retired controls or writes',async()=>{
  const page=await open(360);try{
-  const m={role:'assistant',_taskId:'demo-plan',taskStatus:'confirm',content:'План\n1. Подготовить документ.',planReview:{revision:3,steps:[{title:'Подготовить документ',instruction:'Создать отчёт'}]}};
-  await seed(page,[m]);await page.locator('[data-action="edit-plan"]').click();await page.locator('#plan-changes-0').fill('Добавить Excel');
-  await page.evaluate(()=>renderMessages());assert.equal(await page.locator('#plan-changes-0').inputValue(),'Добавить Excel');assert.equal(await page.locator('#plan-changes-0').isVisible(),true);
-  await page.locator('[data-action="revise-plan"]').click();
-  await page.waitForFunction(()=>state.messages[0]?.loading);
-  const request=requests.findLast(r=>r.path==='/api/tasks/demo-plan/review-plan');assert.deepEqual(JSON.parse(request.body),{revision:3,action:'revise',changes:'Добавить Excel'});
-  assert.deepEqual(page.errors,[]);
+  const m={role:'assistant',_taskId:'demo-plan',taskStatus:'confirm',content:'Исторический план: подготовить документ.',planReview:{revision:3,steps:[{title:'Подготовить документ',instruction:'Создать отчёт'}]}};
+  const before=effectRequests().length;
+  await seed(page,[m]);await page.evaluate(()=>{renderMessages();renderMessages();});
+  assert.ok((await page.locator('body').innerText()).includes('Исторический план'));
+  for(const action of ['edit-plan','revise-plan','approve-plan','confirm-task','deny-task']){
+   assert.equal(await page.locator(`[data-action="${action}"]`).count(),0);
+  }
+  assert.equal(effectRequests().length,before);assert.deepEqual(page.errors,[]);
  }finally{await page.close();}
 });
 test('cancel and file download keep target and use existing APIs only',async()=>{
@@ -422,10 +423,10 @@ for(const width of [400,1280]){
     taskReceipt:{task_status:'completed',goal_completed:true,final_verification_status:'verified'},commands:[],tasks:[],
     workerReport:{schema_version:1,status:'success',target_device_ids:['Second'],artifacts:[{path:'C:\\Users\\Demo\\Desktop\\result.pptx',device_id:'Second',verified:true}]}};
    await seed(page,[message]);
-   assert.equal(await page.locator('.smart-text > .smart-text-content').textContent(),message.content);
+   assert.equal(await page.locator('#chatMessages .smart-text > .smart-text-content').textContent(),message.content);
    let dockStatus='success';
    await page.route('**/api/operations',route=>route.fulfill({json:{operations:[{task_id:'dialog-worker',chat_id:1,title:'Презентация',status:dockStatus,device_ids:['Second'],can_cancel:false}]}}));
-   await page.route('**/api/tasks/dialog-worker',route=>route.fulfill({json:{task:{task_id:'dialog-worker',status:dockStatus,execution_details:raw,conversational_response:message.content,commands:[]}}}));
+   await page.route('**/api/tasks/dialog-worker',route=>route.fulfill({json:{task:{task_id:'dialog-worker',chat_id:1,status:dockStatus,execution_details:raw,conversational_response:message.content,commands:[]}}}));
    assert.equal(await page.locator('#chatMessages .smart-task').count(),0);
    await page.locator('.operation-reference').click();
    const report=page.locator('.operation-detail');
@@ -436,13 +437,13 @@ for(const width of [400,1280]){
    await page.route('**/api/chats/1/messages',route=>route.fulfill({json:{messages:[message]}}));
    await page.route('**/api/chats/2/messages',route=>route.fulfill({json:{messages:[{role:'assistant',content:'Другой чат'}]}}));
    await page.evaluate(()=>openChat(2));assert.equal(await page.locator('#chatMessages .smart-task').count(),0);
-   assert.equal(await report.locator('details .operation-prose').textContent(),raw);
-   await page.evaluate(()=>openChat(1));assert.equal(await page.locator('.smart-text > .smart-text-content').textContent(),message.content);
+   assert.equal(await page.locator('#operationMirror').isVisible(),false);
+   await page.evaluate(()=>openChat(1));await page.locator('.operation-reference').click();await report.locator('summary').click();assert.equal(await page.locator('#chatMessages .smart-text > .smart-text-content').textContent(),message.content);
    assert.equal(await report.locator('details .operation-prose').textContent(),raw);
    assert.equal(await page.locator('.smart-file').count(),1);
    await page.reload({waitUntil:'networkidle'});await page.locator('#appRoot.active').waitFor();
    await page.locator('.operation-reference').click();
-   assert.equal(await page.locator('.smart-text > .smart-text-content').textContent(),message.content);
+   assert.equal(await page.locator('#chatMessages .smart-text > .smart-text-content').textContent(),message.content);
    assert.equal(await report.locator('details .operation-prose').textContent(),raw);
    assert.equal(await page.locator('.smart-file').count(),1);
    for(const status of ['partial','blocked','unknown','failed']){

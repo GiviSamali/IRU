@@ -149,7 +149,11 @@ def test_execute_cmd_transport_preserves_medium_result_and_connection_limit(monk
     class Connection:
         async def __aenter__(self):return self
         async def __aexit__(self, *args):return None
+        delivered = False
         async def recv(self):
+            if self.delivered:
+                await asyncio.Future()  # One frame; later reads wait for transport shutdown.
+            self.delivered = True
             return json.dumps({'type': 'command', 'payload': {'id': 'cmd-medium',
                 'action': 'execute_cmd', 'params': {'command': 'mock read'}}})
         async def send(self, text):

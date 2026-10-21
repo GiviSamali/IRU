@@ -4,7 +4,7 @@ const { createVoiceSession } = require('../ui/js/voice-session.js');
 
 function setup(overrides = {}) {
   let time = 100, nextId = 0, listening = false;
-  const timers = new Map(), submitted = [], spoken = [], errors = [], choices = [], reviews = [], commandChoices = [], cues = [];
+  const timers = new Map(), submitted = [], spoken = [], errors = [], commandChoices = [], cues = [];
   const session = createVoiceSession({
     now: () => time,
     setTimeout: (fn, delay) => { const id = ++nextId; timers.set(id, { fn, at: time + delay }); return id; },
@@ -12,8 +12,6 @@ function setup(overrides = {}) {
     cue: kind => cues.push(kind),
     state() {}, stopAudio() {}, listen: value => { listening = value; },
     error: error => errors.push(error),
-    choosePlan: (offer, accepted) => choices.push({ offer, accepted }),
-    reviewPlan: (review, changes) => { reviews.push({ review, changes }); session.planReviewResolved(review.taskId); },
     chooseCommand: (offer, accepted) => { commandChoices.push({ offer, accepted }); session.commandDecisionResolved(offer.taskId); },
     submit: text => { submitted.push(text); session.beginRequest(); },
     speak: (id, signal, onSpeaking) => new Promise(resolve => { spoken.push({ id, signal, onSpeaking, resolve }); }),
@@ -24,7 +22,7 @@ function setup(overrides = {}) {
     for (const [id, timer] of [...timers]) if (timer.at <= time && timers.delete(id)) timer.fn();
   }
   session.enable();
-  return { session, submitted, spoken, errors, choices, reviews, commandChoices, cues, advance, get listening() { return listening; } };
+  return { session, submitted, spoken, errors, commandChoices, cues, advance, get listening() { return listening; } };
 }
 
 test('wake word sends only final text after silence, ignoring background speech', () => {
@@ -123,114 +121,26 @@ test('a stale network failure cannot disable a new voice session', () => {
 });
 
 
-async function offerPlan(h, extra = {}) {
-  h.session.watchTask('plan');
-  h.session.taskFinished('plan', { plan_suggestion: 'Сложная задача', chat_id: 1,
-    plan_original_request: 'Сделай отчёт', ...extra });
-  h.spoken[0].onSpeaking();
-  h.session.transcript('да', true);
-  assert.equal(h.choices.length, 0);
-  h.spoken[0].resolve(); await Promise.resolve();
-}
-for (const [phrase, accepted] of [['да', true], ['Иру запускай', true], ['нет', false]]) {
-  test(`plan offer accepts explicit final choice once: ${phrase}`, async () => {
-    const h = setup(); await offerPlan(h);
-    assert.equal(h.session.phase, 'awaiting_plan');
-    h.session.transcript(phrase, false); assert.equal(h.choices.length, 0);
-    h.session.transcript('да наверное потом', true); assert.equal(h.choices.length, 0);
-    h.session.transcript(phrase, true); h.session.transcript(phrase, true);
-    await Promise.resolve();
-    assert.deepEqual(h.choices, [{ offer: { taskId: 'plan', chatId: 1, originalRequest: 'Сделай отчёт' }, accepted }]);
-    assert.deepEqual(h.submitted, []);
-  });
-}
-test('plan confirmation expires and cannot survive chat reset', async () => {
-  const h = setup(); await offerPlan(h); h.advance(30000);
-  h.session.transcript('да', true); await Promise.resolve();
-  assert.equal(h.choices.length, 0);
-  h.session.disable(); h.session.enable(); h.session.transcript('да', true);
-  assert.equal(h.choices.length, 0);
-});
-test('exhausted plan trial is spoken but never accepts voice consent', async () => {
-  const h = setup(); await offerPlan(h, { plan_trial_used: true });
-  assert.equal(h.session.phase, 'listening'); assert.equal(h.choices.length, 0);
-});
 test('voice dispatch waits one second of silence', () => {
   const h = setup(); h.session.transcript('Иру привет', true);
   h.advance(999); assert.equal(h.submitted.length, 0);
   h.advance(1); assert.deepEqual(h.submitted, ['привет']);
 });
 
-test('empty speech response cannot arm plan consent', async () => {
-  const h = setup(); h.session.watchTask('plan');
-  h.session.taskFinished('plan', { plan_suggestion: 'Plan', chat_id: 1, plan_original_request: 'Request' });
-  h.spoken[0].resolve(); await Promise.resolve();
-  assert.equal(h.session.phase, 'listening'); assert.equal(h.choices.length, 0);
-});
-
-test('draft review says yes to edit and no to execute after repeated revisions', async () => {
-  const h = setup(); h.session.watchTask('plan');
-  h.session.taskPlanReview('plan', { revision: 'v1' });
-  h.spoken[0].onSpeaking();
-  h.session.transcript('нет', true); // Echo during TTS must not approve.
-  assert.equal(h.reviews.length, 0);
-  h.spoken[0].resolve(); await Promise.resolve();
-  assert.equal(h.session.phase, 'awaiting_plan_review');
-  h.advance(60000); assert.equal(h.session.phase, 'awaiting_plan_review');
-  h.session.transcript('да', false); assert.equal(h.session.phase, 'awaiting_plan_review');
-  h.session.transcript('да', true);
-  assert.equal(h.session.phase, 'editing_plan'); assert.equal(h.listening, true);
-  assert.equal(h.reviews.length, 0);
-  h.session.transcript('Добавь сравнение стоимости', true); h.advance(1200);
-  await Promise.resolve();
-  assert.equal(h.reviews[0].changes, 'Добавь сравнение стоимости');
-  assert.equal(h.reviews[0].review.revision, 'v1');
-  assert.equal(h.listening, false);
-  h.session.taskPlanReview('plan', { revision: 'v2' });
-  h.session.taskPlanReview('plan', { revision: 'v2' });
-  assert.equal(h.spoken.length, 2);
-  h.spoken[1].onSpeaking(); h.spoken[1].resolve(); await Promise.resolve();
-  h.session.transcript('да', true);
-  h.session.transcript('Убери Excel', true); h.advance(1200); await Promise.resolve();
-  h.session.taskPlanReview('plan', { revision: 'v3' });
-  h.spoken[2].onSpeaking(); h.spoken[2].resolve(); await Promise.resolve();
-  h.session.transcript('нет', true); h.session.transcript('нет', true); await Promise.resolve();
-  assert.equal(h.reviews.length, 3);
-  assert.equal(h.reviews[2].review.revision, 'v3'); assert.equal(h.reviews[2].changes, '');
-  assert.equal(h.listening, false);
-  h.session.transcript('другая команда', true); h.advance(2000);
-  assert.deepEqual(h.submitted, []);
-});
-
-test('missing review audio keeps confirmation in chat and cannot arm voice approval', async () => {
-  const h = setup(); h.session.watchTask('plan'); h.session.taskPlanReview('plan', { revision: 'v1' });
-  h.spoken[0].resolve(); await Promise.resolve();
-  assert.equal(h.session.phase, 'confirming'); assert.equal(h.listening, false);
-  h.session.transcript('нет', true); await Promise.resolve();
-  assert.deepEqual(h.reviews, []);
-});
-
-test('stop review speech does not execute and chat reset drops edit dictation', async () => {
-  const h = setup(); h.session.watchTask('plan'); h.session.taskPlanReview('plan', { revision: 'v1' });
-  h.spoken[0].onSpeaking(); h.session.transcript('стоп', true);
-  assert.equal(h.spoken[0].signal.aborted, true); assert.deepEqual(h.reviews, []);
-  h.session.editPlan('plan'); h.session.transcript('Изменение', true);
-  h.session.disable(); h.advance(2000); await Promise.resolve();
-  assert.deepEqual(h.reviews, []); assert.equal(h.listening, false);
-});
-
-test('uncertain approval response disables voice rather than listening during possible work', async () => {
-  const h = setup({ reviewPlan: () => Promise.reject(new Error('network lost')) });
-  h.session.watchTask('plan'); h.session.taskPlanReview('plan', { revision: 'v1' });
-  h.spoken[0].onSpeaking(); h.spoken[0].resolve(); await Promise.resolve();
-  h.session.transcript('нет', true);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(h.session.enabled, false); assert.equal(h.listening, false);
-  assert.equal(h.errors.length, 1);
+test('historical PLAN metadata cannot arm consent or synthesize speech', () => {
+  const h = setup(); h.session.watchTask('historical');
+  h.session.taskFinished('historical', {plan_suggestion:'Old offer', plan_review:{revision:1}});
+  assert.deepEqual(h.spoken, []);
+  assert.equal(h.session.phase, 'listening');
+  for (const method of ['taskPlanReview', 'editPlan', 'planReviewResolved']) {
+    assert.equal(h.session[method], undefined);
+  }
+  h.session.taskFinished('historical', {answer:'Duplicate result'});
+  assert.deepEqual(h.spoken, []);
 });
 
 for (const [answer, accepted] of [['да', true], ['нет', false]]) {
-  test(`ordinary confirmation handles ${answer} once, independently of PLAN answers`, async () => {
+  test(`ordinary confirmation handles ${answer} once, with the current confirmation identity`, async () => {
     const h = setup(); h.session.watchTask('task');
     h.session.taskPaused('task', { kind: 'command', voice_allowed: true, confirmation_id: 'delete-1' });
     h.session.taskPaused('task', { kind: 'command', voice_allowed: true, confirmation_id: 'delete-1' });
@@ -242,7 +152,7 @@ for (const [answer, accepted] of [['да', true], ['нет', false]]) {
     h.session.transcript(answer, false); assert.deepEqual(h.commandChoices, []);
     h.session.transcript(answer, true); h.session.transcript(answer, true); await Promise.resolve();
     assert.deepEqual(h.commandChoices, [{ offer: { taskId: 'task', confirmationId: 'delete-1' }, accepted }]);
-    assert.deepEqual(h.reviews, []); assert.deepEqual(h.choices, []); assert.deepEqual(h.submitted, []);
+    assert.deepEqual(h.submitted, []);
     assert.equal(h.listening, false);
     h.session.taskPaused('task', { kind: 'command', voice_allowed: true, confirmation_id: 'delete-2' });
     assert.equal(h.spoken.length, 2);
@@ -284,15 +194,7 @@ test('sleep clears dictation and requires wake word without sending a command', 
   assert.deepEqual(h.submitted, ['создай файл']);
 });
 
-test('sleep during speech stops audio; pending PLAN requires wake and fresh review', async () => {
-  const h = setup(); h.session.watchTask('plan'); h.session.taskPlanReview('plan', {revision: 'v1'});
-  h.spoken[0].onSpeaking(); h.session.transcript('Иру, усни', true);
-  assert.equal(h.spoken[0].signal.aborted, true); assert.equal(h.session.phase, 'idle');
-  h.session.transcript('нет', true); await Promise.resolve(); assert.deepEqual(h.reviews, []);
-  h.session.transcript('Иру', true); assert.equal(h.spoken.length, 2);
-  h.spoken[1].onSpeaking(); h.spoken[1].resolve(); await Promise.resolve();
-  assert.equal(h.session.phase, 'awaiting_plan_review');
-});
+
 
 test('microphone cues track readiness, silence and sleep, not repeated phases or TTS stop listening', async () => {
   const h = setup(); assert.deepEqual(h.cues, ['on']);
@@ -329,11 +231,7 @@ test('sleep interrupts audio without late completion waking session', async () =
   assert.equal(h.session.phase, 'idle'); assert.deepEqual(h.submitted, []);
 });
 
-test('sleep dismisses voice plan consent without accepting or declining plan', async () => {
-  const h = setup(); await offerPlan(h); h.session.transcript('усни', true);
-  h.session.transcript('да', true); h.advance(31000); await Promise.resolve();
-  assert.equal(h.session.phase, 'idle'); assert.deepEqual(h.choices, []);
-});
+
 
 test('sleep requires a complete standalone phrase and is ignored during work', () => {
   const h = setup(); h.session.transcript('Иру', true);
@@ -400,24 +298,7 @@ test('wake punctuation alone cannot approve a command, but an explicit answer ca
   assert.equal(h.commandChoices.length, 1); assert.equal(h.commandChoices[0].accepted, true);
 });
 
-test('punctuated wake works for plan consent, review and edits without an empty revision', async () => {
-  const offer = setup(); await offerPlan(offer);
-  offer.session.transcript('ИРУ.', true); await Promise.resolve(); assert.deepEqual(offer.choices, []);
-  offer.session.transcript('IRU. Запускай!', true); await Promise.resolve();
-  assert.equal(offer.choices.length, 1); assert.equal(offer.choices[0].accepted, true);
-  const h = setup(); h.session.watchTask('plan'); h.session.taskPlanReview('plan', {revision: 'v1'});
-  h.spoken[0].onSpeaking(); h.spoken[0].resolve(); await Promise.resolve();
-  h.session.transcript('ИРУ.', true); await Promise.resolve(); assert.deepEqual(h.reviews, []);
-  h.session.transcript('Иру. Да!', true); assert.equal(h.session.phase, 'editing_plan');
-  h.session.transcript('ИРУ.', true); h.session.transcript('.', true); h.advance(1200);
-  await Promise.resolve(); assert.deepEqual(h.reviews, []);
-  h.session.transcript('И.Р.У. Добавь Excel.', true); h.advance(1200); await Promise.resolve();
-  assert.equal(h.reviews.length, 1); assert.equal(h.reviews[0].changes, 'Добавь Excel.');
-  h.session.taskPlanReview('plan', {revision: 'v2'});
-  h.spoken[1].onSpeaking(); h.spoken[1].resolve(); await Promise.resolve();
-  h.session.transcript('И Р У. Нет!', true); await Promise.resolve();
-  assert.equal(h.reviews.length, 2); assert.equal(h.reviews[1].changes, '');
-});
+
 
 
 test('OW background Worker does not occupy dialogue and sleep never cancels it',async()=>{

@@ -13,13 +13,13 @@ def setup(client,monkeypatch,mode=None,kind='SIMPLE'):
     key=f"{user['id']}:givi";devices[key]={'user_id':user['id'],'ws':object(),'info':{'hostname':'GIVI','os':'Windows'},'pending':{}}
     tasks['trace-task']={'task_id':'trace-task','user_id':user['id'],'chat_id':chat['id'],'message':'test','device_ids':[key],'status':'running','results':{},'modes':mode or {},'created_at':time.time()}
     async def classify(*a,**kw):return kind,'suggestion' if kind=='PLAN' else ''
-    monkeypatch.setattr(runtime,'classify_task_complexity',classify)
+
     return user,chat,key
 
 
-@pytest.mark.parametrize('pipeline',[False,True])
-def test_nl_trace_records_mode_tools_and_terminal_without_sensitive_content(client,monkeypatch,caplog,pipeline):
-    user,chat,key=setup(client,monkeypatch,{'pipeline':pipeline})
+@pytest.mark.parametrize('mode',[{}, {'autonomous':True}])
+def test_nl_trace_records_mode_tools_and_terminal_without_sensitive_content(client,monkeypatch,caplog,mode):
+    user,chat,key=setup(client,monkeypatch,mode)
     async def process(**kw):
         commands=[]
         journal.append_tool_step(commands,journal.make_run_step(journal=commands,tool_name='web.read',target_device_id='givi',
@@ -33,7 +33,7 @@ def test_nl_trace_records_mode_tools_and_terminal_without_sensitive_content(clie
     trace=tasks['trace-task']['diagnostic_trace'];wire=json.dumps(trace)
     assert all(row['task_id']=='trace-task' for row in trace)
     assert any(row['event']=='classification' for row in trace)
-    assert any(row.get('controller')==('pipeline' if pipeline else 'non_pipeline') for row in trace)
+    assert any(row.get('controller')=='non_pipeline' for row in trace)
     assert any(row.get('tool_name')=='web.read' and row.get('status')=='success' for row in trace)
     assert any(row.get('tool_name')=='answer.text' and row.get('answer_type')=='grounded_report' for row in trace)
     assert trace[-1]['event']=='request_finished' and trace[-1]['source']=='model'
@@ -42,15 +42,18 @@ def test_nl_trace_records_mode_tools_and_terminal_without_sensitive_content(clie
         assert secret not in wire and secret not in logs
 
 
-def test_plan_suggestion_records_why_controller_did_not_execute(client,monkeypatch):
-    user,chat,key=setup(client,monkeypatch,kind='PLAN')
-    async def process(**kw):pytest.fail('PLAN suggestion does not start an ordinary worker')
+def test_queue_execution_records_no_extra_classification_model(client,monkeypatch):
+    user,chat,key=setup(client,monkeypatch)
+    called=[]
+    async def process(**kw):
+        called.append(kw['user_message'])
+        return {'answer':'result','commands':[],'tasks':[]}
     monkeypatch.setattr(runtime,'process_nl_command',process)
     asyncio.run(runtime.run_nl_task('trace-task',user['id'],'task',[key],chat['id']))
     trace=tasks['trace-task']['diagnostic_trace']
-    assert any(row.get('classification')=='PLAN' for row in trace)
-    assert trace[-1]['source']=='plan_suggestion'
-    # Tests the real branch, does not declare hardware identity its cause.
+    assert called==['task']
+    assert any(row.get('classification')=='skipped' and row.get('source')=='goal_task_queue' for row in trace)
+    assert not tasks['trace-task'].get('plan_suggestion')
 
 
 def test_protocol_recovery_is_visible_and_logging_failure_does_not_break_task(client,monkeypatch):

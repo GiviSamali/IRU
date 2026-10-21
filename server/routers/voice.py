@@ -74,37 +74,32 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
     silence_task = {**task,"status":"done"} if normalized and normalized["status"]=="success" else task
     if (normalized is None or normalized["status"]=="success") and (silent_window_success(silence_task) or silent_browser_success(silence_task)):
         return Response(status_code=204)
-    review = task.get("plan_review") if task.get("status") == "confirm" else None
+    if revision is not None:
+        raise HTTPException(410, "execution_mode_unsupported")
     pending = task.get("confirm_data") or {}
     ordinary = (pending if task.get("status") == "confirm" and pending.get("kind") == "command" and pending.get("voice_allowed")
-                and not review else None)
+                and not task.get("plan_review") else None)
     if confirmation is not None and (not ordinary or ordinary.get("confirmation_id") != confirmation):
         raise HTTPException(409, "Подтверждение команды изменилось")
-    if revision is not None and (not review or review.get("revision") != revision):
-        raise HTTPException(409, "Вариант плана изменился")
     input_event = task.get("input_required") or {}
     input_question = (task.get("status")=="waiting_input" and input_event.get("phase")=="waiting" and time.time()<input_event.get("expires_at",0))
     if question is not None and (not input_question or input_event.get("question_id") != question):
         raise HTTPException(409, "Вопрос уже изменился")
     if input_question and question is None:
         raise HTTPException(409, "Требуется идентификатор вопроса")
-    if task.get("status") not in TERMINAL_STATUSES and not review and not ordinary and not input_question:
+    if task.get("status") not in TERMINAL_STATUSES and not ordinary and not input_question:
         raise HTTPException(409, "Задача ещё не завершена")
-    plan_offer = bool(task.get("plan_suggestion") and not task.get("plan_declined") and not task.get("voice_plan_started"))
-    offer_text = "Задача требует нескольких шагов. Предлагаю режим План: составлю план, выполню его и доложу результат. Запустить?"
-    if plan_offer and not _is_admin(user) and get_user_plan(user["id"]) == "free" and get_plan_trial_used(user["id"]):
-        offer_text = "Пробный запуск режима План уже использован. Для этого режима нужен тариф Про."
     human_answer = task.get("answer") or ""
     # An empty written handoff can still have optional context-bound speech.
     if task.get("kind")=="orchestrator" and task.get("dialogue_speech_answer")==task.get("answer"):
         human_answer = task.get("dialogue_spoken_response") or human_answer
-    if task.get("worker_id") and not plan_offer and not review and not ordinary:
+    if task.get("worker_id") and not ordinary:
         try:
             from ..response_presentation import worker_presentation
         except ImportError:
             from response_presentation import worker_presentation
         human_answer = worker_presentation(task,task.get("worker_report"))["conversational_response"]
-    parts = voice.answer_parts(ordinary["speech"] if ordinary else review["speech"] if review else offer_text if plan_offer else human_answer, keep_inline=True)
+    parts = voice.answer_parts(ordinary["speech"] if ordinary else human_answer, keep_inline=True)
     if not parts:
         return Response(status_code=204)
     target = _piper_device(user["id"], device_id) if provider == "piper" else None
@@ -115,7 +110,7 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
         raise HTTPException(429, "Озвучка занята. Попробуйте позже")
     _active_users.add(user_id)
     try:
-        if not plan_offer and not review and not ordinary:
+        if not ordinary:
             parts = await voice.spoken_parts(task)
         if part >= len(parts):
             raise HTTPException(404, "Часть ответа не найдена")

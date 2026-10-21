@@ -1,13 +1,22 @@
 import asyncio
 import json
 import pytest
-from server import controller_pipeline as pipeline
+from server import database as db
+from server.controller_non_pipeline import process_non_pipeline_command
+from server.controller_tools import NON_PIPELINE_TOOLS
+from server.worker_scheduler import WorkerScheduler, init_worker_storage, goal_view, owned_job
+from server.worker_reports import build_worker_report
+from test_goal_parallel_scheduler import complete
 from server.controller_trust import enforce_trusted_answer, has_grounded_terminal_answer
-from server.pipeline_step_control import completion_matches
 from server.run_journal import append_answer_step, append_tool_step, validate_answer_text_payload
 from server.tool_completion import synthesize_terminal_answer_payload
-from test_controller_pipeline_budget import _shared_context, _execute_call
 from test_controller_trust import _run_non_pipeline_case
+
+
+def _execute_call(call_id, command, device_id=None):
+    args={"command":command}
+    if device_id:args["device_id"]=device_id
+    return {"id":call_id,"function":{"name":"execute_cmd","arguments":json.dumps(args)}}
 
 
 def evidence(journal, device, result, status="success"):
@@ -32,20 +41,21 @@ def test_unvalidated_success_does_not_hide_failure():
     assert "not found" in enforce_trusted_answer("Готово", journal)
 
 
-@pytest.mark.parametrize("tool,result,check", [
-    ("app_open_url", {"status": "opened_verified", "window_found": True, "url": "https://music.yandex.ru"}, {"tool": "app_open_url", "url": "https://music.yandex.ru"}),
-    ("app_launch", {"status": "launched_verified", "window": {"process_name": "steam.exe"}}, {"tool": "app_launch", "process_name": "steam.exe"}),
+@pytest.mark.parametrize("tool,result", [
+    ("app_open_url", {"status":"opened_verified","launched":True,"window_found":True,"url":"https://music.yandex.ru"}),
+    ("app_launch", {"status":"launched_verified","window":{"process_name":"steam.exe"}}),
 ])
-def test_verified_application_completes_only_matching_explicit_check(tool, result, check):
-    entry = {"action": tool, "result": result}
-    assert completion_matches({"completion_check": check}, entry)
-    assert not completion_matches({}, entry)
-    assert not completion_matches({"completion_check": {**check, "url": "wrong", "process_name": "wrong"}}, entry)
-    assert not completion_matches({"completion_check": check}, {**entry, "result": {**result, "status": "failed"}})
+def test_verified_application_observation_does_not_complete_whole_goal(tool,result):
+    journal=[]
+    append_tool_step(journal,{"action":tool,"device_id":"pc","result":result,"status":"success"})
+    report=build_worker_report({"task_id":"application-only","user_id":1,"device_ids":["1:pc"],
+        "message":"Open an application and prepare a report","status":"done","commands":journal})
+    assert report["goal_completed"] is False
+    assert report["status"]!="success"
 
 
 def test_verified_url_worker_stops_without_another_llm_or_verification(monkeypatch):
-    monkeypatch.setattr(pipeline.db, "get_device_profile", lambda *a, **kw: None)
+    monkeypatch.setattr(db, "get_device_profile", lambda *a, **kw: None)
     calls, sent = [], []
     async def completion(**kw):
         calls.append(kw)
@@ -60,12 +70,11 @@ def test_verified_url_worker_stops_without_another_llm_or_verification(monkeypat
     async def send(device, action, params):
         sent.append((device, action))
         return {"status": "opened_verified", "launched": True, "window_found": True, "url": "https://music.yandex.ru"}
-    result = asyncio.run(pipeline.run_pipeline_worker(client=None, cfg={"model": "mock", "answer_auditor_enabled": False}, model="mock",
-        shared=_shared_context(), overall_goal="Open music", step={"title": "Open music", "instruction": "Open music",
-        "completion_check": {"tool": "app_open_url", "url": "https://music.yandex.ru"}}, completed_steps=[],
-        chat_history=[], send_command_fn=send, get_file_link_fn=lambda *a: "", machine_guid=None, mem_user_id=None,
-        poll_task_id=None, chat_completion_request_fn=completion, worker_tools=[]))
-    assert result["status"] == "ok"
+    result = asyncio.run(process_non_pipeline_command(user_message="Open music",device_id="device-1",
+        device_info={"os":"Windows"},send_command_fn=send,get_file_link_fn=lambda *a:"",chat_history=[],
+        user_id=None,chat_id=None,modes={},poll_task_id=None,cfg={"model":"mock","answer_auditor_enabled":False},
+        system_msg="system",machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,
+        max_iterations=4,pick_model_fn=lambda *a:"mock",chat_completion_request_fn=completion))
     assert len(calls) == 2 and sent == [("device-1", "app.open_url")]
     assert result["commands"][-1]["tool_name"] == "answer.text"
 
@@ -83,50 +92,52 @@ def test_non_pipeline_success_on_first_device_allows_explicit_second_action(monk
     assert sent == ["device-1", "device-2"]
 
 
-@pytest.mark.parametrize("valid_terminal,fail_second", [(True, False), (False, False), (False, True)])
-def test_plan_reports_each_device_despite_missing_summary_tool(monkeypatch, valid_terminal, fail_second):
-    phases = []
-    monkeypatch.setattr(pipeline.db, "create_task", lambda **kw: 1)
-    monkeypatch.setattr(pipeline.db, "update_step", lambda *a, **kw: None)
-    monkeypatch.setattr(pipeline.db, "finish_task", lambda *a, **kw: None)
-    monkeypatch.setattr(pipeline.db, "get_device_profile", lambda *a, **kw: None)
-    monkeypatch.setattr(pipeline, "build_memory_block", lambda *a: "")
-    monkeypatch.setattr(pipeline, "collect_tasks", lambda *a: [])
-    monkeypatch.setattr(pipeline, "push_tasks_view", lambda *a: None)
-    async def completion(**kw):
-        phases.append(kw["phase"])
-        if kw["phase"] == "pipeline.plan":
-            return {"choices": [{"message": {"content": json.dumps({"steps": [{"title": "Open on " + d, "device_id": d} for d in ("a", "b")]})}}]}
-        return {"choices": [{"message": {"content": "raw final"}}]}
-    async def worker(**kw):
-        target = kw["step"]["device_id"]
-        journal = []
-        if target == "b" and fail_second:
-            evidence(journal, target, {"error": "not found"}, "failed")
-            return {"status": "error", "answer": "не открыто", "commands": journal}
-        if target == "b": evidence(journal, target, {"error": "timeout"}, "failed")
-        evidence(journal, target, {"returncode": 0, "stdout": "OK: opened_verified"})
-        if valid_terminal:
-            append_answer_step(journal, "answer_text", synthesize_terminal_answer_payload(journal[-1]), target_device_id=target)
-        return {"status": "ok", "answer": "Открыто", "commands": journal}
-    monkeypatch.setattr(pipeline, "run_pipeline_worker", worker)
-    result = asyncio.run(pipeline.process_pipeline_subagents(user_message="Open two apps", device_id="a", device_info={"hostname": "A"},
-        all_devices={d: {"info": {"hostname": d}} for d in ("a", "b")}, send_command_fn=None, get_file_link_fn=None,
-        chat_history=[], load_llm_config_fn=lambda: {"model": "mock"}, pick_model_fn=lambda *a: "mock",
-        chat_completion_request_fn=completion, worker_tools=[], windows_rules="", linux_rules=""))
-    assert result["task_receipt"]["answer_source"] == "pipeline_step_report"
-    assert "Open on a" in result["answer"] and "Open on b" in result["answer"]
-    assert result["answer"].startswith("План выполнен не полностью." if fail_second else "Результаты выполнения шагов:")
-    assert result["task_receipt"]["answer_source"] != "audited_terminal"
-    assert result["task_receipt"].get("goal_completed") is not True
-    if not fail_second:
-        assert "Команда завершилась с ошибкой: timeout" not in result["answer"]
-    else:
-        assert "b: Open on b — не выполнено." in result["answer"]
-        assert "not found" in result["answer"]
-    assert not any(x.get("action") == "tool_only_protocol" for x in result["commands"])
-    # A known failed PLAN is explained from its saved steps, without another synthesis call.
-    assert phases.count("pipeline.final") == (0 if fail_second else 2)
+@pytest.mark.parametrize("valid_terminal,fail_second", [(True,False),(True,True),(False,False),(False,True)])
+def test_goal_preserves_each_device_result_without_summary_llm(tmp_path,monkeypatch,valid_terminal,fail_second):
+    monkeypatch.setattr(db,"DB_PATH",tmp_path/"device-goal.sqlite")
+    db.init_db();init_worker_storage()
+    owner=db.create_user("device-goal")
+    chat=db.create_chat(owner["id"],"device outcomes")["id"]
+    started=[]
+    async def execute(task):
+        target=task["device_ids"][0]
+        started.append(target)
+        journal=[]
+        if target.endswith(":b") and fail_second:
+            evidence(journal,"b",{"error":"not found"},"failed")
+            task.update(status="error",answer="Device B failed",commands=journal)
+        elif valid_terminal:
+            # Synthetic grounded source report: no actual device command is run.
+            complete(task)
+            task["commands"][0].update(tool_name="execute_cmd", device_id=target,
+                command="Get-Content C:/Temp/note.txt",
+                result={"returncode":0,"stdout":f"Observed state on {target}","stderr":""})
+        else:
+            evidence(journal,target,{"returncode":0,"stdout":"OK: opened_verified"})
+            task.update(status="done",answer="Opened",commands=journal)
+    async def scenario():
+        scheduler=WorkerScheduler(execute)
+        try:
+            devices=[f"{owner['id']}:{name}" for name in ("a","b")]
+            admitted=await scheduler.submit_goal({"user_id":owner["id"],"chat_id":chat,
+                "message":"Read both devices","device_ids":devices},[
+                    {"key":name,"objective":f"Read device {name}","target_device_ids":[device]}
+                    for name,device in zip(("a","b"),devices)],request_key="both-devices")
+            await scheduler.runners[owner["id"]]
+            view=goal_view(admitted["goal_id"],owner["id"],chat)
+            assert started==devices and len(view["tasks"])==2
+            assert view["goal_completed"] is (valid_terminal and not fail_second)
+            assert [item["objective"] for item in view["tasks"]]==["Read device a","Read device b"]
+            if fail_second:
+                assert view["tasks"][1]["report"]["goal_completed"] is False
+                assert view["tasks"][1]["result"] is None
+                saved=owned_job(view["tasks"][1]["task_id"],owner["id"])
+                assert json.loads(saved["payload"])["commands"][0]["result"]["error"]=="not found"
+            if not valid_terminal:
+                assert all(item["result"] is None for item in view["tasks"])
+        finally:
+            await scheduler.shutdown()
+    asyncio.run(scenario())
 
 
 def test_other_device_success_cannot_hide_failed_device():
@@ -168,7 +179,7 @@ def test_runtime_keeps_validated_markdown_recovery_answer(monkeypatch):
     payload["text"] = "**Приложение открыто.**"
     append_answer_step(journal, "answer_text", payload, target_device_id="a")
     rt.devices["1:a"] = {"user_id": 1, "info": {"os": "Linux"}, "ws": object()}
-    rt.tasks["report"] = {"results": {}, "status": "running", "modes": {"plan_declined": True}}
+    rt.tasks["report"] = {"results": {}, "status": "running", "modes": {}}
     monkeypatch.setattr(rt, "get_messages", lambda *a, **kw: [])
     monkeypatch.setattr(rt, "get_device_profile", lambda *a, **kw: None)
     monkeypatch.setattr(rt, "add_message", lambda *a, **kw: None)
@@ -183,7 +194,7 @@ def test_broadcast_runtime_keeps_each_recovered_answer(monkeypatch):
     from server import task_runtime as rt
     for device in ("a", "b"):
         rt.devices["1:" + device] = {"user_id": 1, "info": {"os": "Linux", "hostname": device}, "ws": object()}
-    rt.tasks["broadcast-report"] = {"results": {}, "status": "running", "modes": {"plan_declined": True}}
+    rt.tasks["broadcast-report"] = {"results": {}, "status": "running", "modes": {}}
     monkeypatch.setattr(rt, "get_device_profile", lambda *a, **kw: None)
     monkeypatch.setattr(rt, "add_message", lambda *a, **kw: None)
     async def process(**kw):

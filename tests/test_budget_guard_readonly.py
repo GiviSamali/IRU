@@ -8,14 +8,13 @@ Covers all 7 requirements:
 4. Repeated identical unknown command does NOT trigger budget_guard.
 5. pip install classified as package_install_or_setup (mutating), not read-only.
 6. python -m pip --version classified as environment_discovery.
-7. CommandBudget used identically in non-pipeline and pipeline tests.
+7. CommandBudget remains active in the unified Worker.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 
-import httpx
 import pytest
 
 from server.controller_budget import (
@@ -29,7 +28,8 @@ from server.controller_budget import (
     normalize_execute_cmd,
     _is_readonly_cmd,
 )
-from server.controller_pipeline import run_pipeline_worker
+from server.controller_non_pipeline import process_non_pipeline_command
+from server.controller_tools import NON_PIPELINE_TOOLS
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +363,7 @@ class TestCommandBudget:
 
 
 # ---------------------------------------------------------------------------
-# 4. Pipeline integration tests (Requirement 7)
+# 4. Unified Worker integration tests (Requirement 7)
 # ---------------------------------------------------------------------------
 
 def _make_completion_fn(responses: list):
@@ -428,52 +428,26 @@ def _write_call(call_id: str, path: str, append: bool = False) -> dict:
     }
 
 
-def _shared_ctx() -> dict:
-    return {
-        "current_device_id": "device-1",
-        "current_hostname": "devbox",
-        "current_os": "Windows",
-        "current_os_version": "11",
-        "device_profile_block": "",
-        "device_memory_block": "",
-        "devices_block": "",
-        "other_devices_summary": "",
-        "target_device_id": "device-1",
-        "os_rules": "",
-        "current_datetime_msk": "2026-05-03 10:00",
-    }
-
-
 def _run_worker(responses: list, send_fn=None) -> dict:
     async def _noop(device_id, action, params):
         return {"returncode": 0, "stdout": "ok", "stderr": ""}
 
-    async def _run():
-        async with httpx.AsyncClient() as client:
-            return await run_pipeline_worker(
-                client=client,
-                cfg={"model": "mock-model"},
-                model="mock-model",
-                shared=_shared_ctx(),
-                overall_goal="goal",
-                step={"title": "step", "instruction": "inspect", "device_id": "device-1"},
-                completed_steps=[],
-                chat_history=[],
-                send_command_fn=send_fn or _noop,
-                get_file_link_fn=lambda *a: "/api/download/mock",
-                machine_guid=None,
-                mem_user_id=None,
-                poll_task_id=None,
-                chat_completion_request_fn=_make_completion_fn(responses),
-                worker_tools=[],
-            )
-
-    return asyncio.run(_run())
+    return asyncio.run(process_non_pipeline_command(
+        user_message="Inspect the environment and create the requested test artifacts",
+        device_id="device-1", device_info={"os": "Windows", "hostname": "devbox"},
+        send_command_fn=send_fn or _noop,
+        get_file_link_fn=lambda *a: "/api/download/mock",
+        chat_history=[], user_id=None, chat_id=None, modes={}, poll_task_id=None,
+        cfg={"model": "mock-model"}, system_msg="system", machine_guid=None,
+        mem_user_id=None, non_pipeline_tools=NON_PIPELINE_TOOLS, max_iterations=16,
+        pick_model_fn=lambda *a: "mock-model",
+        chat_completion_request_fn=_make_completion_fn(responses),
+    ))
 
 
-def test_pipeline_env_discovery_sequence_not_blocked():
+def test_worker_env_discovery_sequence_not_blocked():
     """
-    Req 7: Pipeline must NOT block the full env-discovery sequence.
+    Req 7: The unified Worker must not block the full env-discovery sequence.
     """
     discovery_calls = [
         _exec_call("c1",  "python --version"),
@@ -516,12 +490,11 @@ def test_pipeline_env_discovery_sequence_not_blocked():
     )
     actions = [c.get("action") for c in result.get("commands", [])]
     assert "budget_guard" not in actions
-    assert result["status"] == "ok"
 
 
-def test_pipeline_readonly_inspection_not_blocked():
+def test_worker_readonly_inspection_not_blocked():
     """
-    Req 7: Pipeline must NOT block the canonical read-only inspection sequence.
+    Req 7: The unified Worker must not block the canonical read-only inspection sequence.
     """
     inspection_calls = [
         _exec_call("c0", r'Test-Path "C:\Users\russa\TEST_IRU"'),
@@ -556,10 +529,9 @@ def test_pipeline_readonly_inspection_not_blocked():
 
     assert len(executed) == 5
     assert "budget_guard" not in [c.get("action") for c in result.get("commands", [])]
-    assert result["status"] == "ok"
 
 
-def test_pipeline_artifact_creation_sequence_not_blocked():
+def test_worker_artifact_creation_sequence_not_blocked():
     calls = [
         _exec_call("c1", 'python -c "import PyQt5"'),
         _write_call("c2", r"C:\work\questions.json"),
@@ -593,10 +565,9 @@ def test_pipeline_artifact_creation_sequence_not_blocked():
 
     assert len(executed) == len(calls)
     assert "budget_guard" not in [c.get("action") for c in result.get("commands", [])]
-    assert result["status"] == "ok"
 
 
-def test_pipeline_start_process_spiral_not_budget_blocked():
+def test_worker_start_process_spiral_not_budget_blocked():
     """
     Req 7: budget_guard must not block Start-Process retry loops.
     """
@@ -632,4 +603,3 @@ def test_pipeline_start_process_spiral_not_budget_blocked():
 
     assert len(executed) == len(spiral_calls)
     assert "budget_guard" not in [c.get("action") for c in result.get("commands", [])]
-    assert result["status"] == "ok"

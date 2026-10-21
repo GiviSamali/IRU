@@ -212,6 +212,7 @@ def worker_presentation(task, report=None):
     elif status=="waiting_input":human=answer or "Какое окно выбрать?"
     elif status=="waiting_confirmation":human="Нужно твоё подтверждение, прежде чем продолжить."
     elif status=="queued":human="Поручение в очереди. Начну после текущей задачи."
+    elif status=="waiting_dependency":human="Жду подтверждённого результата связанного поручения."
     elif status=="running":human=running_progress(task)
     elif status=="success":
         terminal=next((c for c in reversed(commands) if _tool(c)=="answer.text" and c.get("status")=="terminal"),{})

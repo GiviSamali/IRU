@@ -431,10 +431,12 @@ def test_managed_runtime_app_launch_rewrite_is_process_safe():
 
 
 def test_user_instruction_is_saved_verbatim_as_unverified_without_receipt():
-    from server.memory_intent_guard import ORIGINAL_WORKER_REQUEST
+    from server.memory_intent_guard import ORIGINAL_WORKER_REQUEST, MEMORY_AUTHORIZATION, bind_memory_authorization
 
     instruction = "Для просмотра проекта используй python -m http.server 8766."
-    token = ORIGINAL_WORKER_REQUEST.set("Запомни инструкцию: " + instruction)
+    human_request = "Запомни инструкцию: " + instruction
+    token = ORIGINAL_WORKER_REQUEST.set(human_request)
+    auth_token = MEMORY_AUTHORIZATION.set(bind_memory_authorization(human_request, [{"operation":"remember_fact", "human_quote":human_request}]))
     try:
         allowed, stored = validate_toolchain_fact_against_receipt(
             instruction, None, category="instruction", human_request="planner data",
@@ -445,6 +447,7 @@ def test_user_instruction_is_saved_verbatim_as_unverified_without_receipt():
         assert validate_toolchain_fact_against_receipt(instruction, None) == (False, None)
     finally:
         ORIGINAL_WORKER_REQUEST.reset(token)
+        MEMORY_AUTHORIZATION.reset(auth_token)
 
 
 def test_instruction_category_cannot_authorize_or_fabricate_environment_memory():

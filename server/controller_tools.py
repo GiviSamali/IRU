@@ -24,7 +24,9 @@ WRITE_CONTENT_DESCRIPTION = (
     "For a limited edit, prefer a reliable local transformation of the current original using existing tools; do not reconstruct unchanged elements in the LLM. "
     "Overwrite replaces the entire file; neither overwrite nor append guarantees preservation. Verify the requested change and preservation against the original before claiming success. "
     "Suitable for scripts, HTML, JSON, TXT, CSV, Markdown, "
-    "and source code. For binary or Office documents, future dedicated office tools should be used. "
+    "and source code. For binary or Office documents, use helper scripts through existing execute_cmd/Python capabilities "
+    "after checking the actual runtime/library APIs; never write binary document bytes through this text tool. "
+    "Do not require Microsoft Office when verified available libraries can create the requested format. "
     "Returns compact evidence only: path, append mode, encoding, chars_written, bytes_written, content_sha256, "
     "content_preview, and an OK/NO/ERROR-style summary."
 )
@@ -58,52 +60,6 @@ def recovery_observation_tools(tools):
 
 TOOLS = [
     *DEVICE_TOOL_SCHEMAS,
-    {
-        "type": "function",
-        "function": {
-            "name": "create_plan",
-            "description": "Создать план из шагов для многошаговой задачи. Вызывай В САМОМ НАЧАЛЕ, до любых execute_cmd/write_content. Возвращает task_id. Далее по каждому шагу вызывай mark_step(task_id, idx, status, summary).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "goal": {
-                        "type": "string",
-                        "description": "Общая цель задачи одной строкой"
-                    },
-                    "steps": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "План: массив коротких описаний шагов (3-10 шт), каждое — одно действие"
-                    }
-                },
-                "required": ["goal", "steps"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "mark_step",
-            "description": "Обновить статус шага плана (вызывай после выполнения каждого шага).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_id": {"type": "integer", "description": "ID задачи из create_plan"},
-                    "idx": {"type": "integer", "description": "Номер шага (0-based)"},
-                    "status": {
-                        "type": "string",
-                        "enum": ["running", "done", "failed", "skipped"],
-                        "description": "Новый статус шага"
-                    },
-                    "summary": {
-                        "type": "string",
-                        "description": "Короткое описание результата шага"
-                    }
-                },
-                "required": ["task_id", "idx", "status"]
-            }
-        }
-    },
     {
         "type": "function",
         "function": {
@@ -264,46 +220,13 @@ for _tool in TOOLS:
     elif _function.get("name") == "write_content":
         _function["description"] = WRITE_CONTENT_DESCRIPTION
 
-PLAN_TRACKING_TOOL_NAMES = {
-    "create_plan",
-    "mark_step",
-}
 NON_PIPELINE_TOOLS = [
     tool for tool in TOOLS
-    if tool["function"]["name"] not in PLAN_TRACKING_TOOL_NAMES | {"answer_request_confirmation"}
+    if tool["function"]["name"] not in {"answer_request_confirmation"}
 ]
 
-WORKER_TOOL_NAMES = {
-    "web_tabs", "web_read", "web_elements", "web_fill", "web_activate", "web_wait", "web_focus",
-    "window_control",
-    "transfer_file",
-    "memory_get_stats",
-    "memory_list_facts",
-    "device_refresh_state",
-    "device_check_runtime",
-    "device_prepare_runtime",
-    "window_list",
-    "window_find",
-    "window_verify",
-    "window_focus",
-    "window_close",
-    "app_launch",
-    "app_open_url",
-    "app_verify_launch",
-    "app_close",
-    "execute_cmd",
-    "write_content",
-    "get_file_link",
-    "web_search",
-    "remember_fact",
-    "forget_fact",
-    "answer_text",
-    "answer_report_failure",
-}
-WORKER_TOOLS = [
-    tool for tool in NON_PIPELINE_TOOLS
-    if tool["function"]["name"] in WORKER_TOOL_NAMES
-]
+# Compatibility name for integrations; there is one executable Worker toolset.
+WORKER_TOOLS = NON_PIPELINE_TOOLS
 
 TOOLSET_REGISTRY = {
     "full": TOOLS,

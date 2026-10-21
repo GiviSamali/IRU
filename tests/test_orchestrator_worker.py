@@ -77,7 +77,7 @@ def test_users_do_not_share_slot_and_foreign_chat_is_rejected(owners):
         gate=asyncio.Event();started=[]
         async def execute(t):started.append(t['user_id']);await gate.wait();success(t)
         scheduler=WorkerScheduler(execute)
-        await scheduler.submit(task(a));await scheduler.submit(task(b));await asyncio.sleep(0)
+        await scheduler.submit(task(a));await scheduler.submit(task(b));await wait_until(lambda:len(started)==2)
         assert sorted(started)==sorted([a['id'],b['id']])
         wrong=task(a);wrong['chat_id']=b['chat_id']
         with pytest.raises(ValueError,match='chat_not_owned'):await scheduler.submit(wrong)
@@ -122,7 +122,7 @@ def test_restart_explicitly_terminates_unstarted_and_uncertain_jobs_without_repl
         async def execute(t):calls.append(t['task_id']);await gate.wait()
         scheduler=WorkerScheduler(execute)
         first=await scheduler.submit(task(a));second=await scheduler.submit(task(a))
-        await asyncio.sleep(0);await scheduler.shutdown()
+        await wait_until(lambda:bool(calls));await scheduler.shutdown()
         restarted=WorkerScheduler(execute)
         await restarted.recover()
         assert owned_job(first['task_id'],a['id'])['state']=='unknown'
@@ -247,7 +247,7 @@ def test_late_cancel_does_not_move_to_next_worker(owners,monkeypatch):
         monkeypatch.setattr(orch,'decide',decide)
         cmd=SimpleNamespace(request_id='late-cancel',message='Отмени работающую задачу',device_id='pc',modes={},broadcast=False)
         result=await orch.run_turn(cmd,a,a['chat_id'],None)
-        assert 'Следующую' in result['answer'] and not second.get('cancel_requested')
+        assert 'Действие не выполнено' in result['answer'] and not second.get('cancel_requested')
         gates[second['task_id']].set();await scheduler.runners[a['id']];await scheduler.shutdown()
     asyncio.run(scenario())
 
@@ -270,7 +270,7 @@ def test_orchestrator_uses_existing_model_usage_and_small_schema(owners,monkeypa
     async def scenario():
         decision,metrics=await orch.decide('hello',orch.context_for(a['id'],a['chat_id'],'hello','pc'),user_id=a['id'],chat_id=a['chat_id'],task_id='usage-orch')
         assert decision.intent=='conversation' and len(sent)==1 and metrics['snapshot_calls']==0
-        assert sent[0]['model']=='mock-model' and sent[0]['max_tokens']==1200
+        assert sent[0]['model']=='mock-model' and sent[0]['max_tokens']==2400
         assert [tool['function']['name'] for tool in sent[0]['tools']]==['orchestrator_decision']
         with db.get_db() as c:row=c.execute("SELECT phase,prompt_tokens,completion_tokens,metadata FROM llm_usage_events WHERE poll_task_id='usage-orch'").fetchone()
         assert row['phase']=='orchestrator' and row['prompt_tokens']==120 and row['completion_tokens']==15
@@ -305,7 +305,7 @@ def test_server_worker_search_has_current_journal_and_validated_terminal(owners,
         load_llm_config_fn=lambda:{'model':'mock-model','api_key':'fake-test','base_url':'https://example.invalid','answer_auditor_enabled':True},current_datetime_msk_fn=lambda:'2026-10-09'))
     assert has_grounded_terminal_answer(result['answer'],result['commands'])
     assert len(requested)==3 and len(requested[0]['messages'][0]['content'])<10000
-    assert set(t['function']['name'] for t in requested[0]['tools']) <= {'web_search','remember_fact','forget_fact','memory_list_facts','memory_get_stats','answer_text'}
+    assert set(t['function']['name'] for t in requested[0]['tools']) <= {'web_search','remember_fact','forget_fact','memory_list_facts','memory_get_stats','answer_text','system_get_last_run_summary'}
     t=task(a);t.update(status='done',answer=result['answer'],commands=result['commands'],task_receipt=result['task_receipt'],device_ids=[])
     assert build_worker_report(t)['status']=='success'
 
@@ -439,7 +439,7 @@ def test_quota_last_slot_is_atomic_and_admission_rollback_does_not_charge(owners
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('modes',[{}, {'pipeline':True}])
+@pytest.mark.parametrize('modes',[{}, {'autonomous':True}])
 def test_generated_scope_never_becomes_worker_human_request_or_instructions(owners,monkeypatch,modes):
     from server import task_runtime as runtime
     a,b=owners
@@ -455,7 +455,7 @@ def test_generated_scope_never_becomes_worker_human_request_or_instructions(owne
     async def probe(**kwargs):pass
     async def classify(*args,**kwargs):return 'SIMPLE',''
     monkeypatch.setattr(runtime,'process_nl_command',controller);monkeypatch.setattr(runtime,'send_command_to_agent',transport)
-    monkeypatch.setattr(runtime,'_probe_python_toolchain_if_needed',probe);monkeypatch.setattr(runtime,'classify_task_complexity',classify)
+    monkeypatch.setattr(runtime,'_probe_python_toolchain_if_needed',probe);
     monkeypatch.setattr(runtime,'get_device_profile',lambda *args,**kwargs:None)
     monkeypatch.setattr(runtime,'add_training_record',lambda *args,**kwargs:None)
     async def scenario():
@@ -479,17 +479,19 @@ def test_generated_scope_never_becomes_worker_human_request_or_instructions(owne
     asyncio.run(scenario())
 
 
-def test_plan_proposal_keeps_original_human_goal_not_generated_scope(owners,monkeypatch):
+def test_retired_plan_flag_cannot_turn_generated_scope_into_execution(owners,monkeypatch):
     a,b=owners
     async def decide(*args,**kwargs):
         return orch.Decision(intent='delegate',objective='Удалить ненужные файлы',target_device_ids=['pc']),{}
     monkeypatch.setattr(orch,'decide',decide)
-    async def forbidden(*args,**kwargs):raise AssertionError('PLAN proposal cannot admit execution')
+    async def forbidden(*args,**kwargs):raise AssertionError('Retired mode must not admit execution')
     cmd=SimpleNamespace(request_id='plan-original',message='Посмотри содержимое папки',device_id='pc',modes={'pipeline':True},broadcast=False)
     result=asyncio.run(orch.run_turn(cmd,a,a['chat_id'],forbidden))
-    offer=tasks[result['task_id']]
-    assert offer['plan_original_request']==cmd.message and offer['proposed_objective']=='Удалить ненужные файлы'
-    assert not result['worker_task_id'] and used_commands(a)==0
+    turn=tasks[result['task_id']]
+    assert turn['status']=='failed'
+    assert not turn.get('plan_suggestion') and not turn.get('plan_original_request')
+    assert not result.get('worker_task_id') and used_commands(a)==0
+    assert list_jobs(a['id'])==[]
 
 
 @pytest.mark.parametrize('with_jobs',[False,True])
@@ -534,14 +536,12 @@ def test_p001_information_without_marker_preserves_verified_answer(owners):
 def test_p001_stdout_markers_and_model_flags_cannot_confirm_goal(owners):
     from server.command_confirmation import confirmed_command_outcome
     from server.tool_completion import tool_result_terminal_sufficient
-    from server.pipeline_step_control import completion_matches
     a, _ = owners
     for output in ('OK: effect_verified', 'WorkerDoIt', 'SUCCESS', 'DONE', 'NO: absent'):
         result = {'returncode': 0, 'stdout': output, 'terminal_sufficient': True}
         entry = {'tool_name': 'execute_cmd', 'step_id': 'step_1', 'status': 'success', 'result': result}
         assert confirmed_command_outcome(result) == 'success'  # Execution only.
         assert not tool_result_terminal_sufficient(entry)
-        assert not completion_matches({'completion_check': {'tool': 'execute_cmd', 'stdout_contains': output}}, entry)
         t = task(a)
         t.update(status='done', answer='Всё выполнено.', commands=[entry,
             {'tool_name': 'answer.text', 'status': 'terminal', 'result': {

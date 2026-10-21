@@ -74,13 +74,12 @@ def test_execute_cmd_schema_contains_first_class_outcome_guidance():
     schema = next(tool for tool in WORKER_TOOLS if tool["function"]["name"] == "execute_cmd")
     description = schema["function"]["description"]
 
-    assert "OK:" in description
-    assert "NO:" in description
-    assert "ERROR:" in description
+    assert "no success marker is required" in description
+    assert "Exit code zero proves command execution only" in description
     assert "action" in description and "verification" in description
     assert "Visual/window verification is only needed" in description
     assert "write_content" in description
-    assert "long, multiline" in description
+    assert "new generated content" in description
 
 
 def test_answer_text_contract_is_terminal_safe_and_visible():
@@ -109,8 +108,8 @@ def test_write_content_schema_describes_large_content_transport():
     schema = next(tool for tool in WORKER_TOOLS if tool["function"]["name"] == "write_content")
     description = schema["function"]["description"]
 
-    assert "long, multiline, or generated text content" in description
-    assert "instead of execute_cmd" in description
+    assert "long, multiline, or generated new content" in description
+    assert "explicitly requested full replacement" in description
     assert "scripts, HTML, JSON, TXT, CSV, Markdown" in description
     assert "binary or Office documents" in description
     assert "chars_written" in description

@@ -16,7 +16,7 @@ def _wait_for_task_status(client, headers, task_id, expected_status, attempts=30
         response = client.get(f"/api/tasks/{task_id}", headers=headers)
         assert response.status_code == 200
         last_payload = response.json()["task"]
-        if last_payload["status"] == expected_status:
+        if last_payload["status"] == expected_status or (expected_status == "unknown" and last_payload.get("worker_report", {}).get("status") == "unknown"):
             return last_payload
         time.sleep(0.05)
     assert last_payload is not None
@@ -32,6 +32,11 @@ def test_declined_suggested_fact_does_not_reappear_in_same_chat(client, monkeypa
     user, headers = _create_and_login_user(client)
     device_key = f"{user['id']}:device-1"
     request_text = "Где у меня установлен Python?"
+    from server import orchestrator as orch
+    async def semantic_decision(message, context, **kwargs):
+        assert message == request_text
+        return orch.Decision(intent="delegate",objective=message,scope="device",target_device_ids=["device-1"]),{}
+    monkeypatch.setattr(orch,"decide",semantic_decision)
     suggested_text = r"Python lives in D:\Python311"
     suggested_category = "config"
 
@@ -43,6 +48,7 @@ def test_declined_suggested_fact_does_not_reappear_in_same_chat(client, monkeypa
         "user_id": user["id"],
         "info": {"hostname": "workstation", "os": "Windows", "os_version": "11"},
         "pending": {},
+        "ws": object(),
     }
 
     calls = {"classify": 0, "process": 0}
@@ -71,7 +77,7 @@ def test_declined_suggested_fact_does_not_reappear_in_same_chat(client, monkeypa
             "tasks": [],
         }
 
-    monkeypatch.setattr(task_runtime, "classify_task_complexity", fake_classify_task_complexity)
+
     monkeypatch.setattr(task_runtime, "process_nl_command", fake_process_nl_command)
 
     first_response = client.post(
@@ -81,10 +87,10 @@ def test_declined_suggested_fact_does_not_reappear_in_same_chat(client, monkeypa
     )
     assert first_response.status_code == 200
     first_payload = first_response.json()
-    first_task_id = first_payload["task_id"]
+    first_task_id = first_payload["worker_task_ids"][0]
     chat_id = first_payload["chat_id"]
 
-    first_task = _wait_for_task_status(client, headers, first_task_id, "done")
+    first_task = _wait_for_task_status(client, headers, first_task_id, "unknown")
     assert first_task.get("suggested_fact") == {"text": suggested_text, "category": suggested_category}
     assert "SUGGEST_REMEMBER" not in (first_task.get("answer") or "")
 
@@ -105,11 +111,11 @@ def test_declined_suggested_fact_does_not_reappear_in_same_chat(client, monkeypa
     )
     assert second_response.status_code == 200
     second_payload = second_response.json()
-    second_task_id = second_payload["task_id"]
+    second_task_id = second_payload["worker_task_ids"][0]
 
-    second_task = _wait_for_task_status(client, headers, second_task_id, "done")
+    second_task = _wait_for_task_status(client, headers, second_task_id, "unknown")
     assert second_task.get("suggested_fact") is None
     assert "SUGGEST_REMEMBER" not in (second_task.get("answer") or "")
     assert get_user_facts(str(user["id"])) == []
-    assert calls["classify"] == 2
+    assert calls["classify"] == 0
     assert calls["process"] == 2

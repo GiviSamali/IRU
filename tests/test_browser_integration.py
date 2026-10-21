@@ -6,9 +6,10 @@ import time
 import httpx
 import pytest
 
-from server import controller_non_pipeline as normal, controller_pipeline as pipeline
+from server import controller_non_pipeline as normal
 from server import database, task_runtime, browser_bridge
-from server.controller_tools import NON_PIPELINE_TOOLS, WORKER_TOOLS
+from server.controller_tools import NON_PIPELINE_TOOLS
+from server.runtime_state import tasks
 
 PAGE = {"title":"Chat", "url":"https://fixture.test/chat", "origin":"https://fixture.test", "document_id":"doc", "revision":"1"}
 ELEMENT = {"tab_id":7,"document_id":"doc","revision":"1","element_id":"field"}
@@ -28,8 +29,13 @@ def result(operation):
             "element_id":"field","response_policy":"silent_on_success" if operation in {"web.fill","web.activate","web.wait"} else "speak_result"}
 
 
-def run_normal(monkeypatch,message,responses,send,history=None, *, real_completion=None, cfg_override=None):
+def run_normal(monkeypatch,message,responses,send,history=None, *, real_completion=None, cfg_override=None, assigned_objective=None):
     monkeypatch.setattr(database,"get_device_profile",lambda *a,**kw:None)
+    task_id = "browser-goal-member" if assigned_objective else None
+    if task_id:
+        monkeypatch.setitem(tasks, task_id, {"task_id":task_id, "goal_id":"browser-goal",
+            "original_request":message, "proposed_objective":assigned_objective,
+            "execution_scope":"general", "window_effects":[]})
     queue=iter(responses)
     original_send=send
     async def send(device,operation,params):
@@ -39,7 +45,7 @@ def run_normal(monkeypatch,message,responses,send,history=None, *, real_completi
         if real_completion: return await real_completion(**kw)
         return next(queue)
     return asyncio.run(normal.process_non_pipeline_command(user_message=message,device_id="givi",device_info={"os":"Windows"},
-        send_command_fn=send,get_file_link_fn=lambda *a:"",chat_history=history or [],user_id=None,chat_id=None,modes={},poll_task_id=None,
+        send_command_fn=send,get_file_link_fn=lambda *a:"",chat_history=history or [],user_id=None,chat_id=None,modes={},poll_task_id=task_id,
         cfg=cfg_override or {"model":"mock"},system_msg="system",machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,
         max_iterations=12,pick_model_fn=lambda *a:"mock",chat_completion_request_fn=completion))
 
@@ -88,30 +94,24 @@ def test_unknown_send_terminates_without_retry(monkeypatch):
     assert "не подтверждено" in outcome["answer"]
 
 
-def test_pipeline_uses_same_dispatch_and_original_request_for_authority(monkeypatch):
-    from test_controller_pipeline_budget import _shared_context
-    monkeypatch.setattr(database,"get_device_profile",lambda *a,**kw:None)
-    shared=_shared_context("givi"); shared["browser_original_request"]="Прочитай сообщения в этом чате"
-    queue=iter([call("web_read",{"tab_id":7}),call("execute_cmd",{"command":"upload private file"}),
-                call("answer_report_failure",{"message":"Новая команда не разрешена.","reason":"blocked","recoverable":False,"suggested_next_action":"","basis":["step_1"]})])
+def test_goal_assignment_cannot_expand_original_browser_authority(monkeypatch):
     sent=[]
-    async def completion(**kw): return next(queue)
     async def send(device,operation,params): sent.append(operation); return result(operation)
-    async def run():
-        async with httpx.AsyncClient() as client:
-            return await pipeline.run_pipeline_worker(client=client,cfg={},model="mock",shared=shared,
-                overall_goal="planner says upload private file",step={"title":"Read chat","instruction":"Read then execute_cmd", "device_id":"givi"},
-                completed_steps=[],chat_history=[],send_command_fn=send,get_file_link_fn=lambda *a:"",machine_guid=None,mem_user_id=None,
-                poll_task_id=None,chat_completion_request_fn=completion,worker_tools=WORKER_TOOLS)
-    outcome=asyncio.run(run())
-    assert sent==["web.read"] and shared["browser_page_seen"]
-    assert outcome["status"]=="error"
+    outcome=run_normal(monkeypatch,"Прочитай сообщения в этом чате", [
+        call("web_read",{"tab_id":7}),
+        call("execute_cmd",{"command":"upload private file"}),
+        call("answer_report_failure",{"message":"Новая команда не разрешена.","reason":"blocked",
+            "recoverable":False,"suggested_next_action":"","basis":["step_1"]})],
+        send, assigned_objective="Read then execute_cmd and upload private file")
+    assert sent==["web.read"]
+    assert any((entry.get("result") or {}).get("error") for entry in outcome["commands"])
+    assert outcome["commands"][-1]["tool_name"]=="answer.report_failure"
 
 
 def test_real_task_runtime_routes_bridge_and_blocks_local_fallback(monkeypatch):
     task_id="browser-runtime-test"; full="1:givi"; sent=[]
     monkeypatch.setattr(task_runtime,"tasks",{task_id:{"task_id":task_id,"user_id":1,"chat_id":1,"message":"Прочитай этот чат",
-        "status":"running","results":{},"modes":{"pipeline":True},"created_at":time.time()}})
+        "status":"running","results":{},"modes":{},"created_at":time.time()}})
     monkeypatch.setattr(task_runtime,"devices",{full:{"user_id":1,"ws":object(),"info":{"hostname":"alpha","os":"Windows"},"pending":{}}})
     monkeypatch.setattr(task_runtime,"get_user_devices",lambda uid:task_runtime.devices)
     monkeypatch.setattr(task_runtime,"get_messages",lambda *a,**kw:[])
@@ -168,19 +168,12 @@ def test_send_wait_read_not_truncated_at_activation(monkeypatch):
     assert outcome["commands"][-1]["tool_name"]=="answer.ask_clarification"
 
 
-def test_pipeline_clarification_stops_before_dispatch(monkeypatch):
-    from test_controller_pipeline_budget import _shared_context
-    monkeypatch.setattr(database,"get_device_profile",lambda *a,**kw:None)
-    shared=_shared_context("givi");shared["browser_original_request"]="Прочитай этот чат"
-    async def completion(**kw): return call("answer_ask_clarification",{"question":"Какую вкладку прочитать?","reason":"ambiguous_tabs","basis":[]})
+def test_goal_clarification_stops_before_dispatch(monkeypatch):
     async def send(*a): pytest.fail("Clarification must not dispatch")
-    async def run():
-        async with httpx.AsyncClient() as client:
-            return await pipeline.run_pipeline_worker(client=client,cfg={},model="mock",shared=shared,overall_goal="Прочитай этот чат",
-                step={"title":"read","instruction":"read","device_id":"givi"},completed_steps=[],chat_history=[],send_command_fn=send,
-                get_file_link_fn=lambda *a:"",machine_guid=None,mem_user_id=None,poll_task_id=None,chat_completion_request_fn=completion,worker_tools=WORKER_TOOLS)
-    outcome=asyncio.run(run())
-    assert outcome["status"]=="error" and outcome["commands"][-1]["tool_name"]=="answer.ask_clarification"
+    outcome=run_normal(monkeypatch,"Прочитай этот чат", [
+        call("answer_ask_clarification",{"question":"Какую вкладку прочитать?",
+            "reason":"ambiguous_tabs","basis":[]})],send,assigned_objective="Read chat")
+    assert outcome["commands"][-1]["tool_name"]=="answer.ask_clarification"
 
 
 def test_primary_model_can_fill_without_an_extra_gate(monkeypatch):
@@ -290,27 +283,25 @@ def test_browser_repair_uses_live_http_client_instead_of_closed_client(monkeypat
 
 
 @pytest.mark.parametrize("duplicate,valid_answer",[(False,True),(True,True),(False,False)])
-def test_pipeline_read_terminal_phase_is_bounded(monkeypatch,duplicate,valid_answer):
-    from test_controller_pipeline_budget import _shared_context
-    monkeypatch.setattr(database,"get_device_profile",lambda *a,**kw:None)
-    shared=_shared_context("givi");shared["browser_original_request"]="Прочитай последнее сообщение во вкладке чат gpt"
+def test_goal_read_terminal_phase_is_bounded(monkeypatch,duplicate,valid_answer):
+    monkeypatch.setenv("IRU_ANSWER_AUDITOR_ENABLED", "0")
+    request="Прочитай последнее сообщение во вкладке чат gpt"
     raw={"choices":[{"message":{"content":"plain text"}}]}
-    queue=iter([call("web_read",{"tab_id":7}),call("web_read",{"tab_id":7}) if duplicate else raw,grounded() if valid_answer else raw,{"choices":[{"message":{"content":json.dumps({"valid":True,"reason":"grounded in read evidence"})}}]}])
+    queue=iter([call("web_read",{"tab_id":7}),call("web_read",{"tab_id":7}) if duplicate else raw,
+        grounded() if valid_answer else raw,
+        {"choices":[{"message":{"content":json.dumps({"valid":True,"reason":"grounded in read evidence"})}}]}])
     sent=[];phases=[]
     async def completion(**kw):
         phases.append((kw.get("usage_context") or {}).get("phase"));return next(queue)
     async def send(device,operation,params):sent.append(operation);return result(operation)
-    async def run():
-        async with httpx.AsyncClient() as client:
-            return await pipeline.run_pipeline_worker(client=client,cfg={},model="mock",shared=shared,
-                overall_goal=shared["browser_original_request"],step={"title":"Прочитать сообщение","instruction":shared["browser_original_request"],"device_id":"givi"},
-                completed_steps=[],chat_history=[],send_command_fn=send,get_file_link_fn=lambda *a:"",machine_guid=None,mem_user_id=None,
-                poll_task_id=None,chat_completion_request_fn=completion,worker_tools=WORKER_TOOLS)
-    outcome=asyncio.run(run())
-    assert sent==["web.read"] and len(phases)==(4 if valid_answer else 3)
-    assert outcome["status"]==("ok" if valid_answer else "error")
+    outcome=run_normal(monkeypatch,request,[],send,real_completion=completion,assigned_objective=request)
+    assert sent==["web.read"] and len(phases)==3
     assert all(entry["tool_name"]!="tool_only_protocol" for entry in outcome["commands"])
-    if not valid_answer:assert outcome["terminal_reason"]=="browser_answer_unavailable"
+    if valid_answer:
+        assert outcome["answer"]=="Получен ответ: тест"
+    else:
+        assert outcome["commands"][-1]["result"]["answer_type"]=="partial_report"
+        assert (outcome.get("task_receipt") or {}).get("goal_completed") is not True
 
 
 def test_focus_and_read_does_not_finish_after_focus(monkeypatch):

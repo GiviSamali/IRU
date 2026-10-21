@@ -140,3 +140,20 @@ html:not(.iru-mini) .app .msg-enter { animation: chat-appear .18s ease-out both;
   html:not(.iru-mini) .app :is(.msg-enter, .live-dot) { animation: none; }
   html:not(.iru-mini) .app :is(button, a, textarea) { transition: none; }
 }
+
+/* Keep compact result rows and command decisions usable in short windows. */
+html:not(.iru-mini) .app .smart-task.compact-result {
+  padding: 4px 0;
+}
+@media (max-height: 500px) {
+  html:not(.iru-mini) .app .chat-view .chat-messages { padding-block: 4px; scroll-padding-block: 4px; }
+  html:not(.iru-mini) .app .chat-input-area { padding-block: 4px; }
+}
+
+@media (max-height: 260px) {
+  html:not(.iru-mini) .app .header { min-height: 40px; padding-block: 0; }
+  html:not(.iru-mini) .app .conversation-toolbar { min-height: 28px; padding-block: 0; }
+  html:not(.iru-mini) .app .conversation-toolbar button { padding-block: 2px; }
+  html:not(.iru-mini) .app .chat-input-wrap { min-height: 46px; padding-block: 0; }
+  html:not(.iru-mini) .app .voice-controls { padding-top: 0; line-height: 1; }
+}

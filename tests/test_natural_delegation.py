@@ -1,5 +1,6 @@
 """Ten handoffs with factual state, queue, voice, outcomes and failures."""
 import asyncio
+import json
 import time
 import uuid
 from types import SimpleNamespace
@@ -29,10 +30,15 @@ def worker(user,objective):
 
 
 def verified(task):
+    from test_tool_only_protocol import _answer_call
+    from server.run_journal import append_answer_step
     task.update(status="done",answer="Проверенный результат.",
-       commands=[{"tool_name":"write_content","step_id":"step_1","status":"success",
-                  "device_id":"pc","result":{"path":r"C:\Users\Demo\Desktop\result.txt","bytes_written":2}}],
-       tasks=[],task_receipt={"task_status":"completed","final_verification_status":"verified"})
+       commands=[{"tool_name":"write_content","step_id":"step_1","idx":1,"status":"success",
+                  "device_id":"pc","result":{"path":r"C:\Users\Demo\Desktop\result.txt","bytes_written":2,"status":"ok","summary":"OK: file_written"}}],
+       tasks=[],task_receipt={"task_status":"completed","goal_completed":True,"final_verification_status":"verified","answer_source":"audited_terminal"})
+    payload=json.loads(_answer_call('answer',task['answer'],answer_type='grounded_report',basis=['step_1'])['function']['arguments'])
+    payload['self_check']['claims_completed_action']=False
+    append_answer_step(task['commands'],'answer_text',payload)
 
 
 def test_ten_delegations_voice_queue_completion_failure(owner,monkeypatch):
@@ -62,8 +68,8 @@ def test_ten_delegations_voice_queue_completion_failure(owner,monkeypatch):
         assert [r["worker_status"] for r in responses[:5]]==["running","queued","queued","queued","queued"]
         assert responses[5]["worker_task_id"] is None and "Очередь" in responses[5]["answer"]
         assert all(r["answer"]=="" for r in responses[:5])
-        assert await voice.spoken_parts(tasks[responses[0]["task_id"]])==["Проверю параметры файла."]
-        assert any(m.get("spokenResponse")=="Проверю параметры файла." for m in db.get_messages(owner["chat_id"]))
+        assert await voice.spoken_parts(tasks[responses[0]["task_id"]])==[]
+        assert not any(m.get("spokenResponse") for m in db.get_messages(owner["chat_id"]))
         for reply in responses[1:5]:
             assert await voice.spoken_parts(tasks[reply["task_id"]])==[]
             assert tasks[reply["task_id"]]["commands"]==[]

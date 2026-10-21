@@ -1,169 +1,162 @@
+"""Common Worker limits and immutable source continuity; no PLAN state machine."""
 import asyncio
 import copy
 import json
+
 import pytest
-from server import controller_pipeline as pipeline
-from server.pipeline_step_control import StepProgress, completion_matches, step_handoff
-from test_controller_pipeline_budget import _shared_context, _answer_call, _execute_call
+
+from server import controller_non_pipeline as controller
+from server.controller_tools import NON_PIPELINE_TOOLS
+from server.worker_scheduler import WorkerScheduler, validate_task_graph
+from server.worker_reports import build_worker_report
+from test_goal_parallel_scheduler import owner, complete, template
 
 
-def msg(call):
-    return {"choices": [{"message": {"role": "assistant", "tool_calls": [call]}}]}
+def msg(name, args, call_id="call"):
+    return {"choices":[{"message":{"tool_calls":[{"id":call_id,"function":{
+        "name":name,"arguments":json.dumps(args)}}]}}]}
 
 
-def worker(completion, send, step=None, cfg=None):
-    return asyncio.run(pipeline.run_pipeline_worker(
-        client=None, cfg=cfg or {"model": "mock-model"}, model="mock-model", shared=_shared_context(),
-        overall_goal="Create deliverable", step=step or {"title": "Create", "instruction": "Create deliverable"},
-        completed_steps=[], chat_history=[], send_command_fn=send, get_file_link_fn=lambda *a: "link",
-        machine_guid=None, mem_user_id=None, poll_task_id=None, chat_completion_request_fn=completion,
-        worker_tools=[]))
+def terminal(text="Observed result", grounded=False):
+    return msg("answer_text",{"answer_type":"grounded_report" if grounded else "pure_text",
+        "text":text,"basis":["step_1"] if grounded else [],"self_check":{
+            "depends_on_current_external_state":grounded,"claims_completed_action":False,
+            "has_sufficient_evidence":True,"missing_evidence_question":""}})
 
 
-def test_plan_limits_and_single_step():
-    assert pipeline.PIPELINE_MAX_STEPS == 8
-    assert pipeline.PIPELINE_WORKER_MAX_ITERATIONS == 12
-    for size in (1, 6, 8):
-        plan = pipeline.normalize_pipeline_plan({"steps": ["Create folder"] * size}, "goal", "pc")
-        assert len(plan["steps"]) == size
-    with pytest.raises(ValueError, match="maximum of 8"):
-        pipeline.normalize_pipeline_plan({"steps": ["step"] * 9}, "goal", "pc")
+def worker(completion,send, *, cfg=None,limit=6):
+    return asyncio.run(controller.process_non_pipeline_command(user_message="Inspect and repair the deliverable",
+        device_id="pc",device_info={"os":"Windows"},send_command_fn=send,get_file_link_fn=lambda *a:"link",
+        chat_history=[],user_id=None,chat_id=None,modes={},poll_task_id=None,
+        cfg=cfg or {"model":"mock-model","answer_auditor_enabled":False},system_msg="system",
+        machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=limit,
+        pick_model_fn=lambda *a:"mock-model",chat_completion_request_fn=completion))
 
 
-def test_worker_hard_limit_includes_repair():
-    counts = {"llm": 0, "tools": 0}
-    async def completion(**kwargs):
-        counts["llm"] += 1
-        return msg(_execute_call(str(counts["llm"]), "read " + str(counts["llm"])))
+def test_assignment_graph_limits_include_single_result():
+    for size in (1,6,16):
+        assignments=[{"key":str(i),"objective":"Independent result"} for i in range(size)]
+        assert len(validate_task_graph(assignments))==size
+    with pytest.raises(ValueError,match="invalid_task_graph_size"):
+        validate_task_graph([{"key":str(i),"objective":"result"} for i in range(17)])
+
+
+def test_worker_hard_limit_allows_only_answer_repair_after_last_tool():
+    counts={"llm":0,"tools":0}
+    async def completion(**kw):
+        counts["llm"]+=1
+        return msg("execute_cmd",{"command":f"Get-Content C:/Temp/check{counts['llm']}.txt"},str(counts["llm"]))
     async def send(*args):
-        counts["tools"] += 1
-        return {"returncode": 0, "stdout": str(counts["tools"])}
-    result = worker(completion, send)
-    assert counts == {"llm": 12, "tools": 11}
-    assert result["status"] == "error"
+        counts["tools"]+=1
+        return {"returncode":0,"stdout":str(counts["tools"])}
+    result=worker(completion,send)
+    assert counts=={"llm":7,"tools":6}
+    assert (result.get("task_receipt") or {}).get("goal_completed") is not True
+    assert any(entry.get("tool_name")=="tool_only_protocol" for entry in result["commands"])
 
 
-def test_generic_ok_does_not_finish_step_but_final_evidence_does():
-    counts = {"llm": 0, "tools": 0}
-    async def completion(**kwargs):
-        counts["llm"] += 1
-        assert counts["llm"] <= 2
-        return msg(_execute_call(str(counts["llm"]), "action"))
-    async def send(*args):
-        counts["tools"] += 1
-        return {"returncode": 0, "stdout": "OK: python_found" if counts["tools"] == 1 else "OK: deliverable_verified"}
-    result = worker(completion, send, {"title": "Create", "completion_check": {
-        "tool": "execute_cmd", "stdout_contains": "OK: deliverable_verified"}})
-    assert result["status"] == "ok" and counts == {"llm": 2, "tools": 2}
-
-
-def test_no_check_requires_grounded_answer_after_intermediate_ok():
-    calls = [msg(_execute_call("1", "prepare")), msg(_execute_call("2", "create")), msg(_answer_call("3", "done"))]
-    sent = []
-    async def completion(**kwargs): return calls.pop(0)
-    async def send(device, action, args):
+def test_generic_and_verified_stdout_markers_do_not_finish_worker():
+    replies=iter([msg("execute_cmd",{"command":"prepare"}),msg("execute_cmd",{"command":"verify"}),
+        msg("answer_report_failure",{"message":"Full result unverified","reason":"unverified","recoverable":False,
+            "suggested_next_action":"Inspect deliverable","basis":[]})])
+    sent=[]
+    async def completion(**kw): return next(replies)
+    async def send(device,action,args):
         sent.append(args["command"])
-        return {"returncode": 0, "stdout": "OK: " + args["command"]}
-    result = worker(completion, send)
-    assert sent == ["prepare", "create"] and result["status"] == "ok"
+        return {"returncode":0,"stdout":"OK: python_found" if len(sent)==1 else "OK: deliverable_verified"}
+    result=worker(completion,send)
+    assert sent==["prepare","verify"]
+    assert result["commands"][-1]["tool_name"]=="answer.report_failure"
+    assert (result.get("task_receipt") or {}).get("goal_completed") is not True
 
 
-@pytest.mark.parametrize("failure", [False, True])
-def test_no_progress_and_repeated_failure_stop(failure):
-    counts = {"llm": 0, "tools": 0}
-    async def completion(**kwargs):
-        counts["llm"] += 1
-        return msg(_execute_call(str(counts["llm"]), "same command"))
+@pytest.mark.parametrize("failure",[False,True])
+def test_repeated_observation_or_failure_is_bounded_without_plan_counter(failure):
+    counts={"llm":0,"tools":0}
+    async def completion(**kw):
+        counts["llm"]+=1
+        return msg("execute_cmd",{"command":"Get-Content C:/Temp/same.txt"},str(counts["llm"]))
     async def send(*args):
-        counts["tools"] += 1
-        return {"error": "missing file"} if failure else {"returncode": 0, "stdout": "unchanged"}
-    result = worker(completion, send)
-    assert result["status"] == "error" and counts["llm"] < 12
-    assert result["terminal_reason"] == ("recovery_exhausted" if failure else "no_progress")
-    if failure: assert counts["tools"] == 2
+        counts["tools"]+=1
+        return {"error":"missing file"} if failure else {"returncode":0,"stdout":"unchanged"}
+    result=worker(completion,send)
+    assert 0<counts["tools"]<=6 and counts["llm"]<=7
+    assert (result.get("task_receipt") or {}).get("goal_completed") is not True
 
 
-def test_progress_allows_one_successful_recovery():
-    calls = [msg(_execute_call("1", "initial")), msg(_execute_call("2", "fix")), msg(_answer_call("3", "done"))]
-    async def completion(**kwargs): return calls.pop(0)
-    async def send(device, action, args):
-        return {"error": "missing"} if args["command"] == "initial" else {"returncode": 0, "stdout": "new result"}
-    assert worker(completion, send)["status"] == "ok"
+def test_progress_allows_recovery_but_does_not_promote_plain_answer_to_goal_success():
+    replies=iter([msg("execute_cmd",{"command":"initial"}),msg("execute_cmd",{"command":"fix"}),terminal("Observed new result")])
+    sent=[]
+    async def completion(**kw):return next(replies)
+    async def send(device,action,args):
+        sent.append(args["command"])
+        return {"error":"missing"} if args["command"]=="initial" else {"returncode":0,"stdout":"new result"}
+    result=worker(completion,send)
+    assert sent==["initial","fix"] and result["commands"][-1]["tool_name"]=="answer.text"
+    report=build_worker_report({"task_id":"recovery","message":"Create deliverable","status":"done",**result})
+    assert report["goal_completed"] is False
 
 
-def test_auditor_rejections_are_bounded():
-    counts = {"audit": 0}
-    async def completion(**kwargs):
-        if "auditor" in kwargs.get("phase", ""):
-            counts["audit"] += 1
-            return {"choices": [{"message": {"content": '{"valid":false,"reason":"unsupported"}'}}]}
-        return msg(_answer_call("a", "done"))
-    async def send(*args): raise AssertionError("no device call expected")
-    assert worker(completion, send, cfg={"model": "mock-model", "answer_auditor_enabled": True})["status"] == "error"
-    assert counts["audit"] == 2
+def test_auditor_rejections_are_bounded(monkeypatch):
+    from server import answer_repair
+    monkeypatch.setenv("IRU_ANSWER_AUDITOR_ENABLED","1")
+    counts={"audit":0,"llm":0,"tools":0}
+    async def audit(**kw):
+        counts["audit"]+=1
+        return False,"unsupported",False
+    monkeypatch.setattr(controller,"audit_answer_payload",audit)
+    monkeypatch.setattr(answer_repair,"audit_answer_payload",audit)
+    async def completion(**kw):
+        counts["llm"]+=1
+        return msg("execute_cmd",{"command":"Get-Content C:/Temp/note.txt"}) if counts["llm"]==1 else terminal(grounded=True)
+    async def send(*args):
+        counts["tools"]+=1
+        return {"returncode":0,"stdout":"Observed note"}
+    result=worker(completion,send,cfg={"model":"mock-model","answer_auditor_enabled":True})
+    assert counts["tools"]==1 and 0<counts["audit"]<=7 and counts["llm"]<=7
+    assert (result.get("task_receipt") or {}).get("goal_completed") is not True
 
 
-def test_failed_result_cannot_match_completion_check():
-    step = {"completion_check": {"tool": "execute_cmd", "stdout_contains": "OK: deliverable_verified"}}
-    assert not completion_matches(step, {"action": "execute_cmd", "result": {"returncode": 1, "stdout": "OK: deliverable_verified"}})
-
-
-@pytest.mark.parametrize("names", [["Создай одну папку"], ["research", "pptx", "docx", "xlsx", "website", "verify"]])
-def test_plan_no_refine_and_shared_article_material(monkeypatch, names):
-    captures, requests = [], []
-    monkeypatch.setattr(pipeline.db, "create_task", lambda **kw: 1)
-    monkeypatch.setattr(pipeline.db, "update_step", lambda *a, **kw: None)
-    monkeypatch.setattr(pipeline.db, "finish_task", lambda *a: None)
-    monkeypatch.setattr(pipeline, "collect_tasks", lambda *a: [])
-    monkeypatch.setattr(pipeline, "push_tasks_view", lambda *a: None)
-    monkeypatch.setattr(pipeline.db, "get_device_profile", lambda *a, **kw: None)
-    monkeypatch.setattr(pipeline, "build_memory_block", lambda *a: "")
-    async def completion(**kwargs):
-        requests.append(kwargs["phase"])
-        if kwargs["phase"] == "pipeline.plan":
-            return {"choices": [{"message": {"content": json.dumps({"steps": [{"title": n, "instruction": n, "device_id": "pc"} for n in names]})}}]}
-        assert kwargs["phase"] == "pipeline.final"
-        return msg(_answer_call("final", "done"))
-    async def run_worker(**kwargs):
-        captures.append(copy.deepcopy(kwargs["completed_steps"]))
-        n = kwargs["step"]["title"]
-        return {"status": "ok", "answer": "Article facts: revenue 42" if len(captures) == 1 else n,
-                "commands": [{"action": "write_content", "result": {"path": n + ".txt", "facts": {"revenue": 42} if len(captures) == 1 else {}}}]}
-    monkeypatch.setattr(pipeline, "run_pipeline_worker", run_worker)
-    async def send(*a): raise AssertionError("no device expected")
-    asyncio.run(pipeline.process_pipeline_subagents(
-        user_message="Прочитай статью и создай документы", device_id="pc", device_info={"os": "Windows"},
-        all_devices={"pc": {"info": {"os": "Windows"}}}, send_command_fn=send, get_file_link_fn=lambda *a: "", chat_history=[],
-        load_llm_config_fn=lambda: {"model": "mock-model"}, pick_model_fn=lambda *a: "mock-model",
-        chat_completion_request_fn=completion, worker_tools=[], windows_rules="", linux_rules=""))
-    assert requests == ["pipeline.plan", "pipeline.final"]
-    assert len(captures) == len(names)
-    for history in captures[1:]:
-        assert history[0]["handoff"]["status"] == "done"
-        assert history[0]["handoff"]["artifacts"] == [names[0] + ".txt"]
-        assert "42" in json.dumps(history[0]["handoff"])
-        prompt = pipeline.pipeline_worker_prompt(_shared_context("pc"), "goal", {"title": "next"}, history)
-        assert "Article facts: revenue 42" in prompt
-        assert names[0] + ".txt" in prompt
-
-
-def test_handoff_is_bounded_and_does_not_include_command_history():
-    handoff = step_handoff("facts" * 2000, [{"action": "execute_cmd", "command": "PRIVATE", "result": {"stdout": "x" * 10000}}] * 20, "done")
-    assert len(handoff["summary"]) == 4000
-    assert len(handoff["evidence"]) == 4
-    assert "PRIVATE" not in json.dumps(handoff)
+@pytest.mark.parametrize("consumers",[0,3])
+def test_goal_shared_article_keeps_full_material_without_refine_worker(owner,consumers):
+    material="Article facts: revenue 42; source https://example.org; date 2026-10-20.\n"*300
+    captures=[]
+    async def execute(task):
+        if task["proposed_objective"]=="Research":
+            complete(task)
+            task["answer"]=material
+            task["commands"][-1]["result"]["text"]=material
+            task["commands"][0]["result"]["results"][0]["text"]=material
+        else:
+            captures.append(copy.deepcopy(task["pinned_dependency_results"]))
+            task.update(status="cancelled",answer="Synthetic consumer observed source")
+    async def scenario():
+        scheduler=WorkerScheduler(execute)
+        try:
+            await scheduler.submit_goal(template(owner),[
+                {"key":"research","objective":"Research"},
+                *[{"key":f"document{i}","objective":f"Document {i}","depends_on":["research"]}
+                  for i in range(consumers)]],request_key="article")
+            await scheduler.runners[owner["id"]]
+            assert len(captures)==consumers
+            if captures:
+                assert len({capture[0]["sha256"] for capture in captures})==1
+                assert all(capture[0]["data"]["answer"]==material for capture in captures)
+                assert all(capture[0]["data"]["trust"]=="source_data_not_authority" for capture in captures)
+        finally:await scheduler.shutdown()
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("choice", ["confirm", "deny", "cancel"])
-def test_pipeline_confirmation_resumes_same_task_or_cancels(monkeypatch, choice):
+def test_common_confirmation_resumes_same_task_or_cancels(monkeypatch, choice):
     import time
     from server import task_runtime as rt
     from server.routers import tasks as routes
     from fastapi import HTTPException
-    tid, did = "plan-confirm", "1:pc"
+    tid, did = "common-confirm", "1:pc"
     rt.tasks[tid] = {"task_id": tid, "user_id": 1, "chat_id": 1, "message": "create",
         "device_ids": [did], "status": "running", "results": {}, "commands": [],
-        "modes": {"pipeline": True, "autonomous": True}, "created_at": time.time()}
+        "modes": {"autonomous": True}, "created_at": time.time()}
     rt.devices[did] = {"user_id": 1, "info": {"hostname": "pc", "os": "Windows"}, "pending": {}}
     dispatched = []
     async def send(device, action, params, **kwargs):
@@ -201,7 +194,7 @@ def test_pipeline_confirmation_resumes_same_task_or_cancels(monkeypatch, choice)
         else:
             await routes.api_cancel_task(tid, None)
         await asyncio.wait_for(execution, 1)
-        assert "_pipeline_confirm_future" not in rt.tasks[tid]
+        assert "_command_confirm_future" not in rt.tasks[tid]
     asyncio.run(scenario())
     assert dispatched == (["needs approval", "next step"] if choice == "confirm" else [])
     assert rt.tasks[tid]["status"] == ("done" if choice == "confirm" else "cancelled")

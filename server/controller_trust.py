@@ -15,7 +15,7 @@ _URL_RE = re.compile(r"(https?://[^\s<>()\"']+|/api/download/[A-Za-z0-9_-]+)")
 _SUCCESS_CLAIM_RE = re.compile(
     r"(?iu)(готово|выполнен(?:о|а|ы)?|создан(?:о|а|ы|)\b|файл создан|держи ссылк|ссылка готова)"
 )
-_ERROR_TEXT_RE = re.compile(r"(?iu)(ошиб|не удалось|невозможно|сбой|problem|failed|error)")
+_ERROR_TEXT_RE = re.compile(r"(?iu)(ошиб|не удалось|невозможно|сбой|не подтвержд[её]н|неизвест|unknown|unconfirmed|problem|failed|error)")
 _MEMORY_REMEMBER_CLAIM_RE = re.compile(
     r"(?iu)(\bзапомнил[аи]?\b|\bсохранил[аи]?\b.{0,40}\bпамят)"
 )

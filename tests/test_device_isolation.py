@@ -7,10 +7,10 @@ import pytest
 
 from server import database as db
 from server import task_runtime as rt
-from server import controller_pipeline as pipeline
 from server import python_toolchain as toolchain
 from server.routers import tasks as routes
-from test_controller_pipeline_budget import _answer_call
+from types import SimpleNamespace
+from server.worker_scheduler import WorkerScheduler, init_worker_storage, owned_job
 
 
 @pytest.fixture
@@ -103,7 +103,7 @@ def setup_broadcast(monkeypatch, failures=(), confirmation=False):
     seen, sent = [], []
     for did, desktop in (("a", "/home/alice/Desktop"), ("b", "/home/bob/Desktop")):
         rt.devices[f"1:{did}"] = {"user_id": 1, "info": {"hostname": did, "os": "Linux", "desktop_path": desktop}, "ws": object()}
-    rt.tasks["broadcast"] = {"user_id": 1, "status": "running", "results": {}, "modes": {"plan_declined": True}, "chat_id": 1}
+    rt.tasks["broadcast"] = {"user_id": 1, "status": "running", "results": {}, "modes": {}, "chat_id": 1}
     monkeypatch.setattr(rt, "get_device_profile", lambda *a, **kw: None)
     monkeypatch.setattr(rt, "get_messages", lambda *a, **kw: [{"role": "assistant", "content": "/home/alice/private"}])
     monkeypatch.setattr(rt, "add_message", lambda *a, **kw: None)
@@ -164,51 +164,40 @@ def test_broadcast_confirmation_resumes_same_device_or_cancels(monkeypatch, owne
     assert rt.tasks["broadcast"]["status"] == ("cancelled" if cancel else "done")
 
 
-def run_plan(monkeypatch, steps, devices):
-    seen, states = [], {}
-    monkeypatch.setattr(pipeline.db, "create_task", lambda **kw: 1)
-    monkeypatch.setattr(pipeline.db, "update_step", lambda task, idx, status, **kw: states.update({idx: status}))
-    monkeypatch.setattr(pipeline.db, "finish_task", lambda *a: None)
-    monkeypatch.setattr(pipeline.db, "get_device_profile", lambda *a, **kw: None)
-    monkeypatch.setattr(pipeline, "build_memory_block", lambda *a: "")
-    monkeypatch.setattr(pipeline, "collect_tasks", lambda *a: [])
-    monkeypatch.setattr(pipeline, "push_tasks_view", lambda *a: None)
-    async def completion(**kw):
-        if kw["phase"] == "pipeline.plan":
-            return {"choices": [{"message": {"content": json.dumps({"steps": steps})}}]}
-        return {"choices": [{"message": {"tool_calls": [_answer_call("final", "Итог")]}}]}
-    async def send(target, action, params):
-        seen.append((target, params["command"]))
-        return {"returncode": 0}
-    async def worker(**kw):
-        target = kw["step"]["device_id"]
-        wrong = "b" if target == "a" else "a"
-        with pytest.raises(RuntimeError, match="target_device_not_found"):
-            await kw["send_command_fn"](wrong, "execute_cmd", {"command": "wrong"})
-        await kw["send_command_fn"](target, "execute_cmd", {"command": kw["step"]["instruction"]})
-        return {"status": "ok", "answer": "done", "commands": []}
-    monkeypatch.setattr(pipeline, "run_pipeline_worker", worker)
-    result = asyncio.run(pipeline.process_pipeline_subagents(user_message="tasks", device_id="a",
-        device_info={"os": "Linux"}, all_devices=devices, send_command_fn=send, get_file_link_fn=lambda *a: "",
-        chat_history=[], user_id=1, load_llm_config_fn=lambda: {"model": "mock"}, pick_model_fn=lambda *a: "mock",
-        chat_completion_request_fn=completion, worker_tools=[], windows_rules="", linux_rules=""))
-    return result, seen, states
+@pytest.mark.parametrize("target, extra", [
+    ("1:missing", {}), ("2:a", {}),
+    ("1:b", {"1:b": {"user_id": 2, "ws": object()}}),
+    ("1:b", {"1:b": {"user_id": 1, "ws": None}}),
+])
+def test_goal_invalid_offline_foreign_target_never_admits(monkeypatch, target, extra):
+    monkeypatch.setattr(routes, "devices", {"1:a": {"user_id": 1, "ws": object()}, **extra})
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Invalid device reached Scheduler")
+    monkeypatch.setattr(routes, "scheduler", SimpleNamespace(submit_goal=forbidden))
+    with pytest.raises(ValueError, match="device_not_owned_or_unavailable"):
+        asyncio.run(routes.submit_worker({"id": 1}, 1, "do", [target], {}))
 
 
-@pytest.mark.parametrize("target, extra", [("missing", {}), ("2:a", {}), ("b", {"b": {"user_id": 2, "ws": object()}}), ("b", {"b": {"user_id": 1, "ws": None}})])
-def test_plan_invalid_offline_foreign_target_never_dispatches(monkeypatch, target, extra):
-    result, seen, states = run_plan(monkeypatch, [{"instruction": "do", "device_id": target}], {"a": {"user_id": 1, "ws": object()}, **extra})
-    assert seen == []
-    assert states[0] == "failed"
-    assert result["task_receipt"]["task_status"] == "failed"
-
-
-def test_plan_routes_each_step_exactly_and_allows_missing_target(monkeypatch):
-    result, seen, states = run_plan(monkeypatch, [{"instruction": "task-a"}, {"instruction": "task-b", "device_id": "b"}],
-        {"a": {"user_id": 1, "ws": object()}, "b": {"user_id": 1, "ws": object()}})
-    assert seen == [("a", "task-a"), ("b", "task-b")]
-    assert states == {0: "done", 1: "done"}
-    assert result["task_receipt"]["task_status"] == "completed"
+def test_goal_preserves_default_explicit_and_server_only_device_scopes(owners, monkeypatch):
+    owner, _ = owners
+    init_worker_storage()
+    chat = db.create_chat(owner["id"], "scopes")["id"]
+    a, b = (f"{owner['id']}:{name}" for name in ("a", "b"))
+    scheduler = WorkerScheduler()
+    # Inspect durable admission, without starting a Worker or any device action.
+    monkeypatch.setattr(scheduler, "ensure_runner", lambda owner_id: None)
+    admitted = asyncio.run(scheduler.submit_goal(
+        {"user_id": owner["id"], "chat_id": chat, "message": "Independent results",
+         "device_ids": [a, b], "modes": {}}, [
+            {"key": "default", "objective": "Use selected devices"},
+            {"key": "explicit", "objective": "Use B only", "target_device_ids": [b]},
+            {"key": "server", "objective": "Research on server", "target_device_ids": []},
+        ], request_key="scopes"))
+    assert [task["device_ids"] for task in admitted["tasks"]] == [[a, b], [b], []]
+    for task, expected in zip(admitted["tasks"], [[a, b], [b], []]):
+        persisted = owned_job(task["task_id"], owner["id"])
+        assert json.loads(persisted["payload"])["device_ids"] == expected
+        assert owned_job(task["task_id"], owners[1]["id"]) is None
 
 
 def test_websocket_registration_same_id_preserves_both_profiles(client):
@@ -250,9 +239,18 @@ def test_raw_command_broadcast_aggregates_failures(client, monkeypatch, failures
     assert response.json()["overall_status"] == overall
 
 
-@pytest.mark.parametrize("invalid", [0, False, [], {}, "", "   "])
-def test_plan_malformed_explicit_target_is_not_a_default(invalid):
-    with pytest.raises(ValueError, match="target_device_not_found"):
-        pipeline.normalize_pipeline_plan({"steps": [{"instruction": "do", "device_id": invalid}]}, "goal", "a")
-    with pytest.raises(ValueError, match="target_device_not_found"):
-        pipeline.validate_pipeline_step_device({"device_id": invalid}, "a", {"a": {}})
+@pytest.mark.parametrize("invalid", [0, False, {}, "", "   "])
+def test_goal_malformed_explicit_scope_never_defaults(owners, monkeypatch, invalid):
+    owner, _ = owners
+    init_worker_storage()
+    chat = db.create_chat(owner["id"], "invalid scope")["id"]
+    scheduler = WorkerScheduler()
+    monkeypatch.setattr(scheduler, "ensure_runner", lambda owner_id: pytest.fail("Invalid scope started runner"))
+    with pytest.raises(ValueError, match="device_outside_goal_assignment"):
+        asyncio.run(scheduler.submit_goal(
+            {"user_id": owner["id"], "chat_id": chat, "message": "Use A",
+             "device_ids": [f"{owner['id']}:a"]}, [
+                {"key": "x", "objective": "do", "target_device_ids": invalid}], request_key="invalid"))
+    with db.get_db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM worker_jobs").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM worker_goals").fetchone()[0] == 0

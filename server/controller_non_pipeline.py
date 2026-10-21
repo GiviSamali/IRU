@@ -1,3 +1,4 @@
+from copy import deepcopy
 import hashlib
 from pathlib import PureWindowsPath, PurePosixPath
 import asyncio
@@ -248,9 +249,15 @@ async def process_non_pipeline_command(
     usage_context: dict | None = None,
 ) -> dict:
     try:
-        from .window_policy import ordinary_window_request, window_action_sequence, direct_window_action, recent_window_context, unsupported_virtual_desktop_request
+        from .controller_shared import worker_assignment_scope, pinned_material_pending, worker_window_scope
     except ImportError:
-        from window_policy import ordinary_window_request, window_action_sequence, direct_window_action, recent_window_context, unsupported_virtual_desktop_request
+        from controller_shared import worker_assignment_scope, pinned_material_pending, worker_window_scope
+    assigned_objective, assignment_block = worker_assignment_scope(poll_task_id)
+    system_msg += assignment_block
+    try:
+        from .window_policy import recent_window_context
+    except ImportError:
+        from window_policy import recent_window_context
     try:
         from .browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments, browser_answer_ready, browser_tabs_report, browser_partial_read, browser_failure_text
     except ImportError:
@@ -263,8 +270,7 @@ async def process_non_pipeline_command(
     browser_answer_phase = False
     browser_answer_start = None
     browser_last_observation = None
-    window_only = ordinary_window_request(user_message)
-    expected_window_actions = window_action_sequence(user_message)
+    window_only, expected_window_actions = worker_window_scope(poll_task_id)
     if window_only:
         allowed_window_tools = {"window_control", "answer_text", "answer_ask_clarification", "answer_report_failure"}
         non_pipeline_tools = [tool for tool in DEFAULT_CONTROLLER_TOOLS
@@ -296,6 +302,12 @@ async def process_non_pipeline_command(
     terminal_sufficient_entry: dict | None = None
     terminal_sufficient_extra_turn_used = False
     memory_permissions = memory_permissions_from_human_request(user_message)
+    truncation_metrics = []
+    truncation_pending = False
+    non_pipeline_tools = deepcopy(non_pipeline_tools)
+    for tool in non_pipeline_tools:
+        if tool.get("function", {}).get("name") == "write_content":
+            tool["function"]["parameters"]["properties"]["content"]["maxLength"] = 4000
 
     if not window_only and not browser_only and (user_id is not None or chat_id is not None):
         previous_failed = get_last_run_summary(
@@ -325,8 +337,13 @@ async def process_non_pipeline_command(
 
     def provider_failure(code: str, iteration: int) -> dict:
         had_results = any(entry.get("tool_type") != "answer" for entry in commands_log)
+        diagnostic = {"error":code}
+        if truncation_pending or code == "model_output_truncated":
+            diagnostic = {"error":"model_output_truncated", "attempts":truncation_metrics,
+                **({"recovery_status":"unavailable", "provider_error":code} if truncation_pending and code != "model_output_truncated" else {})}
+            code = "model_output_truncated"
         append_entry(make_run_step(journal=commands_log,tool_name="llm_request",tool_type="system",
-            result={"error":code},status="failed",target_device_id=device_id,iteration=iteration))
+            result=diagnostic,status="failed",target_device_id=device_id,iteration=iteration))
         return {"answer":"Связь с моделью прервана. Полученные результаты сохранены; завершение цели не подтверждено.",
             "commands":commands_log,"tasks":[],"training_context":_training_context(device_info),
             "task_receipt":{"task_status":"partial" if had_results else "failed","goal_completed":False,
@@ -368,43 +385,6 @@ async def process_non_pipeline_command(
             "cancel_entry": entry,
         }
 
-    if unsupported_virtual_desktop_request(user_message):
-        text = "Перенос между виртуальными рабочими столами в текущем инструменте ИРУ не реализован. Окна не изменены."
-        append_entry(tool_log_entry("window_control", {"status": "failed", "error": "virtual_desktop_not_supported", "summary": text},
-            command="[system] unsupported window capability", target_device_id=device_id, hostname=device_info.get("hostname") or device_id))
-        append_answer_step(commands_log, "answer_report_failure", {"message": text, "reason": "virtual_desktop_not_supported",
-            "recoverable": False, "suggested_next_action": "", "basis": [commands_log[-1]["step_id"]]}, target_device_id=device_id)
-        return {"answer": text, "commands": commands_log, "tasks": [], "training_context": _training_context(device_info)}
-
-    direct_args = direct_window_action(user_message, chat_history, device_id)
-    if direct_args:
-        if is_task_cancel_requested(poll_task_id):
-            return cancelled_result()
-        if direct_args.pop("_clarify", False):
-            question = "Какое из предыдущих окон изменить? Укажите приложение или заголовок."
-            append_answer_step(commands_log, "answer_ask_clarification", {"question": question,
-                "reason": "ambiguous_previous_window", "basis": []}, target_device_id=device_id)
-            return {"answer": question, "commands": commands_log, "tasks": [], "training_context": _training_context(device_info)}
-        try:
-            direct_result = await send_command_fn(device_id, "window.control", direct_args)
-        except Exception as exc:
-            direct_result = {"status": "failed", "error": str(exc), "summary": "Не удалось выполнить действие с окном: " + str(exc)}
-        entry = append_entry(_command_log_entry("window_control", "[tool] window_control", device_id, device_info, direct_result, 1))
-        if is_task_cancel_requested(poll_task_id):
-            return cancelled_result(1)
-        try:
-            from .window_policy import window_input_required
-        except ImportError:
-            from window_policy import window_input_required
-        event = (window_input_required(direct_args, direct_result, commands_log, device_id)
-                 if window_only and expected_window_actions == ["activate"] else None)
-        if event:
-            return {"answer":"", "commands":commands_log, "tasks":[], "input_required":event}
-        payload = synthesize_terminal_answer_payload(entry)
-        payload = validate_answer_text_payload(payload, commands_log)
-        append_answer_step(commands_log, "answer_text", payload, target_device_id=device_id, iteration=1)
-        return {"answer": payload["text"], "commands": commands_log, "tasks": [], "training_context": _training_context(device_info)}
-
     command_budget = CommandBudget()
     device_profile = db.get_device_profile(device_id, user_id=user_id)
     python_receipt = (
@@ -427,6 +407,9 @@ async def process_non_pipeline_command(
             set_current_step(poll_task_id, "ИРУ думает...")
             print(f"[llm] iteration {iteration + 1}/{max_iterations}, messages={len(messages)}")
             try:
+                phase = (f"window_control.iteration.{iteration + 1}" if window_only else f"browser_bridge.iteration.{iteration + 1}" if browser_only else f"non_pipeline.iteration.{iteration + 1}")
+                if model.startswith("deepseek-"):
+                    phase += ".truncation_recovery" if truncation_pending else ".structured_output"
                 data = await chat_completion_request_fn(
                     client=client,
                     cfg=cfg,
@@ -435,8 +418,8 @@ async def process_non_pipeline_command(
                     tools=non_pipeline_tools,
                     max_tokens=cfg.get("max_tokens", 4096),
                     tool_choice="required",
-                    usage_context={**(usage_context or {}), "phase": f"window_control.iteration.{iteration + 1}" if window_only else f"browser_bridge.iteration.{iteration + 1}" if browser_only else f"non_pipeline.iteration.{iteration + 1}"},
-                    phase=f"window_control.iteration.{iteration + 1}" if window_only else f"browser_bridge.iteration.{iteration + 1}" if browser_only else f"non_pipeline.iteration.{iteration + 1}",
+                    usage_context={**(usage_context or {}), "phase": phase},
+                    phase=phase,
                 )
             except httpx.HTTPStatusError as exc:
                 print(f"[llm] HTTP error: {exc.response.status_code}")
@@ -461,40 +444,26 @@ async def process_non_pipeline_command(
             )
 
             if finish_reason == "length":
-                print("[llm] WARNING: response truncated (finish_reason=length)")
-                if tool_calls:
-                    if iteration < max_iterations - 1:
-                        messages.append({
-                            "role": "user",
-                            "content": "Предыдущий ответ был обрезан. Используй более короткие команды. Попробуй снова.",
-                        })
-                        print(f"[llm] retrying after truncation (iteration {iteration + 1})")
-                        continue
-                    return {
-                        "answer": "Не удалось выполнить задачу: ответ ИИ слишком длинный и был обрезан. Попробуй сформулировать задачу проще или разбить на несколько шагов.",
-                        "commands": commands_log,
-                        "tasks": [],
-                        "training_context": _training_context(device_info),
-                    }
-
-                add_correction(RAW_CONTENT_CORRECTION)
+                usage = data.get("usage") or {}
+                truncation_metrics.append({"iteration":iteration + 1, "model":model,
+                    "prompt_tokens":usage.get("prompt_tokens"), "completion_tokens":usage.get("completion_tokens"),
+                    "reasoning_tokens":(usage.get("completion_tokens_details") or {}).get("reasoning_tokens"),
+                    "tool_argument_chars":sum(len(call.get("function",{}).get("arguments") or "") for call in tool_calls or [])})
+                record_lifecycle_event("recovery", source="model_output_truncated")
+                # The entire response is discarded, even apparently complete calls.
+                if len(truncation_metrics)>1 or not model.startswith("deepseek-") or iteration>=max_iterations-1:
+                    return provider_failure("model_output_truncated", iteration + 1)
+                truncation_pending = True
+                messages.append({"role":"user","content":
+                    "The previous response exhausted its output budget and was discarded in full; no tool from it ran. "
+                    "Preserve every assigned requirement and existing evidence. Do not replay completed actions. "
+                    "Choose one small complete operation with valid JSON. Use write_content chunks of at most 4000 characters, "
+                    "append subsequent chunks only after a confirmed write, then assemble and verify using existing tools. "
+                    "The full goal remains unconfirmed until all required results are verified."})
                 continue
+            truncation_pending = False
 
             content_text = assistant_msg.get("content") or ""
-            suggest_plan_match = re.search(r"\[\[SUGGEST_PLAN:\s*[^\[\]]+?\s*\]\]", content_text)
-            if suggest_plan_match and assistant_msg.get("tool_calls"):
-                dropped = len(assistant_msg["tool_calls"])
-                cmds_preview = ", ".join(tc["function"]["name"] for tc in assistant_msg["tool_calls"][:5])
-                print(
-                    f"[llm] SUGGEST_PLAN guard: маркер найден в content, "
-                    f"ОТМЕНЯЮ {dropped} tool_calls [{cmds_preview}] "
-                    f"(user_id={user_id}, chat_id={chat_id})"
-                )
-                assistant_msg = {
-                    "role": assistant_msg.get("role", "assistant"),
-                    "content": content_text,
-                }
-
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
                 if browser_only and commands_log and commands_log[-1].get("tool_name") == "web.read" and commands_log[-1].get("result", {}).get("status") == "success":
@@ -540,6 +509,10 @@ async def process_non_pipeline_command(
                 add_correction(f"Tool arguments must be valid JSON. {ONE_TOOL_CORRECTION}")
                 continue
 
+            if (pinned_material_pending(runtime_tasks.get(poll_task_id) or {})
+                    and fn_name not in {"system_get_last_run_summary", "system_list_tools", "answer_text", "answer_ask_clarification", "answer_report_failure"}):
+                add_correction("Read all pinned dependency material via system_get_last_run_summary and each next_offset before taking other actions. The manifest is not the full material.")
+                continue
             if browser_answer_phase and not is_terminal_answer_tool(fn_name):
                 append_entry(tool_log_entry("browser_authorization_guard", {"status":"failed","error":"browser_terminal_phase_only"},command="[system] browser answer boundary",target_device_id=device_id,hostname=device_id,iteration=iteration+1))
                 add_correction("The page was already read. Only a terminal answer is allowed now.")
@@ -558,13 +531,15 @@ async def process_non_pipeline_command(
                 try:
                     if is_answer_text_tool(fn_name):
                         answer_payload = validate_answer_text_payload(fn_args_preview, commands_log)
+                        if pinned_material_pending(runtime_tasks.get(poll_task_id) or {}) and answer_payload.get("answer_type") not in {"partial_report","error_report","failure"}:
+                            raise ProtocolValidationError("Read every pinned dependency page before completion; otherwise return partial_report.", GROUNDED_CORRECTION)
                         answer_payload = sanitize_system_list_tools_answer(answer_payload, commands_log)
                         audit_details = {}
                         audit_ok, audit_reason, audit_infra_error = await audit_answer_payload(
                             client=client,
                             cfg=cfg,
                             chat_completion_request_fn=chat_completion_request_fn,
-                            user_request=user_message,
+                            user_request=assigned_objective or user_message,
                             current_run_journal=commands_log,
                             answer_payload=answer_payload,
                             audit_details=audit_details,
@@ -604,6 +579,12 @@ async def process_non_pipeline_command(
                             iteration=iteration + 1,
                         )
                         receipt = audited_task_receipt(answer_payload, audited=answer_auditor_enabled(cfg), audit_details=audit_details)
+                        if recovery_only:
+                            # Observations cannot establish the outcome of a
+                            # mutation whose response was lost. Never replay it.
+                            receipt = {**(receipt or {}), "task_status":"unknown", "goal_completed":False,
+                                "final_verification_status":"unverified", "answer_source":"confirmation_result",
+                                "terminal_reason":"confirmed_transport_outcome_unknown"}
                         audited_receipt = {"task_receipt": receipt} if receipt else {}
                         return {
                             **audited_receipt,
@@ -1070,6 +1051,8 @@ async def process_non_pipeline_command(
 
                 elif fn_name == "write_content":
                     try:
+                        if len(fn_args.get("content", "")) > 4000:
+                            raise ValueError("write_chunk_too_large: write was not dispatched; use complete chunks up to 4000 characters and append only after confirmed writes.")
                         tool_result = await send_command_fn(target_device, "write_content", fn_args)
                         tool_result = compact_write_content_result(fn_args, tool_result)
                         print(f"[llm] write_content result: status={tool_result.get('status', 'unknown')}")
@@ -1312,30 +1295,6 @@ async def process_non_pipeline_command(
                             hostname=device_info.get("hostname") or target_device, iteration=iteration + 1)
                         return {"answer": payload["text"], "commands": commands_log, "tasks": [],
                                 "training_context": _training_context(device_info)}
-                if window_only and tool_result_terminal_sufficient(commands_log[-1]):
-                    terminal_sufficient_entry = commands_log[-1]
-                    if terminal_sufficient_extra_turn_used:
-                        payload = validate_answer_text_payload(
-                            synthesize_device_terminal_report(commands_log, commands_log[-1]),
-                            commands_log,
-                        )
-                        append_answer_step(
-                            commands_log,
-                            "answer_text",
-                            payload,
-                            target_device_id=target_device,
-                            hostname=device_info.get("hostname") or target_device,
-                            iteration=iteration + 1,
-                        )
-                        return {
-                            "answer": payload["text"],
-                            "commands": commands_log,
-                            "tasks": [],
-                            "training_context": _training_context(device_info),
-                        }
-                    terminal_sufficient_extra_turn_used = True
-                    messages.append({"role": "user", "content": "The latest action is verified. Check the ORIGINAL whole human goal: if any requested action/result remains, perform the next necessary action. Otherwise call answer_text with current-run evidence. Do not repeat verification of an already proved action."})
-
     print("[tool-only] terminal answer repair" if browser_answer_phase else "[tool-only] max_iterations reached; attempting answer_text-only repair turn")
     if is_task_cancel_requested(poll_task_id):
         return cancelled_result()

@@ -336,7 +336,6 @@ async function cancelActiveTask(taskId = null) {
     }
     showToast(data.message || 'Остановка запрошена. Текущий инструмент может завершиться с задержкой.');
     if (wasConfirm) {
-      if (msg?.planReview) { window.iruVoice?.planReviewResolved(active.task_id); delete msg.planReview; }
       pollTask(active.task_id, active.msgIndex);
     }
   } catch (e) {
@@ -511,14 +510,6 @@ function renderCommandJournal(m, mi) {
 function renderMessageActions(m, mi) {
     // Кнопки подтверждения
     let confirmBtns = '';
-    if (m.planReview) {
-      confirmBtns = `<div class="confirm-actions">
-        <button class="btn-confirm-yes" data-action="approve-plan" data-index="${mi}">Нет изменений — выполнить</button>
-        <button class="btn-confirm-no" data-action="edit-plan" data-index="${mi}">Изменить план</button>
-        <button class="btn-confirm-no" data-action="cancel-plan" data-index="${mi}">Отменить задачу</button>
-        </div><div id="plan-edit-${mi}" hidden><textarea id="plan-changes-${mi}" maxlength="4000" rows="3" placeholder="Что изменить в плане?"></textarea>
-        <button data-action="revise-plan" data-index="${mi}">Перестроить план</button></div>`;
-    }
     if (m.confirmTaskId) {
       confirmBtns = `<div class="confirm-actions">
         <button class="btn-confirm-yes" data-action="confirm-task" data-task-id="${escapeAttr(m.confirmTaskId)}" data-index="${mi}">\u2713 Выполнить</button>
@@ -540,33 +531,12 @@ function renderMessageActions(m, mi) {
       </div>`;
     }
 
-    // Plan suggestion banner
-    let planHTML = '';
-    // TODO: persist planDismissed/planDeclined на сервере, чтобы после F5 плашка не возвращалась
-    if (m.planSuggestion && !m.planDismissed && !m.planDeclined) {
-      if (m.planTrialUsed) {
-        planHTML = `<div class="plan-suggest-block" id="ps-${mi}">
-          <div class="plan-suggest-text" style="color:#888;">Режим План доступен на Pro-тарифе. Вы уже использовали пробный запуск.</div>
-        </div>`;
-      } else {
-        const desc = escapeHTML(m.planSuggestion);
-        planHTML = `<div class="plan-suggest-block" id="ps-${mi}" data-chat-id="${escapeAttr(state.currentChatId)}" data-index="${mi}">
-          <div class="plan-suggest-text">Задача непростая: ${desc}. В режиме План ИРУ составит и выполнит пошаговое решение.</div>
-          <div class="plan-suggest-actions">
-            <button class="plan-suggest-accept" data-action="accept-plan-suggestion" data-index="${mi}">Запустить план</button>
-            <button class="plan-suggest-decline" data-action="decline-plan-suggestion" data-index="${mi}">Без плана</button>
-          </div>
-          <div class="plan-suggest-warning" style="font-size:11px;color:#888;margin-top:6px;">План выполнит задачу по шагам. Команды, требующие разрешения, нужно подтвердить отдельно.</div>
-        </div>`;
-      }
-    }
-
   const cancel = m.cancelAvailable ? `<button type="button" class="btn-confirm-no" data-action="cancel-smart-task" data-task-id="${escapeAttr(m._taskId)}">Отменить задачу</button>` : '';
-  return confirmBtns + suggestHTML + planHTML + cancel;
+  return confirmBtns + suggestHTML + cancel;
 }
 
 function captureMessagePresentation(container, scrollContainer = container) {
-  const snapshot = { top:scrollContainer.scrollTop, bottom:scrollContainer.scrollHeight-scrollContainer.scrollTop-scrollContainer.clientHeight < 48, open:[], edits:[], focus:document.activeElement?.id };
+  const snapshot = { top:scrollContainer.scrollTop, bottom:scrollContainer.scrollHeight-scrollContainer.scrollTop-scrollContainer.clientHeight < 48, open:[] };
   const bounds = scrollContainer.getBoundingClientRect();
   for (const message of container.querySelectorAll('[data-message-key]')) {
     const rect = message.getBoundingClientRect();
@@ -577,7 +547,6 @@ function captureMessagePresentation(container, scrollContainer = container) {
       });
     }
   }
-  container.querySelectorAll('[id^="plan-changes-"]').forEach(node => snapshot.edits.push({ id:node.id, value:node.value, hidden:node.parentElement.hidden, start:node.selectionStart, end:node.selectionEnd }));
   return snapshot;
 }
 
@@ -586,10 +555,6 @@ function restoreMessagePresentation(container, snapshot, scrollContainer = conta
   for (const item of snapshot.open) {
     const node = messages.find(message => message.dataset.messageKey === item.key)?.querySelectorAll(item.selector)[item.index];
     if (node) { node.classList.toggle('open',item.open); node.classList.toggle('expanded',item.expanded); if (item.expanded) node.setAttribute('aria-expanded','true'); }
-  }
-  for (const edit of snapshot.edits) {
-    const node = document.getElementById(edit.id);
-    if (node) { node.value=edit.value; node.parentElement.hidden=edit.hidden; if (snapshot.focus===edit.id) { node.focus({preventScroll:true}); node.setSelectionRange(edit.start,edit.end); } }
   }
   if (snapshot.bottom) scrollContainer.scrollTop = scrollContainer.scrollHeight;
   else {
@@ -809,23 +774,6 @@ function bindChatMessageActions(container = document.getElementById('chatMessage
       }
       return;
     }
-    if (['approve-plan', 'edit-plan', 'revise-plan', 'cancel-plan'].includes(action)) {
-      const index = Number(target.dataset.index), message = state.messages[index];
-      if (!message?.planReview) return;
-      if (action === 'edit-plan') {
-        document.getElementById(`plan-edit-${index}`).hidden = false;
-        document.getElementById(`plan-changes-${index}`).focus();
-        window.iruVoice?.editPlan(message._taskId);
-      } else if (action === 'cancel-plan') {
-        cancelReviewedPlan(message._taskId, index);
-      } else {
-        const changes = action === 'revise-plan' ? document.getElementById(`plan-changes-${index}`).value.trim() : '';
-        if (action === 'revise-plan' && !changes) { showToast('Опишите изменения.', true); return; }
-        submitPlanReview({ taskId: message._taskId, revision: message.planReview.revision }, changes)
-          .catch(error => showToast(error.message, true));
-      }
-      return;
-    }
     if (action === 'confirm-task' || action === 'deny-task') {
       const msgIndex = Number(target.dataset.index);
       const taskId = target.dataset.taskId || '';
@@ -847,13 +795,6 @@ function bindChatMessageActions(container = document.getElementById('chatMessage
       const fact = message.suggestedFact || {};
       acceptSuggestedFact(message._taskId || '', fact.text || '', fact.category || '', block, msgIndex);
       return;
-    }
-    if (action === 'accept-plan-suggestion' || action === 'decline-plan-suggestion') {
-      const msgIndex = Number(target.dataset.index);
-      const block = document.getElementById(`ps-${msgIndex}`);
-      if (!block) return;
-      if (action === 'accept-plan-suggestion') acceptPlanSuggestion(block);
-      else declinePlanSuggestion(block);
     }
   });
 }
@@ -939,16 +880,18 @@ async function sendMessage(options = {}) {
       if (!state.pendingTasks.some(item => item.task_id === data.task_id)) state.pendingTasks.push({task_id:data.task_id,msgIndex,chatId:sourceChatId,kind:data.response_type === 'orchestrator' ? 'orchestrator' : 'worker'});
       updateStopButton();
       pollTask(data.task_id,msgIndex,voiceTicket,sourceChatId);
-      if (data.worker_task_id) {
-        let workerIndex = state.currentChatId === sourceChatId ? state.messages.findIndex(message => message._taskId === data.worker_task_id) : -1;
+      const workerIds = Array.isArray(data.worker_task_ids) ? [...new Set(data.worker_task_ids)] : data.worker_task_id ? [data.worker_task_id] : [];
+      for (const workerId of workerIds) {
+        if (typeof workerId !== 'string' || !workerId) continue;
+        let workerIndex = state.currentChatId === sourceChatId ? state.messages.findIndex(message => message._taskId === workerId) : -1;
         if (workerIndex < 0 && state.currentChatId === sourceChatId) {
           workerIndex=state.messages.length;
-          state.messages.push({role:'assistant',_taskId:data.worker_task_id,taskKind:'worker',content:'',loading:true,taskStatus:data.worker_status,currentStatus:data.worker_status === 'queued' ? 'queued' : 'running',liveTasks:[],liveCommands:[]});
+          state.messages.push({role:'assistant',_taskId:workerId,goalId:data.goal_id,taskKind:'worker',content:'',loading:true,taskStatus:'queued',currentStatus:'queued',liveTasks:[],liveCommands:[]});
           renderMessages();
         }
-        if (!state.pendingTasks.some(item => item.task_id === data.worker_task_id)) state.pendingTasks.push({task_id:data.worker_task_id,msgIndex:workerIndex,chatId:sourceChatId,kind:'worker'});
-        window.iruVoice?.watchTask(data.worker_task_id,undefined,true);
-        pollTask(data.worker_task_id,workerIndex,undefined,sourceChatId);
+        if (!state.pendingTasks.some(item => item.task_id === workerId)) state.pendingTasks.push({task_id:workerId,msgIndex:workerIndex,chatId:sourceChatId,kind:'worker'});
+        window.iruVoice?.watchTask(workerId,undefined,true);
+        pollTask(workerId,workerIndex,undefined,sourceChatId);
       }
     } else {
       // Ошибка до запуска задачи
@@ -980,15 +923,6 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
     msgIndex = state.currentChatId === sourceChatId ? state.messages.findIndex(message => message._taskId === taskId) : -1;
     const tracked=state.pendingTasks.find(item=>item.task_id===taskId);
     if (tracked) tracked.msgIndex=msgIndex;
-    if (Date.now() - startTime > MAX_POLL_MS) {
-      window.iruVoice?.taskLost(taskId);
-      if (msgIndex >= 0) state.messages[msgIndex] = {role:'assistant',content:'Истекло время ожидания ответа. Исход не подтверждён.',taskStatus:'unknown'};
-      stopped=true; taskPollLoops.delete(taskId);
-      state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
-      forgetActiveTask(taskId);
-      renderMessages();
-      return;
-    }
     try {
       const r = await apiFetch(`${API}/api/tasks/${taskId}`, { headers: authHeaders() });
       if (!r.ok) {
@@ -1003,13 +937,22 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
       const data = await r.json();
       const task = data.task;
       if (task.worker_id && task.status !== 'waiting_input') window.iruVoice?.watchTask(taskId,voiceTicket,true);
-      if (task.status === 'queued') startTime=Date.now();
+      if (['queued','waiting_dependency'].includes(task.status)) startTime=Date.now();
+      if (!isTaskTerminalStatus(task.status) && Date.now() - startTime > MAX_POLL_MS) {
+        window.iruVoice?.taskLost(taskId);
+        if (msgIndex >= 0) state.messages[msgIndex] = {role:'assistant',content:'Истекло время ожидания ответа. Исход не подтверждён.',taskStatus:'unknown'};
+        stopped=true; taskPollLoops.delete(taskId);
+        state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
+        forgetActiveTask(taskId);
+        renderMessages();
+        return;
+      }
       if (msgIndex < 0) {
-        if (isTaskTerminalStatus(task.status)) {stopped=true;taskPollLoops.delete(taskId);state.pendingTasks=state.pendingTasks.filter(item=>item.task_id!==taskId);forgetActiveTask(taskId);}
+        if (isTaskTerminalStatus(task.status)) {window.iruVoice?.taskFinished(taskId,task);stopped=true;taskPollLoops.delete(taskId);state.pendingTasks=state.pendingTasks.filter(item=>item.task_id!==taskId);forgetActiveTask(taskId);}
         else setTimeout(poll,800);
         return;
       }
-      const smartTaskMetadata = { taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind,inputRequired:task.input_required,conversationalResponse:task.conversational_response,executionDetails:task.execution_details };
+      const smartTaskMetadata = { goalId:task.goal_id, assignmentRevision:task.assignment_revision, taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind,inputRequired:task.input_required,conversationalResponse:task.conversational_response,executionDetails:task.execution_details };
       const pendingTask = state.pendingTasks.find(t => t.task_id === taskId);
       if (pendingTask && task.kind) pendingTask.kind=task.kind;
       if (pendingTask && String(task.status || '').trim().toLowerCase() === 'cancelling') {
@@ -1025,15 +968,6 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
         return;
       }
       if (task.status === 'confirm') {
-        if (task.plan_review) {
-          stopped = true; taskPollLoops.delete(taskId);
-          state.messages[msgIndex] = { role: 'assistant', _taskId: taskId, ...smartTaskMetadata,
-            content: `План:\n${task.plan_review.steps.map((step, i) => `${i + 1}. ${step.title}\n${step.instruction}`).join('\n')}\n\nХотите что-то изменить?`,
-            planReview: task.plan_review, tasks: task.tasks || [], commands: task.commands || [] };
-          renderMessages();
-          window.iruVoice?.taskPlanReview(taskId, task.plan_review);
-          return;
-        }
         stopped = true; taskPollLoops.delete(taskId);
         const cd = task.confirm_data || {};
         const cmdText = cd.command || '';
@@ -1055,7 +989,7 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
         window.iruVoice?.taskFinished(taskId, task);
         stopped = true; taskPollLoops.delete(taskId);
         const isCancelled = String(task.status || '').trim().toLowerCase() === 'cancelled';
-        const fallbackAnswer = isCancelled ? 'Остановлено пользователем.' : ((task.kind === 'orchestrator' || task.plan_suggestion) ? '' : 'ИРУ завершила задачу без текстового ответа.');
+        const fallbackAnswer = isCancelled ? 'Остановлено пользователем.' : ((task.kind === 'orchestrator') ? '' : 'ИРУ завершила задачу без текстового ответа.');
         const msg = {
           role: 'assistant',
           ...smartTaskMetadata,
@@ -1064,10 +998,6 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
           tasks: task.tasks || [],
         };
         if (task.suggested_fact) msg.suggestedFact = task.suggested_fact;
-        if (task.plan_suggestion) msg.planSuggestion = task.plan_suggestion;
-        if (task.plan_original_request) msg.planOriginalRequest = task.plan_original_request;
-        if (task.plan_trial_used) msg.planTrialUsed = true;
-        if (task.auto_plan) msg.autoPlan = true;
         msg._taskId = taskId;
         state.messages[msgIndex] = msg;
         state.pendingTasks = state.pendingTasks.filter(t => t.task_id !== taskId);
@@ -1576,38 +1506,6 @@ function downloadAgent() {
   a.remove();
 }
 // ── CONFIRM / DENY ───────────────────────────────────────────
-async function submitPlanReview(review, changes = '') {
-  const index = state.messages.findIndex(message => message._taskId === review.taskId && message.planReview?.revision === review.revision);
-  if (index < 0) throw new Error('Вариант плана устарел. Обновите чат.');
-  try {
-    const response = await apiFetch(`${API}/api/tasks/${review.taskId}/review-plan`, {
-      method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ revision: review.revision, action: changes ? 'revise' : 'approve', changes }),
-    });
-    if (!response.ok) throw new Error('Не удалось подтвердить или изменить план. Обновляю состояние задачи.');
-  } catch (error) {
-    window.iruVoice?.disable();
-    state.messages[index] = { role: 'assistant', _taskId: review.taskId, loading: true, content: '' };
-    renderMessages(); pollTask(review.taskId, index);
-    throw error;
-  }
-  window.iruVoice?.planReviewResolved(review.taskId);
-  state.messages[index] = { role: 'assistant', _taskId: review.taskId, loading: true, content: '' };
-  renderMessages();
-  pollTask(review.taskId, index);
-}
-
-async function cancelReviewedPlan(taskId, index) {
-  try {
-    const response = await apiFetch(`${API}/api/tasks/${taskId}/cancel`, { method: 'POST', headers: authHeaders() });
-    if (!response.ok) throw new Error('Не удалось отменить план');
-    window.iruVoice?.planReviewResolved(taskId);
-    state.messages[index] = { role: 'assistant', _taskId: taskId, loading: true, content: '' };
-    renderMessages();
-    pollTask(taskId, index);
-  } catch (error) { showToast(error.message, true); }
-}
-
 async function chooseVoiceCommand(offer, accepted, viaVoice = false) {
   const index = state.messages.findIndex(message => message.confirmTaskId === offer.taskId
     && message.commandConfirmation?.confirmation_id === offer.confirmationId);

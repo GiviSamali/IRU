@@ -65,9 +65,10 @@ def test_long_primary_speech_avoids_editor_latency_and_does_not_fill_420(monkeyp
 
 
 @pytest.mark.parametrize('state',['queued','running'])
-def test_delegation_speech_uses_actual_admission_not_model_completion(client,monkeypatch,state):
+@pytest.mark.parametrize('model_speech',['Всё сделала.','The requested deliverables are available.','Начну с исследования.'])
+def test_delegation_speech_uses_actual_admission_not_model_completion(client,monkeypatch,state,model_speech):
  user=db.create_user('admission-speaker');chat=db.create_chat(user['id'],'dialog')['id']
- async def decide(*args,**kwargs):return orch.Decision(intent='delegate',scope='server',objective='Проверить данные',spoken_response='Всё сделала.'),{}
+ async def decide(*args,**kwargs):return orch.Decision(intent='delegate',scope='server',objective='Проверить данные',spoken_response=model_speech),{}
  async def delegate(*args,**kwargs):return {'task_id':'fake-worker','status':state}
  monkeypatch.setattr(orch,'decide',decide)
  cmd=SimpleNamespace(message='Проверь данные',request_id='admission',device_id='',modes={},broadcast=False)

@@ -1,48 +1,59 @@
-"""Bounded PLAN recovery regression tests; never execute device commands."""
-from server.pipeline_step_control import StepProgress
-from server.controller_pipeline import normalize_pipeline_plan
+"""Recovery uses the common Worker; no separate PLAN recovery state machine."""
+import asyncio
+import json
+
+from server.controller_non_pipeline import process_non_pipeline_command
+from server.controller_tools import NON_PIPELINE_TOOLS
+from server.orchestrator import Assignment
+from server.worker_scheduler import validate_task_graph
 
 
-def observed(command, result, status="success"):
-    return {"action": "execute_cmd", "command": command,
-            "result": result, "status": status}
+def call(name, arguments, index):
+    return {"choices":[{"message":{"tool_calls":[{"id":str(index),"function":{
+        "name":name,"arguments":json.dumps(arguments)}}]}}]}
 
 
-def test_two_distinct_failures_can_be_corrected():
-    state = StepProgress()
-    log = [observed("run-script", {"error": "encoding"}, "error")]
-    assert state.observe(log) == ("recover", "tool_failure")
-    log.append(observed("validate-script", {"error": "syntax"}, "error"))
-    assert state.observe(log) == ("recover", "tool_failure")
-    log.append(observed("fix-script", {"returncode": 0, "stdout": "verified"}))
-    assert state.observe(log) == ("continue", "")
+def run_recovery(commands, observations):
+    sent=[]
+    responses=iter([*[call("execute_cmd",{"command":command},i) for i,command in enumerate(commands)],
+        call("answer_report_failure",{"message":"Result is not confirmed","reason":"unverified",
+            "recoverable":False,"suggested_next_action":"Inspect the remaining issue","basis":["step_1"]},"final")])
+    results=iter(observations)
+    async def completion(**kwargs):
+        return next(responses)
+    async def send(device,action,params):
+        assert action=="execute_cmd"
+        sent.append(params["command"])
+        return next(results)
+    outcome=asyncio.run(process_non_pipeline_command(user_message="Inspect and repair the script",
+        device_id="pc",device_info={"os":"Windows"},send_command_fn=send,get_file_link_fn=lambda *a:"",
+        chat_history=[],user_id=None,chat_id=None,modes={},poll_task_id=None,
+        cfg={"model":"mock-model","answer_auditor_enabled":False},system_msg="system",
+        machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,
+        max_iterations=8,pick_model_fn=lambda *a:"mock-model",chat_completion_request_fn=completion))
+    return outcome,sent
 
 
-def test_identical_failure_is_still_bounded():
-    state = StepProgress()
-    log = [observed("run-script", {"error": "same"}, "error")]
-    assert state.observe(log) == ("recover", "tool_failure")
-    log.append(observed("run-script", {"error": "same"}, "error"))
-    assert state.observe(log) == ("stop", "recovery_exhausted")
+def test_distinct_failures_can_be_corrected_without_plan_recovery():
+    commands=["python script.py","python repaired.py","python verify.py"]
+    outcome,sent=run_recovery(commands,[
+        {"returncode":1,"stderr":"UnicodeError: invalid encoding"},
+        {"returncode":1,"stderr":"SyntaxError: invalid syntax"},
+        {"returncode":0,"stdout":"observation obtained"}])
+    assert sent==commands
+    assert outcome["commands"][-1]["tool_name"]=="answer.report_failure"
+    assert (outcome.get("task_receipt") or {}).get("goal_completed") is not True
 
 
-def test_three_distinct_failure_recoveries_max():
-    state = StepProgress()
-    log = []
-    for i in range(3):
-        log.append(observed(f"run-{i}", {"error": f"error-{i}"}, "error"))
-        assert state.observe(log) == ("recover", "tool_failure")
-    log.append(observed("run-3", {"error": "error-3"}, "error"))
-    assert state.observe(log) == ("stop", "recovery_exhausted")
+def test_distinct_corrections_are_not_limited_by_retired_three_recovery_counter():
+    commands=[f"python inspect_{i}.py" for i in range(4)]
+    outcome,sent=run_recovery(commands,[{"returncode":1,"stderr":f"Synthetic failure {i}"} for i in range(4)])
+    assert sent==commands
+    assert outcome["commands"][-1]["tool_name"]=="answer.report_failure"
+    assert all(entry.get("action")!="budget_guard" for entry in outcome["commands"])
 
 
-def test_normalized_plan_keeps_explicit_budget_and_independence():
-    plan = normalize_pipeline_plan({"steps": [
-        {"title": "Word", "execution_budget": "extended"},
-        {"title": "Excel", "independent_after_failure": True},
-        {"title": "Report"},
-    ]}, "Create docs", "pc")
-    assert plan["steps"][0]["execution_budget"] == "extended"
-    assert plan["steps"][1]["independent_after_failure"] is True
-    assert "execution_budget" not in plan["steps"][2]
-    assert "independent_after_failure" not in plan["steps"][2]
+def test_independent_deliverables_need_no_recovery_or_budget_flags():
+    assignments=[Assignment(key=key,objective=f"Create {key}").model_dump() for key in ("Word","Excel","Report")]
+    assert validate_task_graph(assignments)=={"Word":[],"Excel":[],"Report":[]}
+    assert all("execution_budget" not in item and "independent_after_failure" not in item for item in assignments)

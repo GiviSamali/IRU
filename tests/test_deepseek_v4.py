@@ -36,15 +36,16 @@ def test_pick_model_uses_flash_for_normal_requests():
     assert _pick_model(cfg, {"pipeline": False, "autonomous": False}) == "deepseek-v4-flash"
 
 
-def test_pick_model_uses_pro_for_complex_requests():
+def test_pick_model_uses_pro_for_autonomous_requests_and_rejects_retired_mode():
     cfg = {"model": "deepseek-v4-flash", "model_reasoner": "deepseek-v4-pro"}
-    assert _pick_model(cfg, {"pipeline": True, "autonomous": False}) == "deepseek-v4-pro"
+    with pytest.raises(ValueError, match="execution_mode_unsupported"):
+        _pick_model(cfg, {"pipeline": True, "autonomous": False})
     assert _pick_model(cfg, {"pipeline": False, "autonomous": True}) == "deepseek-v4-pro"
 
 
 def test_v4_defaults_are_used_when_models_are_omitted():
     assert _pick_model({}, {}) == "deepseek-v4-flash"
-    assert _pick_model({}, {"pipeline": True}) == "deepseek-v4-pro"
+    assert _pick_model({}, {"autonomous": True}) == "deepseek-v4-pro"
     assert _thinking_request_fields({}, "deepseek-v4-flash") == {"thinking": {"type": "disabled"}}
     assert _thinking_request_fields({}, "deepseek-v4-pro") == {
         "thinking": {"type": "enabled"},

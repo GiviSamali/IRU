@@ -77,7 +77,7 @@ def test_real_runtime_finalization_saves_existing_receipt_without_worker_changes
     owner, foreign, chat, client=history
     did=f"{owner['id']}:pc";tid='history-run'
     runtime.tasks[tid]={"task_id":tid,"user_id":owner['id'],"chat_id":chat['id'],"message":"goal",
-        "device_ids":[did],"status":"running","results":{},"modes":{"pipeline":True},"created_at":time.time()}
+        "device_ids":[did],"status":"running","results":{},"modes":{},"created_at":time.time()}
     runtime.devices[did]={"user_id":owner['id'],"info":{"hostname":"pc","os":"Windows"},"pending":{}}
     async def process(**kwargs):return {"answer":"result","commands":[],"tasks":[{"status":"done"}],"task_receipt":receipt}
     async def probe(**kwargs):pass
@@ -89,7 +89,7 @@ def test_real_runtime_finalization_saves_existing_receipt_without_worker_changes
     monkeypatch.setattr(runtime,'enforce_trusted_answer',lambda answer,commands:answer)
     asyncio.run(runtime.run_nl_task(tid,owner['id'],'goal',[did],chat['id']))
     saved=db.get_messages(chat['id'])[-1]
-    assert saved['taskReceipt']==receipt and saved['taskMode']=='plan'
+    assert saved['taskReceipt']==receipt and saved['taskMode']=='ordinary'
     assert saved['tasks']==[{"status":"done"}] and saved['_taskId']==tid
 
 

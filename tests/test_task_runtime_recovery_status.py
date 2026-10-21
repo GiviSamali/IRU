@@ -6,7 +6,7 @@ from server import task_runtime
 
 
 @pytest.mark.parametrize("receipt_status", ["completed_with_recovery", "partial", "unknown"])
-def test_pipeline_receipt_completed_with_recovery_sets_top_level_task_status(monkeypatch, receipt_status):
+def test_common_receipt_recovery_status_is_preserved_at_runtime_boundary(monkeypatch, receipt_status):
     task_id = "recovery-status"
     full_device_id = "1:device-a"
     task_runtime.tasks[task_id] = {
@@ -19,7 +19,7 @@ def test_pipeline_receipt_completed_with_recovery_sets_top_level_task_status(mon
         "results": {},
         "answer": None,
         "commands": None,
-        "modes": {"pipeline": True},
+        "modes": {},
         "created_at": time.time(),
     }
     task_runtime.devices[full_device_id] = {
@@ -71,7 +71,7 @@ def test_runtime_preserves_grounded_markdown_before_report(monkeypatch):
         "results": {},
         "answer": None,
         "commands": None,
-        "modes": {"pipeline": True},
+        "modes": {},
         "created_at": time.time(),
     }
     task_runtime.devices[full_device_id] = {

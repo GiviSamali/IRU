@@ -144,11 +144,17 @@ def test_result_count_clamped(backend, limit, expected):
     assert json.loads(requests[0].content)['groupSpec']['groupsOnPage'] == str(expected)
 
 
-@pytest.mark.parametrize('pipeline', [False, True])
+@pytest.mark.parametrize('goal_member', [False, True])
 @pytest.mark.parametrize('status', [200, 403])
-def test_both_controller_paths_deliver_search_result_to_llm(client, backend, pipeline, status):
+def test_unified_worker_delivers_search_result_to_llm(client, backend, monkeypatch, goal_member, status):
     from server.controller_non_pipeline import process_non_pipeline_command
-    from server.controller_pipeline import run_pipeline_worker
+    from server.controller_tools import NON_PIPELINE_TOOLS
+    from server.runtime_state import tasks
+    task_id = "goal-search" if goal_member else None
+    if goal_member:
+        monkeypatch.setitem(tasks, task_id, {"task_id": task_id, "goal_id": "goal",
+            "original_request": "Поиск", "proposed_objective": "Поиск",
+            "execution_scope": "general", "window_effects": []})
     requests, replies = backend
     replies.append(httpx.Response(status, json=encoded()))
     captured = []
@@ -166,21 +172,10 @@ def test_both_controller_paths_deliver_search_result_to_llm(client, backend, pip
             {'id': 'call-' + name, 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}]}}]}
     async def no_device(*args, **kwargs): pytest.fail('Search must not run on device')
     async def run():
-        if pipeline:
-            async with httpx.AsyncClient() as http_client:
-                return await run_pipeline_worker(client=http_client, cfg={'model': 'mock'}, model='mock',
-                    shared={'current_device_id': 'givi', 'target_device_id': 'givi', 'current_hostname': 'test',
-                            'current_os': 'Windows', 'current_os_version': '11', 'device_profile_block': '',
-                            'device_memory_block': '', 'devices_block': '', 'other_devices_summary': '',
-                            'os_rules': '', 'current_datetime_msk': ''},
-                    overall_goal='Поиск', step={'title': 'Поиск', 'instruction': 'Найди', 'device_id': 'givi'},
-                    completed_steps=[], chat_history=[], send_command_fn=no_device, get_file_link_fn=lambda *a: '',
-                    machine_guid=None, mem_user_id=None, poll_task_id=None,
-                    chat_completion_request_fn=completion, worker_tools=[])
         return await process_non_pipeline_command(user_message='Поиск', device_id='givi', device_info={'os': 'Windows'},
             send_command_fn=no_device, get_file_link_fn=lambda *a: '', chat_history=[], user_id=None, chat_id=None,
-            modes={}, poll_task_id=None, cfg={'model': 'mock'}, system_msg='system', machine_guid=None,
-            mem_user_id=None, non_pipeline_tools=[], max_iterations=3, pick_model_fn=lambda *a: 'mock',
+            modes={}, poll_task_id=task_id, cfg={'model': 'mock'}, system_msg='system', machine_guid=None,
+            mem_user_id=None, non_pipeline_tools=NON_PIPELINE_TOOLS, max_iterations=3, pick_model_fn=lambda *a: 'mock',
             chat_completion_request_fn=completion)
     asyncio.run(run())
     assert len(requests) == 1

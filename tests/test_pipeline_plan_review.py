@@ -1,111 +1,101 @@
+"""The former PLAN review contract is replaced by admission and pending-task CAS."""
 import asyncio
-import json
 import time
+from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
 
-from server import controller_pipeline as pipeline
-from server.pipeline_plan_review import review_pipeline_plan
-from server.runtime_state import tasks, cleanup_old_tasks, TASK_TTL
+from server import database as db, orchestrator as orch
 from server.routers import tasks as routes
-from test_controller_pipeline_budget import _answer_call
+from server.runtime_state import devices
+from server.worker_scheduler import WorkerScheduler, init_worker_storage, goal_view
 
 
-def test_review_revisions_wait_before_tools_and_preserve_request(monkeypatch):
-    tid = "review-flow"
-    monkeypatch.setitem(tasks, tid, {"task_id": tid, "user_id": 1, "status": "running", "created_at": time.time()})
-    monkeypatch.setattr(routes, "get_current_user", lambda request: {"id": request or 1})
-    requests, workers, created = [], [], []
-    original = "Создай PPTX, Word и Excel на рабочем столе"
-    async def completion(**kwargs):
-        if kwargs["phase"] == "pipeline.final":
-            payload = json.loads(kwargs["messages"][-1]["content"])
-            assert payload["original_request"] == original
-            assert payload["approved_plan"]["steps"][0]["title"] == "Версия 3"
-            return {"choices": [{"message": {"tool_calls": [_answer_call("final", "Результат")]}}]}
-        assert kwargs["phase"] == "pipeline.plan"
-        requests.append(kwargs["messages"])
-        if len(requests) > 1:
-            feedback = json.loads(kwargs["messages"][-1]["content"])
-            assert feedback["requested_changes"] == f"Изменение {len(requests) - 1}"
-            assert feedback["current_unexecuted_plan"]["steps"][0]["title"] == f"Версия {len(requests) - 1}"
-        return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({"steps": [
-            {"title": f"Версия {len(requests)}", "instruction": "Создать весь согласованный пакет"}]})}}]}
-    async def worker(**kwargs):
-        workers.append(kwargs)
-        assert len(requests) == 3
-        assert original in kwargs["overall_goal"] and "Версия 3" in kwargs["overall_goal"]
-        return {"status": "ok", "answer": "Результат", "commands": []}
-    monkeypatch.setattr(pipeline, "run_pipeline_worker", worker)
-    monkeypatch.setattr(pipeline.db, "create_task", lambda **kw: created.append(kw) or 1)
-    monkeypatch.setattr(pipeline.db, "update_step", lambda *a, **kw: None)
-    monkeypatch.setattr(pipeline.db, "finish_task", lambda *a: None)
-    monkeypatch.setattr(pipeline.db, "get_device_profile", lambda *a, **kw: None)
-    monkeypatch.setattr(pipeline, "build_memory_block", lambda *a: "")
-    monkeypatch.setattr(pipeline, "collect_tasks", lambda *a: [])
-    monkeypatch.setattr(pipeline, "push_tasks_view", lambda *a: None)
-    async def send(*a): pytest.fail("no real device calls")
+@pytest.fixture
+def queue_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "review-migration.sqlite")
+    db.init_db()
+    init_worker_storage()
+    user = db.create_user("review-migration")
+    user["chat_id"] = db.create_chat(user["id"], "goal")["id"]
+    devices[f"{user['id']}:pc"] = {"user_id":user["id"], "ws":object(), "info":{}}
+    return user
+
+
+async def until(predicate):
+    for _ in range(200):
+        if predicate():return
+        await asyncio.sleep(.01)
+    raise AssertionError("Scheduler did not start the accepted task")
+
+
+def test_explicit_multi_result_request_is_admitted_without_plan_review(queue_owner, monkeypatch):
+    owner = queue_owner
+
     async def scenario():
-        execution = asyncio.create_task(pipeline.process_pipeline_subagents(
-            user_message=original, device_id="pc", device_info={"os": "Windows"}, all_devices={"pc": {"info": {"os": "Windows"}}},
-            send_command_fn=send, get_file_link_fn=lambda *a: "", chat_history=[], poll_task_id=tid,
-            load_llm_config_fn=lambda: {"model": "mock-model"}, pick_model_fn=lambda *a: "mock-model",
-            chat_completion_request_fn=completion, worker_tools=[], windows_rules="", linux_rules=""))
-        previous = None
+        gate = asyncio.Event()
+        started = []
+
+        async def execute(task):
+            started.append(task["task_id"])
+            await gate.wait()
+            task.update(status="cancelled", answer="synthetic end", commands=[])
+
+        scheduler = WorkerScheduler(execute)
+        monkeypatch.setattr(routes, "scheduler", scheduler)
+        async def decide(*args, **kwargs):
+            return orch.Decision(intent="delegate", objective="Three independent descriptions",
+                target_device_ids=["pc"], execution_mode="simple", assignments=[
+                    {"key":key, "objective":f"Create description {key}"} for key in ("a","b","c")]), {}
+        monkeypatch.setattr(orch, "decide", decide)
+        cmd = SimpleNamespace(request_id="three", message="Create three separate descriptions", device_id="pc", modes={}, broadcast=False)
+
+        async def delegate(choice, request_key):
+            return await routes.submit_worker(owner, owner["chat_id"], cmd.message, [f"{owner['id']}:pc"], {},
+                request_key=request_key, objective=choice.objective,
+                assignments=[item.model_dump() for item in choice.assignments])
         try:
-            for version in range(1, 4):
-                for _ in range(100):
-                    if tasks[tid].get("status") == "confirm": break
-                    await asyncio.sleep(0)
-                review = tasks[tid]["plan_review"]
-                assert review["revision"] != previous
-                assert review["speech"].endswith("Хотите что-то изменить?")
-                assert not workers and not created and not execution.done()
-                body = routes.PlanReviewBody(revision=review["revision"], action="approve")
-                with pytest.raises(HTTPException) as foreign:
-                    await routes.api_review_plan(tid, body, 2)
-                assert foreign.value.status_code == 404
-                with pytest.raises(HTTPException) as blank:
-                    await routes.api_review_plan(tid, routes.PlanReviewBody(revision=review["revision"], action="revise", changes=" "), None)
-                assert blank.value.status_code == 400
-                if previous:
-                    with pytest.raises(HTTPException) as stale:
-                        await routes.api_review_plan(tid, routes.PlanReviewBody(revision=previous, action="approve"), None)
-                    assert stale.value.status_code == 409
-                if version < 3:
-                    body = routes.PlanReviewBody(revision=review["revision"], action="revise", changes=f"Изменение {version}")
-                await routes.api_review_plan(tid, body, None)
-                with pytest.raises(HTTPException) as duplicate:
-                    await routes.api_review_plan(tid, body, None)
-                assert duplicate.value.status_code == 409
-                previous = review["revision"]
-            result = await asyncio.wait_for(execution, 2)
-            assert result["task_receipt"]["task_status"] == "completed"
+            response = await orch.run_turn(cmd, owner, owner["chat_id"], delegate)
+            assert len(response["worker_task_ids"]) == 3
+            goal = goal_view(response["goal_id"], owner["id"], owner["chat_id"])
+            assert len(goal["tasks"]) == 3 and all(not task["dependencies"] for task in goal["tasks"])
+            await until(lambda: len(started) == 1)
+            assert all(task["status"] != "waiting_confirmation" for task in goal["tasks"])
         finally:
-            if not execution.done():
-                execution.cancel()
-                await asyncio.gather(execution, return_exceptions=True)
+            gate.set()
+            await scheduler.shutdown()
     asyncio.run(scenario())
-    assert len(workers) == len(created) == 1
-    assert "plan_review" not in tasks[tid] and "_pipeline_plan_future" not in tasks[tid]
 
 
-@pytest.mark.parametrize("action", ["cancel", "deny", "expire"])
-def test_review_cancel_or_expiry_releases_waiter(monkeypatch, action):
-    tid = "cancel-review"
-    monkeypatch.setitem(tasks, tid, {"task_id": tid, "user_id": 1, "status": "running", "created_at": time.time()})
-    monkeypatch.setattr(routes, "get_current_user", lambda request: {"id": 1})
+def test_pending_revision_cannot_change_running_sibling_or_accept_stale_edit(queue_owner):
+    owner = queue_owner
+
     async def scenario():
-        pending = asyncio.create_task(review_pipeline_plan(tid, {"goal": "goal", "steps": [{"title": "document"}]}))
-        await asyncio.sleep(0)
-        assert not pending.done() and tasks[tid]["status"] == "confirm"
-        if action == "expire":
-            tasks[tid]["created_at"] = time.time() - TASK_TTL - 1
-            cleanup_old_tasks()
-        elif action == "cancel":
-            await routes.api_cancel_task(tid, None)
-        else:
-            await routes.api_deny_task(tid, None)
-        assert await asyncio.wait_for(pending, 1) == {"action": "cancel"}
+        gate = asyncio.Event()
+        started = []
+        async def execute(task):
+            started.append(task["task_id"])
+            await gate.wait()
+            task.update(status="cancelled", commands=[], answer="synthetic end")
+        scheduler = WorkerScheduler(execute)
+        try:
+            result = await scheduler.submit_goal({"user_id":owner["id"], "chat_id":owner["chat_id"],
+                "message":"Create two documents", "device_ids":[f"{owner['id']}:pc"],
+                "created_at":time.time(), "kind":"worker"}, [
+                    {"key":"a", "objective":"Document A"}, {"key":"b", "objective":"Document B"}], request_key="two")
+            first, pending = result["tasks"]
+            await until(lambda: started == [first["task_id"]])
+            edited = scheduler.amend_pending(pending["task_id"], owner["id"], owner["chat_id"],
+                expected_revision=1, human_request="Shorten B", objective="Short document B")
+            assert edited["revision"] == 2
+            assert first["proposed_objective"] == "Document A"
+            with pytest.raises(ValueError, match="task_revision_conflict"):
+                scheduler.amend_pending(pending["task_id"], owner["id"], owner["chat_id"],
+                    expected_revision=1, human_request="stale", objective="stale")
+            with pytest.raises(ValueError, match="task_already_dispatched"):
+                scheduler.amend_pending(first["task_id"], owner["id"], owner["chat_id"],
+                    expected_revision=1, human_request="late", objective="late")
+        finally:
+            gate.set()
+            await scheduler.shutdown()
     asyncio.run(scenario())

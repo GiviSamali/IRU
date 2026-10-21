@@ -112,6 +112,6 @@ def test_business_plan_behaves_like_paid_plan_not_free(client):
     )
     run_plan_payload = run_plan_response.json()
 
-    assert run_plan_response.status_code == 200
-    assert run_plan_payload["status"] == "error"
-    assert "подтверждение" not in run_plan_payload.get("error", "").lower()
+    assert run_plan_response.status_code == 410
+    assert run_plan_payload["detail"]["code"] == "execution_mode_unsupported"
+    assert check_daily_command_limit(user["id"])["used"] == 30

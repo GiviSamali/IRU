@@ -10,7 +10,7 @@ const state = {
   devicePanelError: '',
   devicePassportExpanded: false,
   sendTarget: 'single', // 'single' = selected device, 'all' = all devices
-  modes: { pipeline: false, autonomous: false }, // флаги режимов для следующего запроса
+  modes: { autonomous: false }, // флаги режимов для следующего запроса
   explorerOpen: false,
   explorerPath: null,
   explorerHistory: [],

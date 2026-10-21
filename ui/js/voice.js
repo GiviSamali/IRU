@@ -28,10 +28,7 @@
   const START_TIMEOUT_MS = 10000, IDLE_RENEW_MS = 90000, MAX_RETRY_MS = 15000;
   let audioContext = null, source = null, activation = 0, starting = false;
   const labels = { off: '', idle: 'Голос включён · скажите «Иру»', listening: 'Слушаю… · «усни» — ожидание «Иру»',
-    awaiting_plan: 'Запустить План? Скажите «да», «запускай» или «нет»',
-    awaiting_plan_review: 'Изменить план? «Нет» — выполнить, «да» — продиктовать изменения',
     awaiting_command: 'Выполнить действие? «Да» — выполнить, «нет» — отменить',
-    editing_plan: 'Слушаю изменения плана…',
     working: 'Выполняю · микрофон выключен', confirming: 'Нужно подтверждение в чате · микрофон выключен',
     synthesizing: 'Готовлю озвучку…', speaking: 'Отвечаю · «стоп» остановит озвучку' };
   function playMicCue(kind) {
@@ -207,8 +204,6 @@
     }
   }
   const session = createVoiceSession({ listen, speak, stopAudio, cue: playMicCue,
-    choosePlan: (offer, accepted) => chooseVoicePlan(offer, accepted),
-    reviewPlan: (review, changes) => submitPlanReview(review, changes),
     chooseCommand: (offer, accepted) => chooseVoiceCommand(offer, accepted, true),
     submit: text => sendMessage({ voiceText: text }),
     error: error => showToast(error.message, true),
@@ -235,8 +230,6 @@
       if (!response.ok) throw new Error(typeof config.detail === 'string' ? config.detail : 'Озвучка недоступна.');
       if (!config.available) throw new Error('Озвучка не настроена на сервере.');
       session.enable(state.pendingTasks.map(task=>({id:task.task_id,background:task.kind !== 'orchestrator'})),{continuous:true});
-      const reviewMessage = state.messages.find(message => message.planReview);
-      if (reviewMessage) session.taskPlanReview(reviewMessage._taskId, reviewMessage.planReview);
       const confirmationMessage = state.messages.find(message => message.confirmTaskId && message.commandConfirmation?.voice_allowed === true);
       if (confirmationMessage) session.taskPaused(confirmationMessage._taskId, confirmationMessage.commandConfirmation);
     } catch (error) { if (id === activation) { reset(); showToast(error.message, true); } }

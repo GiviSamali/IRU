@@ -27,7 +27,7 @@ _TRACE_LABELS = frozenset({"nl", "onboarding", "pipeline", "non_pipeline", "broa
     "running", "done", "completed", "completed_with_recovery", "failed", "error", "blocked", "cancelled", "confirm",
     "success", "unknown", "partial", "terminal", "pending", "server", "model", "answer_text", "answer_tool", "audited_terminal",
     "pipeline_step_report", "per_device_report", "server_fallback", "trust_guard", "plan_suggestion", "answer_auditor", "invalid_plan",
-    "classification_fallback", "plan_keyword", "window_policy", "classification_model", "explicit_pipeline",
+    "goal_task_queue", "classification_fallback", "plan_keyword", "window_policy", "classification_model", "explicit_pipeline",
     "plan_declined", "orchestrator_decision", "protocol_recovery", "ordinary_task", "other", "grounded_report", "partial_report",
     "ask_clarification", "report_failure", "request_confirmation", "dialogue", "conversation", "factual_answer",
     "history", "iteration_limit", "no_progress", "success_criteria", "browser_answer_unavailable", "completed_successfully",

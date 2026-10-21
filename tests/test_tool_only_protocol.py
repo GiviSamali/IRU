@@ -2,10 +2,9 @@ import asyncio
 import json
 
 import server.controller_non_pipeline as controller_non_pipeline
-import server.controller_pipeline as controller_pipeline
 import server.runtime_state as runtime_state
 from server.controller_non_pipeline import process_non_pipeline_command
-from server.controller_pipeline import process_pipeline_subagents, run_pipeline_worker
+from server.controller_tools import NON_PIPELINE_TOOLS
 from server.run_journal import validate_answer_text_payload, wrap_tool_result_for_llm
 from server.tool_completion import tool_result_terminal_sufficient
 from server.tool_registry import canonical_tool_name, list_tools
@@ -64,7 +63,7 @@ def _message(content="", tool_calls=None, finish_reason="tool_calls"):
     return {"choices": [{"finish_reason": finish_reason, "message": msg}]}
 
 
-def _run_case(
+def _run_case_unbound(
     responses,
     *,
     user_message="Задача",
@@ -100,12 +99,24 @@ def _run_case(
         system_msg="system",
         machine_guid=None,
         mem_user_id=mem_user_id,
-        non_pipeline_tools=[],
+        non_pipeline_tools=NON_PIPELINE_TOOLS,
         max_iterations=max_iterations,
         pick_model_fn=lambda cfg, modes: "mock-model",
         chat_completion_request_fn=_completion_fn(responses, captured),
         device_tool_fn=device_tool_fn,
     ))
+
+
+def _run_case(responses, *, memory_authorizations=None, **kwargs):
+    from server.memory_intent_guard import ORIGINAL_WORKER_REQUEST, MEMORY_AUTHORIZATION, bind_memory_authorization
+    request=kwargs.get("user_message","Задача")
+    original=ORIGINAL_WORKER_REQUEST.set(request)
+    authorization=MEMORY_AUTHORIZATION.set(bind_memory_authorization(request,memory_authorizations or []))
+    try:
+        return _run_case_unbound(responses,**kwargs)
+    finally:
+        MEMORY_AUTHORIZATION.reset(authorization)
+        ORIGINAL_WORKER_REQUEST.reset(original)
 
 
 def test_raw_conceptual_answer_is_rejected_then_answer_text_succeeds():
@@ -145,101 +156,34 @@ def test_non_pipeline_cancelled_task_stops_before_next_tool():
     assert result["commands"][0]["status"] == "cancelled"
 
 
-def test_pipeline_worker_cancelled_task_stops_before_llm_and_tool(monkeypatch):
-    monkeypatch.setattr(controller_pipeline, "is_task_cancel_requested", lambda task_id: task_id == "pipeline-cancel")
-
-    async def _completion_should_not_run(**kwargs):
-        raise AssertionError("pipeline worker must not call LLM after cancellation")
-
-    async def _send_should_not_run(device_id, action, params):
-        raise AssertionError("pipeline worker must not run tools after cancellation")
-
-    result = asyncio.run(run_pipeline_worker(
-        client=None,
-        cfg={"model": "mock-model"},
-        model="mock-model",
-        shared={
-            "current_device_id": "device-1",
-            "target_device_id": "device-1",
-            "current_hostname": "devbox",
-        },
-        overall_goal="goal",
-        step={"id": "s1", "title": "Step 1", "instruction": "Do work"},
-        completed_steps=[],
-        chat_history=[],
-        send_command_fn=_send_should_not_run,
-        get_file_link_fn=lambda device_id, path: "/api/download/mock",
-        machine_guid=None,
-        mem_user_id=None,
-        poll_task_id="pipeline-cancel",
-        step_index=0,
-        chat_completion_request_fn=_completion_should_not_run,
-        worker_tools=[],
-    ))
-
-    assert result["status"] == "cancelled"
-    assert result["commands"][0]["tool_name"] == "task.cancel"
-    assert result["commands"][0]["status"] == "cancelled"
+def test_goal_member_cancelled_task_stops_before_llm_and_tool(monkeypatch):
+    monkeypatch.setitem(runtime_state.tasks,"goal-cancel",{"task_id":"goal-cancel","goal_id":"goal",
+        "proposed_objective":"Create result","status":"cancelling","cancel_requested":True})
+    async def forbidden(*args,**kwargs):raise AssertionError("Cancelled Worker must not dispatch")
+    captured=[]
+    result=_run_case([],poll_task_id="goal-cancel",send_command_fn=forbidden,captured=captured)
+    assert not captured and result["cancelled"] is True
+    assert result["commands"][0]["tool_name"]=="task.cancel"
+    assert result["commands"][0]["status"]=="cancelled"
 
 
-def test_pipeline_worker_write_then_execute_marker_does_not_skip_verification():
-    sent = []
-
-    async def _send(device_id, action, params):
+def test_common_worker_write_then_execute_marker_still_runs_verification():
+    sent=[]
+    async def send(device,action,params):
         sent.append(action)
-        if action == "write_content":
-            return {"status": "ok", "path": params["path"], "bytes_written":13}
-        if action == "execute_cmd":
-            return {"returncode": 0, "stdout": "OK: open_requested C:/Temp/page.html", "stderr": ""}
-        if action == "window.find":
-            return {"status":"success","matches":[{"title":"page.html"}]}
+        if action=="write_content":return {"status":"ok","path":params["path"],"bytes_written":13}
+        if action=="execute_cmd":return {"returncode":0,"stdout":"OK: open_requested C:/Temp/page.html","stderr":""}
+        if action=="window.find":return {"status":"success","matches":[{"title":"page.html"}]}
         raise AssertionError(action)
-
-    result = asyncio.run(run_pipeline_worker(
-        client=None,
-        cfg={"model": "mock-model", "answer_auditor_enabled": False},
-        model="mock-model",
-        shared={
-            "current_device_id": "device-1",
-            "target_device_id": "device-1",
-            "current_hostname": "devbox",
-            "current_os": "Windows",
-            "current_os_version": "10",
-            "devices_block": "- device-1 devbox Windows online",
-            "device_profile_block": "",
-            "device_context_block": "",
-            "target_device_block": "",
-            "device_memory_block": "",
-            "os_rules": "Use PowerShell on Windows.",
-            "current_datetime_msk": "2026-06-11 12:00:00 MSK",
-        },
-        overall_goal="create and open html",
-        step={"id": "s1", "title": "Create and open", "instruction": "Create HTML and open it",
-              "completion_check": {"tool": "execute_cmd", "stdout_contains": "OK: open_requested C:/Temp/page.html"}},
-        completed_steps=[],
-        chat_history=[],
-        send_command_fn=_send,
-        get_file_link_fn=lambda device_id, path: "/api/download/mock",
-        machine_guid=None,
-        mem_user_id=None,
-        poll_task_id=None,
-        step_index=0,
-        chat_completion_request_fn=_completion_fn([
-            _message(tool_calls=[_tool_call("call-write", "write_content", {
-                "path": "C:/Temp/page.html",
-                "content": "<html></html>",
-            })]),
-            _message(tool_calls=[_execute_call("call-open", "start C:/Temp/page.html")]),
-            _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "page.html"})]),
-            _message(tool_calls=[_answer_call("final", "File written and window observed", answer_type="grounded_report", basis=["step_1","step_3"])]),
-        ]),
-        worker_tools=[],
-    ))
-
-    assert sent == ["write_content", "execute_cmd", "window.find"]
-    assert result["status"] == "ok"
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "execute_cmd", "window.find", "answer.text"]
-    assert result["commands"][-1]["result"]["basis"] == ["step_1","step_3"]
+    result=_run_case([
+        _message(tool_calls=[_tool_call("write","write_content",{"path":"C:/Temp/page.html","content":"<html></html>"})]),
+        _message(tool_calls=[_execute_call("open","start C:/Temp/page.html")]),
+        _message(tool_calls=[_tool_call("verify","window_find",{"title_contains":"page.html"})]),
+        _message(tool_calls=[_answer_call("final","File written and window observed",answer_type="grounded_report",basis=["step_1","step_3"])])],
+        user_message="Create and open HTML",send_command_fn=send)
+    assert sent==["write_content","execute_cmd","window.find"]
+    assert [entry["tool_name"] for entry in result["commands"]]==["write_content","execute_cmd","window.find","answer.text"]
+    assert result["commands"][-1]["result"]["basis"]==["step_1","step_3"]
 
 
 def test_conceptual_answer_through_answer_text_succeeds_without_external_tool():
@@ -350,7 +294,7 @@ def test_execute_cmd_marker_does_not_complete_whole_goal():
 
 
 def test_write_content_large_payload_is_compacted_in_journal_and_llm_result():
-    large_content = "<html>\n" + ("A" * 6000) + "\n</html>"
+    large_content = "<html>\n" + ("A" * 3800) + "\n</html>"
     sent = []
     captured = []
 
@@ -375,7 +319,7 @@ def test_write_content_large_payload_is_compacted_in_journal_and_llm_result():
     command = result["commands"][0]
     dumped_command = json.dumps(command, ensure_ascii=False)
     assert large_content not in dumped_command
-    assert "A" * 5000 not in dumped_command
+    assert "A" * 3000 not in dumped_command
     assert command["command"] == "[write] C:/Temp/large.html"
     assert command["result"]["path"] == "C:/Temp/large.html"
     assert command["result"]["chars_written"] is None
@@ -387,13 +331,13 @@ def test_write_content_large_payload_is_compacted_in_journal_and_llm_result():
     wrapped = wrap_tool_result_for_llm(command)
     dumped_wrapped = json.dumps(wrapped, ensure_ascii=False)
     assert large_content not in dumped_wrapped
-    assert "A" * 5000 not in dumped_wrapped
+    assert "A" * 3000 not in dumped_wrapped
     assert wrapped["result"]["content_sha256"] == command["result"]["content_sha256"]
 
     tool_messages = [msg for msg in captured[1]["messages"] if msg.get("role") == "tool"]
     assert tool_messages
     assert large_content not in tool_messages[-1]["content"]
-    assert "A" * 5000 not in tool_messages[-1]["content"]
+    assert "A" * 3000 not in tool_messages[-1]["content"]
 
 
 def test_write_content_error_basis_blocks_completed_success_claim():
@@ -893,7 +837,8 @@ def test_remember_fact_allowed_with_explicit_memory_intent(monkeypatch):
             answer_type="grounded_report",
             basis=["step_1"],
         )]),
-    ], user_message="Запомни, что основной браузер на этом ПК - Comet", mem_user_id="user-1")
+    ], user_message="Запомни, что основной браузер на этом ПК - Comet", mem_user_id="user-1",
+        memory_authorizations=[{"operation":"remember_fact","human_quote":"Запомни, что основной браузер на этом ПК - Comet"}])
 
     assert saved == [("user-1", "основной браузер - Comet", "preference")]
     assert result["commands"][0]["result"]["status"] == "ok"
@@ -1187,7 +1132,7 @@ def test_auditor_rejects_invalid_answer_and_retry_succeeds():
         system_msg="system",
         machine_guid=None,
         mem_user_id=None,
-        non_pipeline_tools=[],
+        non_pipeline_tools=NON_PIPELINE_TOOLS,
         max_iterations=5,
         pick_model_fn=lambda cfg, modes: "real-ish",
         chat_completion_request_fn=_chat_completion_request_fn,
@@ -1197,179 +1142,47 @@ def test_auditor_rejects_invalid_answer_and_retry_succeeds():
     assert any(kwargs.get("tools") is None for kwargs in captured)
 
 
-def test_pipeline_validated_steps_require_final_goal_summary(monkeypatch):
-    def _legacy_trust_should_not_run(answer, commands):
-        raise AssertionError("legacy enforce_trusted_answer must not run for pipeline answer_text")
-
-    monkeypatch.setattr(controller_pipeline, "enforce_trusted_answer", _legacy_trust_should_not_run)
-    final_text = "pipeline ok with failed/error words and /api/download/not_allowed"
-    responses = [
-        _message(json.dumps({
-            "goal": "verify task",
-            "steps": [{"title": "run check", "instruction": "run check", "device_id": "device-1"}],
-        }), tool_calls=None, finish_reason="stop"),
-        _message(tool_calls=[_execute_call("call-exec", "echo ok")]),
-        _message(tool_calls=[_answer_call("call-step-answer", "step ok", answer_type="grounded_report", basis=["step_1"])]),
-        _message("raw final summary", tool_calls=None, finish_reason="stop"),
-        _message(tool_calls=[_answer_call("call-final", final_text, answer_type="grounded_report", basis=["step_1"])]),
-    ]
-    captured = []
-    finished = []
-    step_status = {}
-
-    monkeypatch.setattr("server.controller_pipeline.db.create_task", lambda **kwargs: 1)
-    monkeypatch.setattr("server.controller_pipeline.db.update_step", lambda task_id, idx, status, summary=None: step_status.__setitem__(idx, status) or True)
-    monkeypatch.setattr("server.controller_pipeline.db.finish_task", lambda task_id, status: finished.append(status) or True)
-    monkeypatch.setattr("server.controller_pipeline.collect_tasks", lambda task_ids: [{
-        "id": 1,
-        "goal": "verify task",
-        "status": finished[-1] if finished else "running",
-        "steps": [{"idx": idx, "status": status} for idx, status in sorted(step_status.items())],
-    }])
-    monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
-    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
-    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id, device_id: "")
-    monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
-
-    async def _send(device_id, action, params):
-        return {"returncode": 0, "stdout": "ok", "stderr": ""}
-
-    result = asyncio.run(process_pipeline_subagents(
-        user_message="verify task",
-        device_id="device-1",
-        device_info={"hostname": "devbox", "os": "Windows"},
-        all_devices={"device-1": {"info": {"hostname": "devbox", "os": "Windows"}}},
-        send_command_fn=_send,
-        get_file_link_fn=lambda device_id, path: "/api/download/mock",
-        chat_history=[],
-        user_id=1,
-        chat_id=1,
-        device_profile=None,
-        modes={},
-        poll_task_id=None,
-        load_llm_config_fn=lambda: {"model": "mock-model", "max_tokens": 1000, "answer_auditor_enabled": False},
-        pick_model_fn=lambda cfg, modes: "mock-model",
-        chat_completion_request_fn=_completion_fn(responses, captured),
-        worker_tools=[],
-        windows_rules="windows rules",
-        linux_rules="linux rules",
-    ))
-
-    assert result["answer"] == final_text
-    assert not (result.get("task_receipt") or {}).get("goal_completed")
-    assert finished == ["completed"]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text", "answer.text"]
-    assert any(item.get("phase") == "pipeline.final" for item in captured)
-
-
-def test_pipeline_worker_max_iterations_runs_answer_only_repair(monkeypatch):
-    monkeypatch.setattr(controller_pipeline, "PIPELINE_WORKER_MAX_ITERATIONS", 2)
-    final_text = "pipeline final ok"
-    responses = [
-        _message(json.dumps({
-            "goal": "verify task",
-            "steps": [{"title": "run check", "instruction": "run check", "device_id": "device-1"}],
-        }), tool_calls=None, finish_reason="stop"),
-        _message(tool_calls=[_execute_call("call-exec", "echo ok")]),
-        _message(tool_calls=[_answer_call("call-repair-step", "step repaired", answer_type="grounded_report", basis=["step_1"])]),
-        _message(tool_calls=[_answer_call("call-final", final_text, answer_type="grounded_report", basis=["step_1"])]),
-    ]
-    captured = []
-    finished = []
-    step_status = {}
-    sent = []
-
-    monkeypatch.setattr("server.controller_pipeline.db.create_task", lambda **kwargs: 1)
-    monkeypatch.setattr("server.controller_pipeline.db.update_step", lambda task_id, idx, status, summary=None: step_status.__setitem__(idx, status) or True)
-    monkeypatch.setattr("server.controller_pipeline.db.finish_task", lambda task_id, status: finished.append(status) or True)
-    monkeypatch.setattr("server.controller_pipeline.collect_tasks", lambda task_ids: [{
-        "id": 1,
-        "goal": "verify task",
-        "status": finished[-1] if finished else "running",
-        "steps": [{"idx": idx, "status": status} for idx, status in sorted(step_status.items())],
-    }])
-    monkeypatch.setattr("server.controller_pipeline.push_tasks_view", lambda *args, **kwargs: None)
-    monkeypatch.setattr("server.controller_pipeline.db.get_device_profile", lambda device_id, **kw: None)
-    monkeypatch.setattr("server.controller_pipeline.build_memory_block", lambda machine_guid, user_id, device_id: "")
-    monkeypatch.setattr("server.controller_pipeline.db.add_command_memory", lambda **kwargs: None)
-
-    async def _send(device_id, action, params):
+def test_common_terminal_result_requires_no_second_final_summary(monkeypatch):
+    def forbidden(*args):raise AssertionError("Validated terminal payload must not pass legacy trust rewrite")
+    monkeypatch.setattr(controller_non_pipeline,"enforce_trusted_answer",forbidden,raising=False)
+    captured=[];sent=[]
+    async def send(device,action,params):
         sent.append(action)
-        return {"returncode": 0, "stdout": "ok", "stderr": ""}
-
-    result = asyncio.run(process_pipeline_subagents(
-        user_message="verify task",
-        device_id="device-1",
-        device_info={"hostname": "devbox", "os": "Windows"},
-        all_devices={"device-1": {"info": {"hostname": "devbox", "os": "Windows"}}},
-        send_command_fn=_send,
-        get_file_link_fn=lambda device_id, path: "/api/download/mock",
-        chat_history=[],
-        user_id=1,
-        chat_id=1,
-        device_profile=None,
-        modes={},
-        poll_task_id=None,
-        load_llm_config_fn=lambda: {"model": "mock-model", "max_tokens": 1000, "answer_auditor_enabled": False},
-        pick_model_fn=lambda cfg, modes: "mock-model",
-        chat_completion_request_fn=_completion_fn(responses, captured),
-        worker_tools=[],
-        windows_rules="windows rules",
-        linux_rules="linux rules",
-    ))
-
-    assert result["answer"] == final_text
-    assert any(cmd.get("result", {}).get("text") == "step repaired" for cmd in result["commands"])
-    assert sent == ["execute_cmd"]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text", "answer.text"]
-    repair_calls = [kwargs for kwargs in captured if [tool["function"]["name"] for tool in (kwargs.get("tools") or [])] == ["answer_text"]]
-    assert repair_calls
+        return {"returncode":0,"stdout":"observed value","stderr":""}
+    result=_run_case([_message(tool_calls=[_execute_call("read","Get-Content C:/Temp/value.txt")]),
+        _message(tool_calls=[_answer_call("final","Observed value",answer_type="grounded_report",basis=["step_1"])])],
+        captured=captured,send_command_fn=send)
+    assert result["answer"]=="Observed value" and len(captured)==2
+    assert sent==["execute_cmd"]
+    assert [entry["tool_name"] for entry in result["commands"]]==["execute_cmd","answer.text"]
+    assert (result.get("task_receipt") or {}).get("goal_completed") is not True
 
 
-def test_pipeline_long_running_transport_timeout_keeps_original_error():
-    sent = []
+def test_goal_worker_iteration_limit_uses_existing_answer_only_repair(monkeypatch):
+    monkeypatch.setitem(runtime_state.tasks,"repair-goal",{"task_id":"repair-goal","goal_id":"goal",
+        "proposed_objective":"Inspect a value","execution_scope":"general","window_effects":[]})
+    captured=[];sent=[]
+    async def send(device,action,params):
+        sent.append(action)
+        return {"returncode":0,"stdout":"observed value","stderr":""}
+    result=_run_case([_message(tool_calls=[_execute_call("read","Get-Content C:/Temp/value.txt")]),
+        _message(tool_calls=[_answer_call("repair","Observed value",answer_type="grounded_report",basis=["step_1"])])],
+        poll_task_id="repair-goal",send_command_fn=send,captured=captured,max_iterations=1)
+    assert result["answer"]=="Observed value" and sent==["execute_cmd"]
+    assert [tool["function"]["name"] for tool in captured[-1]["tools"]]==["answer_text"]
+    assert [entry["tool_name"] for entry in result["commands"]]==["execute_cmd","answer.text"]
 
-    async def _send(device_id, action, params):
-        sent.append((action, dict(params)))
+
+def test_common_long_running_transport_timeout_keeps_original_error():
+    sent=[]
+    async def send(device,action,params):
+        sent.append((action,dict(params)))
         raise TimeoutError("Таймаут выполнения команды")
-
-    result = asyncio.run(run_pipeline_worker(
-        client=None,
-        cfg={"model": "mock-model", "answer_auditor_enabled": False},
-        model="mock-model",
-        shared={
-            "current_device_id": "device-1",
-            "target_device_id": "device-1",
-            "current_hostname": "devbox",
-            "current_os": "Windows",
-            "current_os_version": "10",
-            "devices_block": "- device-1 devbox Windows online",
-            "device_profile_block": "",
-            "device_context_block": "",
-            "target_device_block": "",
-            "device_memory_block": "",
-            "os_rules": "Use PowerShell on Windows.",
-            "current_datetime_msk": "2026-06-11 12:00:00 MSK",
-        },
-        overall_goal="Launch application",
-        step={"id": "s1", "title": "Launch", "instruction": "Launch application"},
-        completed_steps=[], chat_history=[], send_command_fn=_send,
-        get_file_link_fn=lambda device_id, path: "/api/download/mock",
-        machine_guid=None, mem_user_id=None, poll_task_id=None, step_index=0,
-        chat_completion_request_fn=_completion_fn([
-            _message(tool_calls=[_tool_call("exec", "execute_cmd", {
-                "command": "start application", "long_running": True,
-            })]),
-            _message(tool_calls=[_answer_call(
-                "final", "Запуск не подтверждён", answer_type="partial_report", basis=["step_1"],
-            )]),
-        ]),
-        worker_tools=[],
-    ))
-    assert [action for action, _ in sent] == ["execute_cmd"]
-    assert sent[0][1]["timeout"] == 5
-    command_result = result["commands"][0]["result"]
-    assert command_result["error"] == "Таймаут выполнения команды"
-    assert "stdout" not in command_result
-    assert "launch_requested" not in json.dumps(command_result)
+    result=_run_case([_message(tool_calls=[_tool_call("exec","execute_cmd",{"command":"start application","long_running":True})]),
+        _message(tool_calls=[_answer_call("final","Запуск не подтверждён",answer_type="partial_report",basis=["step_1"])])],
+        user_message="Launch application",send_command_fn=send)
+    assert [action for action,_ in sent]==["execute_cmd"] and sent[0][1]["timeout"]==5
+    observation=result["commands"][0]["result"]
+    assert observation["error"]=="Таймаут выполнения команды"
+    assert "stdout" not in observation and "launch_requested" not in json.dumps(observation)
     assert not tool_result_terminal_sufficient(result["commands"][0])

@@ -135,14 +135,14 @@ def test_ordinary_confirmation_retains_controller_and_does_not_repeat_completed_
             for _ in range(300):
                 if task.get('status')=='confirm':break
                 await asyncio.sleep(.01)
-            assert task['status']=='confirm' and '_pipeline_confirm_future' in task
+            assert task['status']=='confirm' and '_command_confirm_future' in task
             assert len(device.calls)==1
             data=copy.deepcopy(task['confirm_data'])
             original_user=routes.get_current_user
             monkeypatch.setattr(routes,'get_current_user',lambda request:{'id':owner['id']+100})
             with pytest.raises(HTTPException) as foreign:
                 await routes.api_confirm_task(task['task_id'],None,confirmation_id=data['confirmation_id'])
-            assert foreign.value.status_code==404 and not task['_pipeline_confirm_future'].done()
+            assert foreign.value.status_code==404 and not task['_command_confirm_future'].done()
             monkeypatch.setattr(routes,'get_current_user',original_user)
             if choice in {'confirm','concurrent'}:
                 with pytest.raises(HTTPException):
@@ -232,7 +232,7 @@ def test_ordinary_confirmation_stops_safely_when_wait_expires_or_server_restarts
             row=owned_job(task['task_id'],owner['id'])
             assert row['state']==('blocked' if finish=='timeout' else 'unknown')
             restored=restore_task(row)
-            assert not restored.get('_pipeline_confirm_future')
+            assert not restored.get('_command_confirm_future')
             assert not build_worker_report(restored)['goal_completed']
             if finish=='timeout':
                 assert 'Команда не выполнялась' in worker_presentation(restored)['conversational_response']
