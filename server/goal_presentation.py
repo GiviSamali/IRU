@@ -48,9 +48,12 @@ def goal_presentation(goal: dict) -> dict:
         status = "failed"
 
     artifacts = []
+    shown = []
     seen = set()
     for member in finished:
         report = member.get("report") or {}
+        expected = [str(item).casefold().replace("\\\\", "/")
+                    for item in member.get("expected_artifacts") or [] if isinstance(item, str)]
         for file in report.get("artifacts") or []:
             if not isinstance(file, dict) or file.get("verified") is not True:
                 continue
@@ -61,14 +64,22 @@ def goal_presentation(goal: dict) -> dict:
             if ident in seen:
                 continue
             seen.add(ident)
-            artifacts.append({"path": path, "name": file.get("name") or PureWindowsPath(path).name,
-                              "device_id": file.get("device_id"), "task_id": member.get("task_id"),
-                              "verified": True})
-    # Hide helper scripts from the short human summary; they remain available
-    # in the underlying Worker reports for troubleshooting.
-    final_suffixes = (".docx", ".pptx", ".xlsx", ".pdf", ".csv", ".txt", ".md", ".html")
-    final_files = [a for a in artifacts if str(a["name"]).lower().endswith(final_suffixes)]
-    shown = (final_files or artifacts)[:8]
+            name = file.get("name") or PureWindowsPath(path).name
+            artifact = {"path":path, "name":name, "device_id":file.get("device_id"),
+                        "task_id":member.get("task_id"),"verified":True}
+            artifacts.append(artifact)
+            # A helper generator (.py, scripts/helpers) is not the deliverable
+            # unless the assignment explicitly identifies that file as output.
+            canonical_path = path.casefold().replace("\\\\", "/")
+            canonical_name = str(name).casefold()
+            if expected:
+                user_output = any(value == canonical_path or value == canonical_name
+                                  or value.split("/")[-1] == canonical_name for value in expected)
+            else:
+                user_output = ("/scripts/helpers/" not in canonical_path
+                               and not canonical_name.endswith((".py", ".ps1", ".sh", ".tmp")))
+            if user_output and len(shown) < 8:
+                shown.append(artifact)
 
     if success:
         message = ("Готово." if total == 1 else f"Готово. Подтверждены все {total} результата.")
