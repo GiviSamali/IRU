@@ -145,7 +145,7 @@ def test_recovery_never_restarts_deleted_chat_jobs(context, monkeypatch, dispatc
             await scheduler.recover()
             orphan = queue.owned_job("orphan-before-restart", owner["id"])
             assert orphan["state"] == ("unknown" if dispatched else "cancelled")
-            assert orphan["payload"].find("dispatch_started_at") != -1 if dispatched else True
+            assert ("dispatch_started_at" in json.loads(orphan["payload"])) is dispatched
             assert queue.owned_job("keep-before-restart", owner["id"])["state"] == "running"
             assert started == [owner["id"]]
         finally:
