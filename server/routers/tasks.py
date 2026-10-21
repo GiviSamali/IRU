@@ -666,6 +666,26 @@ async def api_get_task(task_id: str, request: Request):
     if task.get("auto_plan"):
         response_task["auto_plan"] = True
 
+    if task.get("kind") == "orchestrator" and task.get("result_first") and task.get("goal_id"):
+        try:
+            from ..worker_scheduler import goal_view
+            from ..goal_presentation import goal_presentation
+        except ImportError:
+            from worker_scheduler import goal_view
+            from goal_presentation import goal_presentation
+        try:
+            presentation = goal_presentation(goal_view(task["goal_id"], user["id"], task["chat_id"]))
+        except ValueError:
+            # A deleted or inaccessible Goal never gives access to another chat.
+            presentation = {"status": "unknown", "terminal": True,
+                            "message": "Результат цели недоступен или её чат удалён.",
+                            "artifacts": []}
+        response_task.update(
+            kind="goal", result_first=True, goal_presentation=presentation,
+            status="done" if presentation["terminal"] else "running",
+            presentation_status=presentation["status"],
+            conversational_response=presentation["message"],
+            answer=presentation["message"])
     return {"status": "ok", "task": response_task}
 
 
