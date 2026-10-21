@@ -253,6 +253,7 @@ def goal_view(goal_id, owner, chat_id):
             edges = [dict(edge) for edge in c.execute("SELECT source_task_id,result_id FROM worker_dependencies WHERE task_id=? ORDER BY source_task_id", (row["task_id"],))]
             members.append({"task_id": row["task_id"], "revision": row["revision"],
                             "objective": payload.get("proposed_objective") or payload.get("message"),
+                            "expected_artifacts": payload.get("assigned_artifacts") or [],
                             "status": row["state"], "report": report, "dependencies": edges,
                             "result": dict(result) if result else None})
         for member in members:
