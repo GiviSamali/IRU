@@ -352,7 +352,16 @@ async def nl_command(cmd: NLCommand, request: Request):
         if cmd.broadcast:
             targets=list(user_devs)
         if choice.scope=="server":
-            if targets:raise ValueError("server_scope_has_device_targets")
+            # Scope describes execution, not the selected UI device. A purely
+            # server-side assignment must not inherit that device. Mixed goals
+            # need an explicit device subset on every assignment.
+            if any(item.target_device_ids for item in choice.assignments):
+                if any(item.target_device_ids is None for item in choice.assignments):
+                    raise ValueError("mixed_goal_requires_explicit_assignment_devices")
+                targets = list(dict.fromkeys([*targets, *( _dk(user["id"], did)
+                    for item in choice.assignments for did in (item.target_device_ids or []))]))
+            else:
+                targets=[]
         elif not targets:
             raise ValueError("target_device_required")
         assignments = []

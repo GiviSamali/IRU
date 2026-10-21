@@ -42,6 +42,7 @@ class Assignment(BaseModel):
     objective: str = Field(min_length=1, max_length=4000)
     depends_on: list[str] = Field(default_factory=list, max_length=15)
     required_source_task_ids: list[str] = Field(default_factory=list, max_length=8)
+    replaces_source_task_id: str | None = Field(default=None, min_length=1, max_length=64)
     target_device_ids: list[str] | None = Field(default=None, max_length=8)
     execution_scope: Literal["general","window"] | None = None
     window_effects: list[WindowEffect] | None = Field(default=None, max_length=16)
@@ -201,6 +202,12 @@ depends_on — локальные key этого решения. required_source
 существующих задач той же цели: их отсутствие блокирует выполнение. source_task_ids остаются
 только контекстом, не зависимостью и не разрешением. Не делай зависимость от старого результата,
 если человек поручил получить новые данные. Продолжение цели не разрешает повторять старые действия.
+Нельзя ждать уже завершённый partial/failed как обязательный успешный результат.
+Если человек поручает завершить исследование после partial/failed, создай самостоятельное
+исследование без depends_on/required_source_task_ids, укажи replaces_source_task_id старого
+исследования, его goal_id/goal_revision и source_task_ids только для контекста. Scheduler
+явно перепривяжет ожидающие потребители к новому исследованию; running/unknown не заменяются.
+Не создавай новые копии документных поручений, уже ожидающих это исследование.
 Для изменения ещё не начатого поручения выбери amend с task_id, task_revision из контекста
 и полным уточнённым objective. Не добавляй действия из предположений. Работающую задачу
 нельзя молча изменить. Для состояния общей цели используй task_status с goal_id.
@@ -268,6 +275,8 @@ def context_for(user_id, chat_id, message, selected):
             (user_id,chat_id))]
         goals = {row['goal_id']: row['revision'] for row in c.execute(
             "SELECT goal_id,revision FROM worker_goals WHERE owner_user_id=? AND chat_id=?", (user_id, chat_id))}
+        dependency_sources={row["task_id"]:[edge[0] for edge in c.execute(
+            "SELECT source_task_id FROM worker_dependencies WHERE task_id=?",(row["task_id"],))] for row in recent_jobs}
     device_records={p["device_id"]:{"device_id":p["device_id"],"name":str(p.get("hostname") or "")[:80],"platform":str(p.get("os") or "unknown")[:24],"registered":True,"online":False} for p in registered[:16]}
     for key,dev in online.items():
         info=dev.get("info") or {};short=_short_did(key)
@@ -295,6 +304,8 @@ def context_for(user_id, chat_id, message, selected):
         objective = payload.get("proposed_objective") or payload.get("message", "")
         jobs.append({"task_id":row["task_id"],"chat_id":row["chat_id"],"in_current_chat":row["chat_id"]==chat_id,"objective":clip_context_text(objective,220),"objective_truncated":len(objective)>220,"status":live_status,"device_ids":[_short_did(d) for d in payload.get("device_ids",[])],
             "goal_id":payload.get("goal_id"),"goal_revision":goals.get(payload.get("goal_id")),
+            "dependency_source_task_ids":dependency_sources.get(row["task_id"],[]),
+            "replaces_source_task_id":payload.get("replaces_source_task_id"),
             "task_revision":payload.get("assignment_revision",1) if payload.get("goal_id") else None,
             "created_at":row["created_at"],"requires_user_action":live_status=="waiting_confirmation","report":report,
             "saved_reports":[{"step_id":r["step_id"],"chars":len(r["text"])} for r in saved_reports],

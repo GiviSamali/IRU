@@ -238,10 +238,13 @@ def goal_view(goal_id, owner, chat_id):
         if not goal or not c.execute("SELECT 1 FROM chats WHERE id=? AND user_id=?", (chat_id, owner)).fetchone():
             raise ValueError("goal_not_owned_or_in_chat")
         members = []
+        replacements = {}
         for row in c.execute("""SELECT j.*,g.revision FROM worker_jobs j JOIN worker_goal_tasks g
             ON g.task_id=j.task_id WHERE g.goal_id=? AND j.owner_user_id=? AND j.chat_id=?
             ORDER BY j.created_at,j.rowid""", (goal_id, owner, chat_id)):
             payload = json.loads(row["payload"])
+            if payload.get("replaces_source_task_id"):
+                replacements[payload["replaces_source_task_id"]] = row["task_id"]
             snapshot = payload.get("worker_report")
             report = snapshot if isinstance(snapshot, dict) else json.loads(row["report"] or "{}")
             if report.get("status") != row["state"] or report.get("task_id") != row["task_id"]:
@@ -252,9 +255,13 @@ def goal_view(goal_id, owner, chat_id):
                             "objective": payload.get("proposed_objective") or payload.get("message"),
                             "status": row["state"], "report": report, "dependencies": edges,
                             "result": dict(result) if result else None})
-        completed = bool(members) and all(member["status"] == "success"
-            and member["report"].get("goal_completed") is True and member["result"] for member in members)
-        states = {member["status"] for member in members}
+        for member in members:
+            member["superseded_by"] = replacements.get(member["task_id"])
+            member["required_for_goal"] = not bool(member["superseded_by"])
+        required = [member for member in members if member["required_for_goal"]]
+        completed = bool(required) and all(member["status"] == "success"
+            and member["report"].get("goal_completed") is True and member["result"] for member in required)
+        states = {member["status"] for member in required}
         status = ("success" if completed else "running" if states.intersection(ACTIVE_STATES)
                   else "queued" if "queued" in states else "waiting_dependency" if "waiting_dependency" in states
                   else "unknown" if "unknown" in states else "cancelled" if states == {"cancelled"}
@@ -526,6 +533,7 @@ class WorkerScheduler:
             "execution_scope":base_scope,"window_effects":base_effects,
         }).encode()).hexdigest()
         admitted = []
+        rebound = {}
         with db.get_db() as c:
             c.execute("BEGIN IMMEDIATE")
             old = c.execute("SELECT * FROM worker_goal_requests WHERE owner_user_id=? AND request_key=?",
@@ -547,6 +555,7 @@ class WorkerScheduler:
             elif expected_revision is not None:
                 raise ValueError("goal_reference_required")
             external = {}
+            replacements = {}
             for assignment in assignments:
                 source_ids = assignment.get("required_source_task_ids", [])
                 if (not isinstance(source_ids, list) or any(not isinstance(s, str) for s in source_ids)
@@ -560,6 +569,36 @@ class WorkerScheduler:
                         raise ValueError("dependency_scope_mismatch")
                     if not set(json.loads(source["payload"]).get("device_ids") or []).issubset(assignment_devices[assignment["key"]]):
                         raise ValueError("dependency_device_not_allowed")
+                    if source["state"] in {"partial","failed","blocked","cancelled","unknown"}:
+                        raise ValueError("dependency_source_not_successful")
+                replacement = assignment.get("replaces_source_task_id")
+                if replacement is not None:
+                    if not isinstance(replacement,str) or not replacement or replacement in replacements:
+                        raise ValueError("invalid_dependency_replacement")
+                    if source_ids or graph[assignment["key"]]:
+                        raise ValueError("replacement_must_be_independent")
+                    source = c.execute("""SELECT j.*,g.goal_id FROM worker_jobs j
+                        JOIN worker_goal_tasks g ON g.task_id=j.task_id
+                        WHERE j.task_id=? AND j.owner_user_id=? AND j.chat_id=?""", (replacement,owner,chat)).fetchone()
+                    if not source or not goal_id or source["goal_id"]!=goal_id:
+                        raise ValueError("dependency_scope_mismatch")
+                    if source["state"] not in {"partial","failed"}:
+                        raise ValueError("replacement_source_not_failed")
+                    if any(json.loads(row[0]).get("replaces_source_task_id")==replacement for row in c.execute(
+                        "SELECT j.payload FROM worker_jobs j JOIN worker_goal_tasks g ON g.task_id=j.task_id WHERE g.goal_id=?",(goal_id,))):
+                        raise ValueError("replacement_source_already_replaced")
+                    if json.loads(source["payload"]).get("device_ids") or assignment_devices[assignment["key"]]:
+                        raise ValueError("replacement_requires_server_source")
+                    consumers=c.execute("""SELECT j.*,g.revision FROM worker_dependencies d
+                        JOIN worker_jobs j ON j.task_id=d.task_id
+                        JOIN worker_goal_tasks g ON g.task_id=j.task_id
+                        WHERE d.source_task_id=? AND g.goal_id=? AND j.owner_user_id=? AND j.chat_id=?""",
+                        (replacement,goal_id,owner,chat)).fetchall()
+                    for consumer in consumers:
+                        payload=json.loads(consumer["payload"])
+                        if consumer["state"] not in {"queued","waiting_dependency"} or "dispatch_started_at" in payload:
+                            raise ValueError("replacement_consumer_already_dispatched")
+                    replacements[replacement]=(assignment["key"],consumers)
                 external[assignment["key"]] = source_ids
             active = c.execute("SELECT 1 FROM worker_jobs WHERE owner_user_id=? AND state IN ('running','waiting_confirmation','waiting_input')",
                                (owner,)).fetchone()
@@ -585,6 +624,9 @@ class WorkerScheduler:
                         "proposed_objective": assignment["objective"], "status": state,
                         "created_at": now, "worker_id": "worker-1", "orchestrated": True,
                         "orchestrator_execution_mode": "simple", "modes": dict(template.get("modes") or {})}
+                if assignment.get("replaces_source_task_id"):
+                    task["replaces_source_task_id"] = assignment["replaces_source_task_id"]
+                    task["source_task_ids"] = list(dict.fromkeys([*(task.get("source_task_ids") or []),assignment["replaces_source_task_id"]]))
                 task["device_ids"] = assignment_devices[key]
                 task["execution_scope"], task["window_effects"] = assignment_scopes[key]
                 if assignment.get("target_device_ids") is not None:
@@ -604,12 +646,34 @@ class WorkerScheduler:
                     c.execute("INSERT INTO worker_dependencies VALUES(?,?,NULL)", (ids[key], ids[dependency]))
                 for source_id in external[key]:
                     c.execute("INSERT INTO worker_dependencies VALUES(?,?,NULL)", (ids[key], source_id))
+            for old_source,(key,consumers) in replacements.items():
+                for consumer in consumers:
+                    previous=dict(rebound.get(consumer["task_id"]) or json.loads(consumer["payload"]))
+                    before=[row[0] for row in c.execute("SELECT source_task_id FROM worker_dependencies WHERE task_id=?",(consumer["task_id"],))]
+                    revision=previous.get("assignment_revision",consumer["revision"])+1
+                    saved={**previous,"dependency_sources_before":before}
+                    c.execute("INSERT INTO worker_task_revisions VALUES(?,?,?,?,?,?)",
+                        (consumer["task_id"],revision,json.dumps(saved,ensure_ascii=False),original,previous.get("proposed_objective") or previous.get("message") or "",now))
+                    c.execute("UPDATE worker_dependencies SET source_task_id=?,result_id=NULL WHERE task_id=? AND source_task_id=?",
+                        (ids[key],consumer["task_id"],old_source))
+                    previous.update(assignment_revision=revision,status="waiting_dependency")
+                    previous["dependency_replacements"]=[*(previous.get("dependency_replacements") or []),
+                        {"old_source_task_id":old_source,"new_source_task_id":ids[key],"human_request":original}]
+                    c.execute("UPDATE worker_jobs SET state='waiting_dependency',payload=?,updated_at=? WHERE task_id=?",
+                        (json.dumps(previous,ensure_ascii=False),now,consumer["task_id"]))
+                    c.execute("UPDATE worker_goal_tasks SET revision=? WHERE task_id=?",(revision,consumer["task_id"]))
+                    metadata=db.message_task_metadata(previous,task_id=consumer["task_id"])
+                    c.execute("UPDATE messages SET task_metadata=? WHERE id=? AND chat_id=? AND role='assistant'",
+                        (json.dumps(metadata,ensure_ascii=False),consumer["message_id"],chat))
+                    rebound[consumer["task_id"]]=previous
             if not active:
                 claimed = self._claim_next(c, owner)
                 if claimed:
                     for task in admitted:
                         if task["task_id"] == claimed["task_id"]:
                             task["status"] = "running"
+        for task_id,payload in rebound.items():
+            if task_id in tasks:tasks[task_id].update(payload)
         for task in admitted:
             tasks[task["task_id"]] = task
         self.ensure_runner(owner)

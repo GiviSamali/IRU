@@ -151,8 +151,13 @@ def test_batch_admission_is_idempotent_and_waiting_does_not_execute(storage):
         await scheduler.runners[owner]
         assert started == ["research"]
         assert owned_job(consumer["task_id"], owner)["state"] == "waiting_dependency"
-        extension = [{"key": "slides", "objective": "slides",
-                      "required_source_task_ids": [result["tasks"][0]["task_id"]]}]
+        impossible = [{"key": "slides", "objective": "slides",
+                       "required_source_task_ids": [result["tasks"][0]["task_id"]]}]
+        with pytest.raises(ValueError, match="dependency_source_not_successful"):
+            await scheduler.submit_goal(template, impossible, request_key="failed-source",
+                goal_id=result["goal_id"], expected_revision=1)
+        # An independent extension remains legal after an unrelated source fails.
+        extension = [{"key": "slides", "objective": "slides"}]
         added = await scheduler.submit_goal({**template, "message": "Also slides"}, extension,
             request_key="extension", goal_id=result["goal_id"], expected_revision=1)
         assert added["goal_id"] == result["goal_id"]
