@@ -275,7 +275,11 @@ def list_jobs(user_id, limit=8, *, queue_first=False):
                 "CASE WHEN state='queued' THEN created_at ELSE -created_at END, rowid") if queue_first else "created_at DESC"
     with db.get_db() as c:
         return [dict(row) for row in c.execute(
-            "SELECT * FROM worker_jobs WHERE owner_user_id=? ORDER BY " + ordering + " LIMIT ?",
+            """SELECT * FROM worker_jobs WHERE owner_user_id=?
+               AND EXISTS(SELECT 1 FROM chats
+                          WHERE chats.id=worker_jobs.chat_id
+                            AND chats.user_id=worker_jobs.owner_user_id)
+               ORDER BY """ + ordering + " LIMIT ?",
             (user_id,min(max(int(limit),1),50)))]
 
 
@@ -700,7 +704,11 @@ class WorkerScheduler:
         # input waits. Raw shell commands cannot honestly promise file-only
         # isolation; do not trust model-declared paths to relax this reservation.
         reserved = {device for item in active for device in json.loads(item['payload']).get('device_ids') or []}
-        row = next((item for item in connection.execute("SELECT * FROM worker_jobs WHERE owner_user_id=? AND state='queued' ORDER BY created_at,rowid", (owner,))
+        row = next((item for item in connection.execute("""SELECT * FROM worker_jobs
+            WHERE owner_user_id=? AND state='queued'
+              AND EXISTS(SELECT 1 FROM chats WHERE chats.id=worker_jobs.chat_id
+                         AND chats.user_id=worker_jobs.owner_user_id)
+            ORDER BY created_at,rowid""", (owner,))
                     if not reserved.intersection(json.loads(item['payload']).get('device_ids') or [])), None)
         if row:
             connection.execute("UPDATE worker_jobs SET state='running',updated_at=? WHERE task_id=?", (time.time(), row["task_id"]))
@@ -807,6 +815,16 @@ class WorkerScheduler:
                 if task is None:
                     task=restore_task(dict(row));tasks[task["task_id"]]=task
                 task["status"] = row["state"]
+                # Deleted chat is no longer execution authority, even if a stale
+                # worker row was claimed just before deletion or by an old build.
+                if not db.get_chat(row["chat_id"], owner):
+                    dispatched = "dispatch_started_at" in json.loads(row["payload"])
+                    task.update(status="unknown" if dispatched else "cancelled",
+                                worker_error_code="deleted_chat_outcome_unknown" if dispatched else "deleted_chat_not_executed",
+                                answer="Чат удалён. Новые действия не выполнялись." if not dispatched
+                                       else "Чат удалён. Исход ранее начатых действий не подтверждён.")
+                    _finalize_report(task)
+                    return
                 # Historical pending preparation assignments must not silently
                 # execute under the new direct-delegation contract.
                 if task.get("assignment_stage") == "reconnaissance":
@@ -1055,6 +1073,16 @@ class WorkerScheduler:
         resumable_owners = set()
         for row in rows:
             task=restore_task(row);tasks[task["task_id"]]=task
+            if not db.get_chat(row["chat_id"], row["owner_user_id"]):
+                # Retire orphaned rows left by older chat deletion implementations.
+                # No replay: preserve uncertainty for anything with a dispatch marker.
+                dispatched = "dispatch_started_at" in task or row["state"] in ACTIVE_STATES
+                task.update(status="unknown" if dispatched else "cancelled",
+                            worker_error_code="deleted_chat_outcome_unknown" if dispatched else "deleted_chat_not_executed",
+                            answer="Чат удалён. Исход исполнения не подтверждён." if dispatched
+                                   else "Чат удалён до исполнения.")
+                _finalize_report(task)
+                continue
             if (task.get("goal_id") and row["state"] in {"queued", "waiting_dependency"}
                     and "dispatch_started_at" not in task):
                 # Queue state alone cannot overrule a durable dispatch marker.
