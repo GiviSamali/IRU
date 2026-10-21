@@ -37,6 +37,21 @@ def test_success_uses_verified_final_state_not_previous_write_error():
     assert len(result["artifacts"])==2
 
 
+def test_helper_generator_remains_internal_when_final_file_is_verified():
+    finished = good("excel")
+    finished["expected_artifacts"] = ["RAG.xlsx"]
+    finished["report"]["artifacts"] = [
+        {"path":r"C:\\AppData\\scripts\\helpers\\make_rag_compare_xlsx.py",
+         "name":"make_rag_compare_xlsx.py","verified":True,"device_id":"pc"},
+        {"path":r"C:\\Desktop\\RAG.xlsx",
+         "name":"RAG.xlsx","verified":True,"device_id":"pc"}]
+    response = goal_presentation({"goal_id":"g", "goal_completed":True,"tasks":[finished]})
+    assert response["status"]=="success"
+    assert "RAG.xlsx" in response["message"]
+    assert "make_rag_compare_xlsx.py" not in response["message"]
+    assert len(response["artifacts"]) == 2
+
+
 def test_missing_proof_cannot_be_upgraded_to_success():
     goal={"goal_id":"g","goal_completed":False,"tasks":[
         member("bad","success",report={"goal_completed":True},result=None)]}
