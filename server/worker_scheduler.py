@@ -622,6 +622,7 @@ class WorkerScheduler:
                 task = {**template, "task_id": ids[key], "goal_id": goal_id,
                         "original_request": original, "message": original,
                         "proposed_objective": assignment["objective"], "status": state,
+                        "assignment_stage": assignment.get("stage", "execution"),
                         "created_at": now, "worker_id": "worker-1", "orchestrated": True,
                         "orchestrator_execution_mode": "simple", "modes": dict(template.get("modes") or {})}
                 if assignment.get("replaces_source_task_id"):
@@ -953,6 +954,47 @@ class WorkerScheduler:
         task.update(status='running',input_required=event)
         _finalize_report(task)
         return task
+
+    async def cancel_group(self, owner, chat_id, *, scope, goal_id=None, task_id=None):
+        """Resolve the complete owned group, then cancel without yielding to dispatch."""
+        if scope not in {"goal", "chat"}:
+            raise ValueError("invalid_cancel_scope")
+        with db.get_db() as c:
+            if not c.execute("SELECT 1 FROM chats WHERE id=? AND user_id=?", (chat_id, owner)).fetchone():
+                raise ValueError("chat_not_owned")
+            if scope == "goal":
+                if task_id:
+                    member = c.execute("""SELECT g.goal_id FROM worker_goal_tasks g
+                        JOIN worker_jobs j ON j.task_id=g.task_id
+                        WHERE j.task_id=? AND j.owner_user_id=? AND j.chat_id=?""",
+                        (task_id, owner, chat_id)).fetchone()
+                    if not member or (goal_id and goal_id != member["goal_id"]):
+                        raise ValueError("task_not_found")
+                    goal_id = member["goal_id"]
+                if not goal_id:
+                    goals = c.execute("""SELECT DISTINCT g.goal_id FROM worker_goal_tasks g
+                        JOIN worker_jobs j ON j.task_id=g.task_id
+                        WHERE j.owner_user_id=? AND j.chat_id=? AND j.state IN
+                        ('queued','waiting_dependency','running','waiting_confirmation','waiting_input') LIMIT 2""",
+                        (owner, chat_id)).fetchall()
+                    if len(goals) != 1:
+                        raise ValueError("ambiguous_task_reference")
+                    goal_id = goals[0]["goal_id"]
+                if not c.execute("SELECT 1 FROM worker_goals WHERE goal_id=? AND owner_user_id=? AND chat_id=?",
+                                 (goal_id, owner, chat_id)).fetchone():
+                    raise ValueError("task_not_found")
+            rows = c.execute("""SELECT j.task_id,j.state FROM worker_jobs j
+                WHERE j.owner_user_id=? AND j.chat_id=? AND j.state IN
+                ('queued','waiting_dependency','running','waiting_confirmation','waiting_input')"""
+                + (" AND EXISTS(SELECT 1 FROM worker_goal_tasks g WHERE g.task_id=j.task_id AND g.goal_id=?)" if scope == "goal" else "")
+                + " ORDER BY CASE WHEN j.state IN ('queued','waiting_dependency') THEN 0 ELSE 1 END,j.created_at",
+                (owner, chat_id, goal_id) if scope == "goal" else (owner, chat_id)).fetchall()
+        # cancel() has no suspension points: all queued members are stopped before
+        # an active Worker can finish and dispatch a sibling in this server process.
+        results = [await self.cancel(row["task_id"], owner) for row in rows]
+        return {"count": len(results),
+                "cancelled": sum(item.get("status") == "cancelled" for item in results),
+                "unknown": sum(item.get("status") == "unknown" for item in results)}
 
     async def cancel(self, task_id, owner):
         job=owned_job(task_id,owner)

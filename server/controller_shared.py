@@ -420,6 +420,18 @@ def worker_assignment_scope(task_id):
              "Report and verify completion of this assigned result only.\n"
              + data_only_context("assigned_result", {"objective": objective,
                  "execution_scope":task.get("execution_scope","general"), "window_effects":task.get("window_effects") or []}))
+    if task.get("assignment_stage") == "reconnaissance":
+        block += ("\nRECONNAISSANCE ONLY. Determine the structure and locate the exact relevant files. "
+                  "For a creation goal, prepare only the requested folders and empty named files; "
+                  "Office placeholders must be valid openable documents, not zero-byte files. "
+                  "Never overwrite existing content. For an analysis goal, inspect paths, formats and "
+                  "accessibility without creating files. Return a verified inventory of exact paths, "
+                  "their purpose, structure and limitations for dependent Workers. Do not fill documents, "
+                  "write substantive analysis, create final deliverables or complete sibling assignments.\n")
+    else:
+        block += ("\nUse the pinned reconnaissance inventory and prepared files when supplied. "
+                  "Fill only your assigned deliverable; preserve the shared structure and other files. "
+                  "Do not claim creation when you only inspected an existing file.\n")
     return objective, block
 
 

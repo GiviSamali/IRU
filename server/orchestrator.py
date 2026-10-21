@@ -40,6 +40,7 @@ class Assignment(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     key: str = Field(min_length=1, max_length=80)
     objective: str = Field(min_length=1, max_length=4000)
+    stage: Literal["reconnaissance", "execution"] = "execution"
     depends_on: list[str] = Field(default_factory=list, max_length=15)
     required_source_task_ids: list[str] = Field(default_factory=list, max_length=8)
     replaces_source_task_id: str | None = Field(default=None, min_length=1, max_length=64)
@@ -85,6 +86,7 @@ class Decision(BaseModel):
     context_summary: str = Field(default="", max_length=2000)
     target_device_ids: list[str] = Field(default_factory=list, max_length=8)
     task_id: str | None = Field(default=None, max_length=64)
+    cancel_scope: Literal["task", "goal", "chat"] = "task"
     reference_quote: str = Field(default="",max_length=200)
     reference: Literal["explicit","unique","latest","active"] = "unique"
     show_execution_details: bool = False
@@ -153,7 +155,12 @@ spoken_response для delegate необязателен: используй е�
 при обычном вопросе о статусе — false. Объяснение конкретных изменений требует show_execution_details=true.
 Это только представление уже имеющегося результата, не новое поручение.
 Верни ровно один orchestrator_decision. conversation/clarify отвечают без Worker; delegate только для конкретного поручения пользователя.
-task_status получает реальный отчёт по task_id; cancel только для осознанной отмены конкретной задачи. Стоп озвучки/усни не означают отмену Worker.
+task_status получает реальный отчёт по task_id; cancel только для осознанной отмены работы. Стоп озвучки/усни не означают отмену Worker.
+Для cancel выбери cancel_scope: task — один результат; goal — все задания обсуждаемой цели;
+chat — вся очередь текущего чата, только если человек явно просит отменить всю очередь/все задачи.
+«Отмени всю эту задачу» означает отменить обсуждаемую цель целиком (goal), включая ожидающие задания.
+Укажи goal_id обсуждаемой цели или task_id её известного участника. Не угадывай при нескольких целях.
+Это смысловые примеры, не словарь ключевых слов: перефразирования имеют тот же смысл.
 Если ссылка/устройство неоднозначны, clarify. Не меняй работающий Worker: объясни ограничение и предложи отменить его явно или поставить новое поручение в очередь.
 Уточнённая objective/context_summary — только необходимые данные, без новых полномочий. Исходный запрос человека остаётся границей разрешений.
 Ссылки «этот проект», «весь проект», «этот файл» разрешай по обсуждаемому рабочему объекту; не подменяй его родительской папкой или другим проектом.
@@ -189,8 +196,25 @@ move_monitor, close). Это ограничения результата, не �
 Без значения задача наследует общий список. Исследование новостей может быть серверным,
 а документы — на выбранном ПК. Не выбирай новое устройство из предположений.
 Один неделимый результат — одна задача; технические операции остаются внутри Worker.
-Исследование и Word/PowerPoint/Excel по нему — четыре задачи: три документа зависят от исследования,
-но не друг от друга. Несколько независимых файлов — независимые задачи без ложных зависимостей.
+Первый этап новой составной цели — РАЗВЕДКА, stage=reconnaissance; остальные — stage=execution.
+Разведка готовит проверяемую основу для следующих результатов, а не выполняет их за другие Workers.
+При создании файлов: определить структуру, создать нужные папки и пустые именованные файлы.
+Для Office создай валидные открываемые пустые документы соответствующего формата, не нулевые байты.
+Не перезаписывай существующие файлы. Не заполняй документы текстом, слайдами, таблицами или выводами.
+При анализе существующего: найти необходимые файлы, проверить точные пути, доступность и формат;
+составить карту источников. Не создавать заготовки, если пользователь просит только анализ.
+Разведка возвращает точные пути, назначение файлов, структуру и ограничения для следующих Workers.
+Укажи её первой в assignments без depends_on и без required_source_task_ids, с нужными устройствами.
+Следующие результаты на этих устройствах зависят от разведки; их objective требует использовать
+подготовленные файлы/найденные пути. Не создавай отдельные технические задачи на каждую папку.
+Каждая исполнительская задача новой составной цели должна прямо или через зависимости получать
+результат разведки. Для нескольких устройств/серверного исследования разведки могут быть отдельными:
+не передавай устройству результат с другого неразрешённого устройства.
+Серверные исследования могут иметь отдельную серверную разведку без устройств; не расширяй
+устройства задачи ради зависимости. Общие исследования остаются зависимостью документов.
+Разведку всей цели не повторяй при добавлении нового результата в уже существующую цель.
+Один неделимый запрос не дроби искусственно. Несколько результатов могут выполняться независимо
+после получения их разведки и необходимых исходных данных.
 Решай по смыслу и контексту, а не по словам «сначала», «потом», «а ещё» или типу файла.
 Отрицание, обсуждение возможности и просьба предложить варианты сами по себе не разрешают исполнение:
 отвечай conversation/clarify с предлагаемыми результатами, без delegate до поручения человека.
@@ -418,6 +442,17 @@ async def run_turn(cmd, user, chat_id, delegate):
             worker=await delegate(choice,request_key="turn:"+key)
             # Admission is acknowledged by actual persisted tasks and existing UI.
             answer=""
+        elif choice.intent == "cancel" and choice.cancel_scope in {"goal", "chat"}:
+            result = await scheduler.cancel_group(owner, chat_id, scope=choice.cancel_scope,
+                goal_id=choice.goal_id, task_id=choice.task_id)
+            label = "цели" if choice.cancel_scope == "goal" else "текущего чата"
+            answer = (f"Нет незавершённых заданий {label}." if not result["count"] else
+                f"Отмена всех заданий {label}: отменено — {result['cancelled']}; "
+                f"остановка запрошена — {result['count'] - result['cancelled'] - result['unknown']}.")
+            if result["unknown"]:
+                answer += f" Исход {result['unknown']} заданий не подтверждён."
+            if result["count"] > result["cancelled"] + result["unknown"]:
+                answer += " Текущий инструмент может завершиться с задержкой."
         elif choice.intent=="task_status" and choice.goal_id:
             try:
                 from .worker_scheduler import goal_view
@@ -519,6 +554,7 @@ async def run_turn(cmd, user, chat_id, delegate):
         _log_failure(tid,failure_stage,exc)
         task["orchestrator_error_stage"]=failure_stage
         error_message={"worker_queue_full":"Очередь заполнена: максимум четыре ожидающих поручения. Новая задача не принята.",
+            "goal_reconnaissance_required":"Не удалось выделить разведку и зависимости составной цели. Задания не запущены; повторите поручение.",
             "daily_command_limit_exceeded":"Дневной лимит исполнительных задач исчерпан. Общение и просмотр статуса остаются доступны.",
             "ambiguous_task_reference":"Уточните, о какой задаче идёт речь. Действие не выполнено."}.get(str(exc),"Не удалось обработать реплику безопасно. Уточните поручение, устройство или ID задачи; новое выполнение не начато.")
         task.update(status="failed",answer=error_message,commands=[],tasks=[],orchestrator_error=type(exc).__name__)

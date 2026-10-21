@@ -370,6 +370,20 @@ async def nl_command(cmd: NLCommand, request: Request):
             if assignment.target_device_ids is not None:
                 item["target_device_ids"] = [_dk(user["id"], did) for did in assignment.target_device_ids]
             assignments.append(item)
+        if not choice.goal_id and len(assignments) > 1:
+            # A composed goal must have a real reconnaissance prerequisite,
+            # not merely an early folder task that also fills every deliverable.
+            if assignments[0]["stage"] != "reconnaissance" or assignments[0]["depends_on"] or assignments[0]["required_source_task_ids"]:
+                raise ValueError("goal_reconnaissance_required")
+            by_key = {item["key"]: item for item in assignments}
+            def has_reconnaissance(key, visited):
+                if key in visited or key not in by_key:
+                    return False
+                item = by_key[key]
+                return item["stage"] == "reconnaissance" or any(
+                    has_reconnaissance(source, visited | {key}) for source in item["depends_on"])
+            if any(item["stage"] == "execution" and not has_reconnaissance(item["key"], set()) for item in assignments):
+                raise ValueError("goal_reconnaissance_required")
         return await submit_worker(user,chat_id,cmd.message,targets,cmd.modes,request_key=request_key,
             context_summary=choice.context_summary,objective=choice.objective,broadcast=cmd.broadcast,
             execution_mode=choice.execution_mode,source_task_ids=choice.source_task_ids,history_snapshot=history_snapshot,
