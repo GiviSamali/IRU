@@ -964,7 +964,8 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
         else setTimeout(poll,800);
         return;
       }
-      const smartTaskMetadata = { goalId:task.goal_id, assignmentRevision:task.assignment_revision, taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind,inputRequired:task.input_required,conversationalResponse:task.conversational_response,executionDetails:task.execution_details };
+      const smartTaskMetadata = { goalId:task.goal_id, assignmentRevision:task.assignment_revision, taskStatus:task.presentation_status || task.status, taskReceipt:task.task_receipt || null, overallStatus:task.overall_status, taskTitle:task.current_step || task.message, taskMode:task.task_mode, taskElapsedMs:task.elapsed_ms, workerReport:task.worker_report,taskKind:task.kind,inputRequired:task.input_required,conversationalResponse:task.conversational_response,executionDetails:task.execution_details,
+        goalPresentation:task.goal_presentation||null,resultFirst:task.result_first===true };
       const pendingTask = state.pendingTasks.find(t => t.task_id === taskId);
       if (pendingTask && task.kind) pendingTask.kind=task.kind;
       if (pendingTask && task.goal_id) pendingTask.goalId=task.goal_id;
@@ -1029,6 +1030,13 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
         const metadataChanged = JSON.stringify([msg.taskStatus,msg.taskReceipt,msg.overallStatus,msg.taskTitle,msg.taskMode]) !== JSON.stringify([smartTaskMetadata.taskStatus,smartTaskMetadata.taskReceipt,smartTaskMetadata.overallStatus,smartTaskMetadata.taskTitle,smartTaskMetadata.taskMode]);
         Object.assign(msg,smartTaskMetadata);
         let needRender = metadataChanged;
+        // The Goal is the single live conversation surface, even while its
+        // internal Workers complete and update their frozen result receipts.
+        if (task.kind === 'goal' && typeof task.conversational_response === 'string'
+            && msg.content !== task.conversational_response) {
+          msg.content=task.conversational_response;
+          needRender=true;
+        }
         const liveStatus = deriveLiveTaskStatus(task, msg);
         if (msg.currentStatus !== liveStatus) {
           msg.currentStatus = liveStatus;
