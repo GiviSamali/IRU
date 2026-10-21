@@ -407,7 +407,17 @@ async def api_operations(request: Request):
                 from ..worker_scheduler import goal_view
             except ImportError:
                 from worker_scheduler import goal_view
-            goal_cache[goal_id] = goal_view(goal_id, user["id"], job["chat_id"])
+            try:
+                goal_cache[goal_id] = goal_view(goal_id, user["id"], job["chat_id"])
+            except ValueError as exc:
+                if str(exc) != "goal_not_owned_or_in_chat":
+                    raise
+                # A mismatched historical goal must not blank the entire
+                # owner's Operations panel. Never show foreign goal data.
+                logging.getLogger("iru.operations").warning(
+                    "goal_reference_unavailable task_id=%s goal_id=%s",
+                    job["task_id"], goal_id)
+                goal_cache[goal_id] = None
         goal = goal_cache.get(goal_id)
         member = next((item for item in goal["tasks"] if item["task_id"] == job["task_id"]), {}) if goal else {}
         items.append({"task_id": job["task_id"], "chat_id": job["chat_id"],
@@ -430,7 +440,8 @@ async def api_operations(request: Request):
 async def api_list_tasks(request: Request):
     user = get_current_user(request)
     cleanup_old_tasks()
-    user_tasks = [task for task in tasks.values() if task["user_id"] == user["id"]]
+    user_tasks = [task for task in tasks.values()
+                  if task["user_id"] == user["id"] and get_chat(task["chat_id"], user["id"])]
     user_tasks.sort(key=lambda task: task["created_at"], reverse=True)
     return {
         "status": "ok",
@@ -567,7 +578,7 @@ async def api_get_task(task_id: str, request: Request):
         if job:task=restore_task(job)
         else:task=restore_dialogue(task_id,user["id"])
         if task:tasks[task_id]=task
-    if not task or task["user_id"] != user["id"]:
+    if not task or task["user_id"] != user["id"] or not get_chat(task["chat_id"], user["id"]):
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
     memory_stats = get_memory_stats(None, str(user["id"]))
