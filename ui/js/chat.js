@@ -326,7 +326,10 @@ async function cancelActiveTask(taskId = null) {
   updateStopButton();
 
   try {
-    const resp = await apiFetch(`${API}/api/tasks/${encodeURIComponent(active.task_id)}/cancel`, {
+    const endpoint = active.kind === 'goal' && active.goalId
+      ? `${API}/api/goals/${encodeURIComponent(active.goalId)}/cancel?chat_id=${encodeURIComponent(active.chatId)}`
+      : `${API}/api/tasks/${encodeURIComponent(active.task_id)}/cancel`;
+    const resp = await apiFetch(endpoint, {
       method: 'POST',
       headers: authHeaders(),
     });
@@ -876,8 +879,13 @@ async function sendMessage(options = {}) {
     if (data.status === 'ok' && data.task_id) {
       voiceTaskId = data.task_id;
       // Задача запущена в фоне — начинаем polling
-      if (msgIndex >= 0) state.messages[msgIndex]._taskId = data.task_id;
-      if (!state.pendingTasks.some(item => item.task_id === data.task_id)) state.pendingTasks.push({task_id:data.task_id,msgIndex,chatId:sourceChatId,kind:data.response_type === 'orchestrator' ? 'orchestrator' : 'worker'});
+      if (msgIndex >= 0) Object.assign(state.messages[msgIndex], {
+        _taskId:data.task_id,...(data.goal_id ? {goalId:data.goal_id,resultFirst:true,taskKind:'goal'} : {})
+      });
+      if (!state.pendingTasks.some(item => item.task_id === data.task_id))
+        state.pendingTasks.push({task_id:data.task_id,msgIndex,chatId:sourceChatId,
+          kind:data.goal_id ? 'goal' : data.response_type === 'orchestrator' ? 'orchestrator' : 'worker',
+          goalId:data.goal_id||null});
       updateStopButton();
       pollTask(data.task_id,msgIndex,voiceTicket,sourceChatId);
       // Result First: one Orchestrator message follows the whole Goal. Internal
