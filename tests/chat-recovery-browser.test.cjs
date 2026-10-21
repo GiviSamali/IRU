@@ -182,3 +182,56 @@ test('window input uses the shown task/question binding; unrelated text remains 
   assert.equal(requests[1].input_question_id,undefined);
  }finally{await p.close();}
 });
+
+
+test('Owner can inspect historical operation missing from the last 20 jobs',async()=>{
+ const f=await setup(),p=f.page;
+ try{
+  const recent=Array.from({length:20},(_,n)=>item('recent-'+n,'success',2));
+  await f.snapshot(recent,{archived:{...task('archived','success'),conversational_response:'Saved historical report'}});
+  await p.evaluate(()=>{
+   state.messages=[{role:'assistant',content:'Saved historical report',taskKind:'worker',
+     _taskId:'archived',taskStatus:'success'}];
+   renderMessages();
+  });
+  await p.locator('#chatMessages [data-action="show-operation"]').click();
+  await p.locator('#mirrorContent [data-task-id="archived"]').waitFor();
+  await p.evaluate(()=>IRUOperations.refresh());
+  assert.equal(await p.locator('#mirrorContent [data-task-id="archived"]').count(),1);
+  assert.ok((await p.locator('#mirrorContent').innerText()).includes('Saved historical report'));
+  assert.equal(await p.locator('#mirrorContent [data-operation="confirm"]').count(),0);
+  assert.equal(f.writes.length,0);
+  assert.deepEqual(f.errors,[]);
+ }finally{await p.close();}
+});
+
+test('Owner may inspect a different chat task, but cannot act on its confirmation',async()=>{
+ const f=await setup(),p=f.page;
+ try{
+  const elsewhere={...task('elsewhere','confirm',2),presentation_status:'waiting_confirmation',
+   confirm_data:{confirmation_id:'remote',command:'Remove-Item protected-file'}};
+  await f.snapshot([],{elsewhere});
+  await p.evaluate(()=>IRUOperations.show('elsewhere'));
+  await p.locator('#mirrorContent [data-task-id="elsewhere"]').waitFor();
+  const body=await p.locator('#mirrorContent').innerText();
+  assert.ok(body.includes('Чат №2'));
+  assert.ok(body.includes('Только просмотр'));
+  for(const action of ['confirm','deny','cancel'])
+   assert.equal(await p.locator('#mirrorContent [data-operation="'+action+'"]').count(),0);
+  await p.evaluate(()=>IRUOperations.refresh());
+  assert.equal(await p.locator('#mirrorContent [data-task-id="elsewhere"]').count(),1);
+  assert.equal(f.writes.length,0);
+  assert.deepEqual(f.errors,[]);
+ }finally{await p.close();}
+});
+
+test('Owner-scoped endpoint refusal prevents opening another user task',async()=>{
+ const f=await setup(),p=f.page;
+ try{
+  await f.snapshot([],{});
+  await p.route('**/api/tasks/denied',route=>route.fulfill({status:404,json:{detail:'Задача не найдена'}}));
+  await assert.rejects(p.evaluate(()=>IRUOperations.show('denied')),/Задача недоступна или не найдена/);
+  assert.equal(await p.locator('#mirrorContent [data-task-id="denied"]').count(),0);
+  assert.equal(f.writes.length,0);
+ }finally{await p.close();}
+});
