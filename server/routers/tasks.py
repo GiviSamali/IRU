@@ -470,7 +470,12 @@ async def api_goal(goal_id: str, chat_id: int, request: Request):
     except ImportError:
         from worker_scheduler import goal_view
     try:
-        return {"status": "ok", "goal": goal_view(goal_id, user["id"], chat_id)}
+        from ..goal_presentation import goal_presentation
+    except ImportError:
+        from goal_presentation import goal_presentation
+    try:
+        goal = goal_view(goal_id, user["id"], chat_id)
+        return {"status": "ok", "goal": goal, "presentation": goal_presentation(goal)}
     except ValueError:
         raise HTTPException(status_code=404, detail="goal_not_found")
 
