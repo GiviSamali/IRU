@@ -149,3 +149,31 @@ def test_unsafe_dependency_replacement_rolls_back(owner,hazard):
             assert c.execute('select count(*) from worker_task_revisions').fetchone()[0]==0
         await scheduler.shutdown()
     asyncio.run(scenario())
+
+
+def test_direct_deliverables_reach_scheduler_without_preparation(owner,monkeypatch):
+    key=f"{owner['id']}:pc"
+    devices[key]={'user_id':owner['id'],'ws':object(),'info':{'os':'Windows'}}
+    monkeypatch.setattr(routes,'get_current_user',lambda request:owner)
+    monkeypatch.setattr(routes,'check_rate_limit',lambda key:True)
+    monkeypatch.setattr(routes,'check_ip_rate_limit',lambda key:True)
+    submitted=[]
+    async def submit(template,assignments,**kwargs):
+        submitted.append(assignments)
+        return {'goal_id':'goal','tasks':[{'task_id':'accepted','status':'queued'}]}
+    monkeypatch.setattr(routes,'scheduler',SimpleNamespace(submit_goal=submit))
+    async def turn(cmd,user,chat,delegate):
+        decision=orch.Decision(intent='delegate',scope='device',target_device_ids=['pc'],
+            objective='Make independent documents',
+            assignments=[
+                orch.Assignment(key='word',objective='Write Word',artifacts=['report.docx']),
+                orch.Assignment(key='slides',objective='Make slides',artifacts=['slides.pptx'])])
+        return await delegate(decision,'direct-delegation')
+    monkeypatch.setattr(routes,'run_turn',turn)
+    cmd=routes.NLCommand(message='Make a Word document and slides',device_id='pc',chat_id=owner['chat_id'])
+    asyncio.run(routes.nl_command(cmd,SimpleNamespace(client=SimpleNamespace(host='127.0.0.1'))))
+    assert len(submitted)==1
+    assert [row['key'] for row in submitted[0]]==['word','slides']
+    assert [row['depends_on'] for row in submitted[0]]==[[],[]]
+    assert [row['artifacts'] for row in submitted[0]]==[['report.docx'],['slides.pptx']]
+    assert all('stage' not in row and 'reconnaissance_contract' not in row for row in submitted[0])
