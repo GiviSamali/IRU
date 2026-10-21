@@ -480,6 +480,21 @@ async def api_goal(goal_id: str, chat_id: int, request: Request):
         raise HTTPException(status_code=404, detail="goal_not_found")
 
 
+@router.post("/api/goals/{goal_id}/cancel")
+async def api_cancel_goal(goal_id: str, chat_id: int, request: Request):
+    user = get_current_user(request)
+    try:
+        from ..worker_scheduler import goal_view
+    except ImportError:
+        from worker_scheduler import goal_view
+    try:
+        goal_view(goal_id, user["id"], chat_id)
+        outcome = await scheduler.cancel_group(user["id"], chat_id, scope="goal", goal_id=goal_id)
+        return {"status": "ok", **outcome}
+    except ValueError:
+        raise HTTPException(status_code=404, detail="goal_not_found")
+
+
 @router.patch("/api/tasks/{task_id}/assignment")
 async def api_amend_pending_task(task_id: str, body: PendingTaskAmendment, request: Request):
     user = get_current_user(request)
