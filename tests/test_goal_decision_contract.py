@@ -70,3 +70,35 @@ def test_assigned_objective_limits_work_without_replacing_human_authority():
         assert "Do not execute sibling deliverables" in block
     finally:
         tasks.pop("assignment-boundary", None)
+
+
+def test_no_stage_or_preparation_contract():
+    from server.orchestrator import Assignment
+    # Planning is over deliverables, not mandatory preparation stages.
+    assert "РАЗВЕДКА" not in SYSTEM
+    assert "reconnaissance" not in Assignment.model_fields
+    decision = Decision(intent="delegate", objective="Two independent outputs",
+        assignments=[
+            {"key":"word","objective":"Write only the Word document","artifacts":["report.docx"]},
+            {"key":"slides","objective":"Build only the slides","artifacts":["presentation.pptx"]},
+        ])
+    assert validate_task_graph([item.model_dump() for item in decision.assignments]) == {
+        "word": [], "slides": []}
+    with pytest.raises(ValidationError):
+        Assignment(key="probe",objective="Prepare placeholders",stage="reconnaissance")
+
+
+def test_assigned_worker_sees_only_own_artifact_contract():
+    from server.runtime_state import tasks
+    from server.controller_shared import worker_assignment_scope
+    tasks["single-output"] = {
+        "goal_id":"goal","proposed_objective":"Write the Word report",
+        "assigned_artifacts":["report.docx"], "device_ids":["pc"]}
+    try:
+        objective, block = worker_assignment_scope("single-output")
+        assert objective == "Write the Word report"
+        assert "report.docx" in block
+        assert "do not create, fill or modify it" in block
+        assert "original human message" in block
+    finally:
+        tasks.pop("single-output",None)
