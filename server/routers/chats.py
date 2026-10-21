@@ -55,5 +55,16 @@ async def api_rename_chat(chat_id: int, body: RenameChatRequest, request: Reques
 @router.delete("/api/chats/{chat_id}")
 async def api_delete_chat(chat_id: int, request: Request):
     user = get_current_user(request)
+    if not get_chat(chat_id, user["id"]):
+        return {"status": "error", "deleted": False}
+    try:
+        from ..worker_scheduler import scheduler
+    except ImportError:
+        from worker_scheduler import scheduler
+    # A chat delete revokes authority for its unfinished work. The group cancel
+    # requests cancellation of active tools and stops queued/dependent work.
+    # Both operations are synchronous until they return, so this server process
+    # cannot schedule a sibling between cancellation and deletion.
+    await scheduler.cancel_group(user["id"], chat_id, scope="chat")
     ok = delete_chat(chat_id, user["id"])
     return {"status": "ok" if ok else "error", "deleted": ok}
