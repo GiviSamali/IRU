@@ -291,6 +291,7 @@ async def process_non_pipeline_command(
         messages.extend(build_chat_messages(chat_history[:-1], filter_onboarding=True))
     messages.append({"role": "user", "content": user_message})
     commands_log = []
+    reconnaissance_rejections = {}
     recovery_only = bool(runtime_tasks.get(poll_task_id, {}).get("_action_outcome_unknown"))
     if recovery_only:
         non_pipeline_tools = recovery_observation_tools(non_pipeline_tools or DEFAULT_CONTROLLER_TOOLS)
@@ -657,6 +658,15 @@ async def process_non_pipeline_command(
                         )
                 except ProtocolValidationError as exc:
                     print(f"[tool-only] invalid answer tool: {exc.message}")
+                    if exc.message == "reconnaissance_contract_incomplete":
+                        key = (exc.correction, len(commands_log))
+                        reconnaissance_rejections[key] = reconnaissance_rejections.get(key, 0) + 1
+                        if reconnaissance_rejections[key] >= 3:
+                            return {"answer":"Подготовленные результаты сохранены, но разведка не прошла проверку. Зависимые задания не запущены.",
+                                "commands":commands_log, "tasks":[],
+                                "task_receipt":{"task_status":"partial", "goal_completed":False,
+                                    "final_verification_status":"unverified", "answer_source":"server_fallback",
+                                    "terminal_reason":"reconnaissance_contract_incomplete"}}
                     add_correction(exc.correction)
                     continue
 

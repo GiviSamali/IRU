@@ -416,7 +416,8 @@ async def nl_command(cmd: NLCommand, request: Request):
                 for consumer in assignments if item["key"] in ancestors(consumer["key"])
                 and assignment_devices(item) == assignment_devices(consumer)
                 for source in consumer["source_requirements"])]))
-            item["reconnaissance_contract"] = {"sources": sources, "outputs": outputs}
+            item["reconnaissance_contract"] = {"sources": sources, "outputs": outputs,
+                "placement": item["placement_requirements"]}
             # The same complete contract is the Worker's and the auditor's
             # objective; a narrow model-written objective cannot omit outputs.
             item["objective"] = (

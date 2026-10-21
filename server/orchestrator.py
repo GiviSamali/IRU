@@ -42,6 +42,7 @@ class Assignment(BaseModel):
     objective: str = Field(min_length=1, max_length=4000)
     stage: Literal["reconnaissance", "analysis", "creation", "execution"] = "execution"
     source_requirements: list[str] = Field(default_factory=list, max_length=16)
+    placement_requirements: list[str] = Field(default_factory=list, max_length=16)
     artifacts: list[str] = Field(default_factory=list, max_length=16)
     depends_on: list[str] = Field(default_factory=list, max_length=15)
     required_source_task_ids: list[str] = Field(default_factory=list, max_length=8)
@@ -203,6 +204,9 @@ move_monitor, close). Это ограничения результата, не �
 Для creation обязательно перечисли artifacts: имена или однозначные названия всех выходных файлов.
 Creation получает разведку на том же наборе устройств; серверная разведка не создаёт файлы на ПК.
 Для разведки перечисли source_requirements: какие существующие файлы/источники нужно найти;
+Это ТОЛЬКО содержательные входные данные для анализа/наполнения. Папка назначения, рабочий стол,
+доступность записи и свободные имена НЕ являются источниками: перечисли их в placement_requirements.
+Для создания материалов по общей теме без заданных входных документов source_requirements=[].
 если существующие источники не нужны (например объяснение общеизвестной темы), оставь список пустым.
 При анализе с последующим созданием зависимости обязательны: разведка → анализ → creation.
 Разведка готовит ОБА конца: находит и проверяет исходные файлы И создаёт пустые валидные выходные файлы.
@@ -447,7 +451,11 @@ async def run_turn(cmd, user, chat_id, delegate):
             choice,stats=await decide(cmd.message,routing_context,user_id=owner,chat_id=chat_id,task_id=tid)
         if choice.intent=="delegate":
             stage="handoff"
-            if not choice.objective.strip():raise ValueError("missing_objective")
+            if not choice.objective.strip():
+                # Delegation is already the semantic decision. Preserve the
+                # human's actual request instead of failing on missing decoration.
+                choice.objective=cmd.message.strip()[:2000]
+            if not choice.objective:raise ValueError("missing_objective")
             if cmd.modes.get("pipeline") or choice.execution_mode=="plan":
                 raise ValueError("execution_mode_unsupported")
             worker=await delegate(choice,request_key="turn:"+key)
