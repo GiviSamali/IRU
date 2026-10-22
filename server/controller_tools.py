@@ -6,6 +6,9 @@ except ImportError:
     from tool_registry import DEVICE_TOOL_SCHEMAS
 
 EXECUTE_CMD_DESCRIPTION = (
+    "When executing a command that creates final user files, include their absolute paths in artifact_paths ON THAT "
+    "CREATION COMMAND. The agent compares before/after file hashes and verifies actual formats, returning bound "
+    "artifact receipts. A later read of a pre-existing file cannot register it as newly created. "
     "First-class generic control surface for normal system actions through PowerShell/cmd/bash. "
     "Existing window actions must use window_control, never shell code or synthetic keyboard/mouse input. "
     "Use it to perform the requested action and include the cheapest sufficient verification in the same short command when possible. "
@@ -19,6 +22,8 @@ EXECUTE_CMD_DESCRIPTION = (
 )
 
 WRITE_CONTENT_DESCRIPTION = (
+    "Submit the complete text in one logical call: the system automatically transports large writes in ordered chunks "
+    "and atomically commits only after integrity verification. Do not manually split a valid complete write. "
     "Path is literal: resolve environment/home variables on the target device first; never pass $env:, %VAR% or ~. "
     "Canonical tool for creating text content or performing an explicitly requested full replacement. Prefer it for long, multiline, or generated new content. "
     "For a limited edit, prefer a reliable local transformation of the current original using existing tools; do not reconstruct unchanged elements in the LLM. "
@@ -107,6 +112,8 @@ TOOLS = [
                         "type": "string",
                         "description": "Команда для выполнения"
                     },
+                    "artifact_paths": {"type":"array", "maxItems":16, "items":{"type":"string"},
+                        "description":"Absolute paths of final deliverables created/changed by this command, not helper scripts."},
                     "timeout": {
                         "type": "integer",
                         "description": "Таймаут в секундах (по умолчанию 30)",

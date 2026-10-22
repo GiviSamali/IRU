@@ -304,10 +304,11 @@ async def process_non_pipeline_command(
     memory_permissions = memory_permissions_from_human_request(user_message)
     truncation_metrics = []
     truncation_pending = False
+    deterministic_rejections = {}
     non_pipeline_tools = deepcopy(non_pipeline_tools)
     for tool in non_pipeline_tools:
         if tool.get("function", {}).get("name") == "write_content":
-            tool["function"]["parameters"]["properties"]["content"]["maxLength"] = 4000
+            tool["function"]["parameters"]["properties"]["content"].pop("maxLength", None)
 
     if not window_only and not browser_only and (user_id is not None or chat_id is not None):
         previous_failed = get_last_run_summary(
@@ -457,8 +458,8 @@ async def process_non_pipeline_command(
                 messages.append({"role":"user","content":
                     "The previous response exhausted its output budget and was discarded in full; no tool from it ran. "
                     "Preserve every assigned requirement and existing evidence. Do not replay completed actions. "
-                    "Choose one small complete operation with valid JSON. Use write_content chunks of at most 4000 characters, "
-                    "append subsequent chunks only after a confirmed write, then assemble and verify using existing tools. "
+                    "Choose one complete operation with valid JSON. write_content automatically chunks complete content; "
+                    "reduce generated boilerplate if the provider cannot return a complete call. Never execute truncated code. "
                     "The full goal remains unconfirmed until all required results are verified."})
                 continue
             truncation_pending = False
@@ -757,6 +758,13 @@ async def process_non_pipeline_command(
                         iteration=iteration + 1,
                     ))
                     append_tool_message(tool_call["id"], entry)
+                    key = (fn_name, json.dumps(fn_args_preview, sort_keys=True, ensure_ascii=False), arg_error["error"])
+                    deterministic_rejections[key] = deterministic_rejections.get(key, 0) + 1
+                    if deterministic_rejections[key] >= 3:
+                        return {"answer":"Технический отказ аргументов инструмента не устранён. Результат не подтверждён.",
+                            "commands":commands_log,"tasks":[],"task_receipt":{"task_status":"failed",
+                                "goal_completed":False,"final_verification_status":"unverified",
+                                "answer_source":"server_fallback","terminal_reason":"repeated_argument_rejection"}}
                     add_correction(f"Tool arguments failed validation. {ONE_TOOL_CORRECTION}")
                     continue
 
@@ -1051,8 +1059,6 @@ async def process_non_pipeline_command(
 
                 elif fn_name == "write_content":
                     try:
-                        if len(fn_args.get("content", "")) > 4000:
-                            raise ValueError("write_chunk_too_large: write was not dispatched; use complete chunks up to 4000 characters and append only after confirmed writes.")
                         tool_result = await send_command_fn(target_device, "write_content", fn_args)
                         tool_result = compact_write_content_result(fn_args, tool_result)
                         print(f"[llm] write_content result: status={tool_result.get('status', 'unknown')}")
@@ -1197,6 +1203,18 @@ async def process_non_pipeline_command(
                     commands_log[-1]["window_request"] = dict(fn_args)
                 mark_read_only_tool_step(commands_log[-1], fn_name, repeat_guard_args)
                 append_tool_message(tool_call["id"], commands_log[-1])
+                if (tool_result.get("error") and (tool_result.get("dispatched") is False
+                        or tool_result.get("committed") is False) and tool_result.get("status") != "unknown"):
+                    key = (fn_name, json.dumps(repeat_guard_args, sort_keys=True, ensure_ascii=False), str(tool_result["error"]))
+                    deterministic_rejections[key] = deterministic_rejections.get(key, 0) + 1
+                    if deterministic_rejections[key] >= 3:
+                        return {"answer":"Повторный технический отказ не устранён; выполнение завершено без подтверждения результата.",
+                            "commands":commands_log,"tasks":[],"task_receipt":{"task_status":"partial" if any(
+                                c.get("status")=="success" for c in commands_log) else "failed",
+                                "goal_completed":False,"final_verification_status":"unverified",
+                                "answer_source":"server_fallback","terminal_reason":"repeated_deterministic_rejection"}}
+                    add_correction("This operation was not committed. Do not repeat identical arguments: correct the stated "
+                        "error or use another authorized method. If an updated agent is required, report that limitation.")
                 repeated = repeated_command_observation(commands_log)
                 if repeated:
                     add_correction(

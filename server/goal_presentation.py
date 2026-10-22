@@ -66,7 +66,8 @@ def goal_presentation(goal: dict) -> dict:
             seen.add(ident)
             name = file.get("name") or PureWindowsPath(path).name
             artifact = {"path":path, "name":name, "device_id":file.get("device_id"),
-                        "task_id":member.get("task_id"),"verified":True}
+                        "task_id":member.get("task_id"),"verified":True,
+                        **{key:file[key] for key in ("size_bytes","source_task_id","sha256","structure") if key in file}}
             artifacts.append(artifact)
             # A helper generator (.py, scripts/helpers) is not the deliverable
             # unless the assignment explicitly identifies that file as output.
@@ -75,6 +76,10 @@ def goal_presentation(goal: dict) -> dict:
             if expected:
                 user_output = any(value == canonical_path or value == canonical_name
                                   or value.split("/")[-1] == canonical_name for value in expected)
+                user_output = user_output or (file.get("source_task_id") == member.get("task_id")
+                    and type(file.get("size_bytes")) is int and file["size_bytes"] > 0
+                    and "/scripts/helpers/" not in canonical_path
+                    and not canonical_name.endswith((".py", ".ps1", ".sh", ".tmp")))
             else:
                 user_output = ("/scripts/helpers/" not in canonical_path
                                and not canonical_name.endswith((".py", ".ps1", ".sh", ".tmp")))

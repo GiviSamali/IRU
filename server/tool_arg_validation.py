@@ -73,6 +73,10 @@ def validate_and_sanitize_tool_args(
     """
     raw_args = dict(args or {})
     warnings: list[str] = []
+    if tool_name == "execute_cmd" and "artifact_paths" in raw_args:
+        paths = raw_args["artifact_paths"]
+        if not isinstance(paths, list) or len(paths) > 16 or any(not isinstance(p,str) or not p.strip() for p in paths):
+            return {}, [], {"status":"validation_error", "error":"invalid_artifact_paths", "dispatched":False}
 
     if tool_name == "window_list":
         if "visible" in raw_args:
