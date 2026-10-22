@@ -75,6 +75,14 @@ window.IRUOperations = (() => {
     if(!detail)return '<p class="operation-prose">Загружаются сведения задачи…</p>';
     const readOnly=historicalItem?.task_id===i.task_id;
     const cd=detail.confirm_data||{};
+    if(surface() && detail.status==='confirm' && !readOnly) {
+      if(!validCommandConfirmation(detail,i.task_id))return '<div class="operation-detail mini-confirmation" role="status">Подтверждение устарело. Обновляю состояние задачи.</div>';
+      return `<div class="operation-detail mini-confirmation" data-surface-attention="true">
+        <div class="mini-confirmation-heading">Подтвердить действие?</div>
+        <p class="mini-confirmation-description">${e(i.title||'Действие на устройстве')}</p>
+        <div class="mini-confirmation-actions"><button data-operation="confirm" data-confirmation-id="${a(cd.confirmation_id)}">Выполнить</button><button data-operation="deny" data-confirmation-id="${a(cd.confirmation_id)}">Отклонить</button></div>
+      </div>`;
+    }
     const answer=IRUSmartUI.REGISTRY.text({key:'mirror-result-'+i.task_id,text:detail.conversational_response||detail.answer||i.summary||'',long:false},{formatAssistantText:true});
     let html=`<div class="operation-detail"><div class="operation-prose mirror-answer">${answer}</div>`;
     if(replaced(i))html+='<p class="operation-prose">Историческая попытка: заменена новой. Её статус не определяет текущий итог цели.</p>';

@@ -47,6 +47,22 @@
 .iru-mini .app .mini-goal-summary > p { margin:6px 0; white-space:pre-wrap; }
 .iru-mini .app .mini-snapshot-note { color:var(--warning); font-size:11px; line-height:1.5; margin:8px 0; }
 .iru-mini .app #mirrorContent button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.iru-mini .app .mini-confirmation {
+  margin-top:10px; padding-top:10px; border-top:1px solid var(--border);
+}
+.iru-mini .app .mini-confirmation-heading { color:var(--warning); font-size:12px; font-weight:600; }
+.iru-mini .app .mini-confirmation-description {
+  margin:6px 0 10px; color:var(--text-secondary); font:12px/1.5 "Segoe UI",system-ui,sans-serif;
+  overflow-wrap:anywhere;
+}
+.iru-mini .app .mini-confirmation-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.iru-mini .app #mirrorContent .mini-confirmation-actions > button {
+  min-height:34px; padding:6px 12px; border-radius:8px; font:12px/1.4 "Segoe UI",system-ui,sans-serif;
+}
+.iru-mini .app #mirrorContent .mini-confirmation-actions > [data-operation="confirm"] {
+  background:var(--accent); color:var(--bg-primary); border-color:var(--accent);
+}
+.iru-mini .app #mirrorContent .mini-confirmation-actions > [data-operation="deny"] { color:var(--text-secondary); }
 @keyframes mini-task-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .iru-mini .app .mini-task-row[data-status="running"] .mini-task-state::after { animation:none; }

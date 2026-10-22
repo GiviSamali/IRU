@@ -677,7 +677,10 @@ function renderMessages() {
     const stopTarget=compact ? getActivePendingTask() : null;
     const composerCancels=Boolean(stopTarget && (stopTarget.task_id===m._taskId
       || (stopTarget.goalId && stopTarget.goalId===m.goalId)));
-    const view = IRUSmartUI.adapt({ ...m, cancelAvailable:Boolean(m.loading && active && active.task_id === m._taskId && !active.cancelRequested && !composerCancels) }, mi, state.currentChatId);
+    const presentationMessage=compact && m.confirmTaskId
+      ? {...m,conversationalResponse:'Нужно подтверждение действия.',conversational_response:'',content:'',text:''}:m;
+    const view = IRUSmartUI.adapt({ ...presentationMessage, cancelAvailable:Boolean(m.loading && active && active.task_id === m._taskId && !active.cancelRequested && !composerCancels) }, mi, state.currentChatId);
+    if(compact && m.confirmTaskId)view.blocks=view.blocks.filter(block=>block.type!=='task');
     // Goal status already has one card in Operations; keep its chat result and files.
     if (m.taskKind === 'goal' && m.resultFirst === true && m.goalId) {
       view.blocks = view.blocks.filter(block => block.type !== 'task');
