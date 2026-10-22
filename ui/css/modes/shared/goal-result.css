@@ -1,0 +1,27 @@
+.app .smart-goal {
+  --goal-color:var(--warning); padding:10px 0;
+  font-family:"Segoe UI",system-ui,sans-serif;
+}
+.app .smart-goal[data-status="success"] { --goal-color:var(--success); }
+.app .smart-goal[data-status="running"] { --goal-color:var(--accent); }
+.app .smart-goal[data-status="failed"] { --goal-color:var(--error); }
+.app .smart-goal[data-status="cancelled"] { --goal-color:var(--text-muted); }
+.app .smart-goal-heading { display:flex; align-items:center; gap:8px; min-width:0; }
+.app .smart-goal-heading strong { font-size:13px; line-height:1.5; font-weight:600; }
+.app .smart-goal-icon { display:inline-flex; justify-content:center; align-items:center; width:16px; flex:none; color:var(--goal-color); }
+.app .smart-goal-count { margin-left:auto; white-space:nowrap; color:var(--text-muted); font-size:11px; }
+.app .smart-goal-meter { height:4px; margin-top:9px; border-radius:3px; background:var(--border); overflow:hidden; }
+.app .smart-goal-meter > span { display:block; height:100%; background:var(--goal-color); border-radius:inherit; }
+.app .smart-goal-attention { display:block; margin-top:7px; color:var(--warning); font-size:11px; }
+.app .smart-goal-details { margin-top:8px; color:var(--text-muted); font-size:11px; line-height:1.55; }
+.app .smart-goal-details > summary { cursor:pointer; width:fit-content; padding:3px 0; }
+.app .smart-goal-details > div { padding-top:6px; overflow-wrap:anywhere; }
+.app .smart-goal-details p { margin:0 0 6px; }
+.app .smart-goal[data-status="running"] .smart-goal-icon::after {
+  content:""; width:10px; height:10px; border:2px solid var(--border-active);
+  border-top-color:var(--accent); border-radius:50%; animation:goal-result-spin 1s linear infinite;
+}
+@keyframes goal-result-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .app .smart-goal[data-status="running"] .smart-goal-icon::after { animation:none; }
+}

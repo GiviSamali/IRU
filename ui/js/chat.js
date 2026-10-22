@@ -684,7 +684,7 @@ function renderMessages() {
     const workerInDock = m.taskKind === 'worker';
     if(compact && !workerInDock && m.loading && !m.confirmTaskId && !m.planReview) {
       view.blocks=view.blocks.filter(block=>block.type!=='task');
-      if(!view.blocks.some(block=>block.type==='text'))view.blocks.unshift({type:'text',key:view.key+'-working',text:'Отвечаю…',long:false});
+      if(!view.blocks.some(block=>block.type==='text'||block.type==='goal'))view.blocks.unshift({type:'text',key:view.key+'-working',text:'Отвечаю…',long:false});
     }
     const resultFiles = workerInDock ? view.blocks.filter(block => block.type === 'file') : [];
     if (workerInDock) view.blocks = view.blocks.filter(block => block.type !== 'task' && block.type !== 'file' && (block.type !== 'action' || m.planSuggestion || m.suggestedFact));
@@ -729,6 +729,17 @@ function bindChatMessageActions(container = document.getElementById('chatMessage
     const target = event.target.closest('[data-action]');
     if (!target || !container.contains(target)) return;
     const action = target.dataset.action;
+
+    if(action==='toggle-goal-result') {
+      event.preventDefault();
+      const block=target.closest('[data-smart-key]'), disclosure=target.closest('details');
+      if(!block || !disclosure)return;
+      disclosure.open=!disclosure.open;
+      target.setAttribute('aria-expanded',String(disclosure.open));
+      if(disclosure.open)state.expandedSmartBlocks.add(block.dataset.smartKey);
+      else state.expandedSmartBlocks.delete(block.dataset.smartKey);
+      return;
+    }
 
     if (action === 'toggle-smart-text' || action === 'toggle-smart-details' || action === 'toggle-smart-file') {
       const block = target.closest('[data-smart-key]');

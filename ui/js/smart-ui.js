@@ -183,6 +183,18 @@ const IRUSmartUI = (() => {
       }
       return line;
     }).filter(line=>line!==null).join('\n').trim();
+    const goalSummary=m.role!=='user' && goal && ['running','success','partial','failed','blocked','unknown','cancelled'].includes(goal.status)
+      && Number.isInteger(goal.completed_count) && Number.isInteger(goal.total_count)
+      && goal.total_count>0 && goal.completed_count>=0 && goal.completed_count<=goal.total_count;
+    if(goalSummary) {
+      const source=text(m.conversationalResponse)||text(m.conversational_response)||text(m.content)||text(m.text);
+      const canonical=source===text(goal.message);
+      blocks.push({type:'goal',key:id+'-goal',status:goal.status,
+        done:goal.completed_count,total:goal.total_count,attention:goal.requires_user_action===true,
+        details:canonical?content:text(goal.message)});
+      // Replace only the server Goal summary; preserve independent answer text.
+      if(canonical)content='';
+    }
     const executionDetails = text(m.executionDetails) || text(m.execution_details);
     if (content) blocks.push({ type:'text', text:content, key:id+'-text', long:content.length > 200 || content.split('\n').length > 4 });
     if (m.role === 'user') return { key:id, blocks };
@@ -193,7 +205,7 @@ const IRUSmartUI = (() => {
     const pureConversation = !executionDetails && !m.loading && !m.confirmTaskId && !m.planReview && !conversationNegative && !tasks.length && !operations.length
       && (key(lastTerminal(commands)?.result?.answer_type) === 'pure_text' || (m.taskMode === 'conversation' && normalizeStatus(m.taskStatus) === 'success'));
     const hasTask = !pureConversation && (tasks.length || operations.length || m.loading || m.taskStatus || m.taskReceipt || m.task_receipt || m.confirmTaskId || m.planReview || executionDetails);
-    if (hasTask) {
+    if (hasTask && !goalSummary) {
       const status = taskState(m, tasks, commands);
       const receipt = m.taskReceipt || m.task_receipt || {};
       const detailed = status !== 'success' || m.loading || m.confirmTaskId || m.planReview || m.cancelAvailable
@@ -252,6 +264,17 @@ const IRUSmartUI = (() => {
 
   const expanded = (block, context) => Boolean(context.expanded?.has(block.key));
   const REGISTRY = Object.freeze({
+    goal(block,context) {
+      const labels={running:'Выполняется',success:'Готово',partial:'Частично выполнено',failed:'Не выполнено',blocked:'Заблокировано',unknown:'Не подтверждено',cancelled:'Отменено'};
+      const icon=block.status==='success'?'✓':block.status==='running'?'':block.status==='partial'?'◐':block.status==='cancelled'?'—':'!';
+      const percent=100*block.done/block.total;
+      return `<section class="smart-block smart-goal" data-block-type="goal" data-status="${esc(block.status)}" data-smart-key="${esc(block.key)}" aria-label="Итог цели">
+        <div class="smart-goal-heading"><span class="smart-goal-icon" aria-hidden="true">${icon}</span><strong>${esc(labels[block.status])}</strong><span class="smart-goal-count" aria-label="Подтверждено ${block.done} из ${block.total} результатов">${block.done} / ${block.total}</span></div>
+        <div class="smart-goal-meter" role="meter" aria-label="Подтверждённые результаты" aria-valuemin="0" aria-valuemax="${block.total}" aria-valuenow="${block.done}"><span style="width:${percent}%"></span></div>
+        ${block.attention?'<span class="smart-goal-attention">Нужен ответ</span>':''}
+        ${block.details?`<details class="smart-goal-details"${expanded(block,context)?' open':''}><summary data-action="toggle-goal-result" aria-expanded="${expanded(block,context)}">Подробнее</summary><div>${formattedText(block.details)}</div></details>`:''}
+      </section>`;
+    },
     text(block, context) {
       const open = expanded(block, context);
       return `<div class="smart-block smart-text${block.long ? ' collapsible' : ''}${open ? ' expanded' : ''}" data-block-type="text" data-smart-key="${esc(block.key)}">

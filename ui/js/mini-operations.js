@@ -49,7 +49,7 @@ window.IRUMiniOperations = (() => {
             <button data-operation="goal-toggle" aria-expanded="${open}">${open?'Свернуть':'Подробнее'}</button>
             ${canCancel?`<button data-operation="goal-cancel"${unavailable?' disabled':''}>Остановить цель</button>`:''}
           </div>
-          ${open?`<div class="mini-goal-summary"><span>Итог цели · ${e(IRUSmartUI.LABELS[IRUSmartUI.normalizeStatus(status)]||'Результат не подтверждён')}</span>${IRUSmartUI.render(resultView,{formatAssistantText:true})}</div>`:''}
+          ${open?`<div class="mini-goal-summary">${IRUSmartUI.render(resultView,{formatAssistantText:true,expanded:state.expandedSmartBlocks})}</div>`:''}
           ${showDetail?detailHTML(selectedMember):''}
         </div>
       </section>`;
