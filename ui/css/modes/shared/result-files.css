@@ -2,3 +2,8 @@
   margin-top:5px; color:var(--text-muted); font-size:11px; line-height:1.5;
 }
 .app .smart-file-heading strong { overflow-wrap:anywhere; }
+.app .smart-file-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:6px; }
+.app .smart-file-actions > button {
+  padding:6px 9px; border:1px solid var(--border); border-radius:7px;
+  background:transparent; color:var(--accent); font:12px/1.4 var(--font); cursor:pointer;
+}

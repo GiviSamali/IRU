@@ -275,11 +275,14 @@ const IRUSmartUI = (() => {
     file(block, context) {
       const open = expanded(block, context);
       return `<section class="smart-block smart-file${open ? ' expanded' : ''}" data-block-type="file" data-smart-key="${esc(block.key)}">
-        <div class="smart-file-heading"><span class="smart-file-kind">${esc(block.extension || 'Файл')}</span><strong>${esc(block.name)}</strong></div>
+        <div class="smart-file-heading"><span class="smart-file-kind">${esc(block.extension || 'Файл')}</span><strong title="${esc(block.path)}">${esc(block.name)}</strong></div>
         ${block.verified?'<div class="smart-file-verified">Подтверждён при выполнении</div>':''}
-        <div class="smart-file-meta"><span>${esc(block.device)}</span><span class="smart-file-path" id="${esc(block.key)}">${esc(block.path)}</span></div>
-        <button type="button" class="smart-file-toggle" data-action="toggle-smart-file" aria-controls="${esc(block.key)}" aria-expanded="${open}">${open ? 'Свернуть сведения' : 'Сведения о файле'}</button>
-        <button type="button" class="msg-download-link" data-action="download-message-file" data-device-id="${esc(encodeURIComponent(block.device))}" data-file-path="${esc(encodeURIComponent(block.path))}">Скачать файл</button></section>`;
+        <div class="smart-file-meta"><span>${esc(block.device)}</span></div>
+        <div class="smart-file-actions">
+          <button type="button" data-action="open-message-file" data-device-id="${esc(encodeURIComponent(block.device))}" data-file-path="${esc(encodeURIComponent(block.path))}">Открыть на устройстве</button>
+          <button type="button" data-action="reveal-message-file" data-device-id="${esc(encodeURIComponent(block.device))}" data-file-path="${esc(encodeURIComponent(block.path))}" title="Открыть папку на устройстве">Папка</button>
+          <button type="button" class="msg-download-link" data-action="download-message-file" data-device-id="${esc(encodeURIComponent(block.device))}" data-file-path="${esc(encodeURIComponent(block.path))}">Скачать файл</button>
+        </div></section>`;
     },
     action(block, context) {
       return `<section class="smart-block smart-action${block.critical ? ' critical' : ''}" data-block-type="action" data-smart-key="${esc(block.key)}">${block.critical ? '<div class="smart-action-label">Требуется ваше подтверждение</div>' : ''}${context.actionDetails ? context.actionDetails(block.message, block.index) : ''}</section>`;

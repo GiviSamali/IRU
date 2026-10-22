@@ -172,6 +172,25 @@ function renderCommandDownloadButtons(commands, usedDownloads = new Set()) {
   return `<div class="msg-download-actions">${buttons.join('')}</div>`;
 }
 
+async function openMessageFile(deviceIdEncoded, filePathEncoded, folder, button) {
+  const originalText=button.textContent;
+  try {
+    const device=decodeURIComponent(deviceIdEncoded), path=decodeURIComponent(filePathEncoded);
+    if(!device || /[\x00-\x1f]/.test(device+path) || !/^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/])/i.test(path))throw Error('Нужен абсолютный путь файла на устройстве Windows.');
+    button.disabled=true;button.textContent='Открываю…';
+    // Literal PowerShell string: filenames cannot become executable shell text.
+    const literal="'"+path.replace(/'/g,"''")+"'";
+    const command="$ErrorActionPreference='Stop'; $iruFile=Get-Item -LiteralPath "+literal+" -ErrorAction Stop; if ($iruFile.PSIsContainer) { throw 'Expected a file' }; Invoke-Item -LiteralPath "+(folder?'$iruFile.Directory.FullName':'$iruFile.FullName')+' -ErrorAction Stop';
+    const response=await apiFetch(`${API}/command`,{method:'POST',headers:authHeaders(),
+      body:JSON.stringify({device_id:device,action:'execute_cmd',params:{command,shell:'powershell',timeout:10}})});
+    const data=await response.json(), result=data.result;
+    if(!response.ok || data.status!=='ok' || !result || result.error || result.returncode!==0)
+      throw Error(data.error || result?.error || result?.stderr || 'Не удалось передать запрос на открытие.');
+    showToast(folder?'Запрос на открытие папки передан устройству.':'Запрос на открытие файла передан устройству.');
+  } catch(error) {showToast(error.message || 'Не удалось открыть файл.',true);}
+  finally {button.disabled=false;button.textContent=originalText;}
+}
+
 async function downloadMessageFile(deviceIdEncoded, filePathEncoded, btn) {
   const deviceId = decodeURIComponent(deviceIdEncoded);
   const filePath = decodeURIComponent(filePathEncoded);
@@ -727,6 +746,10 @@ function bindChatMessageActions(container = document.getElementById('chatMessage
     }
     if (action === 'cancel-smart-task') {
       cancelActiveTask(target.dataset.taskId);
+      return;
+    }
+    if (action === 'open-message-file' || action === 'reveal-message-file') {
+      openMessageFile(target.dataset.deviceId||'',target.dataset.filePath||'',action==='reveal-message-file',target);
       return;
     }
     if (action === 'download-message-file') {
