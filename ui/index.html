@@ -130,9 +130,9 @@
     <div class="content">
       <div class="chat-view">
         <div class="conversation-toolbar">
-          <span>Conversation</span>
-          <button type="button" id="mirrorToggle" aria-expanded="false" aria-controls="operationMirror" hidden>Mirror</button>
-          <button type="button" id="operationsToggle" aria-expanded="false" aria-controls="operationsDock">Tasks <span id="operationsIndicator">—</span></button>
+          <span>Чат</span>
+          <button type="button" id="mirrorToggle" aria-expanded="false" aria-controls="operationMirror" hidden>Подробности</button>
+          <button type="button" id="operationsToggle" aria-expanded="false" aria-controls="operationsDock">Задачи <span id="operationsIndicator">—</span></button>
         </div>
         <div class="chat-messages" id="chatMessages"></div>
         <div class="chat-input-area">
@@ -206,12 +206,12 @@
         </div>
       </div>
 
-      <aside class="operation-mirror" id="operationMirror" aria-label="Mirror — выбранная задача" hidden>
-        <div class="operation-panel-heading"><strong>Mirror</strong><button type="button" id="mirrorClose" aria-label="Закрыть Mirror">×</button></div>
+      <aside class="operation-mirror" id="operationMirror" aria-label="Подробности выбранной задачи" hidden>
+        <div class="operation-panel-heading"><strong>Подробности</strong><button type="button" id="mirrorClose" aria-label="Закрыть подробности">×</button></div>
         <div id="mirrorContent"></div>
       </aside>
-      <aside class="operations-dock" id="operationsDock" aria-label="Tasks — задачи текущего чата" hidden>
-        <div class="operation-panel-heading"><strong>Tasks</strong><button type="button" id="operationsClose" aria-label="Закрыть Tasks">×</button></div>
+      <aside class="operations-dock" id="operationsDock" aria-label="Задачи текущего чата" hidden>
+        <div class="operation-panel-heading"><strong>Задачи</strong><button type="button" id="operationsClose" aria-label="Закрыть задачи">×</button></div>
         <div id="operationsList" hidden><div id="operationsError" role="status"></div><div id="operationsItems"></div></div>
       </aside>
 

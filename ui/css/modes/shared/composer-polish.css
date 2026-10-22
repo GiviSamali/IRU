@@ -1,0 +1,5 @@
+/* Keep scrolling available for long input; an empty composer has no scroll rail. */
+.app .chat-input { overflow-y: auto; scrollbar-width: thin; }
+.app .chat-input:placeholder-shown { overflow-y: hidden; }
+.app .char-count { font-size: 10px; color: var(--text-muted); opacity: .7; }
+.app .chat-input-wrap:focus-within .char-count { opacity: 1; }

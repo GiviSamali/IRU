@@ -1,0 +1,8 @@
+/* Full desktop layout only; keep compact and phone layouts independent. */
+@media (min-width: 981px) {
+  html:not(.iru-mini) .app .chat-messages > .msg,
+  html:not(.iru-mini) .app .chat-input-wrap {
+    max-width: 900px !important;
+    margin-inline: auto !important;
+  }
+}

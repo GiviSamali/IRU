@@ -6,6 +6,7 @@ window.IRUOperations = (() => {
   const renderedRows=new Map(), presentedCommands=new WeakMap();let renderedOwner=null;
   let chat=null, mirrorClosed=null, mirrorHTML='', stale=false, manualSelection=false, mirrorTask=null, selectedStatus=null;
   let surfaceExpanded=null;
+  const dismissedSurfaceTasks=new Set();
   const surface=()=>document.documentElement.classList.contains('iru-mini');
   const validCommandConfirmation=(task,id)=>task?.task_id===id && task.status==='confirm' && !task.plan_review
     && typeof task.confirm_data?.confirmation_id==='string'
@@ -33,6 +34,7 @@ window.IRUOperations = (() => {
   function contextChanged() {
     if(owner!==state.user?.id || chat!==state.currentChatId) {
       chat=state.currentChatId;selected=null;detail=null;historicalItem=null;mirrorClosed=null;mirrorHTML='';manualSelection=false;mirrorTask=null;selectedStatus=null;surfaceExpanded=null;
+      dismissedSurfaceTasks.clear();
       if(owner!==state.user?.id){items=[];stale=false;}
       render();
     }
@@ -96,7 +98,7 @@ window.IRUOperations = (() => {
       if(queue.textContent!==text)queue.textContent=text;
     }
     const i=displayedTask();
-    const visible=Boolean(i && (surface() || mirrorClosed!==selected));
+    const visible=Boolean(i && (surface() ? (!terminal(i.status) || !dismissedSurfaceTasks.has(i.task_id)) : mirrorClosed!==selected));
     const mirror=document.getElementById('operationMirror'), toggle=document.getElementById('mirrorToggle');
     if(mirror.hidden!==!visible)mirror.hidden=!visible;
     if(toggle.hidden!==!i)toggle.hidden=!i;
@@ -104,6 +106,9 @@ window.IRUOperations = (() => {
     syncSurfaceCommand();
     if(!visible)return;
     const status=IRUSmartUI.normalizeStatus(i.status)||'unknown';
+    const stopTarget=surface() ? getActivePendingTask() : null;
+    const composerCancels=Boolean(stopTarget && (stopTarget.task_id===i.task_id
+      || (stopTarget.goalId && stopTarget.goalId===i.goal_id)));
     const label=i.status==='waiting_input'?'Нужно выбрать окно':i.status==='waiting_confirmation'?'Нужно подтверждение':i.status==='waiting_dependency'?'Ждёт связанного результата':i.status==='queued'?'В очереди':IRUSmartUI.LABELS[status];
     const attention=i.waiting_confirmation || i.status==='waiting_input' || detail?.status==='confirm' || detail?.status==='waiting_input';
     const others=scopedItems().filter(item=>item.task_id!==i.task_id);
@@ -116,7 +121,7 @@ window.IRUOperations = (() => {
     const brief=!expanded && ['success','running','waiting'].includes(status);
     const resultLabel=status==='success'?'Результат':['blocked','failed','partial','unknown'].includes(status)?'Причина и результат':'Подробности';
     const html=surface()
-      ? `<article class="surface-operation${brief?' surface-operation-brief':''}" data-task-id="${a(i.task_id)}" data-status="${a(status)}" data-attention="${Boolean(attention)}" data-expanded="${Boolean(expanded)}">${compactStatus}<div class="surface-operation-actions"><button data-operation="surface-toggle" aria-expanded="${surfaceExpanded===i.task_id}">${surfaceExpanded===i.task_id?'Свернуть':resultLabel}</button>${i.can_cancel?'<button data-operation="cancel">Отменить</button>':''}</div>${stale?'<p role="status">Последнее известное состояние. Соединение потеряно.</p>':''}${expanded?detailMarkup(i,status):''}${extraAttention.map(item=>`<p class="surface-attention" role="status">Требует ответа: <button data-operation="details" data-surface-task="${a(item.task_id)}">${e(item.title)}</button></p>`).join('')}</article>`
+      ? `<article class="surface-operation${brief?' surface-operation-brief':''}" data-task-id="${a(i.task_id)}" data-status="${a(status)}" data-attention="${Boolean(attention)}" data-expanded="${Boolean(expanded)}">${compactStatus}<div class="surface-operation-actions"><button data-operation="surface-toggle" aria-expanded="${surfaceExpanded===i.task_id}">${surfaceExpanded===i.task_id?'Свернуть':resultLabel}</button>${i.can_cancel && !composerCancels?'<button data-operation="cancel">Отменить</button>':''}</div>${stale?'<p role="status">Последнее известное состояние. Соединение потеряно.</p>':''}${expanded?detailMarkup(i,status):''}${extraAttention.map(item=>`<p class="surface-attention" role="status">Требует ответа: <button data-operation="details" data-surface-task="${a(item.task_id)}">${e(item.title)}</button></p>`).join('')}</article>`
       : `<article data-task-id="${a(i.task_id)}" data-status="${a(status)}"><div class="mirror-object"><span class="mirror-object-icon" aria-hidden="true">▣</span><h2>${e(i.title)}</h2></div><div class="operation-devices">${e(i.device_ids.join(', ')||'Сервер')}</div><span class="smart-status">${e(label)}</span>${stale?'<p role="status">Последнее известное состояние. Соединение потеряно.</p>':''}${i.can_cancel?'<div class="operation-actions"><button data-operation="cancel">Отменить задачу</button></div>':''}${detailMarkup(i,status)}</article>`;
     if(html!==mirrorHTML) {
       const container=document.getElementById('mirrorContent'), wasOpen=mirrorTask===i.task_id && container.querySelector('.operation-detail details')?.open;
@@ -224,6 +229,7 @@ window.IRUOperations = (() => {
     if(!data.task || data.task.task_id!==id)throw Error('Некорректные сведения задачи.');
     if(state.user?.id!==who || state.currentChatId!==openedChat)return;
     selected=id;manualSelection=true;mirrorClosed=null;selectedStatus=null;detail=data.task;
+    dismissedSurfaceTasks.delete(id);
     historicalItem=scopedItems().some(item=>item.task_id===id)?null:historicalPreview(data.task);
     if(surface())surfaceExpanded=id;
     render();
@@ -289,5 +295,16 @@ window.IRUOperations = (() => {
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
   window.addEventListener('pagehide',()=>{clearInterval(timer);timer=null;});
   window.addEventListener('pageshow',()=>{if(!timer)timer=setInterval(()=>{if(!document.hidden)refresh();},2500);refresh();});
-  return Object.freeze({refresh,show,contextChanged,syncSurfaceCommand,surfaceChanged(){mirrorHTML='';synchronizeSelection();renderMirror();}});
+  return Object.freeze({refresh,show,contextChanged,syncSurfaceCommand,
+    syncSurfaceActions(){if(surface())renderMirror();},
+    messageSubmitted(){
+      const item=displayedTask();
+      if(surface() && item && terminal(item.status)) {
+        dismissedSurfaceTasks.add(item.task_id);
+        surfaceExpanded=null;
+        manualSelection=false;
+        renderMirror();
+      }
+    },
+    surfaceChanged(){mirrorHTML='';synchronizeSelection();renderMirror();}});
 })();

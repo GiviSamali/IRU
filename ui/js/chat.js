@@ -300,6 +300,7 @@ function updateStopButton() {
   const btn = document.getElementById('btnStopTask');
   if (!btn) return;
   const active = getActivePendingTask();
+  window.IRUOperations?.syncSurfaceActions();
   if (!active) {
     btn.hidden = true;
     btn.disabled = true;
@@ -309,6 +310,7 @@ function updateStopButton() {
   btn.hidden = false;
   btn.disabled = Boolean(active.cancelRequested);
   btn.textContent = active.cancelRequested ? 'Остановка...' : 'Стоп';
+  btn.setAttribute('aria-label',active.cancelRequested ? 'Остановка запрошена' : 'Остановить текущую задачу');
 }
 
 async function cancelActiveTask(taskId = null) {
@@ -652,7 +654,10 @@ function renderMessages() {
         !m.planSuggestion && !m.confirmTaskId) continue;
     const role = m.role === 'user' ? 'user' : 'assistant';
     const active = state.pendingTasks.find(item => item.task_id === m._taskId && item.kind !== 'orchestrator');
-    const view = IRUSmartUI.adapt({ ...m, cancelAvailable:Boolean(m.loading && active && active.task_id === m._taskId && !active.cancelRequested) }, mi, state.currentChatId);
+    const stopTarget=compact ? getActivePendingTask() : null;
+    const composerCancels=Boolean(stopTarget && (stopTarget.task_id===m._taskId
+      || (stopTarget.goalId && stopTarget.goalId===m.goalId)));
+    const view = IRUSmartUI.adapt({ ...m, cancelAvailable:Boolean(m.loading && active && active.task_id === m._taskId && !active.cancelRequested && !composerCancels) }, mi, state.currentChatId);
     // Goal status already has one card in Operations; keep its chat result and files.
     if (m.taskKind === 'goal' && m.resultFirst === true && m.goalId) {
       view.blocks = view.blocks.filter(block => block.type !== 'task');
@@ -849,6 +854,7 @@ async function sendMessage(options = {}) {
 
   // Добавить сообщение пользователя в UI сразу
   state.messages.push({ role: 'user', content: text });
+  window.IRUOperations?.messageSubmitted();
   // Добавить placeholder для ответа (live-статус вместо точек загрузки)
   let msgIndex = state.messages.length;
   state.messages.push({ role:'assistant', _requestId:requestId, content:'', loading:true, currentStatus:'thinking', liveTasks:[], liveCommands:[] });

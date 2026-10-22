@@ -2,3 +2,5 @@
 @import url("modes/shared/chat-cleanup.01.css");
 @import url("modes/mobile/chat-cleanup.02.css");
 @import url("modes/shared/chat-cleanup.03.css");
+@import url("modes/shared/composer-polish.css");
+@import url("modes/desktop/chat-readability.css");
