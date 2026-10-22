@@ -192,7 +192,7 @@ async def _chat_completion_request(
     request_json = {
         "model": model,
         "messages": messages,
-        "max_tokens": max_tokens or cfg.get("max_tokens", 4096),
+        "max_tokens": max_tokens or cfg.get("max_tokens", 32768),
     }
     if tools is not None:
         request_json["tools"] = tools

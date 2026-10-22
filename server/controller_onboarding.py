@@ -122,7 +122,7 @@ async def process_onboarding_message(
                 messages.append({"role":"user","content":"Final turn: call answer_text using current step_id/basis. No more searches or memory changes. If evidence is insufficient, return partial_report explaining the missing data; do not claim the goal completed."})
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
             data = await _chat_completion_request(client=client, cfg=cfg, model=cfg['model'],
-                messages=messages, tools=turn_tools, max_tokens=cfg.get('max_tokens',4096),
+                messages=messages, tools=turn_tools, max_tokens=cfg.get('max_tokens',32768),
                 tool_choice='required' if strict_worker else 'auto', usage_context=usage_ctx, phase='onboarding')
 
         message = data["choices"][0]["message"]

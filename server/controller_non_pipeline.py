@@ -417,7 +417,7 @@ async def process_non_pipeline_command(
                     model=model,
                     messages=messages,
                     tools=non_pipeline_tools,
-                    max_tokens=cfg.get("max_tokens", 4096),
+                    max_tokens=cfg.get("max_tokens", 32768),
                     tool_choice="required",
                     usage_context={**(usage_context or {}), "phase": phase},
                     phase=phase,
