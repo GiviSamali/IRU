@@ -1,0 +1,10 @@
+
+@media(prefers-reduced-motion:no-preference){.operations-dock,.operation-mirror,.content>.chat-view{transition:flex-basis .18s ease}}
+
+.mirror-answer{white-space:normal}.mirror-answer p{margin:0 0 10px}.mirror-answer h1,.mirror-answer h2,.mirror-answer h3{font-size:15px;margin:12px 0 8px;line-height:1.4}.mirror-answer pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+
+/* Match Conversation without changing column sizing, disclosure or status cues. */
+.conversation-toolbar,.operation-panel-heading{background:rgba(22,30,40,.28);box-shadow:var(--surface-highlight,none)}
+@supports ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  .operations-dock,.operation-mirror{-webkit-backdrop-filter:blur(var(--surface-blur,12px));backdrop-filter:blur(var(--surface-blur,12px))}
+}

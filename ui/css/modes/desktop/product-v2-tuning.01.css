@@ -1,0 +1,52 @@
+/* IRU Product UI v2 — tuning pass after first live review.
+   This layer keeps all existing controls/functionality, but reduces header noise,
+   widens the conversation surface and collapses technical logs by default. */
+
+/* ── Header: keep functionality, reduce visual noise ─────────────── */
+@media (min-width: 981px) {
+  .btn-header-link {
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .btn-header-link span {
+    display: none;
+  }
+
+  .memory-badge {
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  #memoryBadgeText {
+    display: none;
+  }
+
+  .usage-badge {
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+    justify-content: center;
+    overflow: visible;
+  }
+
+  #usageBadgeText {
+    font-size: 0;
+  }
+
+  #usageBadgeText::before {
+    content: '∑';
+    font-size: 13px;
+    font-weight: 700;
+    color: #aebac5;
+  }
+
+  /* Detailed activation/runtime badges belong in Passport, not the primary nav. */
+  .device-compact-status {
+    display: none !important;
+  }
+}

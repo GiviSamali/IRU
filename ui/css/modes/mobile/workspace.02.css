@@ -1,0 +1,42 @@
+
+
+@media (max-width: 520px) {
+  .chat-messages { padding: 10px; gap: 10px; }
+  .device-passport-panel {
+    width: 100%; max-width: 100%;
+    padding: 10px;
+  }
+  .device-passport-panel.expanded { width: 100%; max-width: 100%; padding: 10px; }
+  .device-passport-title { font-size: 13px; }
+  .device-passport-subtitle { font-size: 10px; }
+  .device-passport-actions {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    margin-bottom: 8px;
+  }
+  .device-passport-btn {
+    width: auto;
+    flex: 0 0 auto;
+    padding: 6px 8px;
+    white-space: nowrap;
+  }
+  .device-passport-section { padding-top: 8px; margin-top: 8px; }
+  .device-passport-grid {
+    grid-template-columns: minmax(72px, 0.42fr) minmax(0, 1fr);
+    gap: 5px 8px;
+  }
+  .device-passport-grid > div {
+    font-size: 10px;
+  }
+  .device-passport-badge {
+    width: fit-content;
+    max-width: 100%;
+  }
+  .device-passport-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .device-passport-metrics > div { padding: 7px; }
+  .device-passport-metrics strong { font-size: 12px; }
+  .device-passport-uptime { font-size: 10px; }
+}

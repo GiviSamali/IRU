@@ -1,0 +1,102 @@
+
+
+/* P0.1: presentation only; keep all layout, visibility and state selectors. */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .app {
+    --surface-shell: rgba(13, 19, 27, 0.84);
+    --surface-conversation: rgba(14, 20, 28, 0.58);
+    --surface-card: rgba(22, 30, 40, 0.82);
+    --surface-input: rgba(25, 34, 45, 0.90);
+    --surface-user: rgba(23, 52, 60, 0.84);
+  }
+
+  .app .sidebar,
+  .app .header,
+  /* Blur the scrolling surface, keeping the mobile composer's stacking intact. */
+  .app .chat-messages,
+  .app .device-passport-panel,
+  .app .explorer-panel,
+  .app .memory-panel,
+  .app .admin-panel,
+  .app .devmode-panel {
+    -webkit-backdrop-filter: blur(var(--surface-blur));
+    backdrop-filter: blur(var(--surface-blur));
+  }
+}
+
+.app .sidebar,
+.app .header,
+.app .device-passport-panel,
+.app .explorer-panel,
+.app .memory-panel,
+.app .admin-panel,
+.app .devmode-panel {
+  background: var(--surface-shell);
+  border-color: var(--surface-border);
+}
+
+.app .chat-view {
+  background: var(--surface-conversation);
+}
+
+.app .sidebar-footer,
+.app .device-passport-metrics > div,
+.app .msg.assistant:not(.msg-thinking) .msg-body {
+  background: var(--surface-card);
+  border-color: var(--surface-border);
+  box-shadow: var(--surface-highlight), var(--surface-shadow);
+}
+
+.app .msg.user .msg-body {
+  background: var(--surface-user);
+  box-shadow: var(--surface-highlight), var(--surface-shadow);
+}
+
+.app .chat-input-area {
+  background: linear-gradient(180deg, transparent, var(--surface-shell));
+}
+
+.app .chat-input-wrap {
+  background: var(--surface-input);
+  border-color: var(--surface-border);
+  box-shadow: var(--surface-highlight), var(--surface-shadow);
+}
+
+.app .chat-input-wrap:focus-within {
+  border-color: var(--border-active);
+  box-shadow: var(--surface-highlight), var(--surface-shadow), 0 0 0 2px var(--accent-glow);
+}
+
+.app .chat-input::placeholder { color: var(--text-muted); }
+
+.app .btn-header-link,
+.app .device-selector,
+.app .memory-badge,
+.app .usage-badge,
+.app .btn-new-chat,
+.app .hint-chip {
+  background: var(--surface-card);
+  border-color: var(--surface-border);
+}
+
+/* Popovers remain dense enough to read above other content. */
+.app .device-dropdown,
+.app .input-device-dropdown,
+.app .input-mode-dropdown,
+.app .memory-popover,
+.app .usage-popover {
+  background: var(--bg-tertiary);
+  border-color: var(--surface-border);
+}
+
+/* Honor OS transparency preferences, with the same surface hierarchy. */
+@media (prefers-reduced-transparency: reduce) {
+  .app {
+    --surface-shell: #0d131b;
+    --surface-conversation: #0e141c;
+    --surface-card: #161e28;
+    --surface-input: #19222d;
+    --surface-user: #17343c;
+    --surface-blur: 0px;
+  }
+}

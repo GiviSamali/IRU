@@ -1,0 +1,4 @@
+
+
+#memoryBadge, #settingsToggle { width: auto; min-width: 100px; gap: 7px; padding: 0 10px; }
+#memoryBadge > span, #settingsToggle > span { display: inline; }

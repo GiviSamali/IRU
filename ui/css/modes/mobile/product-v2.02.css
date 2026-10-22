@@ -1,0 +1,105 @@
+
+
+@media (max-width: 768px) {
+  .header {
+    min-height: 58px;
+    height: 58px;
+    padding: 0 8px;
+  }
+
+  .chat-messages {
+    padding: 18px 0 116px;
+  }
+
+  .chat-messages > .msg,
+  .chat-welcome,
+  .msg {
+    width: calc(100% - 20px);
+  }
+
+  .msg.assistant:not(.msg-thinking) .msg-body,
+  .msg-thinking .msg-body {
+    width: 100%;
+  }
+
+  .msg.user .msg-body {
+    max-width: 90%;
+  }
+
+  .task-block {
+    padding: 14px;
+    border-radius: 16px;
+  }
+
+  .task-step .step-row {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+  }
+
+  .step-details-toggle {
+    grid-column: 2 / -1;
+    justify-self: start;
+    width: auto;
+    min-width: 32px;
+  }
+
+  .step-details {
+    margin-left: 0;
+  }
+
+  .plan-suggest-actions {
+    flex-direction: column;
+  }
+
+  .plan-suggest-accept,
+  .plan-suggest-decline {
+    width: 100%;
+  }
+
+  .chat-input-area {
+    padding: 0;
+    background: rgba(11, 14, 18, 0.94);
+    border-top: 1px solid var(--border);
+  }
+
+  .chat-input-wrap {
+    min-height: 56px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .chat-input-wrap:focus-within {
+    box-shadow: none;
+  }
+
+  .mobile-plus-btn,
+  .voice-btn {
+    border-color: var(--border);
+    background: #111820;
+    color: #a9b5c0;
+  }
+
+  .btn-send {
+    border-radius: 50%;
+  }
+}
+
+@media (max-width: 480px) {
+  .msg-body {
+    font-size: 13px;
+  }
+
+  .task-goal {
+    align-items: flex-start;
+  }
+
+  .task-badge {
+    margin-left: 0;
+  }
+
+  .pipeline-progress-head {
+    flex-direction: column;
+    gap: 3px;
+  }
+}

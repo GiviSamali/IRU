@@ -1,0 +1,7 @@
+
+@media (max-width: 720px) {
+  html:not(.iru-mini) .app .chat-view .chat-messages { padding: 18px 16px; }
+  html:not(.iru-mini) .app .chat-input-area { padding: 10px 12px 14px; }
+  html:not(.iru-mini) .app .msg .msg-body { font-size: 14px; }
+  html:not(.iru-mini) .app .smart-task { padding: 12px; }
+}

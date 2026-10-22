@@ -1,0 +1,17 @@
+
+
+@media (max-width: 768px) {
+  .chat-messages > .msg,
+  .chat-welcome,
+  .msg {
+    width: calc(100% - 20px);
+  }
+
+  .cmd-log {
+    min-height: 46px;
+  }
+
+  .cmd-log.expanded {
+    padding: 10px;
+  }
+}

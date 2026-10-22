@@ -1,0 +1,4 @@
+
+@media(max-width:720px){.content{flex-wrap:wrap}.content>.chat-view{flex:1 1 100%;height:100%}.operation-mirror{position:absolute;right:0;top:42px;bottom:0;width:min(320px,92%);z-index:45;box-shadow:-12px 0 32px #0008}.conversation-toolbar{padding:5px 10px}.chat-view .chat-messages{padding:12px}.operation-panel-heading{padding:10px 12px}}
+
+@media(max-width:720px){.chat-view .chat-input-area{position:relative;z-index:60;background:var(--bg-primary,#0b1015)}#operationsList,#mirrorContent{padding-bottom:150px}}

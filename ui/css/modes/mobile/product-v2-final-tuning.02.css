@@ -1,0 +1,24 @@
+
+
+@media (max-width: 768px) {
+  .chat-messages > .msg,
+  .chat-welcome,
+  .msg {
+    width: calc(100% - 12px) !important;
+  }
+
+  .msg.assistant .msg-role,
+  .msg.assistant:not(.msg-thinking) .msg-body,
+  .msg-thinking .msg-body {
+    width: calc(100% - 8px) !important;
+  }
+
+  .msg.user .msg-body {
+    max-width: 92% !important;
+  }
+
+  .chat-input-wrap,
+  .attachments-bar {
+    width: 100% !important;
+  }
+}
