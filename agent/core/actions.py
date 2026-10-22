@@ -140,6 +140,7 @@ def get_desktop_path() -> str:
 
 def collect_system_info(device_id: str = "") -> dict:
     info = {
+        "office_tools_version": 1,
         "device_id": device_id,
         "os": platform.system(),
         "os_version": platform.version(),
@@ -1508,8 +1509,12 @@ def activate_device(mode: str = "soft", device_id: str = "") -> dict:
 
 
 from .window_control import window_control
+from .office_tools import office as _office
 
 ACTIONS = {
+    "office_docx": lambda **params: _office("office_docx", **params),
+    "office_xlsx": lambda **params: _office("office_xlsx", **params),
+    "office_pptx": lambda **params: _office("office_pptx", **params),
     "window.control": window_control,
     "execute_cmd": lambda **params: execute_cmd(**params),
     "list_dir": lambda **params: list_dir(**params),

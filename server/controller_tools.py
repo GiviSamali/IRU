@@ -6,6 +6,7 @@ except ImportError:
     from tool_registry import DEVICE_TOOL_SCHEMAS
 
 EXECUTE_CMD_DESCRIPTION = (
+    "For standard DOCX/XLSX/PPTX create, inspect and edit operations prefer the office_* tools over generated helper scripts. "
     "First-class generic control surface for normal system actions through PowerShell/cmd/bash. "
     "Existing window actions must use window_control, never shell code or synthetic keyboard/mouse input. "
     "Use it to perform the requested action and include the cheapest sufficient verification in the same short command when possible. "
@@ -24,7 +25,8 @@ WRITE_CONTENT_DESCRIPTION = (
     "For a limited edit, prefer a reliable local transformation of the current original using existing tools; do not reconstruct unchanged elements in the LLM. "
     "Overwrite replaces the entire file; neither overwrite nor append guarantees preservation. Verify the requested change and preservation against the original before claiming success. "
     "Suitable for scripts, HTML, JSON, TXT, CSV, Markdown, "
-    "and source code. For binary or Office documents, use helper scripts through existing execute_cmd/Python capabilities "
+    "and source code. For standard Office documents prefer office_docx, office_xlsx or office_pptx. "
+    "For unsupported binary documents, use existing execute_cmd/Python capabilities "
     "after checking the actual runtime/library APIs; never write binary document bytes through this text tool. "
     "Do not require Microsoft Office when verified available libraries can create the requested format. "
     "Returns compact evidence only: path, append mode, encoding, chars_written, bytes_written, content_sha256, "
@@ -48,7 +50,10 @@ def recovery_observation_tools(tools):
     result = []
     for tool in [*tools, RECOVERY_LIST_DIR]:
         name = tool["function"]["name"]
-        if name == "window_control":
+        if name in {"office_docx","office_xlsx","office_pptx"}:
+            tool = deepcopy(tool)
+            tool["function"]["parameters"]["properties"]["action"]["enum"] = ["inspect"]
+        elif name == "window_control":
             tool = deepcopy(tool)
             tool["function"]["parameters"]["properties"]["action"]["enum"] = ["active", "list", "find", "monitors"]
         elif not is_recovery_observation(name, {}) and name not in {

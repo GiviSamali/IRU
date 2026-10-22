@@ -132,7 +132,14 @@ def build_worker_report(task):
         for path in paths:
             device = result.get("target_device") if tool == "transfer_file" else _short_did(entry.get("target_device_id") or entry.get("device_id") or "")
             if isinstance(path,str) and path and device in allowed_devices and not any(a["path"] == path and a["device_id"] == device for a in artifacts):
-                artifacts.append({"type":"file", "name":PureWindowsPath(path).name, "path":path, "device_id":device, "verified":True})
+                artifact={"type":"file", "name":PureWindowsPath(path).name, "path":path, "device_id":device,"verified":True}
+                if tool in {"office_docx","office_xlsx","office_pptx"}:
+                    native=next((r for r in result.get("artifact_receipts") or [] if r.get("path")==path
+                        and r.get("source_task_id")==task["task_id"] and r.get("device_id")==device
+                        and r.get("verified") is True),None)
+                    if native is None: continue
+                    artifact.update(native)
+                artifacts.append(artifact)
     summaries = {"success":"Задача выполнена по подтверждённым результатам.", "partial":"Задача выполнена частично.",
         "blocked":"Выполнение заблокировано.", "failed":"Задача завершилась с ошибкой.", "cancelled":"Задача отменена.",
         "unknown":"Исход задачи не подтверждён; автоматически её не повторяю.", "queued":"Задача ожидает освобождения Worker.",

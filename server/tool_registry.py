@@ -658,7 +658,7 @@ DEVICE_TOOL_SCHEMAS = [
                 "properties": {
                     "category": {
                         "type": "string",
-                        "enum": ["all", "system", "memory", "device", "files", "python", "window", "app", "artifact", "web", "answer"],
+                        "enum": ["all", "system", "memory", "device", "files", "python", "window", "app", "artifact", "web", "answer", "office"],
                         "default": "all",
                     }
                 },
@@ -1058,6 +1058,15 @@ DEVICE_TOOL_SCHEMAS = [
 ]
 
 
+try:
+    from .office_tool_schemas import office_schemas, office_metadata
+except ImportError:
+    from office_tool_schemas import office_schemas, office_metadata
+
+DEVICE_TOOL_SCHEMAS.extend(office_schemas())
+TOOL_METADATA.update(office_metadata())
+
+
 def canonical_tool_name(name: str) -> str:
     return CANONICAL_TOOL_NAMES.get(name, name)
 
@@ -1204,6 +1213,10 @@ def compact_tool_summary(action: str, result: Any = None, command: str = "") -> 
                 return first_line[:240] if first_line else marker
             rc = result.get("returncode")
             return f"returncode={rc}" if rc is not None else "shell command completed"
+        if name in {"office_docx","office_xlsx","office_pptx"}:
+            return (str(result.get("error")) if result.get("error") else
+                f"{name}:{result.get('action')} verified={result.get('verified',False)}; "
+                + str(result.get("summary") or {}))[:240]
         if name == "answer.text":
             return f"answer_type={result.get('answer_type') or 'unknown'}"
         if name == "answer.ask_clarification":

@@ -73,6 +73,14 @@ def validate_and_sanitize_tool_args(
     """
     raw_args = dict(args or {})
     warnings: list[str] = []
+    if tool_name in {"office_docx","office_xlsx","office_pptx"}:
+        try:
+            from .office_tool_schemas import validate_office_args
+        except ImportError:
+            from office_tool_schemas import validate_office_args
+        error = validate_office_args(raw_args)
+        if error:
+            return {}, [], {"status":"validation_error","error":error,"dispatched":False}
 
     if tool_name == "window_list":
         if "visible" in raw_args:

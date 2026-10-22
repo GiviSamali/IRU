@@ -857,6 +857,8 @@ async def process_non_pipeline_command(
                     set_current_step(poll_task_id, f"Ищу в интернете: {query}")
                 elif fn_name in {"system_list_tools", "system_get_last_run_summary"}:
                     set_current_step(poll_task_id, "Checking tool registry")
+                elif fn_name in {"office_docx", "office_xlsx", "office_pptx"}:
+                    set_current_step(poll_task_id, "Office: " + fn_args.get("action", ""))
                 elif fn_name in MEMORY_TOOL_NAMES:
                     set_current_step(poll_task_id, "Checking memory")
                 elif fn_name.startswith("device_"):
@@ -901,6 +903,17 @@ async def process_non_pipeline_command(
                         hostname=None,
                         iteration=iteration + 1,
                     ))
+
+                elif fn_name in {"office_docx", "office_xlsx", "office_pptx"}:
+                    try:
+                        tool_result = await send_command_fn(target_device, fn_name, fn_args)
+                    except ConfirmationRequired:
+                        raise
+                    except Exception as exc:
+                        tool_result = {"status":"error","error":"office_dispatch_rejected","error_type":type(exc).__name__,"detail":str(exc)[:300]}
+                    append_entry(tool_log_entry(fn_name, tool_result, command="[office] " + fn_args.get("action", ""),
+                        target_device_id=target_device, hostname=device_info.get("hostname") or target_device,
+                        iteration=iteration + 1))
 
                 elif fn_name in MEMORY_TOOL_NAMES:
                     memory_args = dict(fn_args)

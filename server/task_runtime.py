@@ -305,7 +305,7 @@ async def send_command_to_agent(
         if assessment["decision"] == "CONFIRM" and not isinstance(confirmation, ConfirmedAction):
             raise ActionConfirmationRequired(assessment)
 
-    elif action == "write_content":
+    elif action in {"write_content", "office_docx", "office_xlsx", "office_pptx"}:
         path = str(params.get("path", "")).strip()
         if not path:
             raise RuntimeError("BLOCKED: путь не указан")
@@ -329,7 +329,7 @@ async def send_command_to_agent(
             "/var/log/",
             "/root/",
         )
-        if any(norm.startswith(prefix) for prefix in forbidden_prefixes):
+        if not (action.startswith("office_") and params.get("action") == "inspect") and any(norm.startswith(prefix) for prefix in forbidden_prefixes):
             raise RuntimeError(
                 f"BLOCKED: Запись в системные каталоги запрещена на этапе бета-тестирования: {path}"
             )
@@ -361,7 +361,7 @@ async def send_command_to_agent(
         except Exception:
             cmd_timeout = 30
         wait_timeout = max(60.0, float(cmd_timeout) + 15.0)
-    elif action in {"write_content", "get_file_content"}:
+    elif action in {"write_content", "get_file_content", "office_docx", "office_xlsx", "office_pptx"}:
         wait_timeout = 90.0
     elif action == "device.prepare_runtime":
         wait_timeout = 180.0
@@ -427,6 +427,17 @@ async def send_command_to_agent(
         if isinstance(result.get("passport_summary"), dict):
             dev["agent_cached_passport"] = result["passport_summary"]
 
+    if action in {"office_docx","office_xlsx","office_pptx"} and isinstance(result,dict):
+        receipts=[]
+        if params.get("action") in {"create","edit"} and result.get("verified") is True:
+            for item in result.get("artifact_receipts") or []:
+                if (isinstance(item,dict) and item.get("source_task_id") == params.get("_source_task_id")
+                        and item.get("verified") is True and item.get("path") == result.get("path")):
+                    receipts.append({**item,"device_id":_short_did(device_id)})
+        result={**result,"device_id":_short_did(device_id),"artifact_receipts":receipts,
+                "files_verified":[r["path"] for r in receipts]}
+        if params.get("action") in {"create","edit"} and result.get("verified") is True and not receipts:
+            raise AgentOutcomeUnknown("office_artifact_binding_unconfirmed")
     return _attach_identity_receipt(result, device_id=device_id, dev=dev)
 
 
@@ -1004,6 +1015,18 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             target_dev = devices.get(target_dk)
             if not target_dev or target_dev.get("user_id") != user_id:
                 raise RuntimeError(f"Нет доступа к устройству '{target_device_id}'")
+            if action in {"office_docx", "office_xlsx", "office_pptx"}:
+                if (target_dev.get("info") or {}).get("office_tools_version") != 1:
+                    return {"status":"error","error":"office_agent_update_required","dispatched":False}
+                params = {**params,"_source_task_id":task_id}
+                for item in [*(params.get("data",{}).get("slides",[]) or []), *(params.get("changes",[]) or [])]:
+                    if not isinstance(item,dict):
+                        return {"status":"error","error":"invalid_office_parameters","dispatched":False}
+                    for spec in (item, item.get("slide",{}), item.get("content",{})):
+                        if not isinstance(spec,dict):
+                            return {"status":"error","error":"invalid_office_parameters","dispatched":False}
+                        for image in spec.get("images",[]):
+                            validate_write_path_for_device(image["path"],target_dev.get("info") or {},get_device_profile(_short_did(target_dk),user_id=user_id))
             try:
                 result = await send_owned_command(target_dk, action, params, user_id=user_id)
 

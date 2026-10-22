@@ -151,6 +151,8 @@ def is_recovery_observation(action, params):
     except ImportError:
         from tool_registry import canonical_tool_name
     action = canonical_tool_name(action)
+    if action in {"office_docx", "office_xlsx", "office_pptx"}:
+        return params.get("action") == "inspect"
     if action == "window.control":
         return params.get("action") in {"active", "list", "find", "monitors"}
     if action == "device.refresh_state":
