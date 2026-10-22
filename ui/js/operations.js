@@ -150,7 +150,8 @@ window.IRUOperations = (() => {
     return scoped.filter(item=>!terminal(item.status) || (surfaceSeenTasks.has(item.task_id) && !dismissedSurfaceTasks.has(item.task_id)));
   }
   function renderSurfaceGroups() {
-    const rows=surfaceRows(), mirror=document.getElementById('operationMirror');
+    const rows=surfaceRows().map(item=>detail?.task_id===item.task_id && detail.status==='confirm'
+      ? {...item,status:'waiting_confirmation',waiting_confirmation:true}:item), mirror=document.getElementById('operationMirror');
     const container=document.getElementById('mirrorContent'), queue=document.getElementById('adaptiveQueue');
     if(queue)queue.hidden=true; // Queue members are rows inside their own goal.
     mirror.hidden=!rows.length;
@@ -161,7 +162,7 @@ window.IRUOperations = (() => {
     if(!rows.length)return;
     const nextDetailSources=new Map();
     const html=IRUMiniOperations.render({items:rows,snapshots:goalSnapshots,errors:goalSnapshotErrors,
-      expandedGoals:expandedSurfaceGoals,selected,expandedTask:surfaceExpanded,stale,
+      expandedGoals:expandedSurfaceGoals,selected,selectedDetail:detail,expandedTask:surfaceExpanded,stale,
       detailHTML:item=>{
         const text=detailMarkup(item,IRUSmartUI.normalizeStatus(item.status)||'unknown');
         nextDetailSources.set(item.task_id,text);

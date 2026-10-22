@@ -157,8 +157,10 @@ def normalized_worker_report(task, report=None):
         report=build_worker_report(task)
     raw_negative={"error":"failed","failed":"failed","partial":"partial","blocked":"blocked","unknown":"unknown","cancelled":"cancelled","interrupted":"unknown"}
     status_changed=task.get("status") in raw_negative and report["status"]!=raw_negative[task["status"]]
+    attention_status={"confirm":"waiting_confirmation", "waiting_input":"waiting_input"}.get(task.get("status"))
+    attention_changed=attention_status is not None and report["status"]!=attention_status
     incomplete=report["status"]=="success" and (task.get("task_receipt") or {}).get("goal_completed") is False
-    if report["status"]=="success" or status_changed or task.get("cancel_requested") or incomplete:
+    if report["status"]=="success" or status_changed or attention_changed or task.get("cancel_requested") or incomplete:
         # A cache cannot grant completion after the authoritative journal/receipt
         # changed or an older validation contract was replaced.
         report=build_worker_report(task)

@@ -14,7 +14,7 @@ window.IRUMiniOperations = (() => {
       ${attention(item)?'<span class="mini-task-attention">Нужен ответ</span>':''}
     </div>`;
   }
-  function render({items,snapshots,errors,expandedGoals,selected,expandedTask,detailHTML,stale}) {
+  function render({items,snapshots,errors,expandedGoals,selected,selectedDetail,expandedTask,detailHTML,stale}) {
     const goals=new Map(), standalone=[];
     for(const item of items) {
       if(!item.goal_id){standalone.push(item);continue;}
@@ -24,12 +24,15 @@ window.IRUMiniOperations = (() => {
     let html='';
     for(const [id,known] of goals) {
       const snapshot=snapshots.get(id), goal=snapshot?.goal;
-      const members=goal?.tasks?.filter(task=>task.required_for_goal!==false).map(task=>({
-        ...known.find(item=>item.task_id===task.task_id),task_id:task.task_id,goal_id:id,
+      const members=goal?.tasks?.filter(task=>task.required_for_goal!==false).map(task=>{
+        const live=known.find(item=>item.task_id===task.task_id);
+        const confirming=selectedDetail?.task_id===task.task_id && selectedDetail.status==='confirm';
+        return {
+        ...live,task_id:task.task_id,goal_id:id,
         title:task.objective||'Задача',
-        status:task.report?.status || (task.status==='success'?'unknown':task.status),
-        waiting_confirmation:task.status==='waiting_confirmation'
-      })) || known;
+        status:confirming?'waiting_confirmation':live?.status || task.report?.status || (task.status==='success'?'unknown':task.status),
+        waiting_confirmation:confirming || live?.waiting_confirmation || task.status==='waiting_confirmation'
+      };}) || known;
       const unavailable=stale || errors.has(id) || !goal;
       const open=expandedGoals.has(id);
       const title=goal?.original_request || known[0].goal_title || 'Цель';
