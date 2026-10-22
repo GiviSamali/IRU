@@ -79,6 +79,8 @@ try:
         serialize_tool_result_for_llm,
     )
 except ImportError:
+    from api_support import is_recovery_observation
+    from controller_tools import recovery_observation_tools
     import database as db  # type: ignore
     from answer_auditor import audit_answer_payload, answer_auditor_enabled  # type: ignore
     from answer_repair import run_answer_only_repair_turn  # type: ignore
