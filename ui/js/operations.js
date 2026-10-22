@@ -7,6 +7,8 @@ window.IRUOperations = (() => {
   let chat=null, mirrorClosed=null, mirrorHTML='', stale=false, manualSelection=false, mirrorTask=null, selectedStatus=null;
   let surfaceExpanded=null;
   const dismissedSurfaceTasks=new Set();
+  const surfaceSeenTasks=new Set(), goalSnapshots=new Map(), goalSnapshotErrors=new Set(), expandedSurfaceGoals=new Set();
+  const surfaceDetailSources=new Map();
   const surface=()=>document.documentElement.classList.contains('iru-mini');
   const validCommandConfirmation=(task,id)=>task?.task_id===id && task.status==='confirm' && !task.plan_review
     && typeof task.confirm_data?.confirmation_id==='string'
@@ -35,6 +37,8 @@ window.IRUOperations = (() => {
     if(owner!==state.user?.id || chat!==state.currentChatId) {
       chat=state.currentChatId;selected=null;detail=null;historicalItem=null;mirrorClosed=null;mirrorHTML='';manualSelection=false;mirrorTask=null;selectedStatus=null;surfaceExpanded=null;
       dismissedSurfaceTasks.clear();
+      surfaceSeenTasks.clear();goalSnapshots.clear();goalSnapshotErrors.clear();expandedSurfaceGoals.clear();
+      surfaceDetailSources.clear();
       if(owner!==state.user?.id){items=[];stale=false;}
       render();
     }
@@ -90,6 +94,7 @@ window.IRUOperations = (() => {
     return html;
   }
   function renderMirror() {
+    if(surface()){renderSurfaceGroups();return;}
     const queue=document.getElementById('adaptiveQueue');
     if(queue) {
       const queued=items.filter(item=>['queued','waiting_dependency'].includes(item.status));
@@ -131,6 +136,79 @@ window.IRUOperations = (() => {
         presentedCommands.set(button,{nonce:detail.confirm_data.confirmation_id,command:detail.confirm_data.command});
       if(stale)for(const button of container.querySelectorAll('[data-operation]'))if(!['details','surface-toggle'].includes(button.dataset.operation))button.disabled=true;
     }
+  }
+  function surfaceRows() {
+    const scoped=scopedItems();
+    if(historicalItem?.task_id===selected && !scoped.some(item=>item.task_id===selected))scoped.push(historicalItem);
+    for(const item of scoped)if(!terminal(item.status) || item.task_id===selected)surfaceSeenTasks.add(item.task_id);
+    return scoped.filter(item=>!terminal(item.status) || (surfaceSeenTasks.has(item.task_id) && !dismissedSurfaceTasks.has(item.task_id)));
+  }
+  function renderSurfaceGroups() {
+    const rows=surfaceRows(), mirror=document.getElementById('operationMirror');
+    const container=document.getElementById('mirrorContent'), queue=document.getElementById('adaptiveQueue');
+    if(queue)queue.hidden=true; // Queue members are rows inside their own goal.
+    mirror.hidden=!rows.length;
+    document.getElementById('mirrorToggle').hidden=!rows.length;
+    syncSurfaceCommand();
+    const needsAttention=rows.some(IRUMiniOperations.attention) || [...goalSnapshots.values()].some(snapshot=>snapshot.goal.tasks.some(IRUMiniOperations.attention));
+    mirror.dataset.surfaceAttention=String(needsAttention);
+    if(!rows.length)return;
+    const nextDetailSources=new Map();
+    const html=IRUMiniOperations.render({items:rows,snapshots:goalSnapshots,errors:goalSnapshotErrors,
+      expandedGoals:expandedSurfaceGoals,selected,expandedTask:surfaceExpanded,stale,
+      detailHTML:item=>{
+        const text=detailMarkup(item,IRUSmartUI.normalizeStatus(item.status)||'unknown');
+        nextDetailSources.set(item.task_id,text);
+        return `<div class="mini-selected-detail" data-task-id="${a(item.task_id)}">${text}</div>`;
+      }});
+    if(html===mirrorHTML)return;
+    const presentation=captureMessagePresentation(container,document.getElementById('chatMessages'));
+    const template=document.createElement('template');template.innerHTML=html;
+    const focused=document.activeElement;
+    // Keep unchanged groups and an unchanged open detail node (including editors).
+    const current=new Map([...container.children].map(node=>[node.dataset.goalId||'standalone',node]));
+    for(const [index,next] of [...template.content.children].entries()) {
+      const key=next.dataset.goalId||'standalone';let node=current.get(key);current.delete(key);
+      if(!node || node.outerHTML!==next.outerHTML) {
+        const oldDetail=node?.querySelector('.operation-detail'), newDetail=next.querySelector('.operation-detail');
+        const detailId=newDetail?.closest('[data-task-id]')?.dataset.taskId;
+        if(oldDetail && newDetail && detailId===oldDetail.closest('[data-task-id]')?.dataset.taskId) {
+          if(surfaceDetailSources.get(detailId)===nextDetailSources.get(detailId))newDetail.replaceWith(oldDetail);
+          else {
+            const disclosure=newDetail.querySelector('details');
+            if(disclosure)disclosure.open=Boolean(oldDetail.querySelector('details')?.open);
+          }
+        }
+        if(node)node.replaceWith(next);node=next;
+      }
+      if(container.children[index]!==node)container.insertBefore(node,container.children[index]||null);
+    }
+    for(const node of current.values())node.remove();
+    mirrorHTML=html;mirrorTask=selected;
+    surfaceDetailSources.clear();for(const [id,text] of nextDetailSources)surfaceDetailSources.set(id,text);
+    if(validCommandConfirmation(detail,selected))for(const button of container.querySelectorAll('[data-operation="confirm"], [data-operation="deny"]'))
+      presentedCommands.set(button,{nonce:detail.confirm_data.confirmation_id,command:detail.confirm_data.command});
+    if(stale)for(const button of container.querySelectorAll('[data-operation]'))if(!['details','goal-toggle'].includes(button.dataset.operation))button.disabled=true;
+    restoreMessagePresentation(container,presentation,document.getElementById('chatMessages'));
+    if(focused && container.contains(focused) && document.activeElement!==focused)focused.focus({preventScroll:true});
+  }
+  async function readSurfaceGoals(userId) {
+    if(!surface())return;
+    const chatId=state.currentChatId, ids=[...new Set(scopedItems().map(item=>item.goal_id).filter(Boolean))];
+    const results=await Promise.allSettled(ids.map(async id=>{
+      const response=await apiFetch(`${API}/api/goals/${encodeURIComponent(id)}?chat_id=${encodeURIComponent(chatId)}`);
+      if(!response.ok)throw Error('Сведения цели недоступны.');
+      const data=await response.json();
+      if(data.goal?.goal_id!==id || String(data.goal.chat_id)!==String(chatId) || !Array.isArray(data.goal.tasks))throw Error('Некорректные сведения цели.');
+      return data;
+    }));
+    if(state.user?.id!==userId || state.currentChatId!==chatId)return;
+    for(const [index,result] of results.entries()) {
+      const id=ids[index];
+      if(result.status==='fulfilled'){goalSnapshots.set(id,result.value);goalSnapshotErrors.delete(id);}
+      else goalSnapshotErrors.add(id);
+    }
+    for(const id of goalSnapshots.keys())if(!ids.includes(id)){goalSnapshots.delete(id);goalSnapshotErrors.delete(id);}
   }
   function render() {
     const scoped=scopedItems();
@@ -199,6 +277,8 @@ window.IRUOperations = (() => {
       const r=await apiFetch(`${API}/api/operations`);if(!r.ok)throw Error('Не удалось обновить операции.');
       const data=await r.json();if(state.user?.id!==id)return;
       items=Array.isArray(data.operations)?data.operations:[];
+      await readSurfaceGoals(id);
+      if(state.user?.id!==id)return;
       synchronizeSelection();
       if(selected && (items.some(i=>i.task_id===selected) || historicalItem?.task_id===selected)) {
         const selectedId=selected;
@@ -239,6 +319,19 @@ window.IRUOperations = (() => {
   }
   async function act(action,id,presented={}) {
     if(busy)return;
+    if(action==='goal-toggle'){expandedSurfaceGoals.has(id)?expandedSurfaceGoals.delete(id):expandedSurfaceGoals.add(id);renderMirror();return;}
+    if(action==='goal-cancel') {
+      if(stale || goalSnapshotErrors.has(id) || !goalSnapshots.has(id) || !scopedItems().some(item=>item.goal_id===id))throw Error('Обновите состояние цели перед остановкой.');
+      const who=state.user?.id, chatId=state.currentChatId;
+      busy=true;
+      try {
+        const response=await apiFetch(`${API}/api/goals/${encodeURIComponent(id)}/cancel?chat_id=${encodeURIComponent(chatId)}`,{method:'POST',headers:authHeaders()});
+        const result=await response.json();
+        if(!response.ok || result.status!=='ok')throw Error('Не удалось остановить цель. Обновите её состояние.');
+        if(state.user?.id===who && state.currentChatId===chatId){showToast('Остановка цели запрошена.');await refresh();}
+      } finally {busy=false;}
+      return;
+    }
     if(action==='surface-toggle'){surfaceExpanded=surfaceExpanded===id?null:id;renderMirror();return;}
     if(action==='details'){await show(id);return;}
     if(stale)throw Error('Обновите состояние задачи перед действием.');
@@ -278,6 +371,11 @@ window.IRUOperations = (() => {
     for(const element of ['operationsItems','mirrorContent'])document.getElementById(element).addEventListener('click',event=>{
       if(event.target.closest('[data-action]'))return;
       const button=event.target.closest('[data-operation]'), row=button?.closest('[data-task-id]')||event.target.closest('.operation-item');
+      if(button?.dataset.operation?.startsWith('goal-')) {
+        const group=button.closest('[data-goal-id]');
+        if(group)act(button.dataset.operation,group.dataset.goalId).catch(err=>showToast(err.message,true));
+        return;
+      }
       if(row)act(button?.dataset.operation||'details',button?.dataset.surfaceTask||row.dataset.taskId,button?presentedCommands.get(button)||{}:{}).catch(err=>showToast(err.message,true));
     });
     bindChatMessageActions(document.getElementById('mirrorContent'));
@@ -298,13 +396,20 @@ window.IRUOperations = (() => {
   return Object.freeze({refresh,show,contextChanged,syncSurfaceCommand,
     syncSurfaceActions(){if(surface())renderMirror();},
     messageSubmitted(){
-      const item=displayedTask();
-      if(surface() && item && terminal(item.status)) {
-        dismissedSurfaceTasks.add(item.task_id);
+      if(surface()) {
+        for(const item of surfaceRows())if(terminal(item.status))dismissedSurfaceTasks.add(item.task_id);
         surfaceExpanded=null;
         manualSelection=false;
         renderMirror();
       }
     },
-    surfaceChanged(){mirrorHTML='';synchronizeSelection();renderMirror();}});
+    ownsCancellation(task){
+      if(!surface() || !task)return false;
+      const container=document.getElementById('mirrorContent');
+      const selector=task.kind==='goal' && task.goalId
+        ? `[data-goal-id="${CSS.escape(task.goalId)}"] [data-operation="goal-cancel"]:not(:disabled)`
+        : `[data-task-id="${CSS.escape(task.task_id)}"] [data-operation="cancel"]:not(:disabled)`;
+      return !document.getElementById('operationMirror').hidden && Boolean(container.querySelector(selector));
+    },
+    surfaceChanged(){mirrorHTML='';synchronizeSelection();renderMirror();if(surface())refresh();}});
 })();

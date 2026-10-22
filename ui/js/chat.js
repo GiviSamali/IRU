@@ -301,7 +301,7 @@ function updateStopButton() {
   if (!btn) return;
   const active = getActivePendingTask();
   window.IRUOperations?.syncSurfaceActions();
-  if (!active) {
+  if (!active || window.IRUOperations?.ownsCancellation(active)) {
     btn.hidden = true;
     btn.disabled = true;
     btn.textContent = 'Стоп';
