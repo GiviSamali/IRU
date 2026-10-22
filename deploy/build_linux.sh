@@ -65,7 +65,7 @@ fi
 source "$VENV_DIR/bin/activate"
 
 python -m pip install --upgrade pip >/dev/null
-python -m pip install --upgrade pyinstaller websockets httpx >/dev/null
+python -m pip install --upgrade pyinstaller -r "$REPO_ROOT/requirements-agent.txt" >/dev/null
 
 # ── Очистка ──────────────────────────────────────────────────────────────
 rm -rf "$DIST_DIR" "$BUILD_DIR"
@@ -80,6 +80,10 @@ python -m PyInstaller \
     --workpath "$BUILD_DIR" \
     --specpath "$REPO_ROOT" \
     --noconfirm \
+    --collect-all docx \
+    --collect-all openpyxl \
+    --collect-all pptx \
+    --collect-all pypdf \
     --collect-submodules platforms \
     --hidden-import platforms \
     --hidden-import platforms.windows \

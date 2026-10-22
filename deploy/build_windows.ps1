@@ -304,7 +304,7 @@ Write-Host "Обновляем pip..."
 if ($LASTEXITCODE -ne 0) { throw "pip upgrade завершился с кодом $LASTEXITCODE" }
 
 Write-Host "Устанавливаем зависимости сборки (pyinstaller, websockets, httpx, PySide6, pywebview, pythonnet)..."
-& python -m pip install --upgrade pyinstaller websockets httpx PySide6 "pywebview==6.2.1" "pythonnet==3.2.0"
+& python -m pip install --upgrade pyinstaller -r (Join-Path $repoRoot "requirements-agent.txt")
 if ($LASTEXITCODE -ne 0) { throw "pip install завершился с кодом $LASTEXITCODE" }
 
 Write-Host "Зависимости установлены." -ForegroundColor DarkGray
@@ -392,7 +392,11 @@ $pyiArgs = @(
     "--collect-data", "webview",
     "--collect-binaries", "webview",
     "--collect-all", "pythonnet",
-    "--collect-all", "clr_loader"
+    "--collect-all", "clr_loader",
+    "--collect-all", "docx",
+    "--collect-all", "openpyxl",
+    "--collect-all", "pptx",
+    "--collect-all", "pypdf"
 )
 
 foreach ($module in $qtHiddenImports) {
