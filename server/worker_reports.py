@@ -178,14 +178,38 @@ def build_worker_report(task):
                     artifact.update(size_bytes=result.get("bytes_transferred"),sha256=result.get("sha256"))
                 record_artifact(artifact, native=transferred or (tool == "write_content"
                     and result.get("verified") is True and result.get("committed") is True))
-    expected = task.get("assigned_artifacts") or []
+    expected = [item.strip() for item in task.get("assigned_artifacts") or []
+                if isinstance(item, str) and item.strip()]
     user_files = [a for a in final_receipts if "/scripts/helpers/" not in a["path"].replace("\\","/").casefold()
-                  or any(str(e).replace("\\","/").split("/")[-1].casefold()==a["name"].casefold() for e in expected)]
-    # Expected labels may be descriptive or an earlier proposed filename. Keep
-    # the existing goal audit authoritative for semantics; require real files.
-    artifact_incomplete = status == "success" and bool(expected) and len(user_files) < len(expected)
+                  or any(e.replace("\\","/").split("/")[-1].casefold()==a["name"].casefold() for e in expected)]
+    # An output receipt can satisfy only one assignment. Explicit filenames are
+    # exact; descriptive output labels may use a verified file of that format.
+    formats = {".docx": ("docx", "word"), ".xlsx": ("xlsx", "excel"),
+               ".pptx": ("pptx", "powerpoint"), ".pdf": ("pdf",)}
+    def specificity(label):
+        name = label.replace("\\", "/").casefold()
+        suffix = PureWindowsPath(name).suffix
+        if suffix and len(suffix) <= 12 and suffix[1:2].isalpha() and name[-len(suffix)-1:-len(suffix)].isalnum():
+            return 2
+        return int(any(token in name for tokens in formats.values() for token in tokens))
+
+    remaining = list(user_files)
+    matched = []
+    for label in sorted(expected, key=specificity, reverse=True):
+        target = label.replace("\\", "/").casefold()
+        exact = specificity(label) == 2
+        hinted = {suffix for suffix, tokens in formats.items() if any(token in target for token in tokens)}
+        match = next((a for a in remaining if (
+            (PureWindowsPath(a["path"]).as_posix().casefold() == PureWindowsPath(target).as_posix().casefold() if "/" in target
+             else a["name"].casefold() == target) if exact else
+            (PureWindowsPath(a["path"]).suffix.casefold() in hinted if hinted else True)
+        )), None)
+        if match is not None:
+            matched.append(match)
+            remaining.remove(match)
+    artifact_incomplete = status == "success" and len(matched) < len(expected)
     if artifact_incomplete:
-        status = "partial" if user_files else "unknown"
+        status = "partial" if matched else "unknown"
     summaries = {"success":"Задача выполнена по подтверждённым результатам.", "partial":"Задача выполнена частично.",
         "blocked":"Выполнение заблокировано.", "failed":"Задача завершилась с ошибкой.", "cancelled":"Задача отменена.",
         "unknown":"Исход задачи не подтверждён; автоматически её не повторяю.", "queued":"Задача ожидает освобождения Worker.",

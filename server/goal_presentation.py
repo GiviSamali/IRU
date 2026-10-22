@@ -50,7 +50,8 @@ def goal_presentation(goal: dict) -> dict:
     artifacts = []
     shown = []
     seen = set()
-    for member in finished:
+    # Verified files from partially completed Tasks remain visible as partial results.
+    for member in members:
         report = member.get("report") or {}
         expected = [str(item).casefold().replace("\\", "/")
                     for item in member.get("expected_artifacts") or [] if isinstance(item, str)]
