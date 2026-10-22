@@ -653,6 +653,10 @@ function renderMessages() {
     const role = m.role === 'user' ? 'user' : 'assistant';
     const active = state.pendingTasks.find(item => item.task_id === m._taskId && item.kind !== 'orchestrator');
     const view = IRUSmartUI.adapt({ ...m, cancelAvailable:Boolean(m.loading && active && active.task_id === m._taskId && !active.cancelRequested) }, mi, state.currentChatId);
+    // Goal status already has one card in Operations; keep its chat result and files.
+    if (m.taskKind === 'goal' && m.resultFirst === true && m.goalId) {
+      view.blocks = view.blocks.filter(block => block.type !== 'task');
+    }
     const workerInDock = m.taskKind === 'worker';
     if(compact && !workerInDock && m.loading && !m.confirmTaskId && !m.planReview) {
       view.blocks=view.blocks.filter(block=>block.type!=='task');
