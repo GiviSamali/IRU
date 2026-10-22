@@ -113,10 +113,9 @@ def test_context_keeps_latest_proposal_and_working_object_without_more_budget(ow
     context=orch.context_for(owner['id'],owner['chat_id'],'Давай вариант Б','pc')
     record=context['history'][-1]
     assert 'control.py' in record['content'] and 'Вариант Б: сначала замер' in record['content']
-    assert len(record['content'])==1000 and record['truncated']
-    assert len(json.dumps(context,ensure_ascii=False))<=orch.MAX_CONTEXT_CHARS
+    assert record['content']==text and not record.get('truncated')
     frozen=capture_history(owner['chat_id'])
-    assert 'Вариант Б' in frozen[-1]['content'] and frozen[-1]['content_truncated']
+    assert frozen[-1]['content']==text and not frozen[-1]['content_truncated']
     for limit in range(30):assert len(clip_context_text(text,limit))<=limit
 
 

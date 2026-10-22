@@ -100,7 +100,23 @@ def get_last_run_summary(
     source_task_id: str | None = None,
     report_offset: int = 0,
     allowed_devices: set[str] | None = None,
+    context_checkpoint_id: str | None = None,
+    context_before_message_id: int | None = None,
+    context_message_id: int | None = None,
+    context_step_id: str | None = None,
 ) -> dict[str, Any]:
+    if context_before_message_id is not None or context_message_id is not None:
+        try:
+            from .context_store import history_page
+        except ImportError:
+            from context_store import history_page
+        return history_page(user_id, chat_id, context_before_message_id, context_message_id, report_offset)
+    if context_checkpoint_id:
+        try:
+            from .context_store import read_page
+        except ImportError:
+            from context_store import read_page
+        return read_page(user_id, chat_id, context_checkpoint_id, report_offset, exclude_task_id, context_step_id)
     if source_task_id:
         # Explicit persisted source: ownership/chat/device boundaries precede all content access.
         try:

@@ -155,7 +155,9 @@ def test_orchestrator_context_is_bounded_owner_scoped_and_data_only(owners):
     db.add_message(a['chat_id'],'user','x'*50000)
     context=orch.context_for(a['id'],a['chat_id'],'Руслан','pc')
     text=json.dumps(context,ensure_ascii=False)
-    assert len(text)<=orch.MAX_CONTEXT_CHARS and 'PRIVATE_OTHER_OWNER' not in text
+    # Collection preserves source text; the complete request is bounded at send time.
+    assert 'PRIVATE_OTHER_OWNER' not in text
+    assert context['history'][0]['content'] == 'x'*50000
     assert len(context['facts'])==1 and all(d['device_id']=='pc' for d in context['devices'])
     assert 'execute_cmd' not in json.dumps(orch.TOOL) and orch.TOOL['function']['name']=='orchestrator_decision'
     with pytest.raises(Exception):orch.Decision.model_validate({'intent':'delegate','user_id':b['id'],'verified':True})
@@ -255,6 +257,9 @@ def test_late_cancel_does_not_move_to_next_worker(owners,monkeypatch):
 def test_orchestrator_uses_existing_model_usage_and_small_schema(owners,monkeypatch):
     a,b=owners
     from server import controller
+    from server import context_budget
+    # The mock provider has no model tokenizer; make the request-size estimate deterministic.
+    monkeypatch.setattr(context_budget,'_encoding',lambda:SimpleNamespace(encode=lambda text,**kw:range(len(text)//3)))
     class Response:
         def raise_for_status(self):pass
         def json(self):return {'choices':[{'finish_reason':'stop','message':{'tool_calls':[{'function':{'name':'orchestrator_decision','arguments':json.dumps({'intent':'conversation','answer':'hello'})}}]}}],
@@ -508,9 +513,14 @@ def test_context_hard_cap_with_oversized_devices_and_no_tasks(owners,monkeypatch
         with db.get_db() as c:
             c.execute('INSERT INTO worker_jobs(task_id,owner_user_id,chat_id,state,payload,report,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
                 (t['task_id'],a['id'],a['chat_id'],'unknown',json.dumps(t),json.dumps({'summary':'R'*50000}),time.time(),time.time()))
-    monkeypatch.setattr(orch,'MAX_CONTEXT_CHARS',700)
     result=orch.context_for(a['id'],a['chat_id'],'question','pc')
-    assert len(json.dumps(result,ensure_ascii=False))<=700 and result['context_truncated'] is True
+    from server import context_budget as budget
+    monkeypatch.setattr(budget,'_encoding',lambda:None)
+    with pytest.raises(budget.ContextBudgetExceeded):
+        budget.check_request({'base_url':'https://example.invalid','model':'mock',
+            'orchestrator_input_tokens':2048,'orchestrator_expanded_input_tokens':2048},
+            'orchestrator',[{'role':'user','content':json.dumps(result,ensure_ascii=False)}],[orch.TOOL],2400)
+    assert len(result['history']) == 12
     assert all(len(d.get('name',''))<=80 for d in result['devices'])
 
 
