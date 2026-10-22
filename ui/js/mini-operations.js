@@ -38,6 +38,8 @@ window.IRUMiniOperations = (() => {
       const canCancel=members.some(item=>active(item.status));
       const selectedMember=members.find(item=>item.task_id===selected);
       const showDetail=selectedMember && (expandedTask===selected || attention(selectedMember));
+      const resultView=IRUSmartUI.adapt({role:'assistant',_taskId:'goal-'+id,goalId:id,goalPresentation:snapshot?.presentation,
+        content:snapshot?.presentation?.message||'Подробности поручения — по нажатию на его название.'},0,goal?.chat_id||'');
       html+=`<section class="mini-goal" data-goal-id="${a(id)}">
         <h3 class="mini-goal-title">${e(title)}</h3>
         <div class="mini-goal-box">
@@ -47,7 +49,7 @@ window.IRUMiniOperations = (() => {
             <button data-operation="goal-toggle" aria-expanded="${open}">${open?'Свернуть':'Подробнее'}</button>
             ${canCancel?`<button data-operation="goal-cancel"${unavailable?' disabled':''}>Остановить цель</button>`:''}
           </div>
-          ${open?`<div class="mini-goal-summary"><span>${e(IRUSmartUI.LABELS[IRUSmartUI.normalizeStatus(status)]||'Результат не подтверждён')}</span><p>${e(snapshot?.presentation?.message||'Подробности поручения — по нажатию на его название.')}</p></div>`:''}
+          ${open?`<div class="mini-goal-summary"><span>Итог цели · ${e(IRUSmartUI.LABELS[IRUSmartUI.normalizeStatus(status)]||'Результат не подтверждён')}</span>${IRUSmartUI.render(resultView,{formatAssistantText:true})}</div>`:''}
           ${showDetail?detailHTML(selectedMember):''}
         </div>
       </section>`;

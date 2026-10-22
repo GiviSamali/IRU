@@ -431,6 +431,8 @@ async def api_operations(request: Request):
             "goal_status": goal["status"] if goal else None,
             "goal_task_count": len(goal["tasks"]) if goal else 1,
             "assignment_revision": member.get("revision"),
+            "required_for_goal": member.get("required_for_goal", True),
+            "superseded_by": member.get("superseded_by"),
             "dependencies": member.get("dependencies", []),
             "can_cancel": report["status"] in {"queued", "waiting_dependency", "running", "waiting_confirmation", "waiting_input"},
             "waiting_confirmation": report["status"] == "waiting_confirmation"})

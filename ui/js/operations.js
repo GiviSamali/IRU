@@ -21,6 +21,7 @@ window.IRUOperations = (() => {
     if(state.user)sessionStorage.setItem(key(),String(value));
   }
   const scopedItems=()=>items.filter(i=>String(i.chat_id)===String(state.currentChatId));
+  const replaced=item=>item.required_for_goal===false || Boolean(item.superseded_by);
   // The global Operations snapshot is bounded; an owner-authorized historical task
   // can be viewed even when it is absent from that snapshot or from this chat.
   const historicalPreview=task=>({
@@ -49,7 +50,7 @@ window.IRUOperations = (() => {
     if(selected && !scoped.some(i=>i.task_id===selected) && historicalItem?.task_id!==selected){selected=null;detail=null;mirrorClosed=null;}
     // A manually opened historical card must not be displaced by background polling.
     if(historicalItem?.task_id===selected){selectedStatus=historicalItem.status;return;}
-    const current=scoped.find(i=>i.waiting_confirmation)||scoped.find(i=>!terminal(i.status));
+    const current=scoped.find(i=>!replaced(i) && i.waiting_confirmation)||scoped.find(i=>!replaced(i) && !terminal(i.status));
     if(current && (!selected || (!manualSelection && terminal(scoped.find(i=>i.task_id===selected)?.status)))) {
       selected=current.task_id;detail=null;mirrorClosed=null;selectedStatus=null;
     }
@@ -74,6 +75,7 @@ window.IRUOperations = (() => {
     const cd=detail.confirm_data||{};
     const answer=IRUSmartUI.REGISTRY.text({key:'mirror-result-'+i.task_id,text:detail.conversational_response||detail.answer||i.summary||'',long:false},{formatAssistantText:true});
     let html=`<div class="operation-detail"><div class="operation-prose mirror-answer">${answer}</div>`;
+    if(replaced(i))html+='<p class="operation-prose">Историческая попытка: заменена новой. Её статус не определяет текущий итог цели.</p>';
     if(readOnly){
       const source=state.chats?.find(chat=>String(chat.id)===String(detail.chat_id));
       const label=source?.title||'Чат №'+String(detail.chat_id);
@@ -82,7 +84,7 @@ window.IRUOperations = (() => {
     if(i.goal_id) {
       const related=scopedItems().filter(item=>item.goal_id===i.goal_id);
       const dependencies=(i.dependencies||[]).map(edge=>related.find(item=>item.task_id===edge.source_task_id)?.title||'Связанное поручение');
-      html+=`<div class="operation-prose"><strong>Цель:</strong> ${e(i.goal_title||'')}<br>Поручений: ${e(String(i.goal_task_count||related.length))} · ${e(IRUSmartUI.LABELS[IRUSmartUI.normalizeStatus(i.goal_status)]||i.goal_status||'')}${dependencies.length?`<br>Зависит от: ${dependencies.map(e).join('; ')}`:''}</div>`;
+      html+=`<div class="operation-prose"><strong>Общая цель:</strong> ${e(i.goal_title||'')}<br>Поручений: ${e(String(i.goal_task_count||related.length))}<br>Итог цели: ${e(IRUSmartUI.LABELS[IRUSmartUI.normalizeStatus(i.goal_status)]||i.goal_status||'Не подтверждён')}${dependencies.length?`<br>Зависит от: ${dependencies.map(e).join('; ')}`:''}</div>`;
     }
     if(detail.status==='confirm' && !readOnly) {
       if(validCommandConfirmation(detail,i.task_id))html+=`<div class="operation-prose operation-command-preview">${e(cd.command)}</div><button data-operation="confirm" data-confirmation-id="${a(cd.confirmation_id)}">Выполнить</button><button data-operation="deny" data-confirmation-id="${a(cd.confirmation_id)}">Отклонить</button>`;
@@ -127,7 +129,7 @@ window.IRUOperations = (() => {
     const resultLabel=status==='success'?'Результат':['blocked','failed','partial','unknown'].includes(status)?'Причина и результат':'Подробности';
     const html=surface()
       ? `<article class="surface-operation${brief?' surface-operation-brief':''}" data-task-id="${a(i.task_id)}" data-status="${a(status)}" data-attention="${Boolean(attention)}" data-expanded="${Boolean(expanded)}">${compactStatus}<div class="surface-operation-actions"><button data-operation="surface-toggle" aria-expanded="${surfaceExpanded===i.task_id}">${surfaceExpanded===i.task_id?'Свернуть':resultLabel}</button>${i.can_cancel && !composerCancels?'<button data-operation="cancel">Отменить</button>':''}</div>${stale?'<p role="status">Последнее известное состояние. Соединение потеряно.</p>':''}${expanded?detailMarkup(i,status):''}${extraAttention.map(item=>`<p class="surface-attention" role="status">Требует ответа: <button data-operation="details" data-surface-task="${a(item.task_id)}">${e(item.title)}</button></p>`).join('')}</article>`
-      : `<article data-task-id="${a(i.task_id)}" data-status="${a(status)}"><div class="mirror-object"><span class="mirror-object-icon" aria-hidden="true">▣</span><h2>${e(i.title)}</h2></div><div class="operation-devices">${e(i.device_ids.join(', ')||'Сервер')}</div><span class="smart-status">${e(label)}</span>${stale?'<p role="status">Последнее известное состояние. Соединение потеряно.</p>':''}${i.can_cancel?'<div class="operation-actions"><button data-operation="cancel">Отменить задачу</button></div>':''}${detailMarkup(i,status)}</article>`;
+      : `<article data-task-id="${a(i.task_id)}" data-status="${a(status)}"><div class="mirror-object"><span class="mirror-object-icon" aria-hidden="true">▣</span><h2>${e(i.title)}</h2></div><div class="operation-devices">${e(i.device_ids.join(', ')||'Сервер')}</div><span class="smart-status">${i.goal_id?'Поручение · ':''}${e(label)}</span>${stale?'<p role="status">Последнее известное состояние. Соединение потеряно.</p>':''}${i.can_cancel?'<div class="operation-actions"><button data-operation="cancel">Отменить задачу</button></div>':''}${detailMarkup(i,status)}</article>`;
     if(html!==mirrorHTML) {
       const container=document.getElementById('mirrorContent'), wasOpen=mirrorTask===i.task_id && container.querySelector('.operation-detail details')?.open;
       container.innerHTML=html;mirrorHTML=html;mirrorTask=i.task_id;
@@ -138,7 +140,9 @@ window.IRUOperations = (() => {
     }
   }
   function surfaceRows() {
-    const scoped=scopedItems();
+    const scoped=scopedItems().filter(item=>!replaced(item));
+    const selectedItem=scopedItems().find(item=>item.task_id===selected);
+    if(manualSelection && selectedItem && replaced(selectedItem))scoped.push({...selectedItem,goal_id:null,can_cancel:false,title:'История: '+selectedItem.title});
     if(historicalItem?.task_id===selected && !scoped.some(item=>item.task_id===selected))scoped.push(historicalItem);
     for(const item of scoped)if(!terminal(item.status) || item.task_id===selected)surfaceSeenTasks.add(item.task_id);
     return scoped.filter(item=>!terminal(item.status) || (surfaceSeenTasks.has(item.task_id) && !dismissedSurfaceTasks.has(item.task_id)));
@@ -212,20 +216,20 @@ window.IRUOperations = (() => {
   }
   function render() {
     const scoped=scopedItems();
-    const active=scoped.filter(i=>!terminal(i.status));
-    const negative=scoped.filter(i=>['partial','failed','blocked','unknown'].includes(i.status));
+    const active=scoped.filter(i=>!replaced(i) && !terminal(i.status));
+    const negative=scoped.filter(i=>!replaced(i) && ['partial','failed','blocked','unknown'].includes(i.status));
     const indicator=active.length ? `${active.length} в работе / очереди` : negative.length ? `${negative.length} требуют внимания` : scoped.length ? 'Нет активных' : 'Нет задач';
     if(document.getElementById('operationsIndicator').textContent!==indicator)document.getElementById('operationsIndicator').textContent=indicator;
     const container=document.getElementById('operationsItems');
     const presentation=captureMessagePresentation(document.getElementById('operationsItems'));
     const disclosures=new Map(Array.from(container.querySelectorAll('.operation-item')).map(row=>[row.dataset.taskId,row.querySelector('.operation-detail details')?.open]));
     const scroll=document.getElementById('operationsList').scrollTop;
-    const group=i=>i.waiting_confirmation?0:i.status==='running'?1:['queued','waiting_dependency'].includes(i.status)?2:i.status==='partial'?3:['failed','blocked','unknown'].includes(i.status)?4:5;
-    const groups=['Нужно подтверждение','Выполняются','Очередь','Частично выполнены','Требуют внимания','Завершены'];
+    const group=i=>replaced(i)?6:i.waiting_confirmation?0:i.status==='running'?1:['queued','waiting_dependency'].includes(i.status)?2:i.status==='partial'?3:['failed','blocked','unknown'].includes(i.status)?4:5;
+    const groups=['Нужно подтверждение','Выполняются','Очередь','Частично выполнены','Требуют внимания','Завершены','История заменённых попыток'];
     let previousGroup=null;
     const rows=[...scoped].sort((left,right)=>group(left)-group(right)).map(i=>{
       const status=IRUSmartUI.normalizeStatus(i.status)||'unknown';
-      const label=i.status==='waiting_input'?'Нужно выбрать окно':i.status==='waiting_confirmation'?'Нужно подтверждение':i.status==='waiting_dependency'?'Ждёт связанного результата':i.status==='queued'?'В очереди':IRUSmartUI.LABELS[status];
+      const label=replaced(i)?`${IRUSmartUI.LABELS[status]} · Заменена новой попыткой`:i.status==='waiting_input'?'Нужно выбрать окно':i.status==='waiting_confirmation'?'Нужно подтверждение':i.status==='waiting_dependency'?'Ждёт связанного результата':i.status==='queued'?'В очереди':IRUSmartUI.LABELS[status];
       const number=group(i), heading=number!==previousGroup?`<div class="operation-group">${e(groups[number])}</div>`:'';previousGroup=number;
       return {id:i.task_id,html:`<article class="operation-item${selected===i.task_id?' selected':''}" data-message-key="dock-${a(i.task_id)}" data-task-id="${a(i.task_id)}" data-status="${a(status)}">${heading}<div class="operation-heading"><strong>${e(i.title)}</strong><span class="smart-status">${e(label)}</span></div><div class="operation-devices">${e(i.device_ids.join(', ')||'Сервер')}</div><div class="operation-actions"><button data-operation="details" aria-pressed="${selected===i.task_id}">${selected===i.task_id?'Выбрана':'Показать'}</button>${i.can_cancel?'<button data-operation="cancel">Отменить</button>':''}</div></article>`};
     });

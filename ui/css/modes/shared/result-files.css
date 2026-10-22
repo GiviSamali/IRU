@@ -1,0 +1,4 @@
+.app .smart-file-verified {
+  margin-top:5px; color:var(--text-muted); font-size:11px; line-height:1.5;
+}
+.app .smart-file-heading strong { overflow-wrap:anywhere; }

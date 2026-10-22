@@ -48,6 +48,7 @@ def goal_presentation(goal: dict) -> dict:
         status = "failed"
 
     artifacts = []
+    result_artifacts = []
     shown = []
     seen = set()
     # Verified files from partially completed Tasks remain visible as partial results.
@@ -88,8 +89,10 @@ def goal_presentation(goal: dict) -> dict:
             else:
                 user_output = ("/scripts/helpers/" not in canonical_path
                                and not canonical_name.endswith((".py", ".ps1", ".sh", ".tmp")))
-            if user_output and len(shown) < 8:
-                shown.append(artifact)
+            if user_output:
+                result_artifacts.append(artifact)
+                if len(shown) < 8:
+                    shown.append(artifact)
 
     if success:
         message = ("Готово." if total == 1 else f"Готово. Подтверждены все {total} результата.")
@@ -114,6 +117,7 @@ def goal_presentation(goal: dict) -> dict:
     return {"goal_id": goal.get("goal_id"), "status": status,
             "terminal": terminal, "goal_completed": success, "completed_count": done,
             "total_count": total, "message": message, "artifacts": artifacts,
+            "result_artifacts": result_artifacts,
             "requires_user_action": any(m.get("status") in {"waiting_confirmation", "waiting_input"}
                                        for m in members),
             "task_ids": [m.get("task_id") for m in members]}

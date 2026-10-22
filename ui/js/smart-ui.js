@@ -140,6 +140,23 @@ const IRUSmartUI = (() => {
     return [...files.values()];
   }
 
+  function filesFromGoal(presentation) {
+    if(!presentation || !Array.isArray(presentation.result_artifacts) || !Array.isArray(presentation.task_ids))return [];
+    const files=new Map();
+    for(const artifact of presentation.result_artifacts) {
+      if(!artifact || artifact.verified!==true || !presentation.task_ids.includes(artifact.task_id))continue;
+      const path=text(artifact.path), device=text(artifact.device_id), name=path.split(/[\\/]/).pop();
+      if(!path || !device || !name || /[\x00-\x1f]/.test(path+device))continue;
+      try {encodeURIComponent(path);encodeURIComponent(device);} catch {continue;}
+      // Identity is device + full path; two devices may return the same filename.
+      const identity=`${device}:${path.replace(/\\/g,'/').toLowerCase()}`;
+      if(!files.has(identity))files.set(identity,{type:'file',path,device,name,verified:true,
+        extension:name.includes('.')?name.split('.').pop().toLowerCase():'',
+        size:Number.isFinite(artifact.size_bytes) && artifact.size_bytes>=0?artifact.size_bytes:null});
+    }
+    return [...files.values()];
+  }
+
   function adapt(message, index = 0, chatId = '') {
     const m = message && typeof message === 'object' ? message : {};
     const encodeId = (value, fallback) => {
@@ -147,7 +164,15 @@ const IRUSmartUI = (() => {
       try { return encodeURIComponent(String(value)); } catch { return String(fallback); }
     };
     const id = `smart-${encodeId(chatId,'')}-${encodeId(m._taskId ?? m.id ?? index,index)}`;
-    const blocks = [], content = text(m.conversationalResponse) || text(m.conversational_response) || text(m.content) || text(m.text);
+    const candidate=m.goalPresentation || m.goal_presentation;
+    const goal=candidate?.goal_id && candidate.goal_id===(m.goalId||m.goal_id) ? candidate : null;
+    const isGoalMessage=m.taskKind==='goal' || Boolean(m.resultFirst && (m.goalId||m.goal_id));
+    const goalFiles=filesFromGoal(goal);
+    const blocks = [];
+    let content = text(m.conversationalResponse) || text(m.conversational_response) || text(m.content) || text(m.text);
+    // Replace only exact server-generated file lines represented by real File blocks.
+    // Keep all other prose, statuses and unavailable/unverified paths unchanged.
+    if(m.role!=='user' && goalFiles.length)content=content.split('\n').filter(line=>!goalFiles.some(file=>line.trim()==='Файл: '+file.path)).join('\n').trim();
     const executionDetails = text(m.executionDetails) || text(m.execution_details);
     if (content) blocks.push({ type:'text', text:content, key:id+'-text', long:content.length > 200 || content.split('\n').length > 4 });
     if (m.role === 'user') return { key:id, blocks };
@@ -171,9 +196,9 @@ const IRUSmartUI = (() => {
         tasks, commands, executionDetails, loading:Boolean(m.loading), currentStatus:m.currentStatus,
         unknown: status === 'unknown' });
     }
-    const files=filesFromCommands(commands);
+    const files=goal || isGoalMessage ? goalFiles : filesFromCommands(commands);
     const report=m.workerReport || m.worker_report;
-    if(report?.schema_version===1 && Array.isArray(report.artifacts) && Array.isArray(report.target_device_ids)) {
+    if(!goal && !isGoalMessage && report?.schema_version===1 && Array.isArray(report.artifacts) && Array.isArray(report.target_device_ids)) {
       for(const artifact of report.artifacts) {
         if(!artifact || artifact.verified!==true || !report.target_device_ids.includes(artifact.device_id))continue;
         const path=text(artifact.path), device=text(artifact.device_id), name=path.split(/[\\/]/).pop();
@@ -241,6 +266,7 @@ const IRUSmartUI = (() => {
       const open = expanded(block, context);
       return `<section class="smart-block smart-file${open ? ' expanded' : ''}" data-block-type="file" data-smart-key="${esc(block.key)}">
         <div class="smart-file-heading"><span class="smart-file-kind">${esc(block.extension || 'Файл')}</span><strong>${esc(block.name)}</strong></div>
+        ${block.verified?'<div class="smart-file-verified">Подтверждён при выполнении</div>':''}
         <div class="smart-file-meta"><span>${esc(block.device)}</span><span class="smart-file-path" id="${esc(block.key)}">${esc(block.path)}</span></div>
         <button type="button" class="smart-file-toggle" data-action="toggle-smart-file" aria-controls="${esc(block.key)}" aria-expanded="${open}">${open ? 'Свернуть сведения' : 'Сведения о файле'}</button>
         <button type="button" class="msg-download-link" data-action="download-message-file" data-device-id="${esc(encodeURIComponent(block.device))}" data-file-path="${esc(encodeURIComponent(block.path))}">Скачать файл</button></section>`;
