@@ -84,7 +84,7 @@
 .iru-mini .app .surface-operation > .smart-blocks > .smart-task { padding:0; border:0; background:transparent; }
 .iru-mini .app .surface-operation .smart-task-heading { flex-direction:column; align-items:flex-start; gap:6px; }
 .iru-mini .app .surface-operation .smart-task-title {
-  font-family:inherit; font-size:13px; font-weight:600; line-height:1.45;
+  font-family:"Segoe UI",system-ui,sans-serif; font-size:12px; font-weight:700; line-height:1.4;
   color:var(--text-primary); overflow-wrap:anywhere;
 }
 .iru-mini .app .surface-operation .smart-status {
