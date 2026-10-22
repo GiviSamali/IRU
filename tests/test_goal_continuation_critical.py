@@ -177,3 +177,64 @@ def test_direct_deliverables_reach_scheduler_without_preparation(owner,monkeypat
     assert [row['depends_on'] for row in submitted[0]]==[[],[]]
     assert [row['artifacts'] for row in submitted[0]]==[['report.docx'],['slides.pptx']]
     assert all('stage' not in row and 'reconnaissance_contract' not in row for row in submitted[0])
+
+
+def test_device_retry_replaces_failed_attempt_not_deliverable(owner):
+    """Word + failed HTML + successful retry is two completed deliverables."""
+    from server.goal_presentation import goal_presentation
+
+    async def scenario():
+        device=f"{owner['id']}:pc"
+        base=template(owner,device=True)
+
+        async def execute(task):
+            if task['proposed_objective']=='Create HTML':
+                task.update(status='partial',answer='HTML needs another attempt',commands=[])
+            else:
+                complete(task)
+
+        scheduler=WorkerScheduler(execute)
+        try:
+            original=await scheduler.submit_goal(base,[
+                {'key':'word','objective':'Create Word','target_device_ids':[device]},
+                {'key':'html','objective':'Create HTML','target_device_ids':[device]}],request_key='first')
+            await scheduler.runners[owner['id']]
+            old_html=original['tasks'][1]['task_id']
+            before=goal_view(original['goal_id'],owner['id'],owner['chat_id'])
+            assert before['status']=='partial' and not before['goal_completed']
+
+            # A retry cannot silently move the work to another device.
+            wrong={**base,'device_ids':[device,f"{owner['id']}:other"]}
+            with pytest.raises(ValueError,match='replacement_device_scope_mismatch'):
+                await scheduler.submit_goal(wrong,[
+                    {'key':'retry','objective':'Create HTML',
+                     'target_device_ids':[f"{owner['id']}:other"],
+                     'replaces_source_task_id':old_html}],
+                    request_key='wrong-device',goal_id=original['goal_id'],expected_revision=1)
+            assert goal_view(original['goal_id'],owner['id'],owner['chat_id'])['revision']==1
+
+            async def retry(task):
+                complete(task)
+            scheduler.execute=retry
+            retry_assignments=[{'key':'retry','objective':'Create HTML',
+                'target_device_ids':[device],'replaces_source_task_id':old_html}]
+            second=await scheduler.submit_goal(base,retry_assignments,request_key='retry',
+                goal_id=original['goal_id'],expected_revision=1)
+            await scheduler.runners[owner['id']]
+            repeated=await scheduler.submit_goal(base,retry_assignments,request_key='retry',
+                goal_id=original['goal_id'],expected_revision=1)
+            assert repeated['tasks'][0]['task_id']==second['tasks'][0]['task_id']
+
+            view=goal_view(original['goal_id'],owner['id'],owner['chat_id'])
+            presentation=goal_presentation(view)
+            assert view['goal_completed'] and view['status']=='success'
+            assert presentation['goal_completed'] and presentation['status']=='success'
+            assert (presentation['completed_count'],presentation['total_count'])==(2,2)
+            historical=next(item for item in view['tasks'] if item['task_id']==old_html)
+            assert historical['status']=='partial'
+            assert historical['required_for_goal'] is False
+            assert historical['superseded_by']==second['tasks'][0]['task_id']
+            assert len(view['tasks'])==3
+        finally:
+            await scheduler.shutdown()
+    asyncio.run(scenario())

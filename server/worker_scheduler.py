@@ -592,8 +592,10 @@ class WorkerScheduler:
                     if any(json.loads(row[0]).get("replaces_source_task_id")==replacement for row in c.execute(
                         "SELECT j.payload FROM worker_jobs j JOIN worker_goal_tasks g ON g.task_id=j.task_id WHERE g.goal_id=?",(goal_id,))):
                         raise ValueError("replacement_source_already_replaced")
-                    if json.loads(source["payload"]).get("device_ids") or assignment_devices[assignment["key"]]:
-                        raise ValueError("replacement_requires_server_source")
+                    # An explicit retry replaces an earlier attempt on the same device(s).
+                    # Keep the existing Goal ownership, state and dependency rules.
+                    if set(json.loads(source["payload"]).get("device_ids") or []) != set(assignment_devices[assignment["key"]]):
+                        raise ValueError("replacement_device_scope_mismatch")
                     consumers=c.execute("""SELECT j.*,g.revision FROM worker_dependencies d
                         JOIN worker_jobs j ON j.task_id=d.task_id
                         JOIN worker_goal_tasks g ON g.task_id=j.task_id
