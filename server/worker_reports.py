@@ -47,6 +47,9 @@ def positive_evidence(command, *, observation=False):
     if (command.get("tool_name") or command.get("action")) == "write_content":
         return write_content_result_is_ok(result)
     if command.get("tool_name") == "execute_cmd" or command.get("action") == "execute_cmd":
+        if any(isinstance(r,dict) and r.get("verified") is True and r.get("created_or_changed") is True
+               for r in result.get("artifact_receipts") or []):
+            return True
         if confirmed_command_outcome(result)=="success" and execute_cmd_outcome_marker(result)=="OK":return True
         # A successful observation is usable by an already validated informational
         # terminal answer. It does not establish that an action achieved its goal.
@@ -120,9 +123,35 @@ def build_worker_report(task):
         status = "partial"
     if task.get("cancel_requested"):status="cancelled"
     artifacts = []
+    final_receipts = []
+    def same_artifact(left, right):
+        def key(item):
+            path = item["path"]
+            return (item["device_id"], PureWindowsPath(path).as_posix().casefold()
+                    if PureWindowsPath(path).drive else path)
+        return key(left) == key(right)
+    def record_artifact(artifact, native=False):
+        # The latest operation owns the path; an older receipt must not survive
+        # a subsequent change, even when that change lacks native verification.
+        artifacts[:] = [a for a in artifacts if not same_artifact(a, artifact)]
+        final_receipts[:] = [a for a in final_receipts if not same_artifact(a, artifact)]
+        artifacts.append(artifact)
+        if native:
+            final_receipts.append(artifact)
     allowed_devices={_short_did(d) for d in task.get("device_ids") or []} or {"server"}
     for entry in evidence:
         result = entry["result"];tool = entry.get("tool_name") or entry.get("action")
+        device = _short_did(entry.get("target_device_id") or entry.get("device_id") or "")
+        for item in result.get("artifact_receipts") or []:
+            if (not isinstance(item,dict) or item.get("source_task_id") != task["task_id"]
+                    or item.get("device_id") != device or device not in allowed_devices
+                    or item.get("verified") is not True or item.get("created_or_changed") is not True
+                    or type(item.get("size_bytes")) is not int or item["size_bytes"] <= 0
+                    or not isinstance(item.get("path"),str) or not isinstance(item.get("sha256"),str)
+                    or len(item["sha256"]) != 64):
+                continue
+            artifact = {**item,"name":PureWindowsPath(item["path"]).name,"worker_id":task.get("worker_id") or "worker-1"}
+            record_artifact(artifact, native=True)
         verified_paths = result.get("files_verified") or result.get("verified_files") or []
         if isinstance(verified_paths, str): verified_paths = [verified_paths]
         paths = list(verified_paths) if isinstance(verified_paths, list) else []
@@ -131,21 +160,40 @@ def build_worker_report(task):
         if tool == "transfer_file" and result.get("sha256_verified") is True: paths += [result.get("target_path")]
         for path in paths:
             device = result.get("target_device") if tool == "transfer_file" else _short_did(entry.get("target_device_id") or entry.get("device_id") or "")
-            if isinstance(path,str) and path and device in allowed_devices and not any(a["path"] == path and a["device_id"] == device for a in artifacts):
-                artifact={"type":"file", "name":PureWindowsPath(path).name, "path":path, "device_id":device,"verified":True}
+            if isinstance(path,str) and path and device in allowed_devices:
+                artifact = {"type":"file", "name":PureWindowsPath(path).name, "path":path, "device_id":device,
+                    "verified":True,"source_task_id":task["task_id"],"worker_id":task.get("worker_id") or "worker-1"}
                 if tool in {"office_docx","office_xlsx","office_pptx"}:
-                    native=next((r for r in result.get("artifact_receipts") or [] if r.get("path")==path
-                        and r.get("source_task_id")==task["task_id"] and r.get("device_id")==device
-                        and r.get("verified") is True),None)
+                    native = next((r for r in result.get("artifact_receipts") or [] if isinstance(r,dict)
+                        and r.get("path") == path and r.get("source_task_id") == task["task_id"]
+                        and r.get("device_id") == device and r.get("verified") is True), None)
                     if native is None: continue
                     artifact.update(native)
-                artifacts.append(artifact)
+                    record_artifact(artifact, native=True)
+                    continue
+                if tool == "write_content" and result.get("verified") is True and result.get("committed") is True:
+                    artifact.update(size_bytes=result.get("total_size"),sha256=result.get("file_sha256"))
+                transferred = tool == "transfer_file" and result.get("sha256_verified") is True
+                if transferred:
+                    artifact.update(size_bytes=result.get("bytes_transferred"),sha256=result.get("sha256"))
+                record_artifact(artifact, native=transferred or (tool == "write_content"
+                    and result.get("verified") is True and result.get("committed") is True))
+    expected = task.get("assigned_artifacts") or []
+    user_files = [a for a in final_receipts if "/scripts/helpers/" not in a["path"].replace("\\","/").casefold()
+                  or any(str(e).replace("\\","/").split("/")[-1].casefold()==a["name"].casefold() for e in expected)]
+    # Expected labels may be descriptive or an earlier proposed filename. Keep
+    # the existing goal audit authoritative for semantics; require real files.
+    artifact_incomplete = status == "success" and bool(expected) and len(user_files) < len(expected)
+    if artifact_incomplete:
+        status = "partial" if user_files else "unknown"
     summaries = {"success":"Задача выполнена по подтверждённым результатам.", "partial":"Задача выполнена частично.",
         "blocked":"Выполнение заблокировано.", "failed":"Задача завершилась с ошибкой.", "cancelled":"Задача отменена.",
         "unknown":"Исход задачи не подтверждён; автоматически её не повторяю.", "queued":"Задача ожидает освобождения Worker.",
         "waiting_dependency":"Задача ожидает подтверждённого результата другой задачи.",
         "waiting_input":"Задача ожидает выбора окна.", "running":"Задача выполняется.", "waiting_confirmation":"Задача ожидает решения пользователя."}
     error_code=(task.get("worker_error_code") or receipt.get("terminal_reason")) if status!="success" else None
+    if artifact_incomplete:
+        error_code = "artifact_receipt_missing"
     if not isinstance(error_code, str):error_code=None
     if clarification and status=='blocked':error_code='clarification_required'
     if status=='unknown' and not error_code:
@@ -153,7 +201,7 @@ def build_worker_report(task):
         elif terminal.get('tool_name')=='answer.text':error_code='goal_not_completed'
         elif any(c.get('tool_name')=='tool_only_protocol' for c in commands):error_code='terminal_answer_missing'
     report = {"schema_version":1, "task_id":task["task_id"], "worker_id":task.get("worker_id") or "worker-1", "status":status,
-        "goal_completed":status == "success", "summary":payload['question'][:2000] if clarification and status=='blocked' else payload["text"][:2000] if (terminal_negative or confirmed) and isinstance(payload.get("text"),str) and payload["text"] == task.get("answer") else summaries[status],
+        "goal_completed":status == "success", "summary":payload['question'][:2000] if clarification and status=='blocked' else payload["text"][:2000] if not artifact_incomplete and (terminal_negative or confirmed) and isinstance(payload.get("text"),str) and payload["text"] == task.get("answer") else summaries[status],
         "target_device_ids":[_short_did(d) for d in task.get("device_ids") or []], "artifacts":artifacts,
         "evidence_refs":refs, "requires_user_action":status in {"waiting_confirmation","waiting_input","blocked"},
         "error_code":error_code}

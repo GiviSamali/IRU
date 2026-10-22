@@ -229,6 +229,9 @@ def compact_write_content_result(args: dict[str, Any] | None, result: Any = None
     }
     if original.get("total_size") is not None:
         compact["total_size"] = original.get("total_size")
+    for key in ("verified", "committed", "file_sha256", "chunks_confirmed", "chunks_total", "chunk_receipts"):
+        if key in original:
+            compact[key] = original[key]
     if error:
         compact["error"] = error
     if original.get("arg_warnings"):

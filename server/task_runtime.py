@@ -280,6 +280,8 @@ async def send_command_to_agent(
         profile = get_device_profile(_short_did(device_id), user_id=user_id)
         try:
             validate_execute_command_paths_for_device(cmd_text, (dev or {}).get("info", {}), profile)
+            for artifact_path in params.get("artifact_paths") or []:
+                validate_write_path_for_device(artifact_path, (dev or {}).get("info", {}), profile)
         except ValueError:
             raise RuntimeError(f"BLOCKED: {PATH_SCOPE_ERROR}")
         if len(cmd_text) > 4000:
@@ -438,6 +440,19 @@ async def send_command_to_agent(
                 "files_verified":[r["path"] for r in receipts]}
         if params.get("action") in {"create","edit"} and result.get("verified") is True and not receipts:
             raise AgentOutcomeUnknown("office_artifact_binding_unconfirmed")
+    if action == "execute_cmd" and isinstance(result, dict):
+        from pathlib import PureWindowsPath, PurePosixPath
+        windows = "windows" in str((dev.get("info") or {}).get("os", "")).lower()
+        def artifact_key(path):
+            return PureWindowsPath(path).as_posix().casefold() if windows else PurePosixPath(path).as_posix()
+        requested_artifacts = {artifact_key(p) for p in params.get("artifact_paths") or []}
+        bound = []
+        for receipt in result.get("artifact_receipts") or []:
+            if (isinstance(receipt, dict) and receipt.get("source_task_id") == params.get("_artifact_task_id")
+                    and isinstance(receipt.get("path"),str) and artifact_key(receipt["path"]) in requested_artifacts
+                    and receipt.get("verified") is True and receipt.get("created_or_changed") is True):
+                bound.append({**receipt, "device_id":_short_did(device_id)})
+        result = {**result, "artifact_receipts":bound}
     return _attach_identity_receipt(result, device_id=device_id, dev=dev)
 
 
@@ -1027,6 +1042,27 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                             return {"status":"error","error":"invalid_office_parameters","dispatched":False}
                         for image in spec.get("images",[]):
                             validate_write_path_for_device(image["path"],target_dev.get("info") or {},get_device_profile(_short_did(target_dk),user_id=user_id))
+            if action == "execute_cmd" and params.get("artifact_paths"):
+                if (target_dev.get("info") or {}).get("artifact_receipt_protocol") != 1:
+                    return {"status":"error", "error":"agent_update_required_for_artifact_receipts", "dispatched":False}
+                params = {**params, "_artifact_task_id":task_id}
+            if action == "write_content" and len(params.get("content", "")) > 4000:
+                if (target_dev.get("info") or {}).get("file_write_protocol") != 2:
+                    return {"status":"error", "error":"agent_update_required_for_atomic_large_write",
+                            "dispatched":False, "committed":False}
+                try:
+                    from .write_transport import write_in_chunks
+                except ImportError:
+                    from write_transport import write_in_chunks
+                connection = target_dev.get("ws")
+                async def send_part(part):
+                    if devices.get(target_dk) is not target_dev or target_dev.get("ws") is not connection:
+                        return {"status":"error", "error":"write_connection_changed", "committed":False}
+                    return await send_fn(target_device_id, action, part)
+                result = await write_in_chunks(send_part, params)
+                if result.get("status") == "unknown":
+                    task["_action_outcome_unknown"] = True
+                return result
             try:
                 result = await send_owned_command(target_dk, action, params, user_id=user_id)
 
@@ -1362,7 +1398,9 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 if validated_terminal:
                     # The journal retains the original answer and basis. A content
                     # rejection is not a formatting change or proof of goal success.
-                    combined_task_receipt={**(combined_task_receipt or {}),"task_status":"blocked",
+                    combined_task_receipt={**(combined_task_receipt or {}),"task_status":"partial" if any(
+                        isinstance(c.get("result"),dict) and not c["result"].get("error")
+                        and c.get("status")=="success" for c in combined_commands) else "failed",
                         "goal_completed":False,"final_verification_status":"unverified",
                         "answer_source":"trust_guard","terminal_reason":"untrusted_terminal_content"}
         # Preserve the exact audited answer; speech/UI formatting is a projection.

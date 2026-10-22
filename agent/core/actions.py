@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import getpass
+import hashlib
 import json
 import ntpath
 import os
@@ -11,6 +12,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,8 +41,79 @@ IRU_DIRS = (
 )
 
 
-def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
-    return platform_mod.execute_cmd(command, timeout=timeout, shell=shell)
+def _verify_artifact(path):
+    """Read the actual local file, never stdout labels from generated code."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    target = Path(path)
+    if not target.is_absolute() or target.is_symlink() or not target.is_file():
+        raise ValueError("artifact_not_regular_absolute_file")
+    fingerprint = _file_fingerprint(target)
+    if not fingerprint or fingerprint[0] <= 0:
+        raise ValueError("artifact_empty_or_missing")
+    suffix = target.suffix.lower()
+    structure = "readable_file"
+    if suffix in {".xlsx", ".pptx", ".docx"}:
+        main = {".xlsx":"xl/workbook.xml", ".pptx":"ppt/presentation.xml", ".docx":"word/document.xml"}[suffix]
+        with zipfile.ZipFile(target) as archive:
+            if archive.testzip() is not None:
+                raise ValueError("artifact_zip_corrupt")
+            for member in ("[Content_Types].xml", "_rels/.rels", main):
+                with archive.open(member) as stream:
+                    tree = ET.parse(stream)
+                if member == main and tree.getroot().tag.split("}")[-1] != {
+                        ".xlsx":"workbook", ".pptx":"presentation", ".docx":"document"}[suffix]:
+                    raise ValueError("artifact_office_root_invalid")
+        structure = "office_zip_xml"
+    elif suffix == ".pdf":
+        with target.open("rb") as stream:
+            header = stream.read(8)
+            stream.seek(max(0, fingerprint[0] - 2048))
+            trailer = stream.read()
+        if not header.startswith(b"%PDF-") or b"%%EOF" not in trailer:
+            raise ValueError("artifact_pdf_invalid")
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            structure = "pdf_header_trailer_only"
+        else:
+            len(PdfReader(str(target)).pages)
+            structure = "pdf_parsed"
+    after = _file_fingerprint(target)
+    if after != fingerprint:
+        raise ValueError("artifact_changed_during_verification")
+    return {"type":"file", "path":str(target), "size_bytes":fingerprint[0],
+            "sha256":fingerprint[2], "structure":structure}
+
+
+def execute_cmd(command: str, timeout: int = 30, shell: str = "auto",
+                artifact_paths: list[str] | None = None, _artifact_task_id: str | None = None) -> dict:
+    paths = artifact_paths or []
+    try:
+        if (not isinstance(paths, list) or len(paths) > 16 or any(not isinstance(p,str)
+                or not Path(p).is_absolute() for p in paths)):
+            raise ValueError("invalid_artifact_paths")
+        if len({os.path.normcase(os.path.abspath(p)) for p in paths}) != len(paths):
+            raise ValueError("duplicate_artifact_paths")
+        before = {p:_file_fingerprint(Path(p)) for p in paths}
+    except Exception as exc:
+        return {"error":str(exc), "status":"error", "dispatched":False}
+    result = platform_mod.execute_cmd(command, timeout=timeout, shell=shell)
+    if not paths or result.get("returncode") != 0 or result.get("error"):
+        return result
+    receipts, errors = [], []
+    for path in paths:
+        try:
+            receipt = _verify_artifact(path)
+            if before[path] is not None and before[path][2] == receipt["sha256"]:
+                raise ValueError("artifact_unchanged_from_before_command")
+            if not _artifact_task_id:
+                raise ValueError("artifact_task_binding_missing")
+            receipts.append({**receipt, "verified":True, "source_task_id":_artifact_task_id,
+                             "created_or_changed":True, "previous_sha256":before[path][2] if before[path] else None})
+        except Exception as exc:
+            errors.append({"path":path, "error":str(exc)})
+    return {**result, "artifact_receipts":receipts, "artifact_errors":errors}
 
 
 def list_dir(path: str | None = None) -> dict:
@@ -84,27 +158,121 @@ def list_dir(path: str | None = None) -> dict:
     }
 
 
-def write_content(path: str, content: str, append: bool = False, encoding: str = "utf-8") -> dict:
+_WRITE_TRANSACTIONS = {}
+_WRITE_LOCK = threading.RLock()
+
+
+def _file_fingerprint(path):
+    if not path.exists():
+        return None
+    stat = path.stat()
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return (stat.st_size, stat.st_mtime_ns, digest.hexdigest())
+
+
+def write_content(path: str, content: str, append: bool = False, encoding: str = "utf-8",
+                  _write_transaction: dict | None = None) -> dict:
+    # Serialize commit against other IRU writes; external changes are detected
+    # against the initial fingerprint before replacing the destination.
+    with _WRITE_LOCK:
+        return _write_content(path, content, append, encoding, _write_transaction)
+
+
+def _write_content(path, content, append, encoding, transaction):
+    committed = False
+    output_tmp = None
     try:
         file_path = Path(path)
+        if file_path.is_symlink() or (file_path.exists() and not file_path.is_file()):
+            return {"status": "error", "error": "write_target_not_regular_file", "committed": False}
+        text_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        mode = "a" if append else "w"
+        original = _file_fingerprint(file_path)
+        operation = None
+        if transaction is not None:
+            operation = transaction["id"]
+            index, count = transaction["index"], transaction["count"]
+            if (not re.fullmatch(r"[0-9a-f]{32}", operation) or type(index) is not int
+                    or type(count) is not int or not 0 <= index < count or len(content) > 4000):
+                raise ValueError("invalid_write_transaction")
+            binding = (str(file_path.absolute()), encoding, transaction["sha256"], count, transaction["append"])
+            state = _WRITE_TRANSACTIONS.get(operation)
+            if index == 0:
+                if state is not None:
+                    raise ValueError("write_transaction_replay_rejected")
+                fd, stage = tempfile.mkstemp(prefix=".iru-write-", dir=file_path.parent)
+                os.close(fd)
+                state = {"binding": binding, "next": 0, "stage": Path(stage), "original": original}
+                _WRITE_TRANSACTIONS[operation] = state
+            if state is None or state["binding"] != binding or state["next"] != index:
+                raise ValueError("write_transaction_sequence_mismatch")
+            with state["stage"].open("a", encoding="utf-8", newline="") as stream:
+                stream.write(content)
+            state["next"] += 1
+            if index != count - 1:
+                return {"status": "staged", "operation_id": operation, "chunk_index": index,
+                        "chunk_sha256": text_digest, "committed": False}
+            with state["stage"].open("r", encoding="utf-8", newline="") as stream:
+                content = stream.read()
+            if hashlib.sha256(content.encode("utf-8")).hexdigest() != transaction["sha256"]:
+                raise ValueError("write_content_hash_mismatch")
+            append = transaction["append"]
+            original = state["original"]
         # Windows PowerShell 5.1 requires a BOM for UTF-8 .ps1 scripts.
         # Appends must not introduce an additional BOM into the middle of a file.
         actual_encoding = ("utf-8-sig" if platform_mod.name == "Windows"
                            and file_path.suffix.lower() == ".ps1"
                            and encoding.lower().replace("_", "-") == "utf-8"
                            and not append else encoding)
-        with open(file_path, mode, encoding=actual_encoding, newline="") as handle:
+        fd, output_tmp = tempfile.mkstemp(prefix=".iru-commit-", dir=file_path.parent)
+        os.close(fd)
+        if append and original is not None:
+            shutil.copyfile(file_path, output_tmp)
+        with open(output_tmp, "a" if append else "w", encoding=actual_encoding, newline="") as handle:
             handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        final = _file_fingerprint(Path(output_tmp))
+        if file_path.is_symlink() or _file_fingerprint(file_path) != original:
+            raise ValueError("write_target_changed_before_commit")
+        if original is not None:
+            shutil.copymode(file_path, output_tmp)
+        os.replace(output_tmp, file_path)
+        committed = True
+        observed = _file_fingerprint(file_path)
+        if observed is None or observed[0] != final[0] or observed[2] != final[2]:
+            raise RuntimeError("write_postcondition_unknown")
+        if operation:
+            _WRITE_TRANSACTIONS.pop(operation)["stage"].unlink()
         return {
+            "status": "ok", "verified": True, "committed": True,
             "path": str(file_path),
-            "bytes_written": len(content.encode(encoding, errors="replace")),
+            "chars_written": len(content),
+            "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "file_sha256": observed[2],
+            "bytes_written": final[0] - (original[0] if append and original else 0),
             "mode": "append" if append else "overwrite",
-            "total_size": file_path.stat().st_size,
+            "total_size": observed[0],
+            **({"operation_id": operation, "chunk_index": index, "chunk_sha256": text_digest} if operation else {}),
         }
     except Exception as exc:
-        return {"error": str(exc)}
+        if transaction is not None and isinstance(transaction, dict):
+            abandoned = _WRITE_TRANSACTIONS.pop(transaction.get("id"), None)
+            if abandoned:
+                try:
+                    abandoned["stage"].unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return {"status": "unknown" if committed else "error", "error": str(exc), "committed": committed}
+    finally:
+        if output_tmp and os.path.exists(output_tmp):
+            try:
+                os.unlink(output_tmp)
+            except OSError:
+                pass
 
 
 def get_file_content(path: str, max_size: int = WS_FILE_DOWNLOAD_MAX_BYTES) -> dict:
@@ -141,6 +309,8 @@ def get_desktop_path() -> str:
 def collect_system_info(device_id: str = "") -> dict:
     info = {
         "office_tools_version": 1,
+        "file_write_protocol": 2,
+        "artifact_receipt_protocol": 1,
         "device_id": device_id,
         "os": platform.system(),
         "os_version": platform.version(),
