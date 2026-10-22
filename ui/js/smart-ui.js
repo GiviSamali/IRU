@@ -172,7 +172,17 @@ const IRUSmartUI = (() => {
     let content = text(m.conversationalResponse) || text(m.conversational_response) || text(m.content) || text(m.text);
     // Replace only exact server-generated file lines represented by real File blocks.
     // Keep all other prose, statuses and unavailable/unverified paths unchanged.
-    if(m.role!=='user' && goalFiles.length)content=content.split('\n').filter(line=>!goalFiles.some(file=>line.trim()==='Файл: '+file.path)).join('\n').trim();
+    if(m.role!=='user' && goalFiles.length)content=content.split('\n').map(line=>{
+      const value=line.trim();
+      for(const file of goalFiles) {
+        const prefix='Файл: '+file.path;
+        if(value===prefix)return null;
+        // The server appends this footer to the last file line for partial goals.
+        // Remove only the known file prefix; preserve the warning itself.
+        if(value===prefix+' Подробности по отдельным поручениям — в Операциях.')return 'Подробности по отдельным поручениям — в Операциях.';
+      }
+      return line;
+    }).filter(line=>line!==null).join('\n').trim();
     const executionDetails = text(m.executionDetails) || text(m.execution_details);
     if (content) blocks.push({ type:'text', text:content, key:id+'-text', long:content.length > 200 || content.split('\n').length > 4 });
     if (m.role === 'user') return { key:id, blocks };

@@ -1,3 +1,4 @@
 /* Compatibility entry point: preserve import order. */
 @import url("modes/shared/smart-ui.01.css");
 @import url("modes/shared/result-files.css");
+@import url("modes/mini/result-files.css");

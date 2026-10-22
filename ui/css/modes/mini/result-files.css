@@ -1,0 +1,26 @@
+/* Compact result card. File details remain available without a second scroll area. */
+.iru-mini .app .smart-file {
+  display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px 8px;
+  padding:10px; border:1px solid var(--border); border-radius:10px;
+  background:rgba(137,165,184,.035); font-family:"Segoe UI",system-ui,sans-serif;
+}
+.iru-mini .app .smart-file-heading {
+  grid-column:1 / -1; flex-direction:row; align-items:baseline; gap:7px;
+}
+.iru-mini .app .smart-file-heading strong { font:600 12px/1.45 "Segoe UI",system-ui,sans-serif; }
+.iru-mini .app .smart-file-kind { font:10px/1.4 "Segoe UI",system-ui,sans-serif; }
+.iru-mini .app .smart-file-verified { grid-column:1 / -1; margin:0; font-size:10px; }
+.iru-mini .app .smart-file-meta { grid-column:1 / -1; margin:0; font:11px/1.5 "Segoe UI",system-ui,sans-serif; }
+.iru-mini .app .smart-file:not(.expanded) .smart-file-meta { display:none; }
+.iru-mini .app .smart-file.expanded .smart-file-path { display:block; }
+.iru-mini .app .smart-file .smart-file-toggle,
+.iru-mini .app .smart-file .msg-download-link {
+  display:inline-flex; align-items:center; justify-content:center;
+  min-height:28px; width:auto; max-width:100%; margin:0; padding:4px 7px;
+  border:1px solid var(--border); border-radius:7px; background:transparent;
+  font:11px/1.4 "Segoe UI",system-ui,sans-serif; letter-spacing:normal;
+  text-transform:none; box-shadow:none;
+}
+.iru-mini .app .smart-file .smart-file-toggle { grid-column:1; justify-self:start; color:var(--text-muted); }
+.iru-mini .app .smart-file .msg-download-link { grid-column:2; justify-self:end; color:var(--accent); }
+.iru-mini .app .smart-file button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
