@@ -622,7 +622,8 @@ function adaptiveMessageIndexes() {
   if(lastUser>=0)indexes.add(lastUser);
   state.messages.forEach((message,index)=>{
     if(message.role==='user')return;
-    if(message.taskKind==='worker' && (message.loading || !isTaskTerminalStatus(message.taskStatus)))return;
+    if(message.taskKind==='worker' && !message.confirmTaskId && !message.planReview && message.taskStatus!=='waiting_input'
+        && (message.loading || !isTaskTerminalStatus(message.taskStatus)))return;
     if(index>lastUser || message.confirmTaskId || message.planReview || message.taskStatus==='waiting_input')indexes.add(index);
   });
   return indexes;
@@ -687,7 +688,7 @@ function renderMessages() {
       if(!view.blocks.some(block=>block.type==='text'||block.type==='goal'))view.blocks.unshift({type:'text',key:view.key+'-working',text:'Отвечаю…',long:false});
     }
     const resultFiles = workerInDock ? view.blocks.filter(block => block.type === 'file') : [];
-    if (workerInDock) view.blocks = view.blocks.filter(block => block.type !== 'task' && block.type !== 'file' && (block.type !== 'action' || m.planSuggestion || m.suggestedFact));
+    if (workerInDock) view.blocks = view.blocks.filter(block => block.type !== 'task' && block.type !== 'file' && (block.type !== 'action' || m.confirmTaskId || m.planReview || m.planSuggestion || m.suggestedFact));
     let bodyHTML = IRUSmartUI.render(view, {
       expanded: state.expandedSmartBlocks,
       formatAssistantText: role === 'assistant',

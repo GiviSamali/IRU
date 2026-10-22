@@ -48,11 +48,13 @@ window.IRUOperations = (() => {
     const scoped=scopedItems();
     if(historicalItem && (historicalItem.task_id!==selected || scoped.some(i=>i.task_id===selected)))historicalItem=null;
     if(selected && !scoped.some(i=>i.task_id===selected) && historicalItem?.task_id!==selected){selected=null;detail=null;mirrorClosed=null;}
-    // A manually opened historical card must not be displaced by background polling.
-    if(historicalItem?.task_id===selected){selectedStatus=historicalItem.status;return;}
-    const current=scoped.find(i=>!replaced(i) && i.waiting_confirmation)||scoped.find(i=>!replaced(i) && !terminal(i.status));
-    if(current && (!selected || (!manualSelection && terminal(scoped.find(i=>i.task_id===selected)?.status)))) {
-      selected=current.task_id;detail=null;mirrorClosed=null;selectedStatus=null;
+    const decision=scoped.find(i=>!replaced(i) && (i.waiting_confirmation || ['waiting_confirmation','waiting_input'].includes(i.status)));
+    // An unresolved decision takes precedence over a running or historical card.
+    // Otherwise preserve the user's manually opened historical selection.
+    if(!decision && historicalItem?.task_id===selected){selectedStatus=historicalItem.status;return;}
+    const current=decision || scoped.find(i=>!replaced(i) && !terminal(i.status));
+    if(current && (decision && selected!==decision.task_id || !selected || (!manualSelection && terminal(scoped.find(i=>i.task_id===selected)?.status)))) {
+      selected=current.task_id;detail=null;historicalItem=null;mirrorClosed=null;selectedStatus=null;manualSelection=false;
     }
     const status=scoped.find(i=>i.task_id===selected)?.status;
     if(status==='waiting_confirmation' && selectedStatus!==status)mirrorClosed=null;
