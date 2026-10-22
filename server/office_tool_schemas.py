@@ -1,7 +1,7 @@
 """Three compact Office capabilities in the existing registry's office group."""
 FORMATS = {
     "docx": "data.elements: {type:heading|paragraph|bullet|numbered|table|page_break,text,level,runs:[{text,bold,italic}],rows}; data.style:{font,font_size}. Changes: append(elements), set_text(element_id,text), set_table_cell(element_id,row,column,text).",
-    "xlsx": "data.sheets:[{name,rows,header,column_widths,freeze_panes,autofilter,formats:[{range,style}]}]. Formula strings start with =; date values use {date:ISO} or {datetime:ISO}; formulas are stored, not calculated. Changes: write_range(sheet,start,rows,style), set_cell(sheet,cell,value,style), append_rows(sheet,rows), add_sheet(name,rows), format_range(sheet,range,style), format_sheet(sheet,column_widths,freeze_panes,autofilter). Style:{bold,italic,color,fill,number_format,wrap}.",
+    "xlsx": "data.sheets:[{name,rows,header,column_widths,freeze_panes,autofilter,formats:[{range,style}]}]. column_widths maps A..XFD to finite numbers 1..100 (not pixels). Formula strings start with =; date values use {date:ISO} or {datetime:ISO}; formulas are stored, not calculated. Changes: write_range(sheet,start,rows,style), set_cell(sheet,cell,value,style), append_rows(sheet,rows), add_sheet(name,rows), format_range(sheet,range,style), format_sheet(sheet,column_widths,freeze_panes,autofilter). Style:{bold,italic,color,fill,number_format,wrap}.",
     "pptx": "data.slides:[{title,text,paragraphs:[{text,level,bold,italic,bullet}],table:[[text]],images:[{path,x,y,width,height}],notes}]. Uses a clean 16:9 layout. Changes: add_slide(slide), set_text(slide_id,shape_id,text|paragraphs,font_size), add_content(slide_id,content:{title,text,paragraphs,table,images,notes}).",
 }
 
@@ -9,13 +9,15 @@ FORMATS = {
 def office_schemas():
     return [{"type":"function","function":{"name":"office_"+fmt,
         "description":"Native "+fmt.upper()+": create, bounded inspect, targeted edit; no generated scripts. "
-            "Create never overwrites. Edit requires expected_sha256 from inspect; use returned element IDs. "+details,
+            "Create never overwrites. Edit requires expected_sha256 from inspect; use returned element IDs. "
+            "For formatting-only edits set preserve_content=true; added/deleted text fails preservation. "+details,
         "parameters":{"type":"object","properties":{
             "action":{"type":"string","enum":["create","inspect","edit"]},
             "path":{"type":"string","description":"Absolute path on the selected device."},
             "device_id":{"type":"string"},
             "data":{"type":"object","description":"Structured creation content; see tool description."},
             "changes":{"type":"array","maxItems":100,"items":{"type":"object"}},
+            "preserve_content":{"type":"boolean","description":"Formatting-only edit: require unchanged text, values/formulas and images before commit."},
             "expected_sha256":{"type":"string","description":"Exact revision returned by inspect, required for edit."},
             "selector":{"type":"object","description":"offset,limit (<=50); DOCX element_id,text_offset,row_offset,column_offset; XLSX sheet,range (<=100 cells),text_offset; PPTX slide_id,shape_id,text_offset,row_offset,column_offset."}},
             "required":["action","path"],"additionalProperties":False}}} for fmt,details in FORMATS.items()]
@@ -41,6 +43,21 @@ def validate_office_args(args):
         return "office_edit_revision_required"
     if len(json.dumps(args,ensure_ascii=False).encode("utf-8")) > 256000:
         return "office_request_too_large_use_targeted_operations"
+    if "preserve_content" in args and (type(args["preserve_content"]) is not bool or args["action"] != "edit"):
+        return "preserve_content: boolean allowed only for edit"
+    sheets=args.get("data",{}).get("sheets",[])
+    if not isinstance(sheets,list): return "data.sheets: expected array"
+    for location,spec in [(f"data.sheets[{i}]",s) for i,s in enumerate(sheets)]+[(f"changes[{i}]",s) for i,s in enumerate(args.get("changes",[]))]:
+        if not isinstance(spec,dict): return location+": expected object"
+        widths=spec.get("column_widths",{})
+        if not isinstance(widths,dict): return location+".column_widths: expected object mapping A..XFD to numbers 1..100"
+        for column,width in widths.items():
+            index=0
+            if isinstance(column,str) and re.fullmatch(r"[A-Z]{1,3}",column):
+                for char in column: index=index*26+ord(char)-64
+            if not 1 <= index <= 16384: return f"{location}.column_widths.{column}: expected column A..XFD"
+            if type(width) not in (int,float) or not 1 <= width <= 100:
+                return f"{location}.column_widths.{column}: received {width!r}; expected finite number 1..100"
     slides=args.get("data",{}).get("slides",[])
     if not isinstance(slides,list) or any(not isinstance(s,dict) for s in slides):
         return "invalid_office_slides"

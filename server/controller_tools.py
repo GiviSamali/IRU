@@ -7,8 +7,8 @@ except ImportError:
 
 EXECUTE_CMD_DESCRIPTION = (
     "For standard DOCX/XLSX/PPTX create, inspect and edit operations prefer the office_* tools over generated helper scripts. "
-    "When executing a command that creates final user files, include their absolute paths in artifact_paths ON THAT "
-    "CREATION COMMAND. The agent compares before/after file hashes and verifies actual formats, returning bound "
+    "When executing a command that creates OR MODIFIES final user files, include their absolute paths in artifact_paths ON THAT "
+    "MUTATING COMMAND (including each subsequent edit). The agent compares before/after file hashes and verifies actual formats, returning bound "
     "artifact receipts. A later read of a pre-existing file cannot register it as newly created. "
     "First-class generic control surface for normal system actions through PowerShell/cmd/bash. "
     "Existing window actions must use window_control, never shell code or synthetic keyboard/mouse input. "
@@ -17,6 +17,8 @@ EXECUTE_CMD_DESCRIPTION = (
     "Confirm the original goal from actual final content or native/API evidence, using evidence already available when sufficient. "
     "Visual/window verification is only needed when the user asks for visible/focused verification, the next step requires window interaction, the command result is ambiguous/noisy, or the task is about window state. "
     "For search/analysis, prefer local search or extraction and return only relevant facts; reuse current-run observations instead of overlapping rereads without a new need. "
+    "For formatting-only Office edits, use preserve_content=true on office_* or preserve_content_paths on execute_cmd; "
+    "these paths must also be in artifact_paths. Content verification failure does not authorize repeating a mutation. "
     "For limited edits, reliably transform the current original data on the device, preserving untouched elements, and verify the requested change and preservation against the original. "
     "Do not reconstruct untouched content from LLM memory or infer duplicates from historical claims. Existing permissions, device scope, and confirmations still apply. "
     "Keep commands short. Use write_content for new generated content or a requested full replacement; content length alone does not justify rewriting an existing file."
@@ -118,7 +120,9 @@ TOOLS = [
                         "description": "Команда для выполнения"
                     },
                     "artifact_paths": {"type":"array", "maxItems":16, "items":{"type":"string"},
-                        "description":"Absolute paths of final deliverables created/changed by this command, not helper scripts."},
+                        "description":"Absolute paths of final deliverables created/changed by THIS command, not helper scripts. Required: use [] for read-only commands or commands with no final file output."},
+                    "preserve_content_paths": {"type":"array","maxItems":16,"items":{"type":"string"},
+                        "description":"Existing DOCX/XLSX/PPTX files being formatted only. Must also be in artifact_paths. Agent snapshots and compares content; mismatch yields no verified receipt. Shell changes already made are not automatically rolled back."},
                     "timeout": {
                         "type": "integer",
                         "description": "Таймаут в секундах (по умолчанию 30)",
@@ -140,7 +144,7 @@ TOOLS = [
                         "default": False
                     }
                 },
-                "required": ["command"]
+                "required": ["command", "artifact_paths"]
             }
         }
     },

@@ -255,7 +255,8 @@ def _write_rows(sheet, rows, start="A1", style=None):
 def _sheet_setup(sheet, spec):
     from openpyxl.utils.cell import column_index_from_string
     for column,width in spec.get("column_widths",{}).items():
-        require(1 <= column_index_from_string(column) <= 16384 and isinstance(width,(int,float)) and 1 <= width <= 100,"invalid_column_width")
+        require(isinstance(column,str) and re.fullmatch(r"[A-Z]{1,3}",column) and 1 <= column_index_from_string(column) <= 16384, f"invalid_column_width: column {column!r}; expected A..XFD")
+        require(type(width) in (int,float) and 1 <= width <= 100, f"invalid_column_width: sheet {sheet.title!r}, column {column}; received {width!r}; expected finite number 1..100")
         sheet.column_dimensions[column].width = width
     if "freeze_panes" in spec: sheet.freeze_panes = spec["freeze_panes"]
     if spec.get("autofilter"): sheet.auto_filter.ref = sheet.dimensions
@@ -503,12 +504,13 @@ def verify_preservation(document, reopened):
         require(all(shapes.get(key)==xml for key,xml in guard["pptx"].items()),"unsupported_preservation_pptx")
 
 
-def office(tool, action, path, data=None, changes=None, selector=None, expected_sha256=None, _source_task_id=None):
+def office(tool, action, path, data=None, changes=None, selector=None, expected_sha256=None, _source_task_id=None, preserve_content=False):
     """The same local executor is shared by all three registered agent actions."""
     tmp=None
     committed=False
     try:
         require(tool in TOOLS and action in {"create","inspect","edit"},"unsupported_office_action")
+        require(type(preserve_content) is bool and (not preserve_content or action == "edit"),"preserve_content_requires_edit")
         target=Path(path)
         require(target.is_absolute() and not target.is_symlink(),"invalid_office_path")
         require(target.suffix.lower()=="."+TOOLS[tool],"unsupported_office_format")
@@ -533,6 +535,8 @@ def office(tool, action, path, data=None, changes=None, selector=None, expected_
                 require(fingerprint(Path(tmp))==before,"file_changed_during_snapshot")
                 safe_edit_package(Path(tmp),TOOLS[tool])
                 working=Path(tmp)
+            from .office_content import content_snapshot
+            original_content=content_snapshot(working) if preserve_content else None
             document,summary,inspection=handler(working,action,data,changes,selector)
             if action == "inspect":
                 require(fingerprint(target)==before,"file_changed_during_inspect")
@@ -547,6 +551,8 @@ def office(tool, action, path, data=None, changes=None, selector=None, expected_
             # Reopen with the actual format library before publishing any bytes.
             reopened,_,_=handler(Path(tmp),"inspect",{},[],{})
             verify_preservation(document,reopened)
+            if preserve_content:
+                require(content_snapshot(Path(tmp))==original_content,"content_preservation_failed")
             digest=fingerprint(Path(tmp))
             if action == "edit":
                 require(not target.is_symlink() and fingerprint(target)==before,"file_changed_before_commit")
@@ -566,6 +572,7 @@ def office(tool, action, path, data=None, changes=None, selector=None, expected_
             return {"status":"success","action":action,"format":TOOLS[tool],"path":str(target),
                     "verified":True,"artifact_role":"final","size_bytes":receipt["size_bytes"],
                     "sha256":digest,"source_task_id":_source_task_id,"summary":summary,
+                    "content_preserved":True if preserve_content else None,
                     "files_verified":[str(target)],"artifact_receipts":[receipt]}
     except ImportError:
         return {"status":"error","error":"office_dependencies_missing","required_packages":["python-docx","openpyxl","python-pptx"],

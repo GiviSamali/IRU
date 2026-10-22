@@ -87,15 +87,23 @@ def _verify_artifact(path):
 
 
 def execute_cmd(command: str, timeout: int = 30, shell: str = "auto",
-                artifact_paths: list[str] | None = None, _artifact_task_id: str | None = None) -> dict:
+                artifact_paths: list[str] | None = None, _artifact_task_id: str | None = None,
+                preserve_content_paths: list[str] | None = None) -> dict:
     paths = artifact_paths or []
+    preserve = preserve_content_paths or []
     try:
         if (not isinstance(paths, list) or len(paths) > 16 or any(not isinstance(p,str)
                 or not Path(p).is_absolute() for p in paths)):
             raise ValueError("invalid_artifact_paths")
         if len({os.path.normcase(os.path.abspath(p)) for p in paths}) != len(paths):
             raise ValueError("duplicate_artifact_paths")
+        if not isinstance(preserve,list) or any(not isinstance(p,str) or p not in paths for p in preserve):
+            raise ValueError("preserve_content_paths_must_be_artifact_paths")
+        from .office_content import content_snapshot
         before = {p:_file_fingerprint(Path(p)) for p in paths}
+        snapshots = {p:content_snapshot(p) for p in preserve}
+        if any(_file_fingerprint(Path(p)) != before[p] for p in preserve):
+            raise ValueError("file_changed_during_content_snapshot")
     except Exception as exc:
         return {"error":str(exc), "status":"error", "dispatched":False}
     result = platform_mod.execute_cmd(command, timeout=timeout, shell=shell)
@@ -105,6 +113,13 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto",
     for path in paths:
         try:
             receipt = _verify_artifact(path)
+            if path in snapshots:
+                if content_snapshot(path) != snapshots[path]:
+                    raise ValueError("content_preservation_failed: file changed; no verified final receipt")
+                current = _file_fingerprint(Path(path))
+                if not current or current[0] != receipt["size_bytes"] or current[2] != receipt["sha256"]:
+                    raise ValueError("artifact_changed_during_content_verification")
+                receipt["content_preserved"] = True
             if before[path] is not None and before[path][2] == receipt["sha256"]:
                 raise ValueError("artifact_unchanged_from_before_command")
             if not _artifact_task_id:
@@ -113,7 +128,8 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto",
                              "created_or_changed":True, "previous_sha256":before[path][2] if before[path] else None})
         except Exception as exc:
             errors.append({"path":path, "error":str(exc)})
-    return {**result, "artifact_receipts":receipts, "artifact_errors":errors}
+    return {**result, "artifact_receipts":receipts, "artifact_errors":errors,
+            **({"status":"partial","error":"artifact_verification_failed"} if errors else {})}
 
 
 def list_dir(path: str | None = None) -> dict:
@@ -311,6 +327,7 @@ def collect_system_info(device_id: str = "") -> dict:
         "office_tools_version": 1,
         "file_write_protocol": 2,
         "artifact_receipt_protocol": 1,
+        "office_content_preservation_version": 1,
         "device_id": device_id,
         "os": platform.system(),
         "os_version": platform.version(),

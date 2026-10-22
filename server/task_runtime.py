@@ -1042,6 +1042,9 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                             return {"status":"error","error":"invalid_office_parameters","dispatched":False}
                         for image in spec.get("images",[]):
                             validate_write_path_for_device(image["path"],target_dev.get("info") or {},get_device_profile(_short_did(target_dk),user_id=user_id))
+            if params.get("preserve_content") or params.get("preserve_content_paths"):
+                if (target_dev.get("info") or {}).get("office_content_preservation_version") != 1:
+                    return {"status":"error","error":"agent_update_required_for_content_preservation","dispatched":False}
             if action == "execute_cmd" and params.get("artifact_paths"):
                 if (target_dev.get("info") or {}).get("artifact_receipt_protocol") != 1:
                     return {"status":"error", "error":"agent_update_required_for_artifact_receipts", "dispatched":False}
