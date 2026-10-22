@@ -68,27 +68,52 @@
 .iru-mini .app .content { flex-wrap:nowrap; }
 .iru-mini .app .content > .chat-view { flex:1 1 0; width:100%; height:100%; }
 .iru-mini .app .chat-messages { display:block; overflow:auto; }
-.iru-mini .app #adaptiveBody { display:flex; flex-direction:column; gap:10px; min-width:0; }
-.iru-mini .app #adaptiveConversation { display:flex; flex-direction:column; gap:8px; min-width:0; }
+.iru-mini .app #adaptiveBody { display:flex; flex-direction:column; gap:12px; min-width:0; }
+.iru-mini .app #adaptiveConversation { display:flex; flex-direction:column; gap:10px; min-width:0; }
 .iru-mini .app .operation-mirror {
   position:static; width:auto; flex:none; overflow:visible; border:0;
   background:transparent; box-shadow:none; backdrop-filter:none;
 }
 .iru-mini .app .operation-mirror > .operation-panel-heading { display:none; }
 .iru-mini .app #mirrorContent { padding:0; flex:none; overflow:visible; }
-.iru-mini .app .surface-operation { padding:10px; border:1px solid var(--border); border-radius:12px; background:var(--surface-card); }
+.iru-mini .app .surface-operation {
+  padding:12px; border:1px solid var(--border); border-radius:12px;
+  background:var(--surface-card); min-width:0;
+  font-family:"Segoe UI",system-ui,sans-serif;
+}
 .iru-mini .app .surface-operation > .smart-blocks > .smart-task { padding:0; border:0; background:transparent; }
-.iru-mini .app .surface-operation .smart-task-heading { flex-direction:column; gap:5px; }
-.iru-mini .app .surface-operation .smart-status { max-width:none; }
-.iru-mini .app .surface-operation-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.iru-mini .app .surface-operation .smart-task-heading { flex-direction:column; align-items:flex-start; gap:6px; }
+.iru-mini .app .surface-operation .smart-task-title {
+  font-family:inherit; font-size:13px; font-weight:600; line-height:1.45;
+  color:var(--text-primary); overflow-wrap:anywhere;
+}
+.iru-mini .app .surface-operation .smart-status {
+  max-width:100%; font-family:inherit; font-size:11px; line-height:1.4;
+  white-space:normal; overflow-wrap:anywhere;
+}
+.iru-mini .app .surface-operation-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+.iru-mini .app .surface-operation-actions > button {
+  min-height:30px; padding:5px 9px; border-radius:8px;
+  font-family:inherit; font-size:12px; line-height:1.4;
+}
+.iru-mini .app .surface-operation-actions > [data-operation="cancel"] {
+  color:var(--text-muted);
+}
+.iru-mini .app .surface-operation-actions > button:focus-visible {
+  outline:2px solid var(--accent); outline-offset:2px;
+}
 .iru-mini .app .msg.user.surface-command-duplicate { display:none; }
 .iru-mini .app .surface-operation-brief {
-  display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px;
-  padding:4px 0; border:0; border-radius:0; background:transparent;
+  display:flex; align-items:flex-start; flex-wrap:wrap; gap:10px;
+  padding:10px; border:1px solid var(--border); border-radius:12px;
+  background:rgba(137,165,184,.035);
 }
-.iru-mini .app .surface-operation-brief > .smart-blocks { flex:1; min-width:0; }
-.iru-mini .app .surface-operation-brief .smart-task-heading { flex-direction:row; align-items:baseline; gap:8px; }
-.iru-mini .app .surface-operation-brief .smart-task-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.iru-mini .app .surface-operation-brief > .smart-blocks { flex:1 1 160px; min-width:0; }
+.iru-mini .app .surface-operation-brief .smart-task-heading { flex-direction:column; align-items:flex-start; gap:4px; }
+.iru-mini .app .surface-operation-brief .smart-task-title {
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+  overflow:hidden; white-space:normal;
+}
 .iru-mini .app .surface-operation-brief .surface-operation-actions { margin-top:0; }
 .iru-mini .app .surface-operation-brief .smart-task-summary { display:none; }
 .iru-mini .app .surface-operation[data-attention="true"] .surface-operation-actions > [data-operation="surface-toggle"] { display:none; }
@@ -102,3 +127,24 @@
 .iru-mini .app .chat-welcome { text-align:left; }
 .iru-mini .app .chat-welcome h2 { font-size:15px; }
 .iru-mini .app .chat-welcome p { font-size:12px; }
+
+/* Remain in natural document flow: the native shell measures adaptiveBody.
+   Keep full detail text and confirmation controls available to that observer. */
+.iru-mini .app .surface-operation .operation-detail {
+  margin-top:12px; padding-top:10px; border-top:1px solid var(--border);
+  font-size:13px;
+}
+.iru-mini .app .surface-operation .operation-prose {
+  margin:8px 0; font-family:inherit; font-size:13px; line-height:1.6;
+}
+.iru-mini .app .surface-operation .mirror-answer :is(h1,h2,h3) {
+  font-size:13px; line-height:1.5; margin:14px 0 8px;
+}
+.iru-mini .app .surface-operation .operation-detail details { margin-top:12px; }
+.iru-mini .app .surface-operation .operation-detail summary {
+  padding:4px 0; font-size:12px; line-height:1.5;
+}
+.iru-mini .app #adaptiveQueue {
+  border-left-color:var(--border-active); font-size:11px; line-height:1.5;
+}
+.iru-mini .app .msg + .msg { padding-top:8px; border-top:1px solid var(--border); }
