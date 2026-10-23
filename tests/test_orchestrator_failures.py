@@ -90,3 +90,39 @@ def test_optional_voice_presentation_failure_keeps_dialogue_decision(client,monk
  assert reply['answer']=='LAN links nearby devices.'
  assert tasks[reply['task_id']]['status']=='done'
  assert db.get_messages(user['chat_id'])[-1]['content']==reply['answer']
+
+
+@pytest.mark.parametrize('repair_ok',[True,False])
+def test_invalid_json_has_one_format_retry_before_any_handoff(client,monkeypatch,repair_ok,caplog):
+ user=owner();requests=[];delegated=[]
+ malformed=payload({})
+ malformed['choices'][0]['message']['tool_calls'][0]['function']['arguments']='{"intent":"delegate","objective":"bad "quote"}'
+ repaired=payload({'intent':'delegate','objective':'Create the requested file','scope':'server'})
+ async def completion(*args,**kwargs):
+  assert not delegated
+  assert not args[0].is_closed
+  requests.append((args[3],kwargs))
+  assert len(requests)<=2
+  return repaired if repair_ok and len(requests)==2 else malformed
+ async def delegate(choice,**kwargs):
+  delegated.append(choice)
+  return {'task_id':'verified-handoff','status':'running'}
+ monkeypatch.setattr(orch,'_chat_completion_request',completion)
+ monkeypatch.setattr(orch,'load_llm_config',lambda:{'model':'mock'})
+ cmd=SimpleNamespace(message='Создай файл по тексту «больше воздуха»',request_id='json-repair',device_id='',modes={},broadcast=False)
+ async def scenario():
+  first=await orch.run_turn(cmd,user,user['chat_id'],delegate)
+  second=await orch.run_turn(cmd,user,user['chat_id'],delegate)
+  assert first==second
+  return first
+ reply=asyncio.run(scenario())
+ assert len(requests)==2 and len(delegated)==int(repair_ok)
+ assert requests[0][0][-1]['content']==cmd.message
+ assert requests[1][0][:3]==requests[0][0]
+ assert requests[1][1]['usage_context']['metadata']['format_retry'] is True
+ state=tasks[reply['task_id']]
+ if repair_ok:
+  assert state['status']=='done' and state['orchestrator_metrics']['llm_calls']==2
+ else:
+  assert state['status']=='failed' and 'дважды' in reply['answer']
+  assert 'устройство' not in reply['answer'] and 'bad' not in caplog.text

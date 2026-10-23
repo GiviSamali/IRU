@@ -10,7 +10,7 @@ from datetime import datetime,timezone,timedelta
 from typing import Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 try:
     from . import database as db
@@ -357,7 +357,7 @@ def _log_failure(task_id,stage,exc):
         "traceback":[{"file":f.filename.replace("\\","/").rsplit("/",1)[-1],"line":f.lineno,"function":f.name}
                      for f in traceback.extract_tb(exc.__traceback__)]}
     code=str(exc)
-    if code in {"invalid_orchestrator_decision","orchestrator_response_truncated","missing_objective","target_device_required","task_not_found","ambiguous_task_reference","missing_answer"}:record["error_code"]=code
+    if code in {"invalid_orchestrator_decision","orchestrator_invalid_json","orchestrator_response_truncated","missing_objective","target_device_required","task_not_found","ambiguous_task_reference","missing_answer"}:record["error_code"]=code
     shape=getattr(exc,"orchestrator_response_shape",None)
     if isinstance(shape,dict):record["response_shape"]=shape
     response=getattr(exc,"response",None)
@@ -380,20 +380,44 @@ async def decide(message, context, *, user_id, chat_id, task_id):
             "смысл и факты сохраняются. Эти правила относятся только к spoken_response; "
             "письменный answer оформляй как обычно."
             if context.get("voice_provider") == "piper" else "")
+        messages=[{"role":"system","content":SYSTEM + speech_rules},
+            {"role":"user","content":json.dumps({"untrusted_context":context},ensure_ascii=False)},
+            {"role":"user","content":message}]
+        usage={}
         async with httpx.AsyncClient(timeout=httpx.Timeout(60,connect=10)) as client:
-            data=await _chat_completion_request(client,cfg,cfg["model"],
-                [{"role":"system","content":SYSTEM + speech_rules},{"role":"user","content":json.dumps({"untrusted_context":context},ensure_ascii=False)},
-                 {"role":"user","content":message}],tools=[TOOL],tool_choice="required",max_tokens=2400,
-                usage_context={"user_id":user_id,"chat_id":chat_id,"poll_task_id":task_id,"route":"orchestrator","phase":"orchestrator","metadata":{"entity":"orchestrator","context_chars":len(json.dumps(context,ensure_ascii=False))}},phase="orchestrator")
-        stage="llm_response"
-        item=data["choices"][0]
-        if item.get("finish_reason")=="length":raise ValueError("orchestrator_response_truncated")
-        calls=item["message"].get("tool_calls") or []
-        shape={"tool_call_count":len(calls),"expected_function":len(calls)==1 and calls[0].get("function",{}).get("name")=="orchestrator_decision"}
-        if len(calls)!=1 or calls[0].get("function",{}).get("name")!="orchestrator_decision":raise ValueError("invalid_orchestrator_decision")
-        stage="decision_validation"
-        decision=Decision.model_validate_json(calls[0]["function"].get("arguments") or "{}")
-        return decision,{"entity":"orchestrator","elapsed_ms":int((time.monotonic()-started)*1000),"llm_calls":1,"usage":data.get("usage") or {},"snapshot_calls":0}
+            for attempt in range(2):
+                stage="llm_request"
+                data=await _chat_completion_request(client,cfg,cfg["model"],messages,
+                    tools=[TOOL],tool_choice="required",max_tokens=2400,
+                    usage_context={"user_id":user_id,"chat_id":chat_id,"poll_task_id":task_id,
+                        "route":"orchestrator","phase":"orchestrator","metadata":{"entity":"orchestrator",
+                        "context_chars":len(json.dumps(context,ensure_ascii=False)),"format_retry":bool(attempt)}},phase="orchestrator")
+                for key,value in (data.get("usage") or {}).items():
+                    if isinstance(value,(int,float)) and not isinstance(value,bool):
+                        usage[key]=usage.get(key,0)+value
+                stage="llm_response"
+                item=data["choices"][0]
+                if item.get("finish_reason")=="length":raise ValueError("orchestrator_response_truncated")
+                calls=item["message"].get("tool_calls") or []
+                shape={"tool_call_count":len(calls),"expected_function":len(calls)==1 and calls[0].get("function",{}).get("name")=="orchestrator_decision"}
+                if not shape["expected_function"]:raise ValueError("invalid_orchestrator_decision")
+                stage="decision_validation"
+                try:
+                    decision=Decision.model_validate_json(calls[0]["function"].get("arguments") or "{}")
+                except ValidationError as exc:
+                    # Repair syntax once. Schema/permission errors remain strict; nothing has executed.
+                    if not all(e["type"]=="json_invalid" for e in exc.errors(include_input=False,include_url=False)):
+                        raise
+                    if attempt:
+                        raise ValueError("orchestrator_invalid_json") from exc
+                    messages=[*messages,{"role":"system","content":
+                        "Your previous orchestrator_decision arguments were invalid JSON and were discarded. "
+                        "No action was executed. Return exactly one orchestrator_decision with valid JSON "
+                        "matching the schema, based only on the original human request and context. "
+                        "Escape quotes and newlines inside strings. Do not add permissions or actions."}]
+                    continue
+                return decision,{"entity":"orchestrator","elapsed_ms":int((time.monotonic()-started)*1000),
+                    "llm_calls":attempt+1,"usage":usage,"snapshot_calls":0}
     except Exception as exc:
         exc.orchestrator_stage=stage
         if shape is not None:exc.orchestrator_response_shape=shape
@@ -559,6 +583,8 @@ async def run_turn(cmd, user, chat_id, delegate):
         task["orchestrator_error_stage"]=failure_stage
         error_message={"worker_queue_full":"Очередь заполнена: максимум четыре ожидающих поручения. Новая задача не принята.",
             "daily_command_limit_exceeded":"Дневной лимит исполнительных задач исчерпан. Общение и просмотр статуса остаются доступны.",
+            "orchestrator_invalid_json":"Не удалось обработать ответ модели: она дважды вернула некорректный формат. Новое выполнение не начато. Повторите сообщение.",
+            "orchestrator_response_truncated":"Ответ модели оказался неполным. Новое выполнение не начато. Повторите сообщение.",
             "ambiguous_task_reference":"Уточните, о какой задаче идёт речь. Действие не выполнено."}.get(str(exc),"Не удалось обработать реплику безопасно. Уточните поручение, устройство или ID задачи; новое выполнение не начато.")
         task.update(status="failed",answer=error_message,commands=[],tasks=[],orchestrator_error=type(exc).__name__)
     task.setdefault("orchestrator_metrics",{})["first_response_ms"]=int((time.monotonic()-turn_started)*1000)
