@@ -235,6 +235,21 @@ def has_grounded_terminal_answer(answer: str, commands_log: list[dict]) -> bool:
             if not _is_failed_action(failed):
                 continue
             target = failed.get("target_device_id") or failed.get("device_id")
+            result = failed.get("result") or {}
+            # A rejected extra call performed no action. Retain the earlier
+            # verified file write only when it is in this answer's basis and on
+            # the same device; the normal goal audit and basis checks still apply.
+            if result.get("status") == "validation_error" and result.get("dispatched") is False and target and any(
+                item.get("step_id") in basis and _infer_action(item) == "write_content"
+                and item.get("status") == "success"
+                and (item.get("target_device_id") or item.get("device_id")) == target
+                and isinstance(write := item.get("result"), dict) and not write.get("error")
+                and write.get("verified") is True and write.get("committed") is True and write.get("path")
+                and isinstance(write.get("file_sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", write["file_sha256"])
+                and write["file_sha256"] == write.get("content_sha256")
+                for item in commands_log[:failed_index]
+            ):
+                continue
             if not target or not any(
                 item.get("step_id") in basis and not _is_failed_action(item)
                 and (item.get("target_device_id") or item.get("device_id")) == target

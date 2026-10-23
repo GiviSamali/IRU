@@ -762,7 +762,7 @@ async def process_non_pipeline_command(
                 if arg_error:
                     entry = append_entry(tool_log_entry(
                         fn_name,
-                        {**arg_error, "arg_warnings": arg_warnings} if arg_warnings else arg_error,
+                        {**arg_error, "dispatched": False, **({"arg_warnings": arg_warnings} if arg_warnings else {})},
                         command=f"[tool] {fn_name}",
                         target_device_id=device_id,
                         hostname=device_info.get("hostname") or device_id,
