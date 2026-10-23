@@ -149,8 +149,6 @@ def _thinking_request_fields(
 ) -> dict:
     """Return provider thinking fields for the selected DeepSeek V4 model."""
     request_phase = phase or (usage_context or {}).get("phase")
-    if request_phase == "context_compaction":
-        return {"thinking": {"type": "disabled"}}
     if (request_phase or "").endswith((".truncation_recovery", ".structured_output")) and model.startswith("deepseek-"):
         # Documented Chat Completions toggle; do not combine disabled thinking with effort.
         return {"thinking": {"type": "disabled"}}
@@ -225,15 +223,6 @@ async def _chat_completion_request(
     base_model = cfg.get("model", "deepseek-v4-flash")
     if model == base_model and not thinking:
         request_json["temperature"] = cfg.get("temperature", 0.0)
-
-    try:
-        from .context_budget import check_request
-    except ImportError:
-        from context_budget import check_request
-    contour = "orchestrator" if phase == "orchestrator" else "worker"
-    usage_context["metadata"]["context_budget"] = check_request(
-        {**cfg, "model": model}, contour, request_json["messages"], tools,
-        int(request_json["max_tokens"]))
 
     resp = None
     last_error: Exception | None = None

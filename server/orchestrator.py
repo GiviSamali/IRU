@@ -23,7 +23,7 @@ except ImportError:
     from runtime_state import tasks, get_user_devices, _short_did
     from worker_scheduler import init_worker_storage, owned_job, restore_task, scheduler
 
-# Total model input is bounded in tokens at the request boundary.
+MAX_CONTEXT_CHARS = 14000
 MAX_ANSWER_CHARS = 6000
 
 
@@ -281,16 +281,12 @@ def context_for(user_id, chat_id, message, selected):
         from .worker_context import clip_context_text
     except ImportError:
         from worker_context import clip_context_text
-    try:
-        from .context_store import latest, conversation_rows
-        from .context_compaction import memory_block
-    except ImportError:
-        from context_store import latest, conversation_rows
-        from context_compaction import memory_block
-    checkpoint = latest(user_id, chat_id, "orchestrator")
-    covered = checkpoint["covered_message_id"] if checkpoint else 0
-    history, history_limited = conversation_rows(user_id, chat_id, covered)
-    history = [row for row in reversed(history) if row.get("content")]
+    history=[];budget=5000
+    for row in reversed(db.get_messages(chat_id,limit=12,include_result_first_workers=False)):
+        text=(row.get("executionDetails") or row["content"]) if row.get("taskKind")=="worker" else row["content"]
+        content=clip_context_text(text,min(1000,budget)) if budget>0 else ""
+        if not content or budget<=0:continue
+        history.append({"role":row["role"],"content":content, **({"truncated":True} if len(text)>len(content) else {})});budget-=len(content)
     online=get_user_devices(user_id)
     init_worker_storage()
     with db.get_db() as c:
@@ -340,14 +336,17 @@ def context_for(user_id, chat_id, message, selected):
             "saved_reports":[{"step_id":r["step_id"],"chars":len(r["text"])} for r in saved_reports],
             "steps":[{"title":(s.get("title") or s.get("description") or "")[:160],"status":s.get("status")} for s in step_states][:12]})
     result={"current_datetime_msk":datetime.now(timezone(timedelta(hours=3))).isoformat(),"history":list(reversed(history)),"selected_device":selected if isinstance(selected,str) and len(selected)<=128 else None,"devices":list(device_records.values())[:16],"tasks":jobs,"facts":relevant_facts(user_id,message)}
-    if checkpoint:
-        refs = json.loads(checkpoint["source_json"])
-        result["conversation_memory"] = memory_block(checkpoint["summary"], checkpoint["checkpoint_id"],
-                                                     covered_message_id=covered,
-                                                     history_gap_before_id=refs.get("history_gap_before_id"))
-    if history_limited:
-        result["history_window_limited"] = True
-        result["history_gap_before_id"] = min((r["id"] for r in history), default=None)
+    # The cap holds even without task records. Removed data grants no fallback authority.
+    while len(json.dumps(result,ensure_ascii=False)) > MAX_CONTEXT_CHARS:
+        result["context_truncated"] = True
+        index=next((i for i in range(len(result["tasks"])-1,-1,-1) if result["tasks"][i].get("report")),None)
+        if index is not None: result["tasks"][index]["report"]=None
+        elif result["history"]: result["history"].pop(0)
+        elif result["facts"]: result["facts"].pop()
+        elif result["tasks"]: result["tasks"].pop()
+        elif result["devices"]: result["devices"].pop()
+        elif result["selected_device"] is not None: result["selected_device"]=None
+        else: raise ValueError("orchestrator_context_budget_too_small")
     return result
 
 
@@ -385,14 +384,6 @@ async def decide(message, context, *, user_id, chat_id, task_id):
             "письменный answer оформляй как обычно."
             if context.get("voice_provider") == "piper" else "")
         async with httpx.AsyncClient(timeout=httpx.Timeout(60,connect=10)) as client:
-            try:
-                from .context_compaction import compact_conversation
-            except ImportError:
-                from context_compaction import compact_conversation
-            context = await compact_conversation(client=client, cfg=cfg, model=cfg["model"],
-                context=context, original_request=message, owner=user_id, chat=chat_id,
-                system=SYSTEM + speech_rules, tools=[TOOL], request_fn=_chat_completion_request,
-                usage_context={"user_id":user_id,"chat_id":chat_id,"poll_task_id":task_id,"route":"orchestrator"})
             data=await _chat_completion_request(client,cfg,cfg["model"],
                 [{"role":"system","content":SYSTEM + speech_rules},{"role":"user","content":json.dumps({"untrusted_context":context},ensure_ascii=False)},
                  {"role":"user","content":message}],tools=[TOOL],tool_choice="required",max_tokens=2400,

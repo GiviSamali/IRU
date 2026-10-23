@@ -347,10 +347,7 @@ async def process_non_pipeline_command(
             code = "model_output_truncated"
         append_entry(make_run_step(journal=commands_log,tool_name="llm_request",tool_type="system",
             result=diagnostic,status="failed",target_device_id=device_id,iteration=iteration))
-        answer = ("Контекст превысил входной токенный бюджет. Полученные результаты сохранены; завершение цели не подтверждено."
-                  if code == "context_input_budget_exceeded" else
-                  "Связь с моделью прервана. Полученные результаты сохранены; завершение цели не подтверждено.")
-        return {"answer":answer,
+        return {"answer":"Связь с моделью прервана. Полученные результаты сохранены; завершение цели не подтверждено.",
             "commands":commands_log,"tasks":[],"training_context":_training_context(device_info),
             "task_receipt":{"task_status":"partial" if had_results else "failed","goal_completed":False,
                 "final_verification_status":"unverified","answer_source":"server_fallback","terminal_reason":code}}
@@ -402,13 +399,6 @@ async def process_non_pipeline_command(
     print(f"[llm] выбрана модель: {model} (base={base_model}, autonomous={bool(modes.get('autonomous'))})")
 
     timeout = httpx.Timeout(120.0, connect=10.0)
-    try:
-        from .context_compaction import compact_worker_messages
-        from .context_budget import ContextBudgetExceeded
-    except ImportError:
-        from context_compaction import compact_worker_messages
-        from context_budget import ContextBudgetExceeded
-    compaction_state = {}
     async with httpx.AsyncClient(timeout=timeout) as client:
         for iteration in range(max_iterations):
             if browser_only and iteration >= 12:
@@ -420,14 +410,6 @@ async def process_non_pipeline_command(
             set_current_step(poll_task_id, "ИРУ думает...")
             print(f"[llm] iteration {iteration + 1}/{max_iterations}, messages={len(messages)}")
             try:
-                messages = await compact_worker_messages(
-                    client=client, cfg=cfg, model=model, messages=messages,
-                    tools=non_pipeline_tools, original_request=user_message,
-                    owner=user_id, chat=chat_id, task_id=poll_task_id,
-                    request_fn=chat_completion_request_fn, usage_context=usage_context,
-                    state=compaction_state, journal=commands_log)
-                if is_task_cancel_requested(poll_task_id):
-                    return cancelled_result(iteration + 1)
                 phase = (f"window_control.iteration.{iteration + 1}" if window_only else f"browser_bridge.iteration.{iteration + 1}" if browser_only else f"non_pipeline.iteration.{iteration + 1}")
                 if model.startswith("deepseek-"):
                     phase += ".truncation_recovery" if truncation_pending else ".structured_output"
@@ -439,13 +421,9 @@ async def process_non_pipeline_command(
                     tools=non_pipeline_tools,
                     max_tokens=cfg.get("max_tokens", 32768),
                     tool_choice="required",
-                    usage_context={**(usage_context or {}), "phase": phase,
-                        "metadata":{**((usage_context or {}).get("metadata") or {}),
-                                    "context_compaction":dict(compaction_state)}},
+                    usage_context={**(usage_context or {}), "phase": phase},
                     phase=phase,
                 )
-            except ContextBudgetExceeded:
-                return provider_failure("context_input_budget_exceeded", iteration + 1)
             except httpx.HTTPStatusError as exc:
                 print(f"[llm] HTTP error: {exc.response.status_code}")
                 return provider_failure("llm_http_error_" + str(exc.response.status_code), iteration + 1)
@@ -924,10 +902,6 @@ async def process_non_pipeline_command(
                         include_success=bool(fn_args.get("include_success", True)),
                         exclude_task_id=poll_task_id,
                         source_task_id=fn_args.get("source_task_id"),
-                        context_checkpoint_id=fn_args.get("context_checkpoint_id"),
-                        context_before_message_id=fn_args.get("context_before_message_id"),
-                        context_message_id=fn_args.get("context_message_id"),
-                        context_step_id=fn_args.get("context_step_id"),
                         report_offset=fn_args.get("report_offset", 0),
                         allowed_devices={str(target_device).split(":")[-1]},
                     )
