@@ -321,6 +321,23 @@ def _persistence_failure(task, event, exc):
         trace.append({"task_id":task["task_id"],"event":event,"error_type":type(exc).__name__})
 
 
+def _retain_journal(saved, current):
+    """Keep checkpointed steps; refresh matching steps with current annotations."""
+    commands = list(saved or [])
+    def identity(entry):
+        return (entry.get("target_device_id") or entry.get("device_id"), entry.get("step_id"))
+    positions = {identity(entry): index for index, entry in enumerate(commands) if entry.get("step_id")}
+    for entry in current or []:
+        key = identity(entry)
+        if entry.get("step_id") and key in positions:
+            commands[positions[key]] = entry
+        elif entry not in commands:
+            if entry.get("step_id"):
+                positions[key] = len(commands)
+            commands.append(entry)
+    return commands
+
+
 def persist_worker_journal(task_id, journal):
     """Checkpoint received results without finalizing the Worker or its Goal."""
     task = tasks.get(task_id)
@@ -339,6 +356,8 @@ def persist_worker_journal(task_id, journal):
             if row is None or row["state"] not in ACTIVE_STATES:
                 raise ValueError("worker_journal_identity_or_state_mismatch")
             payload = json.loads(row["payload"])
+            commands = _retain_journal(payload.get("commands"), commands)
+            task["commands"] = commands
             payload["commands"] = commands
             c.execute("UPDATE worker_jobs SET payload=?,updated_at=? WHERE task_id=? AND owner_user_id=?",
                       (json.dumps(payload, ensure_ascii=False), time.time(), task_id, task["user_id"]))
@@ -360,22 +379,25 @@ def _final_snapshot(task, report, previous):
 
 
 def persist_report(task, *, include_report_column=True):
-    report=build_worker_report(task);task["worker_report"]=report
-    if task.get("input_required"):
-        try:
-            from .orchestrator import present_window_input_result
-        except ImportError:
-            from orchestrator import present_window_input_result
-        task.update(present_window_input_result(task, report))
-    else:
-        task.update(worker_presentation(task,report))
-    metadata=db.message_task_metadata({**task,"status":report["status"],"worker_report":report},task_id=task["task_id"])
-    task["history_metadata"]=metadata
     message_id=task.get("history_message_id")
     with db.get_db() as c:
         c.execute("BEGIN IMMEDIATE")
         row=c.execute("SELECT payload FROM worker_jobs WHERE task_id=? AND owner_user_id=?",(task["task_id"],task["user_id"])).fetchone()
         if row is None:raise ValueError("worker_job_identity_mismatch")
+        # Merge before building the report/history, inside the same transaction.
+        # An empty or shortened runtime result cannot erase checkpointed evidence.
+        task["commands"] = _retain_journal(json.loads(row["payload"]).get("commands"), task.get("commands"))
+        report=build_worker_report(task);task["worker_report"]=report
+        if task.get("input_required"):
+            try:
+                from .orchestrator import present_window_input_result
+            except ImportError:
+                from orchestrator import present_window_input_result
+            task.update(present_window_input_result(task, report))
+        else:
+            task.update(worker_presentation(task,report))
+        metadata=db.message_task_metadata({**task,"status":report["status"],"worker_report":report},task_id=task["task_id"])
+        task["history_metadata"]=metadata
         c.execute("SAVEPOINT worker_history")
         try:
             chat=c.execute("SELECT 1 FROM chats WHERE id=? AND user_id=?",(task["chat_id"],task["user_id"])).fetchone()

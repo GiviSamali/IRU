@@ -877,6 +877,12 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             pass
 
     async def run_on_device(device_id: str):
+        def received_commands():
+            # Checkpoints include preceding broadcast devices. Return only this
+            # device's steps so the outer aggregation does not duplicate them.
+            return [entry for entry in task.get("commands") or []
+                    if _short_did(entry.get("target_device_id") or entry.get("device_id") or "") == _short_did(device_id)]
+
         if is_task_cancel_requested(task_id):
             return cancellation_payload()
         dev = devices.get(device_id)
@@ -1265,11 +1271,11 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 "device_id": device_id,
                 "status": "error",
                 "answer": f"Ошибка LLM API: {exc.response.status_code}",
-                "commands": [],
+                "commands": received_commands(),
             }
         except Exception as exc:
             if is_task_cancel_requested(task_id):
-                return cancellation_payload()
+                return cancellation_payload(received_commands())
             print(f"[run_nl_task] ERROR on device={device_id}: {type(exc).__name__}")
             logger.warning("[task] exception type=%s", type(exc).__name__)
             error_text = str(exc).strip() or type(exc).__name__
@@ -1277,7 +1283,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 "device_id": device_id,
                 "status": "error",
                 "answer": f"Ошибка: {error_text}" if error_text else "Произошла внутренняя ошибка. Попробуйте ещё раз.",
-                "commands": [],
+                "commands": received_commands(),
             }
 
     if is_task_cancel_requested(task_id):

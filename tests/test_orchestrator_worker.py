@@ -364,6 +364,97 @@ def used_commands(owner):
     return db.check_daily_command_limit(owner['id'])['used']
 
 
+@pytest.mark.parametrize('http_error', [False, True])
+def test_runtime_exception_after_checkpoint_retains_journal_in_final_report(owners, monkeypatch, http_error):
+    import httpx
+    from server import task_runtime as runtime
+    from server.worker_scheduler import persist_worker_journal
+
+    a, _ = owners
+    entry = {'step_id': 'step_1', 'tool_name': 'execute_cmd', 'device_id': 'pc',
+             'status': 'success', 'result': {'returncode': 0, 'stdout': 'received', 'stderr': ''}}
+    calls = []
+
+    async def process(**kwargs):
+        calls.append(1)
+        persist_worker_journal(kwargs['poll_task_id'], [entry])
+        saved = owned_job(kwargs['poll_task_id'], a['id'])
+        assert json.loads(saved['payload'])['commands'] == [entry]
+        if http_error:
+            raise httpx.HTTPStatusError('mock provider failure', request=httpx.Request('POST', 'https://example.invalid'),
+                                        response=httpx.Response(503))
+        raise RuntimeError('mock controller failure after received result')
+
+    monkeypatch.setattr(runtime, 'process_nl_command', process)
+
+    async def scenario():
+        async def execute(t):
+            await runtime.run_nl_task(t['task_id'], a['id'], t['message'], t['device_ids'], a['chat_id'])
+
+        local = WorkerScheduler(execute)
+        try:
+            template = task(a, 'Observe once')
+            template['results'] = {}
+            job = await local.submit(template, request_key='runtime-error-after-checkpoint')
+            await local.runners[a['id']]
+            saved = owned_job(job['task_id'], a['id'])
+            report = json.loads(saved['report'])
+            assert len(calls) == 1
+            assert job['commands'] == [entry]
+            assert json.loads(saved['payload'])['commands'] == [entry]
+            assert report['goal_completed'] is False and report['status'] != 'success'
+            assert report['evidence_refs'] == ['step_1']
+            with db.get_db() as c:
+                message = c.execute('SELECT commands FROM messages WHERE id=?', (saved['message_id'],)).fetchone()
+            assert json.loads(message['commands']) == [entry]
+        finally:
+            await local.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('shortened', [False, True])
+def test_final_report_cannot_erase_checkpointed_steps(owners, shortened):
+    from server.worker_scheduler import persist_worker_journal, persist_report
+
+    a, _ = owners
+
+    async def scenario():
+        ready = asyncio.Event()
+        gate = asyncio.Event()
+
+        async def execute(t):
+            ready.set()
+            await gate.wait()
+
+        local = WorkerScheduler(execute)
+        try:
+            job = await local.submit(task(a), request_key='final-journal-retention')
+            await asyncio.wait_for(ready.wait(), timeout=3)
+            # Same step IDs on different devices must remain distinct.
+            first = {'step_id': 'step_1', 'tool_name': 'execute_cmd', 'device_id': 'pc',
+                     'status': 'success', 'result': {'returncode': 0, 'stdout': 'first', 'stderr': ''}}
+            second = {**first, 'device_id': 'other', 'result': {'returncode': 0, 'stdout': 'second', 'stderr': ''}}
+            persist_worker_journal(job['task_id'], [first, second])
+            job['commands'] = [dict(second, summary='updated annotation')] if shortened else []
+            job['status'] = 'error'
+            report = persist_report(job)
+            saved = owned_job(job['task_id'], a['id'])
+            commands = json.loads(saved['payload'])['commands']
+            assert len(commands) == 2 and commands[0] == first
+            assert commands[1]['result'] == second['result']
+            if shortened:
+                assert commands[1]['summary'] == 'updated annotation'
+            assert report['status'] == 'failed' and report['goal_completed'] is False
+            with db.get_db() as c:
+                message = c.execute('SELECT commands FROM messages WHERE id=?', (saved['message_id'],)).fetchone()
+            assert json.loads(message['commands']) == commands
+        finally:
+            await local.shutdown()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('failed_tool', [False, True])
 @pytest.mark.parametrize('hard_restart', [False, True])
 def test_received_journal_survives_interrupted_controller_and_restart(owners, failed_tool, hard_restart):
