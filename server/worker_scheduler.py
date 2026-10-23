@@ -325,6 +325,9 @@ def _retain_journal(saved, current):
     """Keep checkpointed steps; refresh matching steps with current annotations."""
     commands = list(saved or [])
     def identity(entry):
+        if entry.get("journal_entry_id"):
+            return ("entry", entry["journal_entry_id"])
+        # Existing persisted journals remain readable without rewriting IDs.
         return (entry.get("target_device_id") or entry.get("device_id"), entry.get("step_id"))
     positions = {identity(entry): index for index, entry in enumerate(commands) if entry.get("step_id")}
     for entry in current or []:

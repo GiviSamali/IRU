@@ -364,6 +364,79 @@ def used_commands(owner):
     return db.check_daily_command_limit(owner['id'])['used']
 
 
+def test_broadcast_keeps_server_steps_from_separate_controller_executions(owners, monkeypatch):
+    from server import task_runtime as runtime
+    from server.controller_non_pipeline import process_non_pipeline_command
+    from server.controller_tools import NON_PIPELINE_TOOLS
+    from server.worker_scheduler import persist_report
+
+    a, _ = owners
+    second_device = f"{a['id']}:pc2"
+    monkeypatch.setitem(devices, second_device, {
+        'user_id': a['id'], 'info': {'hostname': 'pc2', 'os': 'Windows'}, 'ws': object()})
+    executions = []
+
+    async def process(**kwargs):
+        calls = []
+        executions.append(kwargs['device_id'])
+
+        async def completion(**request):
+            calls.append(1)
+            if len(calls) == 1:
+                name, args = 'system_get_last_run_summary', {'include_success': False}
+            else:
+                name, args = 'answer_report_failure', {
+                    'message': 'Inspection finished without executing an action', 'reason': 'unverified',
+                    'recoverable': False, 'suggested_next_action': 'Review available tools', 'basis': ['step_1']}
+            return {'choices': [{'finish_reason': 'tool_calls', 'message': {'tool_calls': [{
+                'id': str(len(calls)), 'function': {'name': name, 'arguments': json.dumps(args)}}]}}]}
+
+        async def no_device_action(*args):
+            pytest.fail('This broadcast only inspects server-side run summaries')
+
+        return await process_non_pipeline_command(
+            user_message=kwargs['user_message'], device_id=kwargs['device_id'],
+            device_info=kwargs['device_info'], send_command_fn=no_device_action,
+            get_file_link_fn=lambda *args: '', chat_history=[], user_id=None, chat_id=None,
+            modes={}, poll_task_id=kwargs['poll_task_id'], cfg={'model': 'mock-model'},
+            system_msg='system', machine_guid=None, mem_user_id=None,
+            non_pipeline_tools=NON_PIPELINE_TOOLS, max_iterations=3,
+            pick_model_fn=lambda *args: 'mock-model', chat_completion_request_fn=completion)
+
+    monkeypatch.setattr(runtime, 'process_nl_command', process)
+
+    async def scenario():
+        async def execute(t):
+            await runtime.run_nl_task(t['task_id'], a['id'], t['message'], t['device_ids'], a['chat_id'])
+
+        local = WorkerScheduler(execute)
+        try:
+            template = task(a, 'Inspect available tools')
+            template.update(device_ids=[f"{a['id']}:pc", second_device], results={},
+                            orchestrated=True, broadcast=True)
+            job = await local.submit(template, request_key='broadcast-server-journal')
+            await local.runners[a['id']]
+            saved = owned_job(job['task_id'], a['id'])
+            commands = json.loads(saved['payload'])['commands']
+            assert executions == ['pc', 'pc2']
+            assert len(commands) == 4
+            assert len({entry['journal_entry_id'] for entry in commands}) == 4
+            server_steps = [entry for entry in commands if entry['tool_name'] == 'system.get_last_run_summary']
+            assert len(server_steps) == 2
+            assert all(entry['step_id'] == 'step_1' and entry['target_device_id'] is None for entry in server_steps)
+            # Repeated finalization refreshes the same entries rather than duplicating them.
+            persist_report(job)
+            saved = owned_job(job['task_id'], a['id'])
+            assert json.loads(saved['payload'])['commands'] == commands
+            with db.get_db() as c:
+                message = c.execute('SELECT commands FROM messages WHERE id=?', (saved['message_id'],)).fetchone()
+            assert json.loads(message['commands']) == commands
+        finally:
+            await local.shutdown()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('http_error', [False, True])
 def test_runtime_exception_after_checkpoint_retains_journal_in_final_report(owners, monkeypatch, http_error):
     import httpx

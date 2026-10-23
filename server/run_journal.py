@@ -5,6 +5,7 @@ import re
 from hashlib import sha256
 import logging
 import time
+from uuid import uuid4
 from contextvars import ContextVar
 from contextlib import contextmanager
 from functools import wraps
@@ -311,6 +312,7 @@ def make_run_step(
     final_summary = summary or compact_step_summary(tool_name, result, command)
     fields = tool_log_fields(tool_name, result, command, target_device_id)
     entry = {
+        "journal_entry_id": uuid4().hex,
         "action": tool_name,
         "command": command or f"[tool] {canonical}",
         "device_id": target_device_id,
@@ -339,6 +341,9 @@ def make_run_step(
 
 
 def append_tool_step(journal: list[dict[str, Any]], entry: dict[str, Any]) -> dict[str, Any]:
+    # step_id is local to a Controller execution, including server-only steps.
+    # Preserve a stable storage identity across checkpoints and finalization.
+    entry.setdefault("journal_entry_id", uuid4().hex)
     if entry.get("step_id") and entry.get("idx") is not None:
         journal.append(entry)
         _trace_journal_step(entry)
