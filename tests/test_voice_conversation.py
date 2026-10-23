@@ -6,20 +6,29 @@ from types import SimpleNamespace
 
 import pytest
 from server import database as db, orchestrator as orch, voice
-from server.runtime_state import tasks
+from server.runtime_state import tasks, devices
 from server.response_presentation import worker_presentation, worker_spoken_response
 from server.worker_reports import build_worker_report
 
 
 @pytest.mark.parametrize('message,answer,speech,intent',[
  ('Привет','Привет! Я на связи.','Привет, я здесь.','conversation'),
+ ('Компьютер подключён?','Да, givi на связи.','givi на связи.','conversation'),
+ ('Что с устройством?','Компьютер givi на связи.','givi на связи.','conversation'),
+ ('Объясни разницу между Worker и Scheduler','Worker выполняет поручение. Scheduler управляет очередью поручений.','Worker выполняет поручение, Scheduler управляет очередью.','conversation'),
  ('Посоветуй занятие на дождливый вечер','Можно почитать книгу или посмотреть фильм дома.','Можно остаться дома с книгой или фильмом.','conversation'),
  ('А чем LAN отличается от WAN?','LAN соединяет устройства дома или в офисе. WAN связывает локальные сети на больших расстояниях.','LAN — сеть дома или в офисе, а WAN связывает такие сети между собой.','conversation'),
  ('Открой файл','Уточни, какой файл нужно открыть.','Какой файл открыть?','clarify'),
 ])
 def test_same_primary_decision_provides_speech_persisted_and_owned(client,monkeypatch,message,answer,speech,intent):
  user=db.create_user('conversation-speaker');chat=db.create_chat(user['id'],'dialog')['id'];calls=[];tts=[]
+ if message in {'Компьютер подключён?','Что с устройством?'}:
+  devices[f"{user['id']}:pc"]={'user_id':user['id'],'info':{'hostname':'givi','os':'Windows'},'ws':object()}
  async def completion(*args,**kwargs):
+  if message in {'Компьютер подключён?','Что с устройством?'}:
+   context=json.loads(args[3][1]['content'])['untrusted_context']
+   assert context['devices'][0]['online'] is True
+   assert context['devices'][0]['availability']=='connection_observed_not_execution_verified'
   calls.append((args,kwargs));return {'choices':[{'finish_reason':'stop','message':{'tool_calls':[{'function':{'name':'orchestrator_decision','arguments':json.dumps({'intent':intent,'answer':answer,'spoken_response':speech})}}]}}]}
  monkeypatch.setattr(orch,'_chat_completion_request',completion);monkeypatch.setattr(orch,'load_llm_config',lambda:{'model':'mock'})
  async def forbidden(*args,**kwargs):raise AssertionError('No worker or extra speech LLM')
@@ -111,6 +120,46 @@ def test_worker_negatives_ignore_fabricated_model_speech_and_keep_outcome(status
 @pytest.mark.parametrize('answer',['Не могу подтвердить результат.','Проверка не выполнена.','Задача выполнена частично.','Нужно подтверждение опасной команды.','Нет доступа к файлу.','Результат пока неизвестен.','Не могу сказать, выполнено ли действие.'])
 def test_sensitive_source_cannot_get_successful_alternate_speech(answer):
  assert voice.conversational_speech('Всё сделала.',answer)==''
+
+
+@pytest.mark.parametrize('answer',[
+ 'Не удалось подтвердить, что файл сохранился.',
+ 'Файл не сохранился.',
+ 'Сохранение не завершено.',
+ 'Файл сохранён, но загрузка ещё идёт.',
+ 'Документ создан. Загрузка не закончена.',
+ 'Возможно, файл сохранён.',
+ 'Вероятно, операция завершена.',
+ 'Нельзя продолжать без разрешения.',
+])
+@pytest.mark.parametrize('speech',['Готово.','Файл сохранён.','Операция успешно завершена.'])
+def test_uncertainty_and_partial_results_cannot_be_shortened_to_success(answer,speech):
+ assert voice.conversational_speech(speech,answer)==''
+ assert voice.conversational_speech(answer,answer)==answer
+
+
+@pytest.mark.parametrize('speech',['Готово.','Файл создан.','Файл сохранён.','Успешно завершено.'])
+def test_speech_cannot_add_completion_to_observation(speech):
+ assert voice.conversational_speech(speech,'Компьютер на связи.')==''
+
+
+def test_voice_cannot_add_uncertainty_to_confirmed_text():
+ assert voice.conversational_speech('Возможно, файл сохранён.','Файл сохранён.')==''
+
+
+@pytest.mark.parametrize('speech',['Файл удалён.','Файл открыт.','Файл создан.'])
+def test_confirmed_action_does_not_prove_another_action(speech):
+ assert voice.conversational_speech(speech,'Файл сохранён.')==''
+
+
+def test_partial_dialogue_fallback_preserves_both_results_without_editor(monkeypatch):
+ answer='Файл сохранён, но отправка не завершена.'
+ task={'kind':'orchestrator','status':'done','answer':answer,'dialogue_intent':'conversation',
+       'dialogue_spoken_response':'Файл сохранён.','dialogue_speech_answer':answer}
+ async def forbidden(*args):raise AssertionError('No editorial call for short fallback')
+ monkeypatch.setattr(voice,'shorten_answer',forbidden)
+ assert asyncio.run(voice.spoken_parts(task))==[answer]
+ assert task['answer']==answer
 
 
 def test_full_read_wins_over_primary_speech_and_survives_restore(client,monkeypatch):

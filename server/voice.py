@@ -68,9 +68,16 @@ def conversational_speech(value, answer: str) -> str:
     try:value.encode("utf-8")
     except UnicodeEncodeError:return ""
     if re.search(r"[\x00-\x1f<>]|```|https?://|[A-Za-z]:[\\/]|(?:^|\s)/[\w.-]+/|(?:^|\s)[-*#>]\s|\*\*",value):return ""
-    # Negative/permission-sensitive source replies remain the protected source formulation.
-    if re.search(r"не\s+(?:подтвер\w*|провер\w*|выполн\w*|получ\w*|удалось)|не\s+(?:могу|знаю|увер\w*)|неизвест\w*|частич\w*|отмен\w*|подтверждени\w*|нет\s+(?:доступ|увер\w*)",answer,re.I):
+    # Keep uncertainty, mixed outcomes and permission-sensitive replies in the
+    # source formulation: lexical overlap cannot establish semantic equivalence.
+    sensitive = (r"не\s+(?:подтвер\w*|провер\w*|выполн\w*|получ\w*|удалось|"
+                 r"сохран\w*|созда\w*|откр\w*|заверш\w*|закон\w*|могу|знаю|увер\w*)|"
+                 r"неизвест\w*|частич\w*|отмен\w*|подтверждени\w*|"
+                 r"нет\s+(?:доступ|увер\w*)|\b(?:но|однако|нельзя|возможно|вероятно)\b")
+    if re.search(sensitive,answer,re.I):
         if value!=" ".join(answer_parts(answer,keep_inline=True)):return ""
+    elif re.search(sensitive,value,re.I):
+        return ""
     # New exact values/file names are rejected. General paraphrase is still the primary model's job.
     critical=r"\b[\w.-]+\.(?:ini|txt|json|py|xlsx|pptx|docx|pdf|zip)\b|\b[a-z_][\w.-]*\s*=\s*[\w.+-]+\b|\b\d+(?:[.,]\d+)?(?:\s?(?:гб|мб|gb|mb|%))?|\b[A-Za-z][A-Za-z0-9_-]{1,}\b"
     def values(text):
@@ -79,8 +86,13 @@ def conversational_speech(value, answer: str) -> str:
         fragments+=re.findall(r"\b\d+(?:[.,]\d+)?\b|\b[A-Za-z][A-Za-z0-9_-]{1,}\b",text,re.I)
         return {re.sub(r"\s+","",v.casefold()) for v in fragments}
     if not values(value)<=values(answer):return ""
-    claim=r"\b(?:сделал\w*|выполн(?:ил|ен)\w*|создал\w*|сохранил\w*|открыл\w*|удалил\w*)\b"
+    claim=r"\b(?:готово|успеш\w*|удалось|заверш\w*|сделал\w*|выполн(?:ил|ен)\w*|созда(?:л|н)\w*|сохран(?:ил|[её]н)\w*|откр(?:ыл|ыт)\w*|удал(?:ил|[её]н)\w*)\b"
     if re.search(claim,value,re.I) and not re.search(claim,answer,re.I):return ""
+    # Evidence for saving is not evidence for deleting/opening the same object.
+    for action in (r"созда(?:л|н)\w*", r"сохран(?:ил|[её]н)\w*",
+                   r"откр(?:ыл|ыт)\w*", r"удал(?:ил|[её]н)\w*"):
+        if re.search(r"\b"+action+r"\b",value,re.I) and not re.search(r"\b"+action+r"\b",answer,re.I):
+            return ""
     return spoken_value
 
 
