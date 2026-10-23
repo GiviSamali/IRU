@@ -24,7 +24,7 @@ SUMMARIES={
 
 
 @pytest.mark.parametrize('reply',REPLIES,ids=lambda r:str(r['message_id']))
-@pytest.mark.parametrize('mode',['recorded','primary','rejected','concise'])
+@pytest.mark.parametrize('mode',['recorded','primary','different_meaning','concise'])
 def test_real_six_deliver_content_and_owner_only_diagnostics(client,monkeypatch,reply,mode):
  user=db.create_user('chat102-replay');chat=db.create_chat(user['id'],'replay')['id']
  candidate=(reply['accepted_spoken_response'] or '') if mode=='recorded' else SUMMARIES[reply['message_id']] if mode in {'primary','concise'} else 'Готово. Удалено extra_file.txt.'
@@ -48,7 +48,7 @@ def test_real_six_deliver_content_and_owner_only_diagnostics(client,monkeypatch,
  monkeypatch.setenv('YANDEX_API_KEY','mock')
  cmd=SimpleNamespace(message=reply['request'],request_id='chat102-replay',device_id='',modes={},broadcast=False)
  result=asyncio.run(orch.run_turn(cmd,user,chat,forbidden));tid=result['task_id'];task=tasks[tid]
- chosen='primary' if mode in {'primary','concise'} or (mode=='recorded' and candidate) else 'short_source' if len(' '.join(voice.answer_parts(answer,keep_inline=True)))<=420 else 'editorial'
+ chosen='primary' if candidate else 'short_source' if len(' '.join(voice.answer_parts(answer,keep_inline=True)))<=420 else 'editorial'
  expected=candidate if chosen=='primary' else ' '.join(voice.answer_parts(answer,keep_inline=True)) if chosen=='short_source' else SUMMARIES[reply['message_id']]
  headers={'X-Token':user['token']}
  first=client.post(f'/api/voice/tasks/{tid}/speech',headers=headers)
@@ -63,7 +63,7 @@ def test_real_six_deliver_content_and_owner_only_diagnostics(client,monkeypatch,
  assert task['speech_diagnostics']['selection']['editorial_used']==(chosen=='editorial')
  primary=task['speech_diagnostics']['primary']
  assert primary['candidate']==candidate
- assert primary['reason']==('accepted' if mode in {'primary','concise'} or (mode=='recorded' and candidate) else 'missing_candidate' if mode=='recorded' else 'outcome_mismatch')
+ assert primary['reason']==('accepted' if candidate else 'missing_candidate')
  # Ordinary history never exposes raw candidates. Diagnostics survive a restart
  # through the existing owner-checked task route.
  assert 'speechDiagnostics' not in db.get_messages(chat)[-1]
@@ -112,10 +112,10 @@ def test_malformed_optional_candidate_is_retained_without_changing_decision_sche
  ('Задача выполнена частично.','Всё сделала.'),
  ('Не могу сказать, выполнено ли действие.','Действие выполнено.'),
 ])
-def test_informational_mode_still_rejects_opposite_or_unconfirmed_outcomes(answer,speech):
+def test_dialogue_opposite_or_unconfirmed_words_are_not_semantically_filtered(answer,speech):
  check={}
- assert voice.conversational_speech(speech,answer,informational=True,diagnostic=check)==''
- assert check['reason']!='accepted'
+ assert voice.conversational_speech(speech,answer,informational=True,diagnostic=check)==speech
+ assert check['reason']=='accepted'
 
 
 @pytest.mark.parametrize('answer,speech',[

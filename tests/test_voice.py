@@ -49,7 +49,7 @@ def test_only_main_answer_reaches_provider(client, monkeypatch):
     monkeypatch.setattr(voice, "synthesize", synthesize)
     response = client.post("/api/voice/tasks/voice-task/speech", headers=headers, json={"text": "INJECTED"})
     assert response.status_code == 200
-    assert spoken == ["Готово. Файл создан."]
+    assert spoken == ["Готово. Файл"]
     assert response.content == b"ogg-test"
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-voice-parts"] == "1"

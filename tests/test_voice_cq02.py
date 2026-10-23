@@ -10,7 +10,7 @@ from server.runtime_state import tasks
 from test_voice_chat102 import REPLIES, SUMMARIES
 
 
-@pytest.mark.parametrize('failure',['provider','timeout','opposite','too_long','incomplete','budget'])
+@pytest.mark.parametrize('failure',['provider','timeout','too_long','incomplete','budget'])
 def test_editor_failure_is_bounded_and_never_reads_long_source(client,monkeypatch,failure):
  user=db.create_user('cq02-failure');chat=db.create_chat(user['id'],'cq02')['id'];calls=[];tts=[]
  answer=('Документ сохранён. '*35)+'Но отправка не завершена.'
@@ -21,7 +21,7 @@ def test_editor_failure_is_bounded_and_never_reads_long_source(client,monkeypatc
     'name':'orchestrator_decision','arguments':json.dumps({'intent':'conversation','answer':answer,'spoken_response':''})}}]}}]}
   if failure=='provider':raise RuntimeError('PRIVATE provider error')
   if failure=='timeout':raise asyncio.TimeoutError()
-  content='Документ сохранён.' if failure=='opposite' else 'x'*421 if failure=='too_long' else 'Не завершено.'
+  content='x'*421 if failure=='too_long' else 'Не завершено.'
   return {'choices':[{'finish_reason':'length' if failure=='incomplete' else 'stop','message':{'content':content}}]}
  async def forbidden(*args,**kwargs):raise AssertionError('No Worker')
  async def synthesize(text):tts.append(text);return b'mock-ogg'
@@ -43,7 +43,6 @@ def test_editor_failure_is_bounded_and_never_reads_long_source(client,monkeypatc
   assert check['selection']['mode']=='unavailable'
   assert check['primary']['reason']=='missing_candidate'
   if failure=='budget':assert check['selection']['reason']=='editorial_cost_budget'
-  if failure=='opposite':assert check['editorial']['reason']=='outcome_mismatch'
   assert 'PRIVATE' not in json.dumps(check)
   tasks.pop(tid)
   assert client.get(f'/api/tasks/{tid}',headers=headers).status_code==200

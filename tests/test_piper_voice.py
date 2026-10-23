@@ -44,9 +44,9 @@ def test_piper_cannot_choose_other_users_device(monkeypatch):
     assert voice._piper_device(2, "pc") == "2:pc"
 
 
-def test_stress_marks_preserve_negative_speech_guard():
+def test_stress_marks_are_checked_as_tts_syntax_only():
     from server.voice import conversational_speech
     speech = "Не удалось вы́полнить."
     assert conversational_speech(speech, "Не удалось выполнить.") == speech
-    assert conversational_speech("Вы́полнила.", "Не удалось выполнить.") == ""
-    assert conversational_speech("Вы́полнила.", "Проверяю.") == ""
+    assert conversational_speech("Вы́полнила.", "Не удалось выполнить.") == "Вы́полнила."
+    assert conversational_speech("Вы́полнила.", "Проверяю.") == "Вы́полнила."

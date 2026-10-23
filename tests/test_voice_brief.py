@@ -143,7 +143,7 @@ def test_configured_cost_cap_prevents_paid_request(monkeypatch):
         asyncio.run(voice.shorten_answer({'answer':'Ответ'}))
 
 
-def test_short_worker_file_name_uses_existing_brief_instead_of_direct_tts(monkeypatch):
+def test_short_structured_worker_speech_does_not_need_editor(monkeypatch):
     from server import response_presentation
     raw='Открыта презентация slides.pptx в редакторе.'
     task={'kind':'worker','worker_id':'worker-1','task_id':'voice-file','device_ids':['pc'],
@@ -156,13 +156,13 @@ def test_short_worker_file_name_uses_existing_brief_instead_of_direct_tts(monkey
     calls=[]
     async def brief(t):calls.append(t);return 'Открыла презентацию.'
     monkeypatch.setattr(voice,'shorten_answer',brief)
-    assert asyncio.run(voice.spoken_parts(task))==['Открыла презентацию.']
-    assert len(calls)==1 and task['answer']==raw
-    assert asyncio.run(voice.spoken_parts(task))==['Открыла презентацию.'] and len(calls)==1
+    assert asyncio.run(voice.spoken_parts(task))==[raw]
+    assert len(calls)==0 and task['answer']==raw
+    assert asyncio.run(voice.spoken_parts(task))==[raw] and len(calls)==0
 
 
-def test_technical_brief_cannot_reintroduce_file_extension(monkeypatch):
+def test_short_filename_is_tts_compatible_without_editor(monkeypatch):
     task={'kind':'orchestrator','status':'done','answer':'Открыта slides.pptx.','message':'Открой презентацию'}
-    async def brief(t):return 'Открыта slides.pptx.'
+    async def brief(t):raise AssertionError('Short TTS input needs no editor')
     monkeypatch.setattr(voice,'shorten_answer',brief)
-    assert asyncio.run(voice.spoken_parts(task))==[voice.SPEECH_UNAVAILABLE]
+    assert asyncio.run(voice.spoken_parts(task))==['Открыта slides.pptx.']

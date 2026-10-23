@@ -262,17 +262,25 @@ def test_unknown_history_keeps_referent_without_promoting_it_to_evidence(owner):
 
 
 
-def test_long_ready_clarification_keeps_question_and_options_in_voice_without_editor(owner,monkeypatch):
+@pytest.mark.parametrize('repeats',[1,20])
+def test_ready_clarification_keeps_question_and_options_with_bounded_speech(owner,monkeypatch,repeats):
     from server import voice
     task=completed(owner);task.pop('task_receipt')
-    question='Какой диапазон zoom нужен для настройки? '+('Уточни нужную границу. '*20)
+    question='Какой диапазон zoom нужен для настройки? '+('Уточни нужную границу. '*repeats)
     task.update(answer=question,commands=[{'tool_name':'answer.ask_clarification','status':'terminal',
         'result':{'question':question,'reason':'range ambiguous','options':['0.20–0.70','0.20–0.83']}}])
-    async def forbidden(*args):raise AssertionError('A ready question needs no editorial LLM call')
-    monkeypatch.setattr(voice,'shorten_answer',forbidden)
+    calls=[]
+    async def brief(editor_task):
+        assert repeats==20, 'Short ready question needs no editorial call'
+        assert '0.20–0.70' in editor_task['answer'] and '0.20–0.83' in editor_task['answer']
+        calls.append(editor_task)
+        return 'Какой диапазон zoom нужен: 0.20–0.70 или 0.20–0.83?'
+    monkeypatch.setattr(voice,'shorten_answer',brief)
     spoken=' '.join(asyncio.run(voice.spoken_parts(task)))
     assert 'Какой диапазон zoom' in spoken and '0.20–0.70' in spoken and '0.20–0.83' in spoken
-    assert 'пересказать' not in spoken
+    assert len(spoken)<=420 and len(calls)==(1 if repeats==20 else 0)
+    assert task['answer']==question
+
 
 
 

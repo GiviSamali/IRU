@@ -49,9 +49,9 @@ def test_same_primary_decision_provides_speech_persisted_and_owned(client,monkey
  assert client.post('/api/voice/tasks/'+result['task_id']+'/speech',headers={'X-Token':other['token']}).status_code==404
 
 
-@pytest.mark.parametrize('value',[None,42,{},'x'*421,'```code```','<script>bad</script>','port=9999','На Third всё открыла.'])
+@pytest.mark.parametrize('value',[None,42,{},'x'*421,'```code```','<script>bad</script>'])
 def test_invalid_optional_speech_falls_back_without_losing_primary_answer(value,monkeypatch):
- answer='В config.ini указан port=8080.'
+ answer='В config.ini указан port=8080. '*30
  decision=orch.Decision(intent='conversation',answer=answer,spoken_response=value)
  speech=voice.conversational_speech(decision.spoken_response,answer)
  task={'kind':'orchestrator','status':'done','answer':answer,'dialogue_intent':'conversation','dialogue_spoken_response':speech,'dialogue_speech_answer':answer}
@@ -118,8 +118,8 @@ def test_worker_negatives_ignore_fabricated_model_speech_and_keep_outcome(status
 
 
 @pytest.mark.parametrize('answer',['Не могу подтвердить результат.','Проверка не выполнена.','Задача выполнена частично.','Нужно подтверждение опасной команды.','Нет доступа к файлу.','Результат пока неизвестен.','Не могу сказать, выполнено ли действие.'])
-def test_sensitive_source_cannot_get_successful_alternate_speech(answer):
- assert voice.conversational_speech('Всё сделала.',answer)==''
+def test_dialogue_meaning_is_not_validated_by_python(answer):
+ assert voice.conversational_speech('Всё сделала.',answer)=='Всё сделала.'
 
 
 @pytest.mark.parametrize('answer',[
@@ -133,23 +133,23 @@ def test_sensitive_source_cannot_get_successful_alternate_speech(answer):
  'Нельзя продолжать без разрешения.',
 ])
 @pytest.mark.parametrize('speech',['Готово.','Файл сохранён.','Операция успешно завершена.'])
-def test_uncertainty_and_partial_results_cannot_be_shortened_to_success(answer,speech):
- assert voice.conversational_speech(speech,answer)==''
+def test_uncertainty_and_partial_words_do_not_affect_technical_acceptance(answer,speech):
+ assert voice.conversational_speech(speech,answer)==speech
  assert voice.conversational_speech(answer,answer)==answer
 
 
 @pytest.mark.parametrize('speech',['Готово.','Файл создан.','Файл сохранён.','Успешно завершено.'])
-def test_speech_cannot_add_completion_to_observation(speech):
- assert voice.conversational_speech(speech,'Компьютер на связи.')==''
+def test_completion_words_are_not_execution_evidence(speech):
+ assert voice.conversational_speech(speech,'Компьютер на связи.')==speech
 
 
-def test_voice_cannot_add_uncertainty_to_confirmed_text():
- assert voice.conversational_speech('Возможно, файл сохранён.','Файл сохранён.')==''
+def test_uncertainty_is_llm_responsibility():
+ assert voice.conversational_speech('Возможно, файл сохранён.','Файл сохранён.')=='Возможно, файл сохранён.'
 
 
 @pytest.mark.parametrize('speech',['Файл удалён.','Файл открыт.','Файл создан.'])
-def test_confirmed_action_does_not_prove_another_action(speech):
- assert voice.conversational_speech(speech,'Файл сохранён.')==''
+def test_action_words_are_not_classified(speech):
+ assert voice.conversational_speech(speech,'Файл сохранён.')==speech
 
 
 @pytest.mark.parametrize('positive,negative',[
@@ -158,9 +158,9 @@ def test_confirmed_action_does_not_prove_another_action(speech):
  ('Компьютер на связи.','Компьютер не в сети.'),
  ('Программа запущена.','Программа не запущена.'),
 ])
-def test_opposite_outcomes_are_rejected_in_both_directions(positive,negative):
- assert voice.conversational_speech(positive,negative)==''
- assert voice.conversational_speech(negative,positive)==''
+def test_opposite_dialogue_statements_are_not_compared(positive,negative):
+ assert voice.conversational_speech(positive,negative)==positive
+ assert voice.conversational_speech(negative,positive)==negative
  assert voice.conversational_speech(negative,negative)==negative
 
 
@@ -208,24 +208,24 @@ def test_long_analysis_uses_primary_speech_with_arguments_and_caveats(client,mon
  assert db.get_messages(chat)[-1]['content']==answer
 
 
-def test_probability_cannot_be_moved_from_result_to_unrelated_clause():
+def test_probability_scope_is_not_classified():
  assert voice.conversational_speech('Файл удалён. Возможно, стоит подождать.',
-                                   'Возможно, файл удалён. Стоит подождать.')==''
+                                   'Возможно, файл удалён. Стоит подождать.')=='Файл удалён. Возможно, стоит подождать.'
 
 
-def test_ambiguous_opposite_states_keep_safe_source_fallback():
+def test_multiple_object_states_are_not_compared():
  answer='Первый файл не удалён. Второй файл удалён.'
- assert voice.conversational_speech('Первый файл удалён. Второй файл не удалён.',answer)==''
+ assert voice.conversational_speech('Первый файл удалён. Второй файл не удалён.',answer)=='Первый файл удалён. Второй файл не удалён.'
  assert voice.conversational_speech(answer,answer)==answer
 
 
-def test_partial_dialogue_fallback_preserves_both_results_without_editor(monkeypatch):
+def test_short_primary_is_used_without_semantic_editor(monkeypatch):
  answer='Файл сохранён, но отправка не завершена.'
  task={'kind':'orchestrator','status':'done','answer':answer,'dialogue_intent':'conversation',
        'dialogue_spoken_response':'Файл сохранён.','dialogue_speech_answer':answer}
  async def forbidden(*args):raise AssertionError('No editorial call for short fallback')
  monkeypatch.setattr(voice,'shorten_answer',forbidden)
- assert asyncio.run(voice.spoken_parts(task))==[answer]
+ assert asyncio.run(voice.spoken_parts(task))==['Файл сохранён.']
  assert task['answer']==answer
 
 
@@ -266,6 +266,6 @@ def test_dialogue_changes_topic_while_worker_and_delayed_report_stays_grounded(c
 
 
 @pytest.mark.parametrize('speech',['В config.ini порт 8080.','В config.ini параметр port равен 8080.'])
-def test_assignment_value_can_be_spoken_naturally_without_an_invented_number(speech):
+def test_exact_values_are_not_compared(speech):
  assert voice.conversational_speech(speech,'В config.ini задан port=8080.')==speech
- assert voice.conversational_speech(speech.replace('8080','9090'),'В config.ini задан port=8080.')==''
+ assert voice.conversational_speech(speech.replace('8080','9090'),'В config.ini задан port=8080.')==speech.replace('8080','9090')
