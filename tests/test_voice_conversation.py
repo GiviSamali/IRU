@@ -152,6 +152,73 @@ def test_confirmed_action_does_not_prove_another_action(speech):
  assert voice.conversational_speech(speech,'Файл сохранён.')==''
 
 
+@pytest.mark.parametrize('positive,negative',[
+ ('Файл удалён.','Файл не удалён.'),
+ ('Компьютер в сети.','Компьютер не в сети.'),
+ ('Компьютер на связи.','Компьютер не в сети.'),
+ ('Программа запущена.','Программа не запущена.'),
+])
+def test_opposite_outcomes_are_rejected_in_both_directions(positive,negative):
+ assert voice.conversational_speech(positive,negative)==''
+ assert voice.conversational_speech(negative,positive)==''
+ assert voice.conversational_speech(negative,negative)==negative
+
+
+@pytest.mark.parametrize('answer,speech',[
+ ('Проверила состояние: файл не удалён.','Файл не удалён.'),
+ ('По текущему состоянию компьютер не в сети.','Компьютер не в сети.'),
+ ('Сейчас программа не запущена.','Программа не запущена.'),
+ ('Локальный поиск быстрее, но внешний поиск шире.','Локальный поиск быстрее, но внешний шире.'),
+ ('Локальный поиск быстрее. Однако внешний поиск шире.','Локальный поиск быстрее, однако внешний шире.'),
+ ('Возможно, локальный поиск окажется быстрее благодаря индексу.','Возможно, локальный поиск окажется быстрее.'),
+])
+def test_short_summary_preserves_polarity_and_caveats(answer,speech):
+ assert voice.conversational_speech(speech,answer)==speech
+
+
+def test_long_analysis_uses_primary_speech_with_arguments_and_caveats(client,monkeypatch):
+ answer=('Локальный поиск быстрее благодаря индексу и не зависит от внешнего сервиса. '
+         'Однако внешний поиск охватывает больше источников и помогает сравнивать данные. '
+         'Возможно, смешанный подход лучше подойдёт для исследования, но его стоимость зависит от объёма. '
+         'Для небольшого личного архива я бы начала с локального поиска. '
+         'Индекс потребует обновления при изменении документов, поэтому скорость поиска '
+         'сопровождается затратами на обслуживание. Внешний сервис расширяет охват, '
+         'но добавляет зависимость от соединения и от поставщика. '
+         'Смешанный подход сочетает эти свойства: личные материалы остаются локально, '
+         'а дополнительные источники подключаются для исследования. '
+         'Однако окончательный выбор стоит сделать после сравнения качества на типичных запросах.')
+ speech=('Локальный поиск быстрее и независим от внешнего сервиса, однако внешний охватывает больше источников. '
+         'Возможно, смешанный подход лучше для исследования, но стоимость зависит от объёма. '
+         'Для личного архива я бы начала с локального поиска; выбор стоит проверить на типичных запросах.')
+ user=db.create_user('analysis-speaker');chat=db.create_chat(user['id'],'analysis')['id'];calls=[]
+ async def completion(*args,**kwargs):
+  calls.append(kwargs)
+  return {'choices':[{'finish_reason':'stop','message':{'tool_calls':[{'function':{
+   'name':'orchestrator_decision','arguments':json.dumps({'intent':'conversation','answer':answer,'spoken_response':speech})}}]}}]}
+ async def forbidden(*args,**kwargs):raise AssertionError('No Worker or editorial LLM for analytical dialogue')
+ monkeypatch.setattr(orch,'_chat_completion_request',completion)
+ monkeypatch.setattr(orch,'load_llm_config',lambda:{'model':'mock'})
+ monkeypatch.setattr(voice,'shorten_answer',forbidden)
+ cmd=SimpleNamespace(message='Сравни локальный и внешний поиск',request_id='analysis',device_id='',modes={},broadcast=False)
+ result=asyncio.run(orch.run_turn(cmd,user,chat,forbidden));task=tasks[result['task_id']]
+ assert len(answer)>420 and len(speech)<420
+ assert task['answer']==answer and task['dialogue_intent']=='conversation'
+ assert asyncio.run(voice.spoken_parts(task))==[speech]
+ assert len(calls)==1 and task['commands'][0]['tool_name']=='answer.text'
+ assert db.get_messages(chat)[-1]['content']==answer
+
+
+def test_probability_cannot_be_moved_from_result_to_unrelated_clause():
+ assert voice.conversational_speech('Файл удалён. Возможно, стоит подождать.',
+                                   'Возможно, файл удалён. Стоит подождать.')==''
+
+
+def test_ambiguous_opposite_states_keep_safe_source_fallback():
+ answer='Первый файл не удалён. Второй файл удалён.'
+ assert voice.conversational_speech('Первый файл удалён. Второй файл не удалён.',answer)==''
+ assert voice.conversational_speech(answer,answer)==answer
+
+
 def test_partial_dialogue_fallback_preserves_both_results_without_editor(monkeypatch):
  answer='Файл сохранён, но отправка не завершена.'
  task={'kind':'orchestrator','status':'done','answer':answer,'dialogue_intent':'conversation',

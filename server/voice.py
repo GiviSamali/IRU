@@ -68,12 +68,36 @@ def conversational_speech(value, answer: str) -> str:
     try:value.encode("utf-8")
     except UnicodeEncodeError:return ""
     if re.search(r"[\x00-\x1f<>]|```|https?://|[A-Za-z]:[\\/]|(?:^|\s)/[\w.-]+/|(?:^|\s)[-*#>]\s|\*\*",value):return ""
-    # Keep uncertainty, mixed outcomes and permission-sensitive replies in the
-    # source formulation: lexical overlap cannot establish semantic equivalence.
+    # Compare result polarity, not just the presence of an action word. Negative
+    # results must survive shortening; a positive result cannot prove its inverse.
+    uncertainty=r"\b(?:возможно|вероятно)\b"
+    def outcomes(text):
+        facts=set()
+        for key, pattern in (
+            ("delete", r"удал(?:ил|[её]н)\w*"),
+            ("online", r"в\s+сети|на\s+связи"),
+            ("start", r"запущ\w*|запустил\w*"),
+        ):
+            for match in re.finditer(r"\b(?:"+pattern+r")\b",text,re.I):
+                negative=bool(re.search(r"\bне\s+(?:(?:был[аио]?|будет)\s+)?$",text[:match.start()],re.I))
+                clause=re.split(r"[.!?;]|\b(?:но|однако)\b",text[:match.start()],flags=re.I)[-1]
+                facts.add((key,negative,bool(re.search(uncertainty,clause,re.I))))
+        return facts
+    source_facts, spoken_facts=outcomes(answer),outcomes(value)
+    if not spoken_facts<=source_facts or not {fact for fact in source_facts if fact[1]}<=spoken_facts:
+        return ""
+    # Opposite states of multiple objects cannot be resolved from a word set.
+    if any((key,not negative,maybe) in source_facts for key,negative,maybe in source_facts):
+        if value!=" ".join(answer_parts(answer,keep_inline=True)):return ""
+    # Probability is meaningful; conjunctions themselves are not a reason to
+    # reject an analytical summary. Do not turn a possibility into certainty.
+    if bool(re.search(uncertainty,answer,re.I)) != bool(re.search(uncertainty,value,re.I)):
+        return ""
+    # Keep unresolved execution and permission constraints in the source form.
     sensitive = (r"не\s+(?:подтвер\w*|провер\w*|выполн\w*|получ\w*|удалось|"
                  r"сохран\w*|созда\w*|откр\w*|заверш\w*|закон\w*|могу|знаю|увер\w*)|"
                  r"неизвест\w*|частич\w*|отмен\w*|подтверждени\w*|"
-                 r"нет\s+(?:доступ|увер\w*)|\b(?:но|однако|нельзя|возможно|вероятно)\b")
+                 r"нет\s+(?:доступ|увер\w*)|\bнельзя\b|ещ[её]\s+ид[её]т")
     if re.search(sensitive,answer,re.I):
         if value!=" ".join(answer_parts(answer,keep_inline=True)):return ""
     elif re.search(sensitive,value,re.I):
