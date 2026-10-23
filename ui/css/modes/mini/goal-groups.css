@@ -1,5 +1,7 @@
 /* Goal title outside the shared frame; standalone tasks stay outside goals.
    Natural heights are observed by the existing native Adaptive Surface. */
+.iru-mini .app .surface-progress-duplicate,
+.iru-mini .app .surface-progress-only { display:none !important; }
 .iru-mini .app .mini-goal { min-width:0; font-family:"Segoe UI",system-ui,sans-serif; }
 .iru-mini .app .mini-goal + .mini-goal { margin-top:14px; }
 .iru-mini .app .mini-goal-title {

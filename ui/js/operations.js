@@ -62,14 +62,28 @@ window.IRUOperations = (() => {
     selectedStatus=status;
   }
   function syncSurfaceCommand() {
+    const mirror=document.getElementById('operationMirror');
+    for(const block of document.querySelectorAll('#adaptiveConversation .smart-goal')) {
+      const duplicate=surface() && !mirror.hidden && block.dataset.status==='running'
+        && block.dataset.singleOperation==='true' && Boolean(block.dataset.goalId)
+        && Boolean(mirror.querySelector(`.mini-goal[data-goal-id="${CSS.escape(block.dataset.goalId)}"]`));
+      block.classList.toggle('surface-progress-duplicate',duplicate);
+      const message=block.closest('.msg');
+      if(message) {
+        const blocks=[...message.querySelectorAll(':scope > .msg-body > .smart-blocks > .smart-block')];
+        message.classList.toggle('surface-progress-only',blocks.length>0 && blocks.every(item=>item.classList.contains('surface-progress-duplicate')));
+      }
+    }
     const row=document.querySelector('#adaptiveConversation .msg.user');
     if(!row)return;
     const item=scopedItems().find(i=>i.task_id===selected);
     const message=[...state.messages].reverse().find(m=>m.role==='user');
     const normalize=value=>String(value||'').trim().replace(/\s+/g,' ');
     const visible=surface() && item && !document.getElementById('operationMirror').hidden;
-    row.classList.toggle('surface-command-duplicate',Boolean(visible && normalize(message?.content)
-      && normalize(message?.content)===normalize(item.title)));
+    const request=normalize(message?.content);
+    const goalTitle=item?.goal_id && (goalSnapshots.get(item.goal_id)?.goal.original_request || item.goal_title);
+    row.classList.toggle('surface-command-duplicate',Boolean(visible && request
+      && (request===normalize(item.title) || request===normalize(goalTitle))));
   }
   function detailMarkup(i,status) {
     if(!detail)return '<p class="operation-prose">Загружаются сведения задачи…</p>';
@@ -200,6 +214,7 @@ window.IRUOperations = (() => {
     }
     for(const node of current.values())node.remove();
     mirrorHTML=html;mirrorTask=selected;
+    syncSurfaceCommand();
     surfaceDetailSources.clear();for(const [id,text] of nextDetailSources)surfaceDetailSources.set(id,text);
     if(validCommandConfirmation(detail,selected))for(const button of container.querySelectorAll('[data-operation="confirm"], [data-operation="deny"]'))
       presentedCommands.set(button,{nonce:detail.confirm_data.confirmation_id,command:detail.confirm_data.command});

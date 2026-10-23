@@ -189,7 +189,7 @@ const IRUSmartUI = (() => {
     if(goalSummary) {
       const source=text(m.conversationalResponse)||text(m.conversational_response)||text(m.content)||text(m.text);
       const canonical=source===text(goal.message);
-      blocks.push({type:'goal',key:id+'-goal',status:goal.status,
+      blocks.push({type:'goal',key:id+'-goal',goalId:goal.goal_id,status:goal.status,
         done:goal.completed_count,total:goal.total_count,attention:goal.requires_user_action===true,
         details:canonical?content:text(goal.message)});
       // Replace only the server Goal summary; preserve independent answer text.
@@ -268,7 +268,7 @@ const IRUSmartUI = (() => {
       const labels={running:'Выполняется',success:'Готово',partial:'Частично выполнено',failed:'Не выполнено',blocked:'Заблокировано',unknown:'Не подтверждено',cancelled:'Отменено'};
       const icon=block.status==='success'?'✓':block.status==='running'?'':block.status==='partial'?'◐':block.status==='cancelled'?'—':'!';
       const percent=100*block.done/block.total;
-      return `<section class="smart-block smart-goal" data-block-type="goal" data-status="${esc(block.status)}" data-smart-key="${esc(block.key)}" aria-label="Итог цели">
+      return `<section class="smart-block smart-goal" data-block-type="goal" data-status="${esc(block.status)}" data-single-operation="${block.total===1}" data-goal-id="${esc(block.goalId||'')}" data-smart-key="${esc(block.key)}" aria-label="Итог цели">
         <div class="smart-goal-heading"><span class="smart-goal-icon" aria-hidden="true">${icon}</span><strong>${esc(labels[block.status])}</strong><span class="smart-goal-count" aria-label="Подтверждено ${block.done} из ${block.total} результатов">${block.done} / ${block.total}</span></div>
         <div class="smart-goal-meter" role="meter" aria-label="Подтверждённые результаты" aria-valuemin="0" aria-valuemax="${block.total}" aria-valuenow="${block.done}"><span style="width:${percent}%"></span></div>
         ${block.attention?'<span class="smart-goal-attention">Нужен ответ</span>':''}
