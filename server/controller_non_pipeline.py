@@ -357,10 +357,21 @@ async def process_non_pipeline_command(
             "task_receipt":{"task_status":"partial" if had_results else "failed","goal_completed":False,
                 "final_verification_status":"unverified","answer_source":"server_fallback","terminal_reason":code}}
 
+    def checkpoint_journal():
+        try:
+            from .worker_scheduler import persist_worker_journal
+        except ImportError:
+            from worker_scheduler import persist_worker_journal
+        persist_worker_journal(poll_task_id, commands_log)
+
     def append_entry(entry: dict) -> dict:
-        return append_tool_step(commands_log, entry)
+        entry = append_tool_step(commands_log, entry)
+        checkpoint_journal()
+        return entry
 
     def append_tool_message(tool_call_id: str, entry: dict):
+        # Capture annotations added after append_entry before the next LLM wait.
+        checkpoint_journal()
         messages.append({
             "role": "tool",
             "tool_call_id": tool_call_id,

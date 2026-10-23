@@ -364,6 +364,159 @@ def used_commands(owner):
     return db.check_daily_command_limit(owner['id'])['used']
 
 
+@pytest.mark.parametrize('failed_tool', [False, True])
+@pytest.mark.parametrize('hard_restart', [False, True])
+def test_received_journal_survives_interrupted_controller_and_restart(owners, failed_tool, hard_restart):
+    from server.controller_non_pipeline import process_non_pipeline_command
+    from server.controller_tools import NON_PIPELINE_TOOLS
+
+    a, _ = owners
+
+    async def scenario():
+        waiting_for_next_reply = asyncio.Event()
+        calls = []
+        dispatched = []
+        result = {'returncode': 1 if failed_tool else 0, 'stdout': 'observed', 'stderr': ''}
+
+        async def completion(**kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                return {'choices': [{'finish_reason': 'tool_calls', 'message': {
+                    'content': '', 'tool_calls': [{'id': 'observe', 'function': {
+                        'name': 'execute_cmd', 'arguments': json.dumps({
+                            'command': 'echo observed', 'artifact_paths': []})}}]}}]}
+            waiting_for_next_reply.set()
+            await asyncio.Event().wait()
+
+        async def send(device, action, params):
+            dispatched.append((device, action, dict(params)))
+            return dict(result)
+
+        async def execute(t):
+            # Exercise the real append path; the controller never returns.
+            await process_non_pipeline_command(
+                user_message=t['message'], device_id='pc', device_info={'os': 'Windows'},
+                send_command_fn=send, get_file_link_fn=lambda *args: '', chat_history=[],
+                user_id=None, chat_id=None, modes={}, poll_task_id=t['task_id'],
+                cfg={'model': 'mock-model', 'max_tokens': 512}, system_msg='system',
+                machine_guid=None, mem_user_id=None, non_pipeline_tools=NON_PIPELINE_TOOLS,
+                max_iterations=3, pick_model_fn=lambda *args: 'mock-model',
+                chat_completion_request_fn=completion)
+
+        local = WorkerScheduler(execute)
+        restarted = WorkerScheduler(execute)
+        try:
+            job = await local.submit(task(a, 'Observe once'), request_key='journal-interruption')
+            await asyncio.wait_for(waiting_for_next_reply.wait(), timeout=3)
+            saved = owned_job(job['task_id'], a['id'])
+            before_shutdown = json.loads(saved['payload'])['commands']
+            assert saved['state'] == 'running' and saved['report'] is None
+            assert len(before_shutdown) == 1
+            assert len(dispatched) == 1 and dispatched[0][1] == 'execute_cmd'
+            assert before_shutdown[0]['result']['stdout'] == 'observed'
+            assert before_shutdown[0]['result']['returncode'] == result['returncode']
+            assert before_shutdown[0]['step_id'] == 'step_1'
+            await local.shutdown()
+            if hard_restart:
+                # Restore exactly the pre-shutdown row: recovery cannot rely on
+                # the graceful shutdown's final report or in-memory journal.
+                with db.get_db() as c:
+                    c.execute('UPDATE worker_jobs SET state=?,payload=?,report=NULL WHERE task_id=?',
+                              ('running', saved['payload'], job['task_id']))
+                    c.execute('UPDATE messages SET commands=NULL WHERE id=?', (saved['message_id'],))
+            tasks.clear()
+            await restarted.recover()
+            saved = owned_job(job['task_id'], a['id'])
+            report = json.loads(saved['report'])
+            assert saved['state'] == 'unknown' and report['goal_completed'] is False
+            assert json.loads(saved['payload'])['commands'] == before_shutdown
+            with db.get_db() as c:
+                history = c.execute('SELECT commands FROM messages WHERE id=?', (saved['message_id'],)).fetchone()
+            assert json.loads(history['commands']) == before_shutdown
+            assert len(calls) == 2  # Neither recovery nor checkpoint replays the tool.
+            assert len(dispatched) == 1
+        finally:
+            await local.shutdown()
+            await restarted.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_journal_checkpoint_keeps_completed_devices_without_finalizing(owners):
+    from server.worker_scheduler import persist_worker_journal
+
+    a, _ = owners
+
+    async def scenario():
+        gate = asyncio.Event()
+
+        async def execute(t):
+            await gate.wait()
+
+        local = WorkerScheduler(execute)
+        try:
+            job = await local.submit(task(a), request_key='journal-devices')
+            await wait_until(lambda: 'dispatch_started_at' in json.loads(owned_job(job['task_id'], a['id'])['payload']))
+            first = {'step_id': 'step_1', 'device_id': 'pc', 'status': 'success', 'result': {'stdout': 'first'}}
+            second = {'step_id': 'step_1', 'device_id': 'other', 'status': 'failed', 'result': {'error': 'observed failure'}}
+            job['results'] = {'pc': {'commands': [first]}}
+            for _ in range(2):
+                persist_worker_journal(job['task_id'], [second])
+            saved = owned_job(job['task_id'], a['id'])
+            assert json.loads(saved['payload'])['commands'] == [first, second]
+            assert saved['state'] == 'running' and saved['report'] is None
+        finally:
+            await local.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_journal_checkpoint_failure_preserves_memory_and_stops_worker(owners, monkeypatch):
+    from contextlib import contextmanager
+    import sqlite3
+    from server.worker_scheduler import persist_worker_journal
+
+    a, _ = owners
+    original_get_db = db.get_db
+    fail_next = False
+
+    @contextmanager
+    def transient_failure():
+        nonlocal fail_next
+        if fail_next:
+            fail_next = False
+            raise sqlite3.OperationalError('simulated unavailable storage')
+        with original_get_db() as c:
+            yield c
+
+    monkeypatch.setattr(db, 'get_db', transient_failure)
+
+    async def scenario():
+        reached_next_action = []
+        entry = {'step_id': 'step_1', 'tool_name': 'execute_cmd', 'status': 'success',
+                 'result': {'returncode': 0, 'stdout': 'received', 'stderr': ''}}
+
+        async def execute(t):
+            nonlocal fail_next
+            fail_next = True
+            persist_worker_journal(t['task_id'], [entry])
+            reached_next_action.append(True)
+
+        local = WorkerScheduler(execute)
+        try:
+            job = await local.submit(task(a), request_key='journal-storage-failure')
+            await local.runners[a['id']]
+            saved = owned_job(job['task_id'], a['id'])
+            assert not reached_next_action
+            assert saved['state'] == 'failed'
+            assert json.loads(saved['report'])['goal_completed'] is False
+            assert json.loads(saved['payload'])['commands'] == [entry]
+        finally:
+            await local.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_conversation_status_and_retry_do_not_consume_exhausted_command_quota(owners,monkeypatch):
     a,b=owners
     async def scenario():

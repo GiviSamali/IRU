@@ -321,6 +321,33 @@ def _persistence_failure(task, event, exc):
         trace.append({"task_id":task["task_id"],"event":event,"error_type":type(exc).__name__})
 
 
+def persist_worker_journal(task_id, journal):
+    """Checkpoint received results without finalizing the Worker or its Goal."""
+    task = tasks.get(task_id)
+    if not task or not task.get("worker_id"):
+        return
+    # Broadcast devices run sequentially; retain completed devices as well as
+    # the current controller's journal. Step IDs keep their existing scope.
+    commands = [entry for result in (task.get("results") or {}).values()
+                for entry in result.get("commands") or []] + list(journal)
+    task["commands"] = commands
+    try:
+        with db.get_db() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute("SELECT payload,state FROM worker_jobs WHERE task_id=? AND owner_user_id=? AND chat_id=?",
+                            (task_id, task["user_id"], task["chat_id"])).fetchone()
+            if row is None or row["state"] not in ACTIVE_STATES:
+                raise ValueError("worker_journal_identity_or_state_mismatch")
+            payload = json.loads(row["payload"])
+            payload["commands"] = commands
+            c.execute("UPDATE worker_jobs SET payload=?,updated_at=? WHERE task_id=? AND owner_user_id=?",
+                      (json.dumps(payload, ensure_ascii=False), time.time(), task_id, task["user_id"]))
+    except Exception as exc:
+        task["worker_error_code"] = "worker_journal_persistence_failed"
+        _persistence_failure(task, "worker_journal_persistence_failed", exc)
+        raise RuntimeError("worker_journal_persistence_failed") from exc
+
+
 def _final_snapshot(task, report, previous):
     snapshot=dict(previous)
     # Never serialize transient controller locks/events or transport objects.

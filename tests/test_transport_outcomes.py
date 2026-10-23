@@ -169,7 +169,8 @@ def test_plan_worker_can_observe_after_unknown_without_dispatching_mutations(ini
     async def completion(**kwargs):
         calls.append(kwargs)
         if len(calls) == 1:
-            return msg(call(initial_tool, {'command': 'New-Item report.txt'} if initial_tool == 'execute_cmd'
+            return msg(call(initial_tool, {'command': 'New-Item C:/Temp/report.txt',
+                                           'artifact_paths': ['C:/Temp/report.txt']} if initial_tool == 'execute_cmd'
                             else {'path': 'report.txt', 'content': 'x'}))
         assert 'execute_cmd' not in {tool['function']['name'] for tool in kwargs['tools']}
         if len(calls) == 2:

@@ -6,6 +6,7 @@ import pytest
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.runtime_state import tasks
 from server.controller_tools import NON_PIPELINE_TOOLS
+from server import database as db
 
 
 def _execute_call(call_id: str, command: str) -> dict:
@@ -13,7 +14,7 @@ def _execute_call(call_id: str, command: str) -> dict:
         "id": call_id,
         "function": {
             "name": "execute_cmd",
-            "arguments": json.dumps({"command": command}),
+            "arguments": json.dumps({"command": command, "artifact_paths": []}),
         },
     }
 
@@ -39,7 +40,9 @@ def _answer_call(call_id: str, text: str) -> dict:
 
 
 @pytest.mark.parametrize("goal_member", [False, True])
-def test_worker_dependency_error_is_structured_observation(monkeypatch, goal_member):
+def test_worker_dependency_error_is_structured_observation(tmp_path, monkeypatch, goal_member):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "command-error.sqlite3")
+    db.init_db()
     task_id = "dependency-error-goal" if goal_member else None
     if goal_member:
         monkeypatch.setitem(tasks, task_id, {"task_id": task_id, "goal_id": "goal",

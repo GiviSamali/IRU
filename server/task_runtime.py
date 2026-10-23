@@ -1457,9 +1457,11 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         error_text = str(exc).strip() or type(exc).__name__
         task["status"] = "error"
         task["answer"] = f"Ошибка: {error_text}" if error_text else "Произошла внутренняя ошибка. Попробуйте ещё раз."
-        task["commands"] = []
+        # The controller checkpoints received results before returning. A later
+        # failure must not erase that evidence from the final snapshot/history.
+        task.setdefault("commands", [])
         try:
-            add_message(chat_id, "assistant", task["answer"], [], task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id"))
+            add_message(chat_id, "assistant", task["answer"], task["commands"], task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id"))
         except Exception:
             logger.warning("task error history persistence failed task_id=%s", task_id)
 
