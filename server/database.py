@@ -501,6 +501,7 @@ def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
         "inputRequired":task.get("input_required"),
         "fullSpeechRequested":task.get("full_speech_requested") is True,"dialogueIntent":task.get("dialogue_intent"),"spokenResponse":task.get("dialogue_spoken_response"),
         "spokenResponseAnswer":task.get("dialogue_speech_answer"),
+        **({"speechDiagnostics":task["speech_diagnostics"]} if task.get("speech_diagnostics") else {}),
         "conversationalResponse":task.get("conversational_response"),"executionDetails":task.get("execution_details"),
         "assignmentDeviceIds":task.get("device_ids"),"sourceTaskIds":task.get("source_task_ids"),"diagnosticTrace":task.get("diagnostic_trace"),"workerStartedAt":task.get("worker_started_at"),
         "orchestratorMetrics":{key:value for key,value in metrics.items() if key in {"first_response_ms","elapsed_ms","llm_calls","snapshot_calls"} and type(value) is int},
@@ -519,6 +520,8 @@ def add_message(chat_id: int, role: str, content: str, commands: list | None = N
     now = time.time()
     commands_json = json.dumps(commands, ensure_ascii=False) if commands else None
     metadata = _message_metadata(task_metadata) if role == "assistant" else {}
+    if role == "assistant" and isinstance(task_metadata, dict) and isinstance(task_metadata.get("speechDiagnostics"), dict):
+        metadata["speechDiagnostics"] = task_metadata["speechDiagnostics"]
     metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
     with get_db() as conn:
         if message_id is not None:
@@ -536,7 +539,24 @@ def add_message(chat_id: int, role: str, content: str, commands: list | None = N
         result["commands"] = commands
         result.pop("task_metadata", None)
         result.update(metadata)
+        result.pop("speechDiagnostics", None)
         return result
+
+
+def save_speech_diagnostics(task: dict) -> None:
+    """Update only owner-bound dialogue diagnostics, preserving the saved answer."""
+    if task.get("kind") != "orchestrator" or not task.get("task_id") or not task.get("user_id"):
+        return
+    with get_db() as conn:
+        row = conn.execute("""SELECT m.id,m.task_metadata FROM orchestrator_turns t
+            JOIN messages m ON m.id=t.message_id JOIN chats c ON c.id=m.chat_id
+            WHERE t.task_id=? AND t.owner_user_id=? AND c.user_id=? AND m.role='assistant'""",
+            (task["task_id"],task["user_id"],task["user_id"])).fetchone()
+        if row:
+            metadata=json.loads(row["task_metadata"] or "{}")
+            metadata["speechDiagnostics"]=task.get("speech_diagnostics") or {}
+            conn.execute("UPDATE messages SET task_metadata=? WHERE id=?",
+                         (json.dumps(metadata,ensure_ascii=False),row["id"]))
 
 
 def get_messages(chat_id: int, limit: int = 50, *, include_worker_commands: bool = True, include_result_first_workers: bool = True) -> list[dict]:

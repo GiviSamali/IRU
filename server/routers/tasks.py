@@ -649,6 +649,7 @@ async def api_get_task(task_id: str, request: Request):
         "task_mode": presentation["taskMode"],
         "elapsed_ms": presentation["taskElapsedMs"],
         "diagnostic_trace": task.get("diagnostic_trace", []),
+        "speech_diagnostics": task.get("speech_diagnostics", {}),
         "current_step": task.get("current_step"),
         "results": task.get("results", {}),
         "overall_status": task.get("overall_status"),

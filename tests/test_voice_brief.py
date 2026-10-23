@@ -46,12 +46,13 @@ def test_technical_input_is_not_a_request_for_verbose_speech(user_message):
 
 
 @pytest.mark.parametrize("error", [RuntimeError("private"), asyncio.TimeoutError()])
-def test_summary_failure_never_reads_a_long_answer_or_claims_success(monkeypatch, error):
+def test_summary_failure_never_automatically_reads_long_source(monkeypatch, error):
     async def fail(task): raise error
     monkeypatch.setattr(voice, "shorten_answer", fail)
     task = {"answer": "Подготовка началась. " * 50 + "Выполнение не удалось.", "status": "error"}
     parts = asyncio.run(voice.spoken_parts(task))
-    assert parts == ["Коротко пересказать сейчас не получилось. Полный ответ оставила в чате."]
+    assert parts == [voice.SPEECH_UNAVAILABLE]
+    assert task['answer'].endswith('Выполнение не удалось.')
 
 
 @pytest.mark.parametrize("content,finish", [
@@ -164,4 +165,4 @@ def test_technical_brief_cannot_reintroduce_file_extension(monkeypatch):
     task={'kind':'orchestrator','status':'done','answer':'Открыта slides.pptx.','message':'Открой презентацию'}
     async def brief(t):return 'Открыта slides.pptx.'
     monkeypatch.setattr(voice,'shorten_answer',brief)
-    assert asyncio.run(voice.spoken_parts(task))==['Коротко пересказать сейчас не получилось. Полный ответ оставила в чате.']
+    assert asyncio.run(voice.spoken_parts(task))==[voice.SPEECH_UNAVAILABLE]

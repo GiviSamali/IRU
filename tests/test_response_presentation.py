@@ -152,7 +152,7 @@ def test_tts_uses_same_worker_summary_without_summary_llm(owner,monkeypatch):
     assert asyncio.run(voice.spoken_parts(task))==[expected]
     assert task['answer'].startswith('Все 10 слайдов.')
     dialogue={'kind':'orchestrator','answer':'Подробное техническое объяснение. '*40,'message':'Объясни подробнее','status':'done'}
-    assert asyncio.run(voice.spoken_parts(dialogue))==['Коротко пересказать сейчас не получилось. Полный ответ оставила в чате.']
+    assert asyncio.run(voice.spoken_parts(dialogue))==[voice.SPEECH_UNAVAILABLE]
 
 
 @pytest.mark.parametrize('question,answer',[('Привет','Привет! Я на связи.'),('Как дела?','Всё хорошо, я на связи.'),('Какие устройства подключены?','Сейчас подключён pc.')])
@@ -162,7 +162,7 @@ def test_primary_orchestrator_style_keeps_conversation_and_technical_questions_w
         kwargs["messages"]=args[3] if len(args)>3 else kwargs["messages"]
         completions.append(kwargs)
         prompt=kwargs['messages'][0]['content']
-        assert 'обычные приветствия' in prompt and 'Не перечисляй устройства' in prompt and 'технический вопрос можно объяснить подробно' in prompt
+        assert 'обычные приветствия' in prompt and 'Не перечисляй устройства' in prompt
         return {'choices':[{'finish_reason':'stop','message':{'tool_calls':[{'function':{'name':'orchestrator_decision','arguments':json.dumps({'intent':'conversation','answer':answer})}}]}}]}
     monkeypatch.setattr(orch,'_chat_completion_request',completion)
     monkeypatch.setattr(orch,'load_llm_config',lambda:{'model':'mock-model'})

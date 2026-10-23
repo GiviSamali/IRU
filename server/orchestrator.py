@@ -10,7 +10,7 @@ from datetime import datetime,timezone,timedelta
 from typing import Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, field_validator, model_validator
 
 try:
     from . import database as db
@@ -54,6 +54,14 @@ class Decision(BaseModel):
     intent: Literal["conversation","delegate","task_status","cancel","amend","clarify"]
     answer: str = Field(default="", max_length=MAX_ANSWER_CHARS)
     spoken_response: str = Field(default="", max_length=420)
+    _spoken_candidate: object = PrivateAttr(default=None)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def retain_speech_candidate(cls, value, handler):
+        result = handler(value)
+        if isinstance(value, dict):result._spoken_candidate = value.get("spoken_response")
+        return result
 
     @model_validator(mode="before")
     @classmethod
@@ -71,7 +79,10 @@ class Decision(BaseModel):
     @classmethod
     def optional_speech(cls, value):
         # A malformed optional projection must not lose a valid answer/routing decision.
-        return value.strip() if isinstance(value,str) and len(value.strip())<=420 else ""
+        if not isinstance(value,str) or len(value.strip())>420:return ""
+        try:value.encode("utf-8")
+        except UnicodeEncodeError:return ""
+        return value.strip()
 
     @model_validator(mode="before")
     @classmethod
@@ -103,7 +114,7 @@ class Decision(BaseModel):
 
 
 TOOL = {"type":"function", "function":{"name":"orchestrator_decision", "description":"One bounded dialogue or routing decision; never executes a device action.", "parameters":Decision.model_json_schema()}}
-SYSTEM = """Ты ИРУ: единственный пользовательский Оркестратор. Веди краткий естественный разговор.
+SYSTEM = """Ты ИРУ: единственный пользовательский Оркестратор. Думай глубоко, отвечай кратко, раскрывай подробности по необходимости.
 Сохраняй требования человека буквально по смыслу: «быстро» включает скорость, а не только уместность.
 После отклонённого предложения не повторяй тот же сценарий другими словами. Учитывай, что именно
 не подошло, и предложи один конкретный существенно другой вариант; если причина неоднозначна,
@@ -146,8 +157,11 @@ spoken_response для delegate необязателен: используй е�
 Для task_status/cancel голосовой итог сформирует сервер по реальному результату.
 Подача: обычные приветствия, вопросы и обсуждения — естественный разговор, без отчёта о конфигурации.
 Не перечисляй устройства, текущие задачи или ограничения, когда они не нужны для ответа.
-Не заканчивай каждую реплику предложением дать команду и не уточняй понятный смысл. Краткость зависит от ситуации:
-технический вопрос можно объяснить подробно; не ограничивай содержательный ответ шаблоном приветствия.
+Для conversation/clarify простой вопрос обычно требует 1–2 предложений; обсуждение — позиции и главных аргументов в 2–4 предложениях.
+Без необходимости не разворачивай списки, планы и альтернативы, не заканчивай каждый ответ предложением продолжить разбор.
+Просьбы объяснить подробно, провести аудит, сравнить варианты, обосновать решение или развить мысль требуют нужной глубины.
+«Почему?», «А подробнее?», «Про второй пункт», «Докажи», «А слабые места?» развивают предыдущую тему без повторения вопроса.
+Сохраняй существенные предупреждения, неопределённость, результат и необходимые уточнения; краткость не отменяет самокритику и аргументированные возражения.
 Сведения об устройствах уместны по запросу: подтверждённое подключение опиши как «компьютер на связи».
 Не пересказывай служебные статусы. Непроверенное исполнение упоминай лишь когда оно влияет на ответ;
 вопрос о подключении сам по себе не требует такого предупреждения или предложения нового поручения.
@@ -570,7 +584,13 @@ async def run_turn(cmd, user, chat_id, delegate):
                     from .voice import conversational_speech
                 except ImportError:
                     from voice import conversational_speech
-                speech=conversational_speech(choice.spoken_response, answer)
+                candidate=choice._spoken_candidate
+                diagnostic={"candidate":candidate}
+                speech=conversational_speech(candidate, answer, informational=True, diagnostic=diagnostic)
+                if diagnostic.get("reason")=="invalid_encoding":
+                    diagnostic["candidate"]=None
+                    diagnostic["candidate_json"]=json.dumps(candidate,ensure_ascii=True)
+                task["speech_diagnostics"]={"primary":diagnostic}
                 if speech:
                     task.update(dialogue_spoken_response=speech,dialogue_speech_answer=answer)
         except Exception as exc:
@@ -627,6 +647,7 @@ def restore_dialogue(task_id, owner):
         "commands":json.loads(row["commands"] or "[]"),"tasks":[],"kind":"orchestrator",
         "full_speech_requested":metadata.get("fullSpeechRequested") is True,"dialogue_intent":metadata.get("dialogueIntent"),"dialogue_spoken_response":metadata.get("spokenResponse"),
         "dialogue_speech_answer":metadata.get("spokenResponseAnswer"),
+        "speech_diagnostics":metadata.get("speechDiagnostics") or {},
         "history_metadata":metadata,"execution_details":metadata.get("executionDetails") or "",
         "worker_report":metadata.get("workerReport"),"task_receipt":metadata.get("taskReceipt"),
         "current_step":metadata.get("taskTitle"),"plan_suggestion":metadata.get("planSuggestion"),"plan_original_request":metadata.get("planOriginalRequest"),
