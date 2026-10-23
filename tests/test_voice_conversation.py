@@ -102,7 +102,7 @@ def test_action_speech_is_structured_and_chat_preserves_audited_text(monkeypatch
  raw=task['answer'];report=build_worker_report(task)
  async def forbidden(*args):raise AssertionError('Action does not need another model')
  monkeypatch.setattr(voice,'shorten_answer',forbidden)
- assert asyncio.run(voice.spoken_parts(task))==['Открыла страницу.']
+ assert asyncio.run(voice.spoken_parts(task))==['Открыл страницу.']
  assert worker_presentation(task)['conversational_response']==raw
  assert task['answer']==raw and build_worker_report(task)==report
 

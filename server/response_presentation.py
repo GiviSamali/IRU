@@ -240,7 +240,7 @@ def worker_presentation(task, report=None):
         else:
             actions=[_tool(c) for c in operations if positive_evidence(c) and _tool(c) not in OBSERVATION_TOOLS]
             human={"app.launch":"Приложение открыто.","app.open_url":"Страница открыта.",
-                   "web.focus":"Вкладка выбрана.","remember_fact":"Запомнила."}.get(actions[-1] if actions else "")
+                   "web.focus":"Вкладка выбрана.","remember_fact":"Запомнил."}.get(actions[-1] if actions else "")
             if not human:
                 human=answer if has_grounded_terminal_answer(answer,commands) else report["summary"]
     elif status=="partial":
@@ -310,13 +310,13 @@ def worker_spoken_response(task, report=None):
         return human
     artifacts=_artifacts(task,report)
     if any(isinstance(c,dict) and _tool(c)=="transfer_file" and positive_evidence(c) and c["result"].get("sha256_verified") is True for c in task.get("commands") or []):
-        return "Передала файл. "+(_desktop_location(task,artifacts) or "Копия проверена.")
+        return "Передал файл. "+(_desktop_location(task,artifacts) or "Копия проверена.")
     if artifacts:
         # Location is only the owner-scoped, verified location. Do not infer a write from existence.
         return human
     actions=[_tool(c) for c in task.get("commands") or [] if isinstance(c,dict) and positive_evidence(c) and _tool(c) not in OBSERVATION_TOOLS]
-    if len(actions)==1 and actions[0]=="app.launch":return "Открыла приложение."
-    if len(actions)==1 and actions[0]=="app.open_url":return "Открыла страницу."
-    if len(actions)==1 and actions[0]=="web.focus":return "Переключила вкладку."
-    if len(actions)==1 and actions[0]=="remember_fact":return "Запомнила."
+    if len(actions)==1 and actions[0]=="app.launch":return "Открыл приложение."
+    if len(actions)==1 and actions[0]=="app.open_url":return "Открыл страницу."
+    if len(actions)==1 and actions[0]=="web.focus":return "Переключил вкладку."
+    if len(actions)==1 and actions[0]=="remember_fact":return "Запомнил."
     return human
