@@ -192,11 +192,11 @@ class BrowserTaskPolicy:
         if operation.startswith("answer.") or operation.startswith("answer_"):
             return True, ""
         if operation not in WEB_OPERATIONS:
-            if self.browser_only or self.page_data_seen:
-                return False, "untrusted_page_data_cannot_authorize_privileged_tool"
+            # Native actions retain their own runtime ownership/effect/confirmation guards.
+            # Observing browser data neither grants authority nor revokes the human task.
             return True, ""
         # Tool selection is semantic; it establishes the current capability scope.
-        self.is_browser_task = self.contextual_task = self.browser_only = True
+        self.is_browser_task = self.contextual_task = True
         target = device_id or (params or {}).get("device_id") or self.current_device
         if not target or (self.authorized_device_ids is not None and str(target).casefold() not in {str(identifier).casefold() for identifier in self.authorized_device_ids}):
             return False, "browser_device_not_authorized_by_user"

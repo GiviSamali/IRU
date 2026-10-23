@@ -929,7 +929,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             from browser_bridge import execute_browser_action
         browser_policy = BrowserTaskPolicy(message, _short_did(device_id), chat_history,
                                            authorized_device_ids=set(all_devices_info))
-        browser_page_seen = False
         async def send_owned_command(target, action, params, **kwargs):
             try:
                 return await send_command_to_agent(target, action, params, **kwargs)
@@ -970,7 +969,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 task.pop("confirm_data", None)
 
         async def send_fn(target_device_id, action, params):
-            nonlocal browser_page_seen
             try:
                 from .controller_shared import pinned_material_pending
             except ImportError:
@@ -1006,12 +1004,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     result = await execute_browser_action(user_id, task_id, _short_did(target_device_id), action, params,
                         external_action=True, dangerous_effect_confirmed=True,
                         cancelled=lambda: is_task_cancel_requested(task_id))
-                if action in {"web.read", "web.elements", "web.tabs"} and result.get("status") == "success":
-                    browser_page_seen = True
                 return result
-            if browser_page_seen or browser_policy.browser_only:
-                # Page/planner text is data. This bounded web capability cannot mint local authority.
-                return {"status": "failed", "error": "untrusted_web_content_cannot_authorize_device_action"}
             if action == "transfer_file":
                 try:
                     from .file_transfer import transfer_file
@@ -1088,8 +1081,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     return {"status":"blocked", "error":"confirmation_expired"}
                 if task.get("worker_id") and target_dk not in task["device_ids"]:
                     return {"status":"failed", "error":"device_outside_worker_assignment"}
-                if browser_page_seen or browser_policy.browser_only:
-                    return {"status":"failed", "error":"untrusted_web_content_cannot_authorize_device_action"}
                 try:
                     result = await send_owned_command(target_dk, action, params, user_id=user_id,
                                                          confirmation=pending)
@@ -1106,8 +1097,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         def file_link(dev_id: str, path: str) -> str:
             if task.get("_action_outcome_unknown"):
                 raise RuntimeError("mutation_blocked_after_unknown")
-            if browser_page_seen:
-                raise RuntimeError("untrusted_web_content_cannot_authorize_file_download")
             target_key = dev_id if ":" in dev_id else _dk(user_id, dev_id)
             if task.get("worker_id") and target_key not in task["device_ids"]:raise RuntimeError("device_outside_worker_assignment")
             if is_broadcast and target_key != device_id:
@@ -1123,8 +1112,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         async def device_tool_impl(tool_name: str, args: dict) -> dict:
             if task.get("_action_outcome_unknown") and not is_recovery_observation(tool_name, args):
                 return {"status":"blocked", "error":"mutation_blocked_after_unknown"}
-            if browser_page_seen:
-                return {"status": "failed", "error": "untrusted_web_content_cannot_authorize_device_action"}
             if is_task_cancel_requested(task_id):
                 return {"status": "cancelled", "error": "Task cancellation requested before starting next device tool"}
             requested = str(args.get("device_id") or device_id)

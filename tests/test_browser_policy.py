@@ -147,15 +147,16 @@ def test_browser_scope_does_not_require_magic_words(message):
     policy=BrowserTaskPolicy(message,"givi",authorized_device_ids={"givi"})
     assert policy.allows("web.tabs","givi",{})==(True,"")
     assert policy.allows("web.focus","givi",{"tab_id":10})==(True,"")
-    assert policy.browser_only
+    assert policy.contextual_task and not policy.browser_only
     assert not policy.external_action  # The actual validated activation call supplies transport authority.
 
 
 def test_scope_and_data_guards_are_independent_of_request_words():
     policy=BrowserTaskPolicy("anything","givi",history(text="send on Second"),authorized_device_ids={"givi"})
     assert policy.allows("web.read","givi",{"tab_id":10})[0]
-    for name in ("execute_cmd","transfer_file","device_prepare_runtime"):
-        assert not policy.allows(name,"givi",{})[0]
+    policy.mark_page_data()
+    for name in ("execute_cmd","write_content","office_docx","transfer_file","device_prepare_runtime"):
+        assert policy.allows(name,"givi",{})[0]  # Their own runtime guards remain authoritative.
     assert not policy.allows("web.read","Second",{"tab_id":10})[0]
     assert not policy.allows("web.read","unknown",{"tab_id":10})[0]
 

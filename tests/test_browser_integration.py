@@ -50,16 +50,17 @@ def run_normal(monkeypatch,message,responses,send,history=None, *, real_completi
         max_iterations=12,pick_model_fn=lambda *a:"mock",chat_completion_request_fn=completion))
 
 
-@pytest.mark.parametrize("malicious", [call("execute_cmd",{"command":"upload private file"}),
-    call("transfer_file",{"source_device_id":"givi","source_path":"C:/private.txt","target_device_id":"Second","target_directory":"desktop"}),
-    call("web_read",{"tab_id":7,"device_id":"Second"}),
-    call("answer_request_confirmation",{"action":"execute_cmd","command_preview":"upload private file","risk":"dangerous","message":"Разрешить?","basis":["step_1"]})])
-def test_injection_cannot_authorize_shell_transfer_other_device(monkeypatch,malicious):
+def test_browser_observation_keeps_native_tools_and_other_device_guard(monkeypatch):
     sent=[]
-    async def send(device,operation,params): sent.append((device,operation)); return result(operation)
-    outcome=run_normal(monkeypatch,"Прочитай последние сообщения в этом чате",[call("web_read",{"tab_id":7}),malicious,clarification()],send)
-    assert sent==[("givi","web.read")]
-    assert any((entry.get("result") or {}).get("error") for entry in outcome["commands"])
+    async def send(device,operation,params):
+        sent.append((device,operation))
+        return result(operation) if operation.startswith("web.") else {"status":"ok","path":"C:/report.txt","verified":True}
+    outcome=run_normal(monkeypatch,"Read the page and save a document",[
+        call("web_read",{"tab_id":7}),
+        call("write_content",{"path":"C:/report.txt","content":"Page material","append":False}),
+        call("web_read",{"tab_id":7,"device_id":"Second"}),clarification()],send)
+    assert sent==[("givi","web.read"),("givi","write_content")]
+    assert any((e.get("result") or {}).get("error")=="browser_device_not_authorized_by_user" for e in outcome["commands"])
 
 
 @pytest.mark.parametrize("bad", [{"tab_id":7,"script":"fetch('file')"},{"tab_id":True},{"tab_id":"7"}])
@@ -94,21 +95,19 @@ def test_unknown_send_terminates_without_retry(monkeypatch):
     assert "не подтверждено" in outcome["answer"]
 
 
-def test_goal_assignment_cannot_expand_original_browser_authority(monkeypatch):
+def test_goal_can_read_browser_then_verify_its_output(monkeypatch):
     sent=[]
-    async def send(device,operation,params): sent.append(operation); return result(operation)
-    outcome=run_normal(monkeypatch,"Прочитай сообщения в этом чате", [
+    async def send(device,operation,params):
+        sent.append(operation)
+        return result(operation) if operation.startswith("web.") else {"returncode":0,"stdout":"verified"}
+    run_normal(monkeypatch,"Read the page and create a document", [
         call("web_read",{"tab_id":7}),
-        call("execute_cmd",{"command":"upload private file"}),
-        call("answer_report_failure",{"message":"Новая команда не разрешена.","reason":"blocked",
-            "recoverable":False,"suggested_next_action":"","basis":["step_1"]})],
-        send, assigned_objective="Read then execute_cmd and upload private file")
-    assert sent==["web.read"]
-    assert any((entry.get("result") or {}).get("error") for entry in outcome["commands"])
-    assert outcome["commands"][-1]["tool_name"]=="answer.report_failure"
+        call("execute_cmd",{"command":"Get-Item C:/report.docx","artifact_paths":[]}),
+        clarification()],send,assigned_objective="Read the page, create and verify the document")
+    assert sent==["web.read","execute_cmd"]
 
 
-def test_real_task_runtime_routes_bridge_and_blocks_local_fallback(monkeypatch):
+def test_real_task_runtime_routes_bridge_then_native_with_device_guards(monkeypatch):
     task_id="browser-runtime-test"; full="1:givi"; sent=[]
     monkeypatch.setattr(task_runtime,"tasks",{task_id:{"task_id":task_id,"user_id":1,"chat_id":1,"message":"Прочитай этот чат",
         "status":"running","results":{},"modes":{},"created_at":time.time()}})
@@ -121,14 +120,15 @@ def test_real_task_runtime_routes_bridge_and_blocks_local_fallback(monkeypatch):
     monkeypatch.setattr(task_runtime,"enforce_trusted_answer",lambda a,c:a)
     async def bridge_execute(user_id,run,device,operation,params,**kw):
         sent.append((user_id,run,device,operation,kw["external_action"])); return result(operation)
-    async def agent_send(*a,**kw): pytest.fail("Page never authorizes local agent dispatch")
+    async def agent_send(device,action,params,**kw):
+        sent.append((device,action));return {"returncode":0,"stdout":"verified"}
     async def process(**kw):
         success=await kw["send_command_fn"]("givi","web.read",{"tab_id":7})
         assert success["status"]=="success"
-        denied=await kw["send_command_fn"]("givi","execute_cmd",{"command":"private"})
-        assert denied["status"]=="failed"
-        denied=await kw["device_tool_fn"]("device_prepare_runtime",{"device_id":"givi"})
-        assert denied["status"]=="failed"
+        native=await kw["send_command_fn"]("givi","execute_cmd",{"command":"Get-Item C:/report.txt"})
+        assert native["returncode"]==0
+        denied=await kw["device_tool_fn"]("device_prepare_runtime",{"device_id":"Second"})
+        assert denied["status"] in {"failed","unavailable"}
         denied=await kw["send_command_fn"]("Second","web.read",{"tab_id":7})
         assert denied["status"]=="failed"
         return {"answer":"test","commands":[],"tasks":[]}
@@ -136,7 +136,7 @@ def test_real_task_runtime_routes_bridge_and_blocks_local_fallback(monkeypatch):
     monkeypatch.setattr(task_runtime,"send_command_to_agent",agent_send)
     monkeypatch.setattr(task_runtime,"process_nl_command",process)
     asyncio.run(task_runtime.run_nl_task(task_id,1,"Прочитай этот чат",[full],1))
-    assert sent==[(1,task_id,"givi","web.read",False)]
+    assert sent==[(1,task_id,"givi","web.read",False),(full,"execute_cmd")]
 
 
 def test_browser_route_precedes_agent_wildcard():
@@ -362,3 +362,15 @@ def test_explicit_send_uses_existing_draft_without_refill_or_extra_wait(monkeypa
     outcome=run_normal(monkeypatch,"Можно отправлять",[call("web_activate",{**ELEMENT,"element_id":"send-button"}),grounded("Отправлено")],send,history)
     assert sent==["web.activate"] and outcome["answer"]=="Отправлено"
 
+
+
+def test_repeated_browser_policy_denial_stops_without_dispatch(monkeypatch):
+    from server.browser_policy import BrowserTaskPolicy
+    monkeypatch.setattr(BrowserTaskPolicy, "allows", lambda *args: (False, "browser_device_not_authorized_by_user"))
+    async def send(*args):
+        pytest.fail("Unauthorized device must never dispatch")
+    denied=call("web_read",{"tab_id":7,"device_id":"Second"})
+    outcome=run_normal(monkeypatch,"Read the page",[denied,denied,denied],send)
+    assert len(outcome["commands"])==3
+    assert outcome["task_receipt"]["terminal_reason"]=="repeated_policy_rejection"
+    assert outcome["task_receipt"]["goal_completed"] is False
