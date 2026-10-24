@@ -1,10 +1,11 @@
 const STATUS={current:'Описание сверено с реализацией',review_required:'Нужна повторная проверка',missing_description:'Человеческое описание пока отсутствует',orphaned_record:'Запись сохранена, сущность отсутствует',status_unavailable:'Актуальность не рассчитана для этого снимка'};
 export async function loadKnowledge(model){
- const paths=['knowledge/nodes.json','knowledge/relationships.json','data/knowledge-status.json'];
+ const paths=['knowledge/nodes.json','knowledge/relationships.json','data/knowledge-status.json','data/critical-review.json'];
  const values=await Promise.all(paths.map(async path=>{try{const response=await fetch(path);if(!response.ok)return null;return await response.json();}catch{return null;}}));
- const [nodes,relations,status]=values;const issues=[];
+ const [nodes,relations,status,review]=values;const issues=[];
  function records(catalog,key){if(!catalog)return {};if(catalog.schema_version!==1||!catalog[key]||typeof catalog[key]!=='object'||Array.isArray(catalog[key])){issues.push('Некорректная схема '+key);return {};}const result=Object.create(null);for(const [id,record] of Object.entries(catalog[key])){if(!record||record.id!==id){issues.push('Привязка знаний не совпадает с ID: '+id);continue;}result[id]=record;}return result;}
- return {nodes:records(nodes,'nodes'),relationships:records(relations,'relationships'),status:status?.architecture_git_sha===model.g.git_sha?status:null,issues};
+ const criticalReview=review?.schema_version===1&&review.architecture_git_sha===model.g.git_sha&&Array.isArray(review.records)?review:null;if(review&&!criticalReview)issues.push('Разбор важных узлов не совпадает с версией снимка');
+ return {criticalReview,nodes:records(nodes,'nodes'),relationships:records(relations,'relationships'),status:status?.architecture_git_sha===model.g.git_sha?status:null,issues};
 }
 export function nodeArticle(model,knowledge,id){
  const n=model.nodes.get(id);if(!n)throw Error('Unknown node');const record=knowledge.nodes[id];const status=record?(record.reviewed===false?'review_required':knowledge.status?.nodes?.[id]?.status||'status_unavailable'):'missing_description';

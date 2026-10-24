@@ -1,0 +1,171 @@
+import time
+import uuid
+import hashlib
+from collections import defaultdict
+
+
+# Connected agent runtime
+devices: dict = {}
+
+
+# Download tokens
+download_tokens: dict = {}
+TOKEN_TTL = 1800  # 30 minutes
+
+
+# In-memory task queue
+tasks: dict = {}
+TASK_TTL = 3600  # 1 hour
+
+RUNNING_TASK_STATUSES = {"running", "pending", "confirm", "cancelling", "queued"}
+TERMINAL_TASK_STATUSES = {"done", "error", "completed", "completed_with_recovery", "failed", "cancelled", "blocked", "partial", "unknown", "interrupted", "success"}
+
+
+# Declined plan suggestions keyed by chat_id + request hash
+declined_plan_requests: dict[str, float] = {}
+
+
+# Declined suggested facts keyed by user_id + chat_id + fact hash
+declined_suggested_facts: dict[str, float] = {}
+
+
+# Rate limit buckets
+rate_counters: dict[str, list[float]] = defaultdict(list)
+ip_rate_counters: dict[str, list[float]] = defaultdict(list)
+
+
+def _dk(user_id: int, device_id: str) -> str:
+    """Composite key for device isolation per user."""
+    return f"{user_id}:{device_id}"
+
+
+def _short_did(composite_key: str) -> str:
+    """Extract short device_id from composite key."""
+    return composite_key.split(":", 1)[1] if ":" in composite_key else composite_key
+
+
+def get_user_devices(user_id: int) -> dict:
+    """Return only devices that belong to the given user."""
+    return {did: dev for did, dev in devices.items() if dev.get("user_id") == user_id}
+
+
+def create_download_token(device_id: str, file_path: str, user_id: int = 0) -> str:
+    """Create a temporary token for file downloads."""
+    token = str(uuid.uuid4())
+    download_tokens[token] = {
+        "device_id": _short_did(device_id),
+        "file_path": file_path,
+        "user_id": user_id,
+        "created": time.time(),
+    }
+    cleanup_expired_download_tokens()
+    return token
+
+
+def cleanup_expired_download_tokens() -> None:
+    """Drop expired download tokens."""
+    now = time.time()
+    expired = [t for t, v in download_tokens.items() if now - v["created"] > TOKEN_TTL]
+    for token in expired:
+        download_tokens.pop(token, None)
+
+
+def create_download_link(device_id: str, file_path: str, user_id: int = 0) -> str:
+    token = create_download_token(device_id, file_path, user_id=user_id)
+    return f"/api/download/{token}"
+
+
+def _request_hash(message: str) -> str:
+    normalized = (message or "").strip().lower()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def build_suggested_fact_hash(user_id: int, chat_id: int, text: str, category: str | None = None) -> str:
+    normalized_text = " ".join((text or "").strip().lower().split())
+    normalized_category = (category or "").strip().lower()
+    payload = f"{user_id}:{chat_id}:{normalized_category}:{normalized_text}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def mark_plan_declined(chat_id: int, message: str) -> None:
+    if not chat_id or not message:
+        return
+    declined_plan_requests[f"{chat_id}:{_request_hash(message)}"] = time.time()
+
+
+def is_plan_declined(chat_id: int, message: str) -> bool:
+    if not chat_id or not message:
+        return False
+    cleanup_old_tasks()
+    return f"{chat_id}:{_request_hash(message)}" in declined_plan_requests
+
+
+def mark_suggested_fact_declined(user_id: int, chat_id: int, text: str, category: str | None = None) -> str | None:
+    if not user_id or not chat_id or not text:
+        return None
+    fact_hash = build_suggested_fact_hash(user_id, chat_id, text, category)
+    declined_suggested_facts[fact_hash] = time.time()
+    return fact_hash
+
+
+def is_suggested_fact_declined(user_id: int, chat_id: int, text: str, category: str | None = None) -> bool:
+    if not user_id or not chat_id or not text:
+        return False
+    cleanup_old_tasks()
+    fact_hash = build_suggested_fact_hash(user_id, chat_id, text, category)
+    return fact_hash in declined_suggested_facts
+
+
+def cleanup_old_tasks() -> None:
+    """Remove tasks older than TASK_TTL."""
+    now = time.time()
+    expired = [tid for tid, task in tasks.items() if now - task["created_at"] > TASK_TTL and not (task.get("worker_id") and task.get("status") not in TERMINAL_TASK_STATUSES)]
+    for task_id in expired:
+        plan_decision = tasks[task_id].get("_pipeline_plan_future")
+        if plan_decision is not None and not plan_decision.done():
+            plan_decision.set_result({"action": "cancel"})
+        tasks.pop(task_id, None)
+    expired_declines = [key for key, created_at in declined_plan_requests.items() if now - created_at > TASK_TTL]
+    for key in expired_declines:
+        declined_plan_requests.pop(key, None)
+    expired_fact_declines = [key for key, created_at in declined_suggested_facts.items() if now - created_at > TASK_TTL]
+    for key in expired_fact_declines:
+        declined_suggested_facts.pop(key, None)
+
+
+def request_task_cancel(task_id: str, user_id: int | None = None) -> dict | None:
+    task = tasks.get(task_id)
+    if not task:
+        return None
+    if user_id is not None and task.get("user_id") != user_id:
+        return None
+    task["cancel_requested"] = True
+    task["cancel_requested_at"] = time.time()
+    if task.get("status") not in TERMINAL_TASK_STATUSES:
+        task["status"] = "cancelling"
+        task["current_step"] = "Остановка запрошена. Текущий инструмент может завершиться с задержкой."
+    return task
+
+
+def is_task_cancel_requested(task_id: str | None) -> bool:
+    if not task_id:
+        return False
+    task = tasks.get(task_id)
+    return bool(task and (task.get("cancel_requested") or task.get("status") in {"cancelling", "cancelled"}))
+
+
+def mark_task_cancelled(task_id: str | None, *, answer: str | None = None, commands: list | None = None) -> dict | None:
+    if not task_id:
+        return None
+    task = tasks.get(task_id)
+    if not task:
+        return None
+    task["status"] = "cancelled"
+    task["cancel_requested"] = True
+    task["cancelled_at"] = time.time()
+    task["current_step"] = "Остановлено пользователем."
+    if answer is not None:
+        task["answer"] = answer
+    if commands is not None:
+        task["commands"] = commands
+    return task

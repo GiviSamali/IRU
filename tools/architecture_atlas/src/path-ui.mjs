@@ -19,5 +19,5 @@ export function mountPath(model,{host,onSwap,onNewTarget,onReset,onExit,onTypes,
    const details=node(card,'details');node(details,'summary','Доказательства перехода');for(const r of step.evidence){if(r.path){const a=node(details,'a',`${r.path}:${r.line||1}${r.symbol?' · '+r.symbol:''}`);a.href=`https://github.com/GiviSamali/IRU/blob/${r.git_sha||model.g.git_sha}/${r.path.split('/').map(encodeURIComponent).join('/')}#L${r.line||1}`;a.target='_blank';a.rel='noopener noreferrer';}node(details,'p',r.explanation||'Источник');}
   }
  }
- return {types,render};
+ return {types,render,setTypes(values){const allowed=new Set([...model.g.edges.map(e=>e.type)]);if(!Array.isArray(values)||values.some(type=>!allowed.has(type)))throw Error('Неизвестные типы маршрута');for(const input of filter.querySelectorAll('input'))input.checked=values.includes(input.value);}};
 }

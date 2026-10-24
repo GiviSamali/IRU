@@ -1,3 +1,4 @@
+import {renderCriticalRecord} from './critical-review.mjs';
 import {nodeArticle,relationshipArticle} from './knowledge.mjs';
 const node=(parent,tag,value)=>{const e=document.createElement(tag);if(value!==undefined)e.textContent=value;parent.append(e);return e;};
 const section=(parent,title,open=false)=>{const e=node(parent,'details');e.open=open;node(e,'summary',title);return e;};
@@ -7,6 +8,7 @@ export function renderNodeKnowledge({model,knowledge,host,id,onNode,onEdge,onExp
  const status=node(host,'small',article.statusLabel);status.className='knowledge-status '+article.status;
  if(record){node(host,'h4','Зачем существует');node(host,'p',article.why||'Назначение ещё требует человеческого описания.');node(section(host,'Как работает',n.type==='component'),'p',article.how||'Последовательность работы ещё не описана.');}
  else{node(host,'p','Функциональное назначение ещё не описано человеком. Ниже доступна техническая справка по существующему исходнику.');}
+ const critical=knowledge.criticalReview?.records.find(r=>r.id===id);if(critical){const box=section(host,'Важный узел: связность и риски',true);renderCriticalRecord(box,critical);}
  const interactions=section(host,'Основные взаимодействия');for(const edgeId of record?.relationship_ids||[]){if(!model.edges.has(edgeId)){node(interactions,'p','Привязка отсутствует: '+edgeId);continue;}const a=relationshipArticle(model,knowledge,edgeId);const button=node(interactions,'button',`${a.source} → ${a.target}`);button.onclick=()=>onEdge(edgeId);node(interactions,'p',a.purpose);}
  if(!record?.relationship_ids?.length)node(interactions,'p','Ручное объяснение основных взаимодействий отсутствует; статические связи доступны в доказательствах.');
  for(const [label,ids] of [['От чего зависит (модель связей)',record?.dependencies||[]],['Что может затронуть изменение',record?.dependents||[]]]){const box=section(host,label);for(const related of ids){if(!model.nodes.has(related)){node(box,'p','Отсутствует привязка: '+related);continue;}const b=node(box,'button',model.nodes.get(related).name);b.onclick=()=>onNode(related);}node(box,'small','Это статические/семантические зависимости. Runtime-критичность и резервирование ими не установлены.');}

@@ -3,6 +3,8 @@ import ast
 import json
 import subprocess
 import argparse
+import re
+import posixpath
 from pathlib import Path
 from semantics import apply_semantics
 
@@ -17,19 +19,24 @@ def group(path):
     if any(s in p for s in ('orchestrator','llm','controller','prompt')): return 1
     return 0
 
-def extract(root):
-    sha = subprocess.check_output(['git','rev-parse','HEAD'], cwd=root,text=True).strip()
-    files = subprocess.check_output(['git','ls-files'],cwd=root,text=True).splitlines()
+def extract(root,source_ref="HEAD",source_root=None,manifest=None):
+    source_root=source_root or root
+    git=["git","-c","safe.directory="+root.resolve().as_posix()]
+    if manifest:
+        meta=json.loads(manifest.read_text(encoding='utf-8'));sha=meta['sha'];files=meta['files']
+    else:
+        sha = subprocess.check_output(git+['rev-parse',source_ref], cwd=root,text=True).strip()
+        files = subprocess.check_output(git+['ls-tree','-r','--name-only',source_ref],cwd=root,text=True).splitlines()
     nodes = [dict(id='iru',name='IRU',type='system',parent_id=None,level=0,description='Единый архитектурный атлас',confidence='logical',references=[])]
     edges=[]; edge_ids=set(); errors=[]; trees={}; symbols={}; modules={}; symbol_ids=set()
     for i,name in enumerate(GROUPS): nodes.append(dict(id=f'group:{i}',name=name,type='subsystem',parent_id='iru',level=1,description='Логическая классификация, не отдельный сервис',confidence='logical',references=[]))
     def ref(p,n,why): return dict(path=p,symbol=getattr(n,'name',None),line=getattr(n,'lineno',1),end_line=getattr(n,'end_lineno',1),git_sha=sha,explanation=why)
     for p in files:
-        if not p.startswith(('server/','agent/','ui/','browser_extension/')) or not p.endswith(('.py','.js','.html')): continue
+        if not p.startswith(('server/','agent/','ui/','browser_extension/')) or not p.endswith(('.py','.js','.mjs','.html','.css')): continue
         mid='module:'+p; modules[p]=mid
         nodes.append(dict(id=mid,name=p,type='module',parent_id=f'group:{group(p)}',level=2,description='Фактический исходный модуль',confidence='confirmed',references=[dict(path=p,line=1,git_sha=sha,explanation='git ls-files')]))
         if not p.endswith('.py'): continue
-        try: trees[p]=ast.parse((root/p).read_text(encoding='utf-8-sig'))
+        try: trees[p]=ast.parse((source_root/p).read_text(encoding='utf-8-sig'))
         except (SyntaxError,UnicodeError) as exc: errors.append(dict(path=p,error=type(exc).__name__));continue
         def walk(body,parent,qual=''):
             for n in body:
@@ -100,11 +107,24 @@ def extract(root):
                         if caller and target:edge(caller,target,'static_call',ref(p,c,'AST named call; dynamic dispatch not resolved'))
                     calls(n.body,q+'.')
         calls(tree.body)
+    # Explicit frontend module/style/script links only; no guessed JS call graph.
+    for path,mid in list(modules.items()):
+        if not path.endswith(('.js','.mjs','.html','.css')):continue
+        text=(source_root/path).read_text(encoding='utf-8-sig')
+        pattern=r"(?:from\s*|import\s*|@import\s*(?:url\()?)[\"']([^\"']+)[\"']|(?:src|href)=[\"']([^\"']+)[\"']"
+        for match in re.finditer(pattern,text):
+            spec=next(v for v in match.groups() if v).split('?')[0].split('#')[0]
+            if not spec or ':' in spec or spec.startswith('//'):continue
+            target=posixpath.normpath(posixpath.join(posixpath.dirname(path),spec))
+            if target not in modules and spec.startswith('/'):target='ui/'+spec.lstrip('/')
+            if target in modules:
+                line=text.count('\n',0,match.start())+1
+                edge(mid,modules[target],'import',dict(path=path,line=line,end_line=line,git_sha=sha,explanation='Explicit frontend import/link/script; not runtime execution'))
     return apply_semantics(dict(schema_version=1,git_sha=sha,nodes=nodes,edges=edges,coverage=dict(source_files=len(modules),python_files=len(trees),entities=len(symbols),nodes=len(nodes),static_edges=len(edges),runtime_edges=0,parse_errors=errors)))
 
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--repo',type=Path,default=Path(__file__).resolve().parents[3]);ap.add_argument('--output',type=Path,default=Path(__file__).resolve().parents[1]/'data/architecture.json');ap.add_argument('--knowledge-dir',type=Path,default=Path(__file__).resolve().parents[1]/'knowledge');args=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--ref',default='HEAD');ap.add_argument('--manifest',type=Path);ap.add_argument('--source-root',type=Path);ap.add_argument('--repo',type=Path,default=Path(__file__).resolve().parents[3]);ap.add_argument('--output',type=Path,default=Path(__file__).resolve().parents[1]/'data/architecture.json');ap.add_argument('--knowledge-dir',type=Path,default=Path(__file__).resolve().parents[1]/'knowledge');args=ap.parse_args()
     if args.output.resolve().is_relative_to(args.knowledge_dir.resolve()):ap.error('Architecture output cannot overwrite human knowledge')
-    model=extract(args.repo);args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps(model,ensure_ascii=False),encoding='utf-8');print(json.dumps(model['coverage'],ensure_ascii=False))
+    model=extract(args.repo,args.ref,args.source_root,args.manifest);args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps(model,ensure_ascii=False),encoding='utf-8');print(json.dumps(model['coverage'],ensure_ascii=False))
     from knowledge import build
-    status=build(args.repo,args.output,args.knowledge_dir,args.output.with_name('knowledge-status.json'));print('Knowledge:',json.dumps(status['summary'],ensure_ascii=False));print('Knowledge binding issues:',len(status['issues']))
+    status=build(args.source_root or args.repo,args.output,args.knowledge_dir,args.output.with_name('knowledge-status.json'));print('Knowledge:',json.dumps(status['summary'],ensure_ascii=False));print('Knowledge binding issues:',len(status['issues']))

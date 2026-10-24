@@ -143,3 +143,58 @@ UNRESOLVED = [
  {'area':'JavaScript internals','reason':'Модули просмотрены; автоматический AST JS функций отсутствует.'},
  {'area':'Dynamic dispatch / event graph','reason':'Callback executor, ACTIONS и event dispatch не равны статически доказанным конкретным runtime-вызовам.'}
 ]
+
+# Snapshot 2026-10-23: pipeline removed; Goal DAG and native tools added.
+CATALOG=[c for c in CATALOG if c['id']!='component:plan']
+for c in CATALOG:
+ for m in c['mechanisms']:
+  m['bindings']=[b for b in m['bindings'] if b['path']!='server/controller_pipeline.py']
+ c['mechanisms']=[m for m in c['mechanisms'] if m['bindings']]
+
+def extend(key,*mechanisms):
+ next(c for c in CATALOG if c['id']=='component:'+key)['mechanisms'].extend(mechanisms)
+
+extend('scheduler',
+ mechanism('goal-admission','Goal admission / revisions','Транзакционно принимает задачи общей цели, проверяет ревизию и зависимости, связывает заменяющие результаты.',
+ ['assignments','goal_id','goal_revision','owner/chat'],['worker_goals','worker_goal_tasks','worker_dependencies'],['DAG проверяется до записи; цель и исходные результаты принадлежат владельцу и чату.'],
+ binding('server/worker_scheduler.py','validate_task_graph','WorkerScheduler.submit_goal','WorkerScheduler.amend_pending')),
+ mechanism('pinned-results','Pinned result dependencies','Закрепляет результат с SHA256 и передаёт проверенные зависимости следующему заданию.',
+ ['task report','dependency tasks'],['worker_results','pinned_results'],['Доступ ограничен owner/chat/device; результат не заменяется произвольным текстом.'],
+ binding('server/worker_scheduler.py','_freeze_result','pinned_results','_final_snapshot')))
+CATALOG.append(component('goals','Goals / Task DAG',2,'Общая цель состоит из зависимых задач и ревизий; итог выводится из всех требуемых результатов.',
+ mechanism('goal-outcome','Goal outcome / superseded tasks','Строит итог цели по актуальным участникам, исключает заменённые задания и проверяет закреплённый результат.',
+ ['goal_id','owner','chat_id'],['goal status','tasks','goal_completed'],['Один успешный Task не означает успех всей цели.'],binding('server/worker_scheduler.py','goal_view','WorkerScheduler.cancel_group')),
+ mechanism('goal-presentation','Goal result presentation','Формирует представление цели, файлов, прогресса и заменённых результатов для интерфейса.',
+ ['goal view'],['goal presentation'],['Отображение не создаёт доказательств успеха.'],binding('server/goal_presentation.py','goal_presentation'),binding('ui/js/mini-operations.js'))))
+CATALOG.append(component('office','Native Office tools',3,'Локальные операции DOCX/XLSX/PPTX через нативные библиотеки, без управления Office UI.',
+ mechanism('office-contract','Office tool schemas','Объявляет схемы и проверяет аргументы Office tools.', ['tool arguments'],['validated operation'],['Неизвестные параметры и неподдерживаемые операции отклоняются.'],binding('server/office_tool_schemas.py','office_schemas','office_metadata','validate_office_args')),
+ mechanism('office-operations','DOCX / XLSX / PPTX operations','Читает, создаёт и изменяет документы с проверками структуры, отпечатка и сохранности содержимого.',
+ ['path','action','data','changes','expected_sha256'],['document result','artifact receipt'],['Изменение пакета и итоговый артефакт проверяются отдельно от принятия tool call.'],binding('agent/core/office_tools.py','office','docx_operation','xlsx_operation','pptx_operation','safe_edit_package','verify_preservation'))))
+CATALOG.append(component('artifacts','Verified artifacts / write transport',6,'Связывает запись файла, проверенный артефакт и доставку файла с исходным заданием/устройством.',
+ mechanism('chunked-writes','Bounded write transport','Разбивает одну логическую запись на последовательные части с digest и финализацией.', ['content','path'],['write session','final write result'],['Частичная передача не равна завершённой записи.'],binding('server/write_transport.py','write_in_chunks'),binding('agent/core/actions.py','_write_content','write_content')),
+ mechanism('artifact-verification','Artifact verification','Проверяет фактический файл и возвращает metadata, привязанные к исходному заданию.', ['path','source task'],['verified artifact'],['Запуск и stdout не заменяют проверку файла.'],binding('agent/core/actions.py','_verify_artifact')),
+ mechanism('file-transfer','File transfer authorization','Передаёт файлы через временный транспорт с owner/device проверками и управлением статусом передачи.', ['owner','run_id','transfer args'],['transfer result'],['Доступ к transfer ограничен токеном/назначением/состоянием; это не публичная файловая раздача.'],binding('server/file_transfer.py','transfer_file','authorize','require_device','download'))))
+extend('authorization',
+ mechanism('execution-scope','Execution scope / window input','Разделяет general/window scope, запрашивает ввод пользователя для неоднозначного окна и продолжает именно ожидающее задание.',
+ ['execution_scope','effects','window options'],['validated scope','pending window input'],['Оконный scope не расширяет полномочия general.'],binding('server/worker_scheduler.py','validated_execution_scope','WorkerScheduler.answer_window_input'),binding('server/window_policy.py','window_input_required','window_input_choice'),binding('server/task_runtime.py','continue_window_input')),
+ mechanism('memory-authorization','Current-turn memory authorization','Представляет явное разрешение на сохранение фактов из текущей реплики в контракте маршрутизатора.', ['current human turn'],['MemoryAuthorization'],['История не выдаёт новое разрешение на запись памяти.'],binding('server/orchestrator.py','MemoryAuthorization','Decision')))
+extend('webui',mechanism('ui-modes','Desktop / mini / mobile surfaces','Разделяет оформление режимов и отображает Goal, файлы и ожидающие подтверждения.',
+ ['task/goal presentation','pending confirmation'],['mode-specific UI'],['UI отображает серверное состояние, не выполняет shell-команды из summary.'],binding('ui/js/operations.js'),binding('ui/js/mini-operations.js'),binding('ui/css/modes/shared/workspace.03.css'),binding('ui/css/modes/mobile/product-v2.02.css')))
+for c in CATALOG:
+ if c['id']=='component:orchestrator':
+  c['responsibility']=c['description']='Маршрутизирует текущую реплику через Decision и assignments; контекст отделён от текущего ввода, повторяющиеся инструкции удаляются.'
+ if c['id']=='component:multidevice':
+  c['responsibility']=c['description']='Выполнение на разрешённых устройствах через Task runtime; старый pipeline fanout удалён.'
+
+extend('context',mechanism('memory-intent-guard','Memory intent guard','Проверяет разрешённость фактов памяти до выполнения соответствующего инструмента.', ['tool arguments','current authorization'],['guard decision'],['Сохранение памяти требует разрешения текущей реплики.'],binding('server/memory_intent_guard.py')))
+extend('worker',mechanism('controller-budget','Controller recovery / budget','Ограничивает бюджет итераций и поддерживает восстановление наблюдений без признания неизвестного успехом.', ['run context','tool results'],['budget state','recovery observations'],['Повторная попытка не является доказательством достижения цели.'],binding('server/controller_budget.py'),binding('server/controller_trust.py')))
+for c in CATALOG:
+ for m in c['mechanisms']:
+  if m['id']=='mechanism:turn-handoff':m['outputs']=['Decision response','Goal/Task admission','task status or cancellation']
+  if m['id']=='mechanism:device-fanout':m['description']=m['responsibility']='Последовательное выполнение задания на разрешённых устройствах через task runtime, без удалённого pipeline executor.'
+# Explicit file membership of the frontend mode layers; not a JS call-graph claim.
+extend('webui',mechanism('frontend-styles','Frontend mode styles','CSS-слои desktop/mini/mobile разделяют оформление общих поверхностей.', ['mode stylesheets'],['visual presentation'],['Только оформление; нет влияния на статус исполнения.'],
+ binding('ui/css/base.css'),binding('ui/css/mobile.css'),binding('ui/css/workspace.css'),binding('ui/css/product-v2.css'),binding('ui/css/surfaces.css')))
+
+extend('office',mechanism('office-preservation','Office content preservation','Сравнивает содержимое документа до и после форматирования; повторно открывает сохранённый пакет.', ['original package','reopened package'],['preservation result'],['Флаг сохранности требует сравнения содержимого, а не только успешного save.'],binding('agent/core/office_content.py'),binding('agent/core/office_tools.py','verify_preservation')))
+extend('voice',mechanism('voice-provider','Voice provider / Piper','Серверный голосовой слой выбирает provider; Piper получает оформление ударений для spoken_response.', ['voice session','spoken_response'],['speech audio'],['Озвучка не меняет письменный итог и не даёт разрешения на исполнение.'],binding('server/voice.py'),binding('server/orchestrator.py','decide'),binding('agent/core/voice.py')))

@@ -1,0 +1,2297 @@
+{
+  "schema_version": 1,
+  "architecture_git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+  "reviewed_on": "2026-10-23",
+  "scope": "25 важных узлов актуальной архитектуры",
+  "limitations": [
+    "Снимок origin/main 712f730757ae440108fc8bcd3c3b572c57124cbc; незакоммиченные изменения не включены.",
+    "Степень, SCC и точка сочленения — структурные сигналы, а не доказанный runtime SPOF.",
+    "Import/static_call и агрегированные depends_on считаются отдельно; contains/implements не являются потоком выполнения.",
+    "Косвенные callback/registry и JavaScript calls не восстановлены; непривязанные модули явно отмечены.",
+    "Риски условные; нагрузочное тестирование, production и физический Android не проверялись."
+  ],
+  "summary": {
+    "static": {
+      "edge_count": 1597,
+      "connected_nodes": 965,
+      "articulation_count": 186,
+      "bridges_count": 408,
+      "cycles": [
+        [
+          "module:server/api_support.py",
+          "module:server/controller_tools.py",
+          "module:server/tool_contracts.py",
+          "module:server/tool_registry.py"
+        ],
+        [
+          "module:server/answer_auditor.py",
+          "module:server/answer_repair.py",
+          "module:server/controller.py",
+          "module:server/controller_non_pipeline.py",
+          "module:server/controller_onboarding.py",
+          "module:server/orchestrator.py",
+          "module:server/task_runtime.py",
+          "module:server/task_summary.py",
+          "module:server/voice.py",
+          "module:server/worker_context.py",
+          "module:server/worker_scheduler.py"
+        ]
+      ],
+      "top": [
+        "code:server/database.py:get_db",
+        "code:server/controller_non_pipeline.py:process_non_pipeline_command",
+        "code:server/tool_registry.py:canonical_tool_name",
+        "module:server/database.py",
+        "module:server/task_runtime.py",
+        "module:server/controller_non_pipeline.py",
+        "code:server/controller_onboarding.py:process_onboarding_message",
+        "code:server/python_toolchain.py:resolve_python_toolchain",
+        "code:server/task_runtime.py:send_command_to_agent",
+        "module:server/api_support.py",
+        "module:ui/index.html",
+        "code:agent/core/office_tools.py:require",
+        "code:server/task_runtime.py:run_nl_task",
+        "module:server/runtime_state.py",
+        "module:server/tool_registry.py"
+      ]
+    },
+    "semantic": {
+      "edge_count": 576,
+      "connected_nodes": 73,
+      "articulation_count": 0,
+      "bridges_count": 1,
+      "cycles": [
+        [
+          "group:0",
+          "group:1",
+          "group:2",
+          "group:3",
+          "group:5",
+          "group:6"
+        ],
+        [
+          "component:auditor",
+          "component:authorization",
+          "component:context",
+          "component:device",
+          "component:goals",
+          "component:journal",
+          "component:llm",
+          "component:multidevice",
+          "component:orchestrator",
+          "component:presentation",
+          "component:registry",
+          "component:report",
+          "component:scheduler",
+          "component:voice",
+          "component:worker"
+        ],
+        [
+          "mechanism:tool-contracts",
+          "mechanism:tool-result"
+        ],
+        [
+          "mechanism:admission",
+          "mechanism:answer-audit",
+          "mechanism:bounded-context",
+          "mechanism:command-transport",
+          "mechanism:decision",
+          "mechanism:device-fanout",
+          "mechanism:dispatch-recovery",
+          "mechanism:execution-scope",
+          "mechanism:goal-admission",
+          "mechanism:goal-outcome",
+          "mechanism:llm-route",
+          "mechanism:llm-transport",
+          "mechanism:memory-authorization",
+          "mechanism:pinned-results",
+          "mechanism:report-projection",
+          "mechanism:result-presentation",
+          "mechanism:runtime-context",
+          "mechanism:turn-handoff",
+          "mechanism:voice-provider",
+          "mechanism:voice-session",
+          "mechanism:worker-lifecycle",
+          "mechanism:worker-tool-loop"
+        ]
+      ],
+      "top": [
+        "mechanism:execution-scope",
+        "mechanism:report-projection",
+        "mechanism:voice-provider",
+        "mechanism:bounded-context",
+        "mechanism:command-transport",
+        "mechanism:device-fanout",
+        "mechanism:worker-lifecycle",
+        "mechanism:turn-handoff",
+        "component:authorization",
+        "mechanism:decision",
+        "mechanism:memory-authorization",
+        "mechanism:runtime-context",
+        "mechanism:worker-tool-loop",
+        "mechanism:dispatch-recovery",
+        "mechanism:memory-read"
+      ]
+    }
+  },
+  "records": [
+    {
+      "id": "code:server/database.py:get_db",
+      "title": "Хранилище и транзакции",
+      "name": "get_db",
+      "role": "Общий контекст подключения к SQLite: WAL, foreign_keys, commit при нормальном завершении и закрытие соединения.",
+      "importance": "Общая точка доступа к хранилищу истории, Goal/Task и закреплённых результатов; степень пересчитана для нового снимка.",
+      "risk": "При ошибке доступа, блокировке или нарушении транзакции возможны сбои сохранения истории и заданий. Это потенциальная зона отказа, а не подтверждённый единый отказ всего IRU.",
+      "protection": "Контекстное закрытие соединения, foreign_keys и commit при нормальном выходе. Резервирование и восстановление базы по этому графу не доказаны.",
+      "checks": "Проверять запись/чтение заданий, конкурирующие транзакции, откат при исключении и восстановление после перезапуска.",
+      "metrics": {
+        "static": {
+          "incoming": 98,
+          "outgoing": 0,
+          "neighbors": 98,
+          "reverse_reachable": 147,
+          "articulation": true,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        }
+      },
+      "sources": [
+        {
+          "path": "server/database.py",
+          "line": 31,
+          "end_line": 41,
+          "symbol": "get_db",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__database.py.txt",
+          "sha256": "b6c42921f429000aa0d3e35a84cf3a44ad633ead1338eeb56a4e9e0da9f8ce89"
+        }
+      ],
+      "edge_ids": [
+        "static_call:code:server/browser_bridge.py:init_browser_bridge->code:server/database.py:get_db",
+        "static_call:code:server/browser_bridge.py:issue_pairing->code:server/database.py:get_db",
+        "static_call:code:server/browser_bridge.py:authenticate_credential->code:server/database.py:get_db",
+        "static_call:code:server/browser_bridge.py:_reserve_effect->code:server/database.py:get_db",
+        "static_call:code:server/browser_bridge.py:_finish_effect->code:server/database.py:get_db",
+        "static_call:code:server/browser_bridge.py:authenticate_credential_hash->code:server/database.py:get_db",
+        "static_call:code:server/database.py:init_db->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_user_by_token->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_user_by_id->code:server/database.py:get_db",
+        "static_call:code:server/database.py:create_user->code:server/database.py:get_db",
+        "static_call:code:server/database.py:list_users->code:server/database.py:get_db",
+        "static_call:code:server/database.py:delete_user->code:server/database.py:get_db",
+        "static_call:code:server/database.py:store_refresh_token->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_refresh_token->code:server/database.py:get_db",
+        "static_call:code:server/database.py:revoke_refresh_token->code:server/database.py:get_db",
+        "static_call:code:server/database.py:revoke_all_refresh_tokens->code:server/database.py:get_db",
+        "static_call:code:server/database.py:cleanup_expired_refresh_tokens->code:server/database.py:get_db",
+        "static_call:code:server/database.py:create_chat->code:server/database.py:get_db",
+        "static_call:code:server/database.py:list_chats->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_chat->code:server/database.py:get_db",
+        "static_call:code:server/database.py:update_chat_title->code:server/database.py:get_db",
+        "static_call:code:server/database.py:delete_chat->code:server/database.py:get_db",
+        "static_call:code:server/database.py:touch_chat->code:server/database.py:get_db",
+        "static_call:code:server/database.py:add_message->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_messages->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_message_count->code:server/database.py:get_db",
+        "static_call:code:server/database.py:add_training_record->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_training_data->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_training_count->code:server/database.py:get_db",
+        "static_call:code:server/database.py:set_user_consent->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_user_plan->code:server/database.py:get_db",
+        "static_call:code:server/database.py:set_user_plan->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_plan_trial_used->code:server/database.py:get_db",
+        "static_call:code:server/database.py:set_plan_trial_used->code:server/database.py:get_db",
+        "static_call:code:server/database.py:check_daily_command_limit->code:server/database.py:get_db",
+        "static_call:code:server/database.py:increment_daily_commands->code:server/database.py:get_db",
+        "static_call:code:server/database.py:check_device_limit->code:server/database.py:get_db",
+        "static_call:code:server/database.py:accept_terms->code:server/database.py:get_db",
+        "static_call:code:server/database.py:has_accepted_terms->code:server/database.py:get_db",
+        "static_call:code:server/database.py:add_audit_log->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_audit_log->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_audit_log_count->code:server/database.py:get_db",
+        "static_call:code:server/database.py:upsert_device_profile->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_device_profile->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_user_device_profiles->code:server/database.py:get_db",
+        "static_call:code:server/database.py:update_device_activation_summary->code:server/database.py:get_db",
+        "static_call:code:server/database.py:update_device_python_runtime_summary->code:server/database.py:get_db",
+        "static_call:code:server/database.py:delete_device_profile->code:server/database.py:get_db",
+        "static_call:code:server/database.py:create_task->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_task->code:server/database.py:get_db",
+        "static_call:code:server/database.py:update_step->code:server/database.py:get_db",
+        "static_call:code:server/database.py:finish_task->code:server/database.py:get_db",
+        "static_call:code:server/database.py:list_chat_tasks->code:server/database.py:get_db",
+        "static_call:code:server/database.py:add_command_memory->code:server/database.py:get_db",
+        "static_call:code:server/database.py:add_fact->code:server/database.py:get_db",
+        "static_call:code:server/database.py:delete_fact->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_recent_commands->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_pinned_facts->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_memory_stats->code:server/database.py:get_db",
+        "static_call:code:server/database.py:add_user_fact->code:server/database.py:get_db",
+        "static_call:code:server/database.py:delete_user_fact->code:server/database.py:get_db",
+        "static_call:code:server/database.py:delete_memory_fact->code:server/database.py:get_db",
+        "static_call:code:server/database.py:add_llm_usage_event->code:server/database.py:get_db",
+        "static_call:code:server/database.py:_usage_summary_where->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_recent_llm_usage_events->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_recent_llm_usage_events_for_chat->code:server/database.py:get_db",
+        "static_call:code:server/database.py:get_user_facts->code:server/database.py:get_db",
+        "static_call:code:server/file_transfer.py:init_transfers->code:server/database.py:get_db",
+        "static_call:code:server/file_transfer.py:get_transfer->code:server/database.py:get_db",
+        "static_call:code:server/file_transfer.py:update->code:server/database.py:get_db",
+        "static_call:code:server/file_transfer.py:cleanup_transfers->code:server/database.py:get_db",
+        "static_call:code:server/file_transfer.py:authorize->code:server/database.py:get_db",
+        "static_call:code:server/file_transfer.py:upload->code:server/database.py:get_db",
+        "static_call:code:server/file_transfer.py:transfer_file->code:server/database.py:get_db",
+        "static_call:code:server/orchestrator.py:init_turn_storage->code:server/database.py:get_db",
+        "static_call:code:server/orchestrator.py:relevant_facts->code:server/database.py:get_db",
+        "static_call:code:server/orchestrator.py:context_for->code:server/database.py:get_db",
+        "static_call:code:server/orchestrator.py:run_turn->code:server/database.py:get_db",
+        "static_call:code:server/orchestrator.py:recover_turns->code:server/database.py:get_db",
+        "static_call:code:server/orchestrator.py:restore_dialogue->code:server/database.py:get_db",
+        "static_call:code:server/task_runtime.py:run_nl_task->code:server/database.py:get_db",
+        "static_call:code:server/worker_context.py:source_references->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:init_worker_storage->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:owned_job->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:pinned_results->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:goal_view->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:list_jobs->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:restore_task->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:persist_report->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:_finalize_report->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:WorkerScheduler.amend_pending->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:WorkerScheduler.submit_goal->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:WorkerScheduler.submit->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:WorkerScheduler._run->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:WorkerScheduler._run_job->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:WorkerScheduler.answer_window_input->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:WorkerScheduler.cancel_group->code:server/database.py:get_db",
+        "static_call:code:server/worker_scheduler.py:WorkerScheduler.recover->code:server/database.py:get_db"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "code:server/controller_non_pipeline.py:process_non_pipeline_command",
+      "title": "Центр выполнения tools",
+      "name": "process_non_pipeline_command",
+      "role": "Основной controller tool-loop без удалённого pipeline: проверяет вызовы, scope, журнал, завершение, восстановление и итог.",
+      "importance": "Центр исполнения с большим числом прямых исходящих зависимостей; включает новые write/Office и recovery ветви.",
+      "risk": "Неверное завершение цикла или потеря текущего basis может дать несогласованный результат. Наличие вызова само по себе не доказывает исполнение.",
+      "protection": "В исходнике используются validate_tool_call_batch, validate_answer_text_payload и audit_answer_payload; текст инструмента нельзя заменять оптимистичным итогом.",
+      "checks": "Проверять tool → journal → answer → audit → receipt, execution_scope, Office/write результаты, остановку, восстановление наблюдений и отсутствие старого pipeline.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 69,
+          "neighbors": 69,
+          "reverse_reachable": 0,
+          "articulation": true,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        }
+      },
+      "sources": [
+        {
+          "path": "server/controller_non_pipeline.py",
+          "line": 230,
+          "end_line": 1384,
+          "symbol": "process_non_pipeline_command",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__controller_non_pipeline.py.txt",
+          "sha256": "627dabf17017a44a1200e37518a892bf8c61243ad628007941c51bfb0227e91e"
+        }
+      ],
+      "edge_ids": [
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_shared.py:worker_assignment_scope",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/browser_policy.py:BrowserTaskPolicy",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_shared.py:worker_window_scope",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/browser_policy.py:recent_browser_context",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_shared.py:data_only_context",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/window_policy.py:recent_window_context",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_shared.py:build_chat_messages",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_tools.py:recovery_observation_tools",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/memory_intent_guard.py:memory_permissions_from_human_request",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/task_summary.py:get_last_run_summary",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_budget.py:CommandBudget",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/database.py:get_device_profile",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/python_toolchain.py:python_toolchain_from_runtime_summary",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/python_toolchain.py:resolve_python_toolchain",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/runtime_state.py:is_task_cancel_requested",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_shared.py:set_current_step",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:record_lifecycle_event",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:validate_answer_text_payload",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/tool_completion.py:synthesize_device_terminal_report",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:append_answer_step",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_non_pipeline.py:_training_context",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:validate_tool_call_batch",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_shared.py:pinned_material_pending",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:is_terminal_answer_tool",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/tool_registry.py:tool_log_entry",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:is_answer_confirmation_tool",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:is_answer_text_tool",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:ProtocolValidationError",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/tool_list_grounding.py:sanitize_system_list_tools_answer",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/answer_auditor.py:audit_answer_payload",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:make_run_step",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:audited_task_receipt",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/answer_auditor.py:answer_auditor_enabled",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:is_answer_clarification_tool",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:is_answer_failure_tool",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:validate_answer_report_failure_payload",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:validate_answer_confirmation_payload",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_shared.py:ConfirmationRequired",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/browser_policy.py:validate_browser_arguments",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_non_pipeline.py:_allow_followup_after_terminal_sufficient",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/tool_arg_validation.py:validate_and_sanitize_tool_args",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/api_support.py:is_recovery_observation",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_non_pipeline.py:_command_log_entry",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/tool_repeat_guard.py:find_prior_successful_read_only_tool_step",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/tool_repeat_guard.py:duplicate_read_only_tool_message",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/python_toolchain.py:rewrite_python_command",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/python_toolchain.py:rewrite_python_app_launch_command",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_budget.py:budget_guard_entry",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/python_env.py:classify_command_error",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/tool_registry.py:list_tools",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/memory_tools.py:run_memory_tool",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/python_env.py:is_recoverable_command_error",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/database.py:add_command_memory",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:compact_write_content_result",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/controller_non_pipeline.py:_run_web_search",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/memory_intent_guard.py:blocked_memory_write_result",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/python_toolchain.py:validate_toolchain_fact_against_receipt",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/database.py:add_user_fact",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/database.py:delete_memory_fact",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/run_journal.py:confirmed_unknown_answer",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/tool_repeat_guard.py:mark_read_only_tool_step",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/tool_repeat_guard.py:repeated_command_observation",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/browser_policy.py:browser_tabs_report",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/tool_completion.py:synthesize_terminal_answer_payload",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/browser_policy.py:browser_answer_ready",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/browser_policy.py:browser_failure_text",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/window_policy.py:window_input_required",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/answer_repair.py:run_answer_only_repair_turn",
+        "static_call:code:server/controller_non_pipeline.py:process_non_pipeline_command->code:server/browser_policy.py:browser_partial_read"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:orchestrator",
+      "title": "Маршрутизация поручения",
+      "name": "Orchestrator",
+      "role": "Decision содержит assignments для Goal/Task, ревизии, scope и memory_authorizations. run_turn отделяет admission от решения LLM.",
+      "importance": "Контекст в 712f730 исключает ровно текущее сохранённое сообщение по ID; прежние одинаковые реплики не удаляются. Текущий ввод передаётся отдельно.",
+      "risk": "Повреждённый Decision, усечённый ответ или сбой LLM оставляют решение непринятым.",
+      "protection": "Один orchestrator_decision, проверка схемы и finish_reason; повтор инструкций устранён в итоговом commit. Экспериментальная durable compaction отменена ee65621.",
+      "checks": "Проверять отсутствие дублирования текущей реплики, owner/chat/goal_revision, повтор request_key и различие Decision/admission.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 7,
+          "outgoing": 11,
+          "neighbors": 13,
+          "reverse_reachable": 14,
+          "articulation": false,
+          "scc_size": 15
+        }
+      },
+      "sources": [
+        {
+          "path": "server/orchestrator.py",
+          "line": 52,
+          "end_line": 102,
+          "symbol": "Decision",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__orchestrator.py.txt",
+          "sha256": "9ddcb5778ba75ac7e70564347644124c2a2874c0e563a9611a9321d808b3eea1"
+        },
+        {
+          "path": "server/orchestrator.py",
+          "line": 372,
+          "end_line": 400,
+          "symbol": "decide",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__orchestrator.py.txt",
+          "sha256": "9ddcb5778ba75ac7e70564347644124c2a2874c0e563a9611a9321d808b3eea1"
+        },
+        {
+          "path": "server/orchestrator.py",
+          "line": 402,
+          "end_line": 576,
+          "symbol": "run_turn",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__orchestrator.py.txt",
+          "sha256": "9ddcb5778ba75ac7e70564347644124c2a2874c0e563a9611a9321d808b3eea1"
+        },
+        {
+          "path": "server/orchestrator.py",
+          "line": 273,
+          "end_line": 347,
+          "symbol": "context_for",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__orchestrator.py.txt",
+          "sha256": "9ddcb5778ba75ac7e70564347644124c2a2874c0e563a9611a9321d808b3eea1"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:orchestrator->component:llm",
+        "depends_on:component:orchestrator->component:context",
+        "depends_on:component:orchestrator->component:worker",
+        "depends_on:component:orchestrator->component:state",
+        "depends_on:component:orchestrator->component:scheduler",
+        "depends_on:component:orchestrator->component:authorization",
+        "depends_on:component:orchestrator->component:goals",
+        "depends_on:component:orchestrator->component:report",
+        "depends_on:component:orchestrator->component:memory",
+        "depends_on:component:orchestrator->component:presentation",
+        "depends_on:component:orchestrator->component:voice",
+        "depends_on:component:device->component:orchestrator",
+        "depends_on:component:multidevice->component:orchestrator",
+        "depends_on:component:authorization->component:orchestrator",
+        "depends_on:component:worker->component:orchestrator",
+        "depends_on:component:scheduler->component:orchestrator",
+        "depends_on:component:goals->component:orchestrator",
+        "depends_on:component:report->component:orchestrator"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:context",
+      "title": "Граница передачи контекста",
+      "name": "Context / Handoff",
+      "role": "Bounded handoff использует clip_context_text: сохраняет начало объекта и конец предложения в лимите; источники и verified artifacts фильтруются по owner/chat/device.",
+      "importance": "Связывает текущую реплику, историю, pinned results и последующие задачи. Токен-бюджеты/durable compaction не входят в итоговую версию.",
+      "risk": "Чужой или устаревший результат в handoff может исказить решение и нарушить изоляцию владельцев.",
+      "protection": "capture_history ограничен восемью сообщениями; исторические данные не дают полномочий. Полные закреплённые результаты передаются отдельно от краткого presentation.",
+      "checks": "Проверять отсутствие чужих артефактов, явное усечение и совместимость snapshot/report при восстановлении.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 11,
+          "outgoing": 10,
+          "neighbors": 15,
+          "reverse_reachable": 14,
+          "articulation": false,
+          "scc_size": 15
+        }
+      },
+      "sources": [
+        {
+          "path": "server/worker_context.py",
+          "line": 29,
+          "end_line": 43,
+          "symbol": "capture_history",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_context.py.txt",
+          "sha256": "076135b2e97ebadb29ff61a98283df8a3b9485d3516e3dfa1edebcdca7b35430"
+        },
+        {
+          "path": "server/worker_context.py",
+          "line": 45,
+          "end_line": 88,
+          "symbol": "source_references",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_context.py.txt",
+          "sha256": "076135b2e97ebadb29ff61a98283df8a3b9485d3516e3dfa1edebcdca7b35430"
+        },
+        {
+          "path": "server/worker_context.py",
+          "line": 91,
+          "end_line": 155,
+          "symbol": "build_worker_context",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_context.py.txt",
+          "sha256": "076135b2e97ebadb29ff61a98283df8a3b9485d3516e3dfa1edebcdca7b35430"
+        },
+        {
+          "path": "server/controller_shared.py",
+          "line": 400,
+          "end_line": 404,
+          "symbol": "data_only_context",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__controller_shared.py.txt",
+          "sha256": "78eeb50520502b2aa2e0d42b3ca29ff49f6a8a73d82e8ad7ca712b8d76991b5a"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:auditor->component:context",
+        "depends_on:component:context->component:worker",
+        "depends_on:component:llm->component:context",
+        "depends_on:component:context->component:authorization",
+        "depends_on:component:context->component:memory",
+        "depends_on:component:worker->component:context",
+        "depends_on:component:context->component:journal",
+        "depends_on:component:context->component:llm",
+        "depends_on:component:context->component:state",
+        "depends_on:component:orchestrator->component:context",
+        "depends_on:component:authorization->component:context",
+        "depends_on:component:voice->component:context",
+        "depends_on:component:device->component:context",
+        "depends_on:component:multidevice->component:context",
+        "depends_on:component:context->component:scheduler",
+        "depends_on:component:context->component:goals",
+        "depends_on:component:context->component:report",
+        "depends_on:component:context->component:presentation",
+        "depends_on:component:scheduler->component:context",
+        "depends_on:component:goals->component:context",
+        "depends_on:component:report->component:context"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:worker",
+      "title": "Жизненный цикл Worker",
+      "name": "Worker",
+      "role": "Task runtime исполняет принятые задания на разрешённых устройствах; поддерживает продолжение pending window input и общий non-pipeline controller.",
+      "importance": "Соединяет admission, выполнение, identity, отмену и отчёт. Результат одной задачи не означает достижение всей Goal.",
+      "risk": "Сбой между фактическим действием и сохранением результата может оставить неопределённый итог.",
+      "protection": "Ветка выполнения связана с отменой, target device scope и receipts; успех действия нельзя выводить из одного статуса запуска.",
+      "checks": "Проверять завершение/partial/blocked/unknown, подтверждения, disconnect и итог для нескольких устройств.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 11,
+          "outgoing": 12,
+          "neighbors": 18,
+          "reverse_reachable": 14,
+          "articulation": false,
+          "scc_size": 15
+        }
+      },
+      "sources": [
+        {
+          "path": "server/task_runtime.py",
+          "line": 834,
+          "end_line": 1477,
+          "symbol": "run_nl_task",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__task_runtime.py.txt",
+          "sha256": "2e2a4a1f5132fcc9f5d4268a1edb8d71775af8e8a3ebfff7e479acc121ef153c"
+        },
+        {
+          "path": "server/task_runtime.py",
+          "line": 1481,
+          "end_line": 1516,
+          "symbol": "run_onboarding_task",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__task_runtime.py.txt",
+          "sha256": "2e2a4a1f5132fcc9f5d4268a1edb8d71775af8e8a3ebfff7e479acc121ef153c"
+        },
+        {
+          "path": "server/controller_non_pipeline.py",
+          "line": 230,
+          "end_line": 1384,
+          "symbol": "process_non_pipeline_command",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__controller_non_pipeline.py.txt",
+          "sha256": "627dabf17017a44a1200e37518a892bf8c61243ad628007941c51bfb0227e91e"
+        },
+        {
+          "path": "server/controller.py",
+          "line": 537,
+          "end_line": 603,
+          "symbol": "process_nl_command",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__controller.py.txt",
+          "sha256": "0eeb81f2dff2c8b4d1a050ac4037eecb0baa83e54ab6bf14df97e3faf0ca0a2c"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:llm->component:worker",
+        "depends_on:component:context->component:worker",
+        "depends_on:component:worker->component:context",
+        "depends_on:component:worker->component:authorization",
+        "depends_on:component:worker->component:memory",
+        "depends_on:component:worker->component:journal",
+        "depends_on:component:worker->component:llm",
+        "depends_on:component:worker->component:auditor",
+        "depends_on:component:worker->component:state",
+        "depends_on:component:worker->component:registry",
+        "depends_on:component:orchestrator->component:worker",
+        "depends_on:component:authorization->component:worker",
+        "depends_on:component:voice->component:worker",
+        "depends_on:component:presentation->component:worker",
+        "depends_on:component:device->component:worker",
+        "depends_on:component:multidevice->component:worker",
+        "depends_on:component:worker->component:browser",
+        "depends_on:component:worker->component:artifacts",
+        "depends_on:component:worker->component:orchestrator",
+        "depends_on:component:worker->component:voice",
+        "depends_on:component:report->component:worker",
+        "depends_on:component:scheduler->component:worker",
+        "depends_on:component:goals->component:worker"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:scheduler",
+      "title": "Admission и восстановление",
+      "name": "Scheduler",
+      "role": "WorkerScheduler принимает Goal DAG транзакционно, проверяет ревизии и зависимости, закрепляет результаты, восстанавливает задания и продолжает оконный ввод.",
+      "importance": "Центр Goal/Task lifecycle и долговременной согласованности; старый независимый pipeline больше не является исполнителем.",
+      "risk": "Гонка admission или рассогласование payload/report может дать дубликат, потерянное задание или старый статус.",
+      "protection": "validate_task_graph до admission writes; submit_goal — all-or-none; owner/chat/device проверки; отсутствие await/Worker/LLM внутри admission-транзакции.",
+      "checks": "Проверять revision conflict, повтор request_key, waiting_dependency/input/confirmation, замену результатов, cancel_group и persist → restore.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 5,
+          "outgoing": 11,
+          "neighbors": 11,
+          "reverse_reachable": 14,
+          "articulation": false,
+          "scc_size": 15
+        }
+      },
+      "sources": [
+        {
+          "path": "server/worker_scheduler.py",
+          "line": 416,
+          "end_line": 1117,
+          "symbol": "WorkerScheduler",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_scheduler.py.txt",
+          "sha256": "703b5c244f567987fe86fea976f8c6a272ac154163e7a6eceeed998e05f5568d"
+        },
+        {
+          "path": "server/worker_scheduler.py",
+          "line": 721,
+          "end_line": 751,
+          "symbol": "submit",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_scheduler.py.txt",
+          "sha256": "703b5c244f567987fe86fea976f8c6a272ac154163e7a6eceeed998e05f5568d"
+        },
+        {
+          "path": "server/worker_scheduler.py",
+          "line": 753,
+          "end_line": 756,
+          "symbol": "ensure_runner",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_scheduler.py.txt",
+          "sha256": "703b5c244f567987fe86fea976f8c6a272ac154163e7a6eceeed998e05f5568d"
+        },
+        {
+          "path": "server/worker_scheduler.py",
+          "line": 758,
+          "end_line": 767,
+          "symbol": "_execute",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_scheduler.py.txt",
+          "sha256": "703b5c244f567987fe86fea976f8c6a272ac154163e7a6eceeed998e05f5568d"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:orchestrator->component:scheduler",
+        "depends_on:component:authorization->component:scheduler",
+        "depends_on:component:voice->component:scheduler",
+        "depends_on:component:context->component:scheduler",
+        "depends_on:component:scheduler->component:state",
+        "depends_on:component:scheduler->component:report",
+        "depends_on:component:scheduler->component:presentation",
+        "depends_on:component:scheduler->component:memory",
+        "depends_on:component:scheduler->component:orchestrator",
+        "depends_on:component:scheduler->component:authorization",
+        "depends_on:component:scheduler->component:voice",
+        "depends_on:component:scheduler->component:context",
+        "depends_on:component:scheduler->component:device",
+        "depends_on:component:scheduler->component:multidevice",
+        "depends_on:component:scheduler->component:worker",
+        "depends_on:component:report->component:scheduler"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:llm",
+      "title": "Транспорт решения LLM",
+      "name": "LLM transport / routing",
+      "role": "Конфигурация и _chat_completion_request — общий транспорт модели, которым пользуются маршрутизация, исполнение и аудит.",
+      "importance": "Внешняя зависимость встречается в нескольких критичных путях.",
+      "risk": "Timeout, ответ неверной формы или исчерпание лимитов могут остановить решение/проверку; это не доказательство сбоя инструментов.",
+      "protection": "Конкретный транспорт и обработка ответа видны в controller.py; потребители отдельно валидируют свои контракты.",
+      "checks": "Проверять timeout, malformed tool call, усечение ответа, usage и разделение ошибок транспорта/протокола.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 7,
+          "outgoing": 5,
+          "neighbors": 9,
+          "reverse_reachable": 14,
+          "articulation": false,
+          "scc_size": 15
+        }
+      },
+      "sources": [
+        {
+          "path": "server/controller.py",
+          "line": 83,
+          "end_line": 92,
+          "symbol": "load_llm_config",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__controller.py.txt",
+          "sha256": "0eeb81f2dff2c8b4d1a050ac4037eecb0baa83e54ab6bf14df97e3faf0ca0a2c"
+        },
+        {
+          "path": "server/controller.py",
+          "line": 177,
+          "end_line": 339,
+          "symbol": "_chat_completion_request",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__controller.py.txt",
+          "sha256": "0eeb81f2dff2c8b4d1a050ac4037eecb0baa83e54ab6bf14df97e3faf0ca0a2c"
+        },
+        {
+          "path": "server/controller.py",
+          "line": 143,
+          "end_line": 174,
+          "symbol": "_thinking_request_fields",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__controller.py.txt",
+          "sha256": "0eeb81f2dff2c8b4d1a050ac4037eecb0baa83e54ab6bf14df97e3faf0ca0a2c"
+        },
+        {
+          "path": "server/controller.py",
+          "line": 127,
+          "end_line": 130,
+          "symbol": "LLMRouteSpec",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__controller.py.txt",
+          "sha256": "0eeb81f2dff2c8b4d1a050ac4037eecb0baa83e54ab6bf14df97e3faf0ca0a2c"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:llm->component:worker",
+        "depends_on:component:llm->component:context",
+        "depends_on:component:llm->component:authorization",
+        "depends_on:component:llm->component:memory",
+        "depends_on:component:llm->component:journal",
+        "depends_on:component:context->component:llm",
+        "depends_on:component:worker->component:llm",
+        "depends_on:component:orchestrator->component:llm",
+        "depends_on:component:authorization->component:llm",
+        "depends_on:component:voice->component:llm",
+        "depends_on:component:device->component:llm",
+        "depends_on:component:multidevice->component:llm"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:registry",
+      "title": "Контракты инструментов",
+      "name": "Tool Registry",
+      "role": "canonical_tool_name нормализует имя; list_tools выбирает разрешённые tools. Registry/inventory связывает объявление инструмента с его использованием.",
+      "importance": "Registry и inventory включают native Office tools, write transport и актуальные контракты результатов. Статические показатели пересчитаны.",
+      "risk": "Изменение имени или схемы может нарушить совместимость LLM, журнала и исполнения.",
+      "protection": "Центральные определения и фильтрация инструментов уменьшают расхождения; достаточность runtime-проверок нужно проверять в каждом dispatcher.",
+      "checks": "Проверять Office schemas/validate_office_args, канонические имена, tool args, artifact receipts и ветви восстановления наблюдений.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 6,
+          "outgoing": 3,
+          "neighbors": 8,
+          "reverse_reachable": 14,
+          "articulation": false,
+          "scc_size": 15
+        }
+      },
+      "sources": [
+        {
+          "path": "server/tool_registry.py",
+          "line": 1070,
+          "end_line": 1071,
+          "symbol": "canonical_tool_name",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__tool_registry.py.txt",
+          "sha256": "084e198fa66a35506dbe394a92ff94e374ddd586a6b2231ec43baaf67f5a0847"
+        },
+        {
+          "path": "server/tool_registry.py",
+          "line": 1100,
+          "end_line": 1110,
+          "symbol": "list_tools",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__tool_registry.py.txt",
+          "sha256": "084e198fa66a35506dbe394a92ff94e374ddd586a6b2231ec43baaf67f5a0847"
+        },
+        {
+          "path": "server/tool_inventory.py",
+          "line": 1,
+          "end_line": null,
+          "symbol": null,
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__tool_inventory.py.txt",
+          "sha256": "808e28c809c559630ea15dceb809611409635417b4f546663d4b3ad684d7f537"
+        },
+        {
+          "path": "server/tool_registry.py",
+          "line": 1130,
+          "end_line": 1230,
+          "symbol": "compact_tool_summary",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__tool_registry.py.txt",
+          "sha256": "084e198fa66a35506dbe394a92ff94e374ddd586a6b2231ec43baaf67f5a0847"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:worker->component:registry",
+        "depends_on:component:presentation->component:registry",
+        "depends_on:component:journal->component:registry",
+        "depends_on:component:device->component:registry",
+        "depends_on:component:multidevice->component:registry",
+        "depends_on:component:authorization->component:registry",
+        "depends_on:component:registry->component:artifacts",
+        "depends_on:component:registry->component:device",
+        "depends_on:component:registry->component:office"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "mechanism:tool-contracts",
+      "title": "Структурный соединитель tools",
+      "name": "Tool contracts / inventory",
+      "role": "Определения/инвентарь связывают канонические имена инструментов с поддерживаемым набором.",
+      "importance": "Центральная граница схем и исполнения tools. Топологический статус вычислен заново: прежнее утверждение о точке сочленения не переносится.",
+      "risk": "Расхождение схемы и executor может нарушить вызов или интерпретацию evidence; runtime SPOF по графу не доказан.",
+      "protection": "Статические evidence указывают registry и inventory. Динамический dispatch и резервирование графом не подтверждены.",
+      "checks": "Проверять совместимость catalog → schema → executor → journal, особенно при переименовании tools.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 10,
+          "outgoing": 5,
+          "neighbors": 14,
+          "reverse_reachable": 28,
+          "articulation": false,
+          "scc_size": 2
+        }
+      },
+      "sources": [
+        {
+          "path": "server/tool_registry.py",
+          "line": 1070,
+          "end_line": 1071,
+          "symbol": "canonical_tool_name",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__tool_registry.py.txt",
+          "sha256": "084e198fa66a35506dbe394a92ff94e374ddd586a6b2231ec43baaf67f5a0847"
+        },
+        {
+          "path": "server/tool_registry.py",
+          "line": 1100,
+          "end_line": 1110,
+          "symbol": "list_tools",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__tool_registry.py.txt",
+          "sha256": "084e198fa66a35506dbe394a92ff94e374ddd586a6b2231ec43baaf67f5a0847"
+        },
+        {
+          "path": "server/tool_inventory.py",
+          "line": 1,
+          "end_line": null,
+          "symbol": null,
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__tool_inventory.py.txt",
+          "sha256": "808e28c809c559630ea15dceb809611409635417b4f546663d4b3ad684d7f537"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:mechanism:worker-tool-loop->mechanism:tool-contracts",
+        "depends_on:mechanism:result-presentation->mechanism:tool-contracts",
+        "depends_on:mechanism:diagnostic-journal->mechanism:tool-contracts",
+        "depends_on:mechanism:journal-steps->mechanism:tool-contracts",
+        "depends_on:mechanism:terminal-validation->mechanism:tool-contracts",
+        "depends_on:mechanism:command-transport->mechanism:tool-contracts",
+        "depends_on:mechanism:device-fanout->mechanism:tool-contracts",
+        "depends_on:mechanism:execution-scope->mechanism:tool-contracts",
+        "depends_on:mechanism:worker-lifecycle->mechanism:tool-contracts",
+        "depends_on:mechanism:tool-contracts->mechanism:tool-result",
+        "depends_on:mechanism:tool-contracts->mechanism:artifact-verification",
+        "depends_on:mechanism:tool-contracts->mechanism:chunked-writes",
+        "depends_on:mechanism:tool-contracts->mechanism:local-actions",
+        "depends_on:mechanism:tool-contracts->mechanism:office-contract",
+        "depends_on:mechanism:tool-result->mechanism:tool-contracts"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:device",
+      "title": "Доставка команды и identity",
+      "name": "Device Execution",
+      "role": "send_command_to_agent проверяет наличие устройства и владельца; область путей проверяется для execute_cmd; identity receipt сопоставляет зарегистрированные и наблюдаемые признаки.",
+      "importance": "Переход от серверного решения к действию на устройстве — граница фактического исполнения.",
+      "risk": "Disconnect, неправильный device scope или identity mismatch могут сделать результат недостоверным для нужного устройства.",
+      "protection": "Owner check; в identity receipt отсутствие сравнимых признаков оставляет unknown, несовпадение даёт mismatch.",
+      "checks": "Проверять target_device_id, nonce/ожидающий ответ, timeout, подтверждение и identity после выполнения.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 5,
+          "outgoing": 14,
+          "neighbors": 17,
+          "reverse_reachable": 14,
+          "articulation": false,
+          "scc_size": 15
+        }
+      },
+      "sources": [
+        {
+          "path": "server/task_runtime.py",
+          "line": 265,
+          "end_line": 456,
+          "symbol": "send_command_to_agent",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__task_runtime.py.txt",
+          "sha256": "2e2a4a1f5132fcc9f5d4268a1edb8d71775af8e8a3ebfff7e479acc121ef153c"
+        },
+        {
+          "path": "server/task_runtime.py",
+          "line": 191,
+          "end_line": 209,
+          "symbol": "_attach_identity_receipt",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__task_runtime.py.txt",
+          "sha256": "2e2a4a1f5132fcc9f5d4268a1edb8d71775af8e8a3ebfff7e479acc121ef153c"
+        },
+        {
+          "path": "agent/core/runtime.py",
+          "line": 31,
+          "end_line": 272,
+          "symbol": "AgentRuntime",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/agent__core__runtime.py.txt",
+          "sha256": "a0c92150182ab738219f0225754409f30dc27242a66c7f1cad5a0735003df1c0"
+        },
+        {
+          "path": "agent/core/runtime.py",
+          "line": 125,
+          "end_line": 186,
+          "symbol": "_run_async",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/agent__core__runtime.py.txt",
+          "sha256": "a0c92150182ab738219f0225754409f30dc27242a66c7f1cad5a0735003df1c0"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:device->component:state",
+        "depends_on:component:device->component:office",
+        "depends_on:component:device->component:artifacts",
+        "depends_on:component:device->component:voice",
+        "depends_on:component:device->component:authorization",
+        "depends_on:component:device->component:llm",
+        "depends_on:component:device->component:context",
+        "depends_on:component:device->component:worker",
+        "depends_on:component:device->component:auditor",
+        "depends_on:component:device->component:memory",
+        "depends_on:component:device->component:registry",
+        "depends_on:component:device->component:journal",
+        "depends_on:component:device->component:browser",
+        "depends_on:component:device->component:orchestrator",
+        "depends_on:component:authorization->component:device",
+        "depends_on:component:registry->component:device",
+        "depends_on:component:scheduler->component:device",
+        "depends_on:component:goals->component:device",
+        "depends_on:component:report->component:device"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "mechanism:local-actions",
+      "title": "Граница локальных действий",
+      "name": "Local actions",
+      "role": "Агентские execute_cmd/write_content и подготовка runtime выполняют действия на устройстве.",
+      "importance": "Локальное исполнение связывает shell/file/window действия и новые атомарные записи. Прежний статус точки сочленения не переносится.",
+      "risk": "Успешный запуск процесса не гарантирует достижение пользовательской цели или появление артефакта.",
+      "protection": "write_content и Office commit различают staged/committed/verified; после потенциального commit неопределённость не превращается в успех.",
+      "checks": "Проверять запись/чтение файла, фактический итог команды, платформенные пути и отличать launch_requested от завершения.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 2,
+          "outgoing": 5,
+          "neighbors": 7,
+          "reverse_reachable": 29,
+          "articulation": false,
+          "scc_size": 1
+        }
+      },
+      "sources": [
+        {
+          "path": "agent/core/actions.py",
+          "line": 89,
+          "end_line": 132,
+          "symbol": "execute_cmd",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/agent__core__actions.py.txt",
+          "sha256": "d4eaef44758778e2402f8a3f60b45b6baaa0b400797b29a26f0905f9557a2ba1"
+        },
+        {
+          "path": "agent/core/actions.py",
+          "line": 192,
+          "end_line": 197,
+          "symbol": "write_content",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/agent__core__actions.py.txt",
+          "sha256": "d4eaef44758778e2402f8a3f60b45b6baaa0b400797b29a26f0905f9557a2ba1"
+        },
+        {
+          "path": "agent/core/actions.py",
+          "line": 824,
+          "end_line": 859,
+          "symbol": "refresh_device_state",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/agent__core__actions.py.txt",
+          "sha256": "d4eaef44758778e2402f8a3f60b45b6baaa0b400797b29a26f0905f9557a2ba1"
+        },
+        {
+          "path": "agent/core/actions.py",
+          "line": 1474,
+          "end_line": 1617,
+          "symbol": "prepare_runtime",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/agent__core__actions.py.txt",
+          "sha256": "d4eaef44758778e2402f8a3f60b45b6baaa0b400797b29a26f0905f9557a2ba1"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:mechanism:local-actions->mechanism:local-state",
+        "depends_on:mechanism:local-actions->mechanism:office-operations",
+        "depends_on:mechanism:local-actions->mechanism:office-preservation",
+        "depends_on:mechanism:local-actions->mechanism:artifact-verification",
+        "depends_on:mechanism:local-actions->mechanism:chunked-writes",
+        "depends_on:mechanism:agent-dispatch->mechanism:local-actions",
+        "depends_on:mechanism:tool-contracts->mechanism:local-actions"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:state",
+      "title": "Отмена и оперативное состояние",
+      "name": "State / Persistence",
+      "role": "Оперативные состояния включают ожидание подтверждения, зависимости и оконного ввода; отмена принадлежит владельцу и согласуется с сохранённым Task/Goal.",
+      "importance": "Состояние используется несколькими ветвями выполнения.",
+      "risk": "Поздняя отмена и гонка с терминальным результатом могут оставить противоречивые проекции.",
+      "protection": "Отмена привязана к task и проверке владельца; запрос отмены и терминальная отмена различаются.",
+      "checks": "Проверять waiting_input/confirmation/dependency, cancelling/cancelled и восстановление latest payload/report.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 14,
+          "outgoing": 0,
+          "neighbors": 14,
+          "reverse_reachable": 18,
+          "articulation": false,
+          "scc_size": 1
+        }
+      },
+      "sources": [
+        {
+          "path": "server/runtime_state.py",
+          "line": 150,
+          "end_line": 154,
+          "symbol": "is_task_cancel_requested",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__runtime_state.py.txt",
+          "sha256": "91788bc5206b59a995b6943c92607a2271cd5d7e714944ecd107ef6286eb9909"
+        },
+        {
+          "path": "server/runtime_state.py",
+          "line": 157,
+          "end_line": 171,
+          "symbol": "mark_task_cancelled",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__runtime_state.py.txt",
+          "sha256": "91788bc5206b59a995b6943c92607a2271cd5d7e714944ecd107ef6286eb9909"
+        },
+        {
+          "path": "server/database.py",
+          "line": 1,
+          "end_line": null,
+          "symbol": null,
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__database.py.txt",
+          "sha256": "b6c42921f429000aa0d3e35a84cf3a44ad633ead1338eeb56a4e9e0da9f8ce89"
+        },
+        {
+          "path": "agent/core/local_state.py",
+          "line": 1,
+          "end_line": null,
+          "symbol": null,
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/agent__core__local_state.py.txt",
+          "sha256": "2a48878f20acaadd9ea2607d10792e0e9dd506a3aaf2ed3edbe3b0d4f136b789"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:artifacts->component:state",
+        "depends_on:component:device->component:state",
+        "depends_on:component:browser->component:state",
+        "depends_on:component:worker->component:state",
+        "depends_on:component:context->component:state",
+        "depends_on:component:authorization->component:state",
+        "depends_on:component:memory->component:state",
+        "depends_on:component:orchestrator->component:state",
+        "depends_on:component:voice->component:state",
+        "depends_on:component:presentation->component:state",
+        "depends_on:component:multidevice->component:state",
+        "depends_on:component:report->component:state",
+        "depends_on:component:scheduler->component:state",
+        "depends_on:component:goals->component:state"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:authorization",
+      "title": "Полномочия и подтверждения",
+      "name": "Authorization / Confirmation",
+      "role": "verify_access_token проверяет подпись и срок JWT; command_confirmation создаёт отдельный confirmation_id и определяет допустимый канал подтверждения.",
+      "importance": "Небольшая степень связности не снижает важность границы безопасности.",
+      "risk": "Ошибка в owner/device scope или привязке подтверждения может разрешить действие не тому владельцу/поручению.",
+      "protection": "Неверный/истёкший JWT возвращает None; опасные/deletion подтверждения не получают voice_allowed.",
+      "checks": "Проверять истёкший токен, чужое устройство/задание, повтор nonce и подтверждение именно ожидающей команды.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 10,
+          "outgoing": 18,
+          "neighbors": 18,
+          "reverse_reachable": 14,
+          "articulation": false,
+          "scc_size": 15
+        }
+      },
+      "sources": [
+        {
+          "path": "server/auth.py",
+          "line": 72,
+          "end_line": 93,
+          "symbol": "verify_access_token",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__auth.py.txt",
+          "sha256": "6bb48a1e8f1e3ddf0d2a05cead20278317a59675f244e38c1352045be6c8d628"
+        },
+        {
+          "path": "server/command_confirmation.py",
+          "line": 31,
+          "end_line": 49,
+          "symbol": "command_confirmation",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__command_confirmation.py.txt",
+          "sha256": "1eab53e5320e64a91908df4bf4b8b6424f56b4a1e57b8d519717a7374af6f085"
+        },
+        {
+          "path": "server/command_confirmation.py",
+          "line": 52,
+          "end_line": 79,
+          "symbol": "confirmed_command_outcome",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__command_confirmation.py.txt",
+          "sha256": "1eab53e5320e64a91908df4bf4b8b6424f56b4a1e57b8d519717a7374af6f085"
+        },
+        {
+          "path": "server/controller_shared.py",
+          "line": 291,
+          "end_line": 300,
+          "symbol": "ConfirmationRequired",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__controller_shared.py.txt",
+          "sha256": "78eeb50520502b2aa2e0d42b3ca29ff49f6a8a73d82e8ad7ca712b8d76991b5a"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:llm->component:authorization",
+        "depends_on:component:context->component:authorization",
+        "depends_on:component:worker->component:authorization",
+        "depends_on:component:authorization->component:memory",
+        "depends_on:component:authorization->component:state",
+        "depends_on:component:authorization->component:llm",
+        "depends_on:component:authorization->component:context",
+        "depends_on:component:authorization->component:worker",
+        "depends_on:component:orchestrator->component:authorization",
+        "depends_on:component:authorization->component:scheduler",
+        "depends_on:component:authorization->component:goals",
+        "depends_on:component:authorization->component:report",
+        "depends_on:component:voice->component:authorization",
+        "depends_on:component:authorization->component:presentation",
+        "depends_on:component:authorization->component:voice",
+        "depends_on:component:device->component:authorization",
+        "depends_on:component:multidevice->component:authorization",
+        "depends_on:component:authorization->component:auditor",
+        "depends_on:component:authorization->component:registry",
+        "depends_on:component:authorization->component:journal",
+        "depends_on:component:authorization->component:browser",
+        "depends_on:component:authorization->component:artifacts",
+        "depends_on:component:authorization->component:orchestrator",
+        "depends_on:component:authorization->component:device",
+        "depends_on:component:report->component:authorization",
+        "depends_on:component:scheduler->component:authorization",
+        "depends_on:component:goals->component:authorization",
+        "depends_on:component:authorization->component:multidevice"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:journal",
+      "title": "Граница доказательств результата",
+      "name": "Run Journal",
+      "role": "Журнал хранит шаги запуска; validate_answer_text_payload требует структуру ответа и проверяет basis текущего журнала.",
+      "importance": "Соединяет наблюдения инструмента с утверждениями итогового ответа.",
+      "risk": "Старый basis, отрицательный результат или текст без evidence могут привести к ложному успеху при обходе проверки.",
+      "protection": "При claims_completed_action отрицательные execute_cmd/write_content evidence отклоняются; валидатор возвращает исходный payload.",
+      "checks": "Проверять актуальность step_id, отсутствие подмены answer.text и разделение наблюдения/доказательства действия.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 8,
+          "outgoing": 1,
+          "neighbors": 9,
+          "reverse_reachable": 14,
+          "articulation": false,
+          "scc_size": 15
+        }
+      },
+      "sources": [
+        {
+          "path": "server/run_journal.py",
+          "line": 292,
+          "end_line": 338,
+          "symbol": "make_run_step",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__run_journal.py.txt",
+          "sha256": "a5faef4c41cf01d8b8c453946d11d3303626bdc3aaba29c780ec388f09ebd929"
+        },
+        {
+          "path": "server/run_journal.py",
+          "line": 341,
+          "end_line": 366,
+          "symbol": "append_tool_step",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__run_journal.py.txt",
+          "sha256": "a5faef4c41cf01d8b8c453946d11d3303626bdc3aaba29c780ec388f09ebd929"
+        },
+        {
+          "path": "server/run_journal.py",
+          "line": 369,
+          "end_line": 394,
+          "symbol": "append_answer_step",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__run_journal.py.txt",
+          "sha256": "a5faef4c41cf01d8b8c453946d11d3303626bdc3aaba29c780ec388f09ebd929"
+        },
+        {
+          "path": "server/run_journal.py",
+          "line": 410,
+          "end_line": 431,
+          "symbol": "wrap_tool_result_for_llm",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__run_journal.py.txt",
+          "sha256": "a5faef4c41cf01d8b8c453946d11d3303626bdc3aaba29c780ec388f09ebd929"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:auditor->component:journal",
+        "depends_on:component:llm->component:journal",
+        "depends_on:component:context->component:journal",
+        "depends_on:component:worker->component:journal",
+        "depends_on:component:journal->component:registry",
+        "depends_on:component:device->component:journal",
+        "depends_on:component:multidevice->component:journal",
+        "depends_on:component:authorization->component:journal",
+        "depends_on:component:report->component:journal"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:auditor",
+      "title": "Независимая проверка ответа",
+      "name": "Answer Auditor",
+      "role": "audit_answer_payload сопоставляет запрос, текущий журнал и ответ; при включённом аудите требует корректный JSON verdict.",
+      "importance": "Дополнительная граница перед принятием отчёта.",
+      "risk": "Аудитор зависит от LLM и конфигурации: отключённый аудитор не равен независимой успешной проверке.",
+      "protection": "Ошибка транспорта возвращает отрицательный verdict; невалидный JSON ограниченно повторяется. При выключенном аудите возвращается auditor disabled.",
+      "checks": "Проверять enabled/disabled, transport error, invalid JSON, отрицательный verdict и basis после repair.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 7,
+          "outgoing": 2,
+          "neighbors": 9,
+          "reverse_reachable": 14,
+          "articulation": false,
+          "scc_size": 15
+        }
+      },
+      "sources": [
+        {
+          "path": "server/answer_auditor.py",
+          "line": 74,
+          "end_line": 155,
+          "symbol": "audit_answer_payload",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__answer_auditor.py.txt",
+          "sha256": "512185cf9b2ac4fcfc18dde9ce6922f457a7d5439d69f26a539beebb5c41640e"
+        },
+        {
+          "path": "server/answer_auditor.py",
+          "line": 63,
+          "end_line": 71,
+          "symbol": "_compact_journal",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__answer_auditor.py.txt",
+          "sha256": "512185cf9b2ac4fcfc18dde9ce6922f457a7d5439d69f26a539beebb5c41640e"
+        },
+        {
+          "path": "server/controller_trust.py",
+          "line": 212,
+          "end_line": 246,
+          "symbol": "has_grounded_terminal_answer",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__controller_trust.py.txt",
+          "sha256": "3688cb2b5e36743203351819e7ee86a88369c7d37a9a0a89f40170701bca9af4"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:auditor->component:journal",
+        "depends_on:component:auditor->component:context",
+        "depends_on:component:worker->component:auditor",
+        "depends_on:component:presentation->component:auditor",
+        "depends_on:component:device->component:auditor",
+        "depends_on:component:multidevice->component:auditor",
+        "depends_on:component:authorization->component:auditor",
+        "depends_on:component:voice->component:auditor",
+        "depends_on:component:report->component:auditor"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:report",
+      "title": "WorkerReport и честный итог",
+      "name": "Worker Report",
+      "role": "WorkerReport строится из текущего terminal answer, receipts и evidence; включает финальные проверенные артефакты Office/write с привязкой к задаче.",
+      "importance": "Итог становится источником состояния для интерфейса и хранения.",
+      "risk": "Если восстановление возьмёт старый report или текст модели вместо текущих доказательств, пользователь увидит ложный успех.",
+      "protection": "Success связан с grounded terminal и проверенными evidence. Финальные artifact receipts имеют SHA256/source_task_id; промежуточный файл не подменяет окончательный результат.",
+      "checks": "Проверять final artifact receipts, content preservation, Task report → pinned result → Goal view → UI → restore; pending и unknown не считать успехом.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 7,
+          "outgoing": 13,
+          "neighbors": 14,
+          "reverse_reachable": 14,
+          "articulation": false,
+          "scc_size": 15
+        }
+      },
+      "sources": [
+        {
+          "path": "server/worker_reports.py",
+          "line": 6,
+          "end_line": 24,
+          "symbol": "WorkerReport",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_reports.py.txt",
+          "sha256": "189b4804792997e429d4f47668bcdfd7e286f484d46527e6604ea3047ca45893"
+        },
+        {
+          "path": "server/worker_reports.py",
+          "line": 60,
+          "end_line": 232,
+          "symbol": "build_worker_report",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_reports.py.txt",
+          "sha256": "189b4804792997e429d4f47668bcdfd7e286f484d46527e6604ea3047ca45893"
+        },
+        {
+          "path": "server/worker_reports.py",
+          "line": 41,
+          "end_line": 57,
+          "symbol": "positive_evidence",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_reports.py.txt",
+          "sha256": "189b4804792997e429d4f47668bcdfd7e286f484d46527e6604ea3047ca45893"
+        },
+        {
+          "path": "server/worker_scheduler.py",
+          "line": 335,
+          "end_line": 388,
+          "symbol": "persist_report",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_scheduler.py.txt",
+          "sha256": "703b5c244f567987fe86fea976f8c6a272ac154163e7a6eceeed998e05f5568d"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:orchestrator->component:report",
+        "depends_on:component:authorization->component:report",
+        "depends_on:component:voice->component:report",
+        "depends_on:component:presentation->component:report",
+        "depends_on:component:context->component:report",
+        "depends_on:component:report->component:auditor",
+        "depends_on:component:report->component:worker",
+        "depends_on:component:report->component:state",
+        "depends_on:component:report->component:authorization",
+        "depends_on:component:report->component:journal",
+        "depends_on:component:scheduler->component:report",
+        "depends_on:component:goals->component:report",
+        "depends_on:component:report->component:presentation",
+        "depends_on:component:report->component:memory",
+        "depends_on:component:report->component:orchestrator",
+        "depends_on:component:report->component:voice",
+        "depends_on:component:report->component:context",
+        "depends_on:component:report->component:device",
+        "depends_on:component:report->component:multidevice",
+        "depends_on:component:report->component:scheduler"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:presentation",
+      "title": "Проекция результата в интерфейс",
+      "name": "Response Presentation",
+      "role": "Проецирует Task и Goal, проверенные файлы и заменённые результаты; UI открывает файлы на исходном устройстве и показывает живое pending confirmation.",
+      "importance": "Связывает проверенный серверный итог с desktop/mini/mobile; последние коммиты исправляют приоритет ожидающих подтверждений и компактность mini.",
+      "risk": "Независимая интерпретация статуса или изменение терминального текста могут противоречить отчёту.",
+      "protection": "Источником результата должен оставаться report, а не декоративная подсветка или LLM обещание.",
+      "checks": "Проверять live/restored pending confirmation, source device для открытия файла, superseded tasks и совпадение goal status/report.",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 7,
+          "outgoing": 6,
+          "neighbors": 12,
+          "reverse_reachable": 14,
+          "articulation": false,
+          "scc_size": 15
+        }
+      },
+      "sources": [
+        {
+          "path": "server/response_presentation.py",
+          "line": 148,
+          "end_line": 167,
+          "symbol": "normalized_worker_report",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__response_presentation.py.txt",
+          "sha256": "33437dd8dd925c49c5a2909d1c9d4a5e5d381dde2c319d2da0672dc9f9008441"
+        },
+        {
+          "path": "server/response_presentation.py",
+          "line": 188,
+          "end_line": 286,
+          "symbol": "worker_presentation",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__response_presentation.py.txt",
+          "sha256": "33437dd8dd925c49c5a2909d1c9d4a5e5d381dde2c319d2da0672dc9f9008441"
+        },
+        {
+          "path": "server/response_presentation.py",
+          "line": 48,
+          "end_line": 51,
+          "symbol": "_artifacts",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__response_presentation.py.txt",
+          "sha256": "33437dd8dd925c49c5a2909d1c9d4a5e5d381dde2c319d2da0672dc9f9008441"
+        },
+        {
+          "path": "server/response_presentation.py",
+          "line": 76,
+          "end_line": 80,
+          "symbol": "_artifact_result",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__response_presentation.py.txt",
+          "sha256": "33437dd8dd925c49c5a2909d1c9d4a5e5d381dde2c319d2da0672dc9f9008441"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:orchestrator->component:presentation",
+        "depends_on:component:authorization->component:presentation",
+        "depends_on:component:voice->component:presentation",
+        "depends_on:component:presentation->component:report",
+        "depends_on:component:presentation->component:auditor",
+        "depends_on:component:presentation->component:worker",
+        "depends_on:component:presentation->component:registry",
+        "depends_on:component:presentation->component:memory",
+        "depends_on:component:presentation->component:state",
+        "depends_on:component:context->component:presentation",
+        "depends_on:component:scheduler->component:presentation",
+        "depends_on:component:goals->component:presentation",
+        "depends_on:component:report->component:presentation"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:goals",
+      "title": "Goal / Task DAG",
+      "role": "Общая цель состоит из проверяемых зависимых результатов и ревизий. goal_view оценивает все актуальные задачи, учитывая superseded/replacement.",
+      "importance": "Новая структура вместо старого PLAN. Один success не означает завершение всей цели.",
+      "risk": "Несогласованная ревизия или принятие старого результата может исказить итог Goal.",
+      "protection": "validate_task_graph ограничивает размер и запрещает циклы/отсутствующие зависимости; goal_view проверяет owner/chat и pinned result.",
+      "checks": "Проверять atomic submit_goal, goal_revision, retries/replacements, cancel_group и waiting_dependency.",
+      "name": "Goals / Task DAG",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 4,
+          "outgoing": 11,
+          "neighbors": 11,
+          "reverse_reachable": 14,
+          "articulation": false,
+          "scc_size": 15
+        }
+      },
+      "sources": [
+        {
+          "path": "server/worker_scheduler.py",
+          "line": 232,
+          "end_line": 270,
+          "symbol": "goal_view",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_scheduler.py.txt",
+          "sha256": "703b5c244f567987fe86fea976f8c6a272ac154163e7a6eceeed998e05f5568d"
+        },
+        {
+          "path": "server/worker_scheduler.py",
+          "line": 988,
+          "end_line": 1027,
+          "symbol": "cancel_group",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_scheduler.py.txt",
+          "sha256": "703b5c244f567987fe86fea976f8c6a272ac154163e7a6eceeed998e05f5568d"
+        },
+        {
+          "path": "server/goal_presentation.py",
+          "line": 15,
+          "end_line": 123,
+          "symbol": "goal_presentation",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__goal_presentation.py.txt",
+          "sha256": "becd69384a35d84b8ab91a1eb2d884d05b8281cdde29ff317aa9849af0778ebc"
+        },
+        {
+          "path": "ui/js/mini-operations.js",
+          "line": 1,
+          "end_line": null,
+          "symbol": null,
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/ui__js__mini-operations.js.txt",
+          "sha256": "78d52d5a252d849078bccd35cd54d98285300f277fc3667061532aed075a25eb"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:orchestrator->component:goals",
+        "depends_on:component:authorization->component:goals",
+        "depends_on:component:voice->component:goals",
+        "depends_on:component:context->component:goals",
+        "depends_on:component:goals->component:state",
+        "depends_on:component:goals->component:report",
+        "depends_on:component:goals->component:presentation",
+        "depends_on:component:goals->component:memory",
+        "depends_on:component:goals->component:orchestrator",
+        "depends_on:component:goals->component:authorization",
+        "depends_on:component:goals->component:voice",
+        "depends_on:component:goals->component:context",
+        "depends_on:component:goals->component:device",
+        "depends_on:component:goals->component:multidevice",
+        "depends_on:component:goals->component:worker"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "mechanism:pinned-results",
+      "title": "Закреплённые результаты",
+      "role": "_freeze_result сохраняет полные server-owned evidence; pinned_results проверяет ссылки на результаты зависимостей.",
+      "importance": "Опорная граница передачи результатов между заданиями Goal, отдельная от усечённого presentation summary.",
+      "risk": "Чужая или незавершённая зависимость может загрязнить handoff при обходе проверок.",
+      "protection": "Закрепление связано с success/goal_completed и той же транзакцией, что терминальная проекция; сами данные источника остаются untrusted.",
+      "checks": "Проверять result_id/SHA256, owner/chat/device, восстановление и отклонение неподтверждённых dependencies.",
+      "name": "Pinned result dependencies",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 7,
+          "outgoing": 17,
+          "neighbors": 18,
+          "reverse_reachable": 22,
+          "articulation": false,
+          "scc_size": 22
+        }
+      },
+      "sources": [
+        {
+          "path": "server/worker_scheduler.py",
+          "line": 113,
+          "end_line": 138,
+          "symbol": "_freeze_result",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_scheduler.py.txt",
+          "sha256": "703b5c244f567987fe86fea976f8c6a272ac154163e7a6eceeed998e05f5568d"
+        },
+        {
+          "path": "server/worker_scheduler.py",
+          "line": 141,
+          "end_line": 186,
+          "symbol": "pinned_results",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_scheduler.py.txt",
+          "sha256": "703b5c244f567987fe86fea976f8c6a272ac154163e7a6eceeed998e05f5568d"
+        },
+        {
+          "path": "server/worker_scheduler.py",
+          "line": 324,
+          "end_line": 332,
+          "symbol": "_final_snapshot",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_scheduler.py.txt",
+          "sha256": "703b5c244f567987fe86fea976f8c6a272ac154163e7a6eceeed998e05f5568d"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:mechanism:decision->mechanism:pinned-results",
+        "depends_on:mechanism:memory-authorization->mechanism:pinned-results",
+        "depends_on:mechanism:turn-handoff->mechanism:pinned-results",
+        "depends_on:mechanism:voice-provider->mechanism:pinned-results",
+        "depends_on:mechanism:bounded-context->mechanism:pinned-results",
+        "depends_on:mechanism:pinned-results->mechanism:task-state",
+        "depends_on:mechanism:pinned-results->mechanism:report-projection",
+        "depends_on:mechanism:pinned-results->mechanism:result-presentation",
+        "depends_on:mechanism:pinned-results->mechanism:memory-read",
+        "depends_on:mechanism:pinned-results->mechanism:decision",
+        "depends_on:mechanism:pinned-results->mechanism:memory-authorization",
+        "depends_on:mechanism:pinned-results->mechanism:turn-handoff",
+        "depends_on:mechanism:pinned-results->mechanism:voice-provider",
+        "depends_on:mechanism:pinned-results->mechanism:memory-authority",
+        "depends_on:mechanism:pinned-results->mechanism:memory-intent-guard",
+        "depends_on:mechanism:pinned-results->mechanism:command-transport",
+        "depends_on:mechanism:pinned-results->mechanism:device-fanout",
+        "depends_on:mechanism:pinned-results->mechanism:execution-scope",
+        "depends_on:mechanism:pinned-results->mechanism:worker-lifecycle",
+        "depends_on:mechanism:pinned-results->mechanism:bounded-context",
+        "depends_on:mechanism:pinned-results->mechanism:command-confirmation",
+        "depends_on:mechanism:pinned-results->mechanism:runtime-context",
+        "depends_on:mechanism:dispatch-recovery->mechanism:pinned-results",
+        "depends_on:mechanism:report-projection->mechanism:pinned-results"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:office",
+      "title": "Нативные Office документы",
+      "role": "DOCX/XLSX/PPTX обрабатываются локальными библиотеками через схемы Office tools, без GUI автоматизации.",
+      "importance": "Новая цепочка schema → executor → атомарный commit → reopened file → final receipt.",
+      "risk": "Успешный save без проверки документа не доказывает корректный итог; ошибка после commit требует unknown.",
+      "protection": "Ожидаемый SHA256, safe_edit_package, временный файл, fsync, повторное открытие, проверка сохранности, os.replace/exclusive link.",
+      "checks": "Проверять edit conflict, content preservation, отсутствие библиотек, final artifact_role и привязку source_task_id.",
+      "name": "Native Office tools",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 3,
+          "outgoing": 0,
+          "neighbors": 3,
+          "reverse_reachable": 16,
+          "articulation": false,
+          "scc_size": 1
+        }
+      },
+      "sources": [
+        {
+          "path": "server/office_tool_schemas.py",
+          "line": 9,
+          "end_line": 23,
+          "symbol": "office_schemas",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__office_tool_schemas.py.txt",
+          "sha256": "f5277dbaeb6c256c7c5388b0e16673f303cac65592deb4806c76c9ae47b8af0f"
+        },
+        {
+          "path": "server/office_tool_schemas.py",
+          "line": 26,
+          "end_line": 30,
+          "symbol": "office_metadata",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__office_tool_schemas.py.txt",
+          "sha256": "f5277dbaeb6c256c7c5388b0e16673f303cac65592deb4806c76c9ae47b8af0f"
+        },
+        {
+          "path": "server/office_tool_schemas.py",
+          "line": 33,
+          "end_line": 70,
+          "symbol": "validate_office_args",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__office_tool_schemas.py.txt",
+          "sha256": "f5277dbaeb6c256c7c5388b0e16673f303cac65592deb4806c76c9ae47b8af0f"
+        },
+        {
+          "path": "agent/core/office_tools.py",
+          "line": 507,
+          "end_line": 588,
+          "symbol": "office",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/agent__core__office_tools.py.txt",
+          "sha256": "f2f2387da2106009670f27736b940a620e25b61645910bf9ee083a8fd8376218"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:artifacts->component:office",
+        "depends_on:component:device->component:office",
+        "depends_on:component:registry->component:office"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "mechanism:office-preservation",
+      "title": "Сохранность содержимого Office",
+      "role": "content_snapshot сравнивает содержимое при preserve_content; verify_preservation сверяет вновь открытый документ.",
+      "importance": "Граница между форматированием и непреднамеренным изменением данных.",
+      "risk": "Форматирование может повредить данные, если опираться только на статус сохранения.",
+      "protection": "Снимок содержимого до/после, проверка package и повторное открытие native библиотекой.",
+      "checks": "Проверять таблицы, формулы/структуру и явный отказ content_preservation_failed.",
+      "name": "Office content preservation",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 4,
+          "outgoing": 0,
+          "neighbors": 4,
+          "reverse_reachable": 33,
+          "articulation": false,
+          "scc_size": 1
+        }
+      },
+      "sources": [
+        {
+          "path": "agent/core/office_content.py",
+          "line": 1,
+          "end_line": null,
+          "symbol": null,
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/agent__core__office_content.py.txt",
+          "sha256": "618207c1f138cb5a4c01258fc225c6ddbf6f410b73561064a577302ee03542c4"
+        },
+        {
+          "path": "agent/core/office_tools.py",
+          "line": 490,
+          "end_line": 504,
+          "symbol": "verify_preservation",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/agent__core__office_tools.py.txt",
+          "sha256": "f2f2387da2106009670f27736b940a620e25b61645910bf9ee083a8fd8376218"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:mechanism:artifact-verification->mechanism:office-preservation",
+        "depends_on:mechanism:chunked-writes->mechanism:office-preservation",
+        "depends_on:mechanism:local-actions->mechanism:office-preservation",
+        "depends_on:mechanism:office-operations->mechanism:office-preservation"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "component:artifacts",
+      "title": "Запись и финальные артефакты",
+      "role": "write_in_chunks объединяет staged части в логическую запись; artifact verification и transfer связывают файл с устройством и исходной задачей.",
+      "importance": "Новая граница между доставкой байтов и доказанным финальным файлом.",
+      "risk": "Несовпадающий chunk receipt или изменённый файл после commit не должен давать success.",
+      "protection": "operation_id/chunk_index/hash, итоговые committed/content_sha256/chars_written/verified; _verify_artifact и transfer authorization.",
+      "checks": "Проверять разрыв передачи, digest, гонки файла, nonce/transfer purpose и final receipts.",
+      "name": "Verified artifacts / write transport",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 5,
+          "outgoing": 3,
+          "neighbors": 8,
+          "reverse_reachable": 15,
+          "articulation": false,
+          "scc_size": 1
+        }
+      },
+      "sources": [
+        {
+          "path": "server/write_transport.py",
+          "line": 6,
+          "end_line": 34,
+          "symbol": "write_in_chunks",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__write_transport.py.txt",
+          "sha256": "a4c0205b25bca2600afbeb235952b808bd266d2cb6a18f8ec1a40a882d6d8666"
+        },
+        {
+          "path": "agent/core/actions.py",
+          "line": 200,
+          "end_line": 291,
+          "symbol": "_write_content",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/agent__core__actions.py.txt",
+          "sha256": "d4eaef44758778e2402f8a3f60b45b6baaa0b400797b29a26f0905f9557a2ba1"
+        },
+        {
+          "path": "agent/core/actions.py",
+          "line": 192,
+          "end_line": 197,
+          "symbol": "write_content",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/agent__core__actions.py.txt",
+          "sha256": "d4eaef44758778e2402f8a3f60b45b6baaa0b400797b29a26f0905f9557a2ba1"
+        },
+        {
+          "path": "agent/core/actions.py",
+          "line": 44,
+          "end_line": 86,
+          "symbol": "_verify_artifact",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/agent__core__actions.py.txt",
+          "sha256": "d4eaef44758778e2402f8a3f60b45b6baaa0b400797b29a26f0905f9557a2ba1"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:component:artifacts->component:state",
+        "depends_on:component:artifacts->component:office",
+        "depends_on:component:device->component:artifacts",
+        "depends_on:component:artifacts->component:memory",
+        "depends_on:component:multidevice->component:artifacts",
+        "depends_on:component:authorization->component:artifacts",
+        "depends_on:component:worker->component:artifacts",
+        "depends_on:component:registry->component:artifacts"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "mechanism:execution-scope",
+      "title": "Оконный scope и ввод",
+      "role": "validated_execution_scope проверяет область; window_input_required/choice формируют выбор пользователя; answer_window_input продолжает ожидающее задание.",
+      "importance": "Разделяет управление окнами и общее выполнение, не выдавая оконному действию дополнительные полномочия.",
+      "risk": "Устаревший выбор окна или ответ не тому pending input может направить действие неверно.",
+      "protection": "Проверяется scope/effects, owner и идентификатор ожидающего ввода.",
+      "checks": "Проверять неоднозначное окно, waiting_input, stale question ID и отсутствие расширения scope.",
+      "name": "Execution scope / window input",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 12,
+          "outgoing": 30,
+          "neighbors": 35,
+          "reverse_reachable": 22,
+          "articulation": false,
+          "scc_size": 22
+        }
+      },
+      "sources": [
+        {
+          "path": "server/worker_scheduler.py",
+          "line": 30,
+          "end_line": 35,
+          "symbol": "validated_execution_scope",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_scheduler.py.txt",
+          "sha256": "703b5c244f567987fe86fea976f8c6a272ac154163e7a6eceeed998e05f5568d"
+        },
+        {
+          "path": "server/worker_scheduler.py",
+          "line": 959,
+          "end_line": 986,
+          "symbol": "answer_window_input",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__worker_scheduler.py.txt",
+          "sha256": "703b5c244f567987fe86fea976f8c6a272ac154163e7a6eceeed998e05f5568d"
+        },
+        {
+          "path": "server/window_policy.py",
+          "line": 65,
+          "end_line": 93,
+          "symbol": "window_input_required",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__window_policy.py.txt",
+          "sha256": "f640aaec218af8241cfd5f14ea060f64eac8a0803c53df7ae81873af6c709aac"
+        },
+        {
+          "path": "server/window_policy.py",
+          "line": 96,
+          "end_line": 111,
+          "symbol": "window_input_choice",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__window_policy.py.txt",
+          "sha256": "f640aaec218af8241cfd5f14ea060f64eac8a0803c53df7ae81873af6c709aac"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:mechanism:worker-tool-loop->mechanism:execution-scope",
+        "depends_on:mechanism:decision->mechanism:execution-scope",
+        "depends_on:mechanism:memory-authorization->mechanism:execution-scope",
+        "depends_on:mechanism:turn-handoff->mechanism:execution-scope",
+        "depends_on:mechanism:voice-provider->mechanism:execution-scope",
+        "depends_on:mechanism:execution-scope->mechanism:command-confirmation",
+        "depends_on:mechanism:execution-scope->mechanism:llm-route",
+        "depends_on:mechanism:execution-scope->mechanism:llm-transport",
+        "depends_on:mechanism:execution-scope->mechanism:runtime-context",
+        "depends_on:mechanism:execution-scope->mechanism:worker-tool-loop",
+        "depends_on:mechanism:execution-scope->mechanism:answer-audit",
+        "depends_on:mechanism:execution-scope->mechanism:controller-budget",
+        "depends_on:mechanism:execution-scope->mechanism:memory-read",
+        "depends_on:mechanism:execution-scope->mechanism:task-state",
+        "depends_on:mechanism:execution-scope->mechanism:tool-contracts",
+        "depends_on:mechanism:execution-scope->mechanism:tool-result",
+        "depends_on:mechanism:execution-scope->mechanism:diagnostic-journal",
+        "depends_on:mechanism:execution-scope->mechanism:journal-steps",
+        "depends_on:mechanism:execution-scope->mechanism:terminal-validation",
+        "depends_on:mechanism:execution-scope->mechanism:browser-credentials",
+        "depends_on:mechanism:execution-scope->mechanism:browser-operations",
+        "depends_on:mechanism:execution-scope->mechanism:bounded-context",
+        "depends_on:mechanism:execution-scope->mechanism:file-transfer",
+        "depends_on:mechanism:execution-scope->mechanism:chunked-writes",
+        "depends_on:mechanism:execution-scope->mechanism:decision",
+        "depends_on:mechanism:execution-scope->mechanism:memory-authorization",
+        "depends_on:mechanism:execution-scope->mechanism:turn-handoff",
+        "depends_on:mechanism:execution-scope->mechanism:voice-provider",
+        "depends_on:mechanism:execution-scope->mechanism:command-transport",
+        "depends_on:mechanism:bounded-context->mechanism:execution-scope",
+        "depends_on:mechanism:execution-scope->mechanism:report-projection",
+        "depends_on:mechanism:execution-scope->mechanism:result-presentation",
+        "depends_on:mechanism:execution-scope->mechanism:memory-authority",
+        "depends_on:mechanism:execution-scope->mechanism:memory-intent-guard",
+        "depends_on:mechanism:admission->mechanism:execution-scope",
+        "depends_on:mechanism:dispatch-recovery->mechanism:execution-scope",
+        "depends_on:mechanism:execution-scope->mechanism:device-fanout",
+        "depends_on:mechanism:execution-scope->mechanism:worker-lifecycle",
+        "depends_on:mechanism:goal-admission->mechanism:execution-scope",
+        "depends_on:mechanism:goal-outcome->mechanism:execution-scope",
+        "depends_on:mechanism:pinned-results->mechanism:execution-scope",
+        "depends_on:mechanism:report-projection->mechanism:execution-scope"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "mechanism:memory-authorization",
+      "title": "Разрешение записи памяти",
+      "role": "Decision содержит MemoryAuthorization; memory-intent guard отделяет текущую явную авторизацию от истории.",
+      "importance": "Критичная граница между прочитанными данными и долговременной записью.",
+      "risk": "История/источник не должны самостоятельно разрешать remember_fact.",
+      "protection": "Контракт текущего turn и guard перед выполнением memory tool.",
+      "checks": "Проверять отсутствие разрешения, чужой owner, неверные факты и неприменение прошлых разрешений к новой реплике.",
+      "name": "Current-turn memory authorization",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 11,
+          "outgoing": 17,
+          "neighbors": 21,
+          "reverse_reachable": 22,
+          "articulation": false,
+          "scc_size": 22
+        }
+      },
+      "sources": [
+        {
+          "path": "server/orchestrator.py",
+          "line": 30,
+          "end_line": 33,
+          "symbol": "MemoryAuthorization",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__orchestrator.py.txt",
+          "sha256": "9ddcb5778ba75ac7e70564347644124c2a2874c0e563a9611a9321d808b3eea1"
+        },
+        {
+          "path": "server/orchestrator.py",
+          "line": 52,
+          "end_line": 102,
+          "symbol": "Decision",
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/server__orchestrator.py.txt",
+          "sha256": "9ddcb5778ba75ac7e70564347644124c2a2874c0e563a9611a9321d808b3eea1"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:mechanism:memory-authorization->mechanism:llm-route",
+        "depends_on:mechanism:memory-authorization->mechanism:llm-transport",
+        "depends_on:mechanism:memory-authorization->mechanism:runtime-context",
+        "depends_on:mechanism:memory-authorization->mechanism:worker-tool-loop",
+        "depends_on:mechanism:memory-authorization->mechanism:task-state",
+        "depends_on:mechanism:memory-authorization->mechanism:admission",
+        "depends_on:mechanism:memory-authorization->mechanism:dispatch-recovery",
+        "depends_on:mechanism:memory-authorization->mechanism:execution-scope",
+        "depends_on:mechanism:memory-authorization->mechanism:goal-admission",
+        "depends_on:mechanism:memory-authorization->mechanism:goal-outcome",
+        "depends_on:mechanism:memory-authorization->mechanism:pinned-results",
+        "depends_on:mechanism:memory-authorization->mechanism:report-projection",
+        "depends_on:mechanism:memory-authorization->mechanism:memory-read",
+        "depends_on:mechanism:memory-authorization->mechanism:bounded-context",
+        "depends_on:mechanism:memory-authorization->mechanism:result-presentation",
+        "depends_on:mechanism:memory-authorization->mechanism:voice-provider",
+        "depends_on:mechanism:memory-authorization->mechanism:voice-session",
+        "depends_on:mechanism:turn-handoff->mechanism:memory-authorization",
+        "depends_on:mechanism:command-transport->mechanism:memory-authorization",
+        "depends_on:mechanism:device-fanout->mechanism:memory-authorization",
+        "depends_on:mechanism:execution-scope->mechanism:memory-authorization",
+        "depends_on:mechanism:worker-lifecycle->mechanism:memory-authorization",
+        "depends_on:mechanism:admission->mechanism:memory-authorization",
+        "depends_on:mechanism:dispatch-recovery->mechanism:memory-authorization",
+        "depends_on:mechanism:goal-admission->mechanism:memory-authorization",
+        "depends_on:mechanism:goal-outcome->mechanism:memory-authorization",
+        "depends_on:mechanism:pinned-results->mechanism:memory-authorization",
+        "depends_on:mechanism:report-projection->mechanism:memory-authorization"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    },
+    {
+      "id": "mechanism:ui-modes",
+      "title": "Desktop / mini / mobile UI",
+      "role": "Режимы показывают Goal-группы, проверенные файлы, заменённые задачи и pending confirmation.",
+      "importance": "Изменения UI существенны: mini confirmation должна отражать живое состояние раньше бегущих задач.",
+      "risk": "Старый снимок confirmation в Goal group может скрыть ожидающий ввод или показать лишние команды.",
+      "protection": "Представление использует task/goal projection; последние fixes выделяют pending confirmation и краткий mini input.",
+      "checks": "Проверять desktop/mini/mobile, live confirmation, история superseded и открытие файлов на исходном устройстве.",
+      "name": "Desktop / mini / mobile surfaces",
+      "metrics": {
+        "static": {
+          "incoming": 0,
+          "outgoing": 0,
+          "neighbors": 0,
+          "reverse_reachable": 0,
+          "articulation": false,
+          "scc_size": 1
+        },
+        "semantic": {
+          "incoming": 1,
+          "outgoing": 0,
+          "neighbors": 1,
+          "reverse_reachable": 1,
+          "articulation": false,
+          "scc_size": 1
+        }
+      },
+      "sources": [
+        {
+          "path": "ui/js/operations.js",
+          "line": 1,
+          "end_line": null,
+          "symbol": null,
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/ui__js__operations.js.txt",
+          "sha256": "6ca3247c59f82dcc68e5711a35b41c5e9085bbebc5be276f904382666f95592d"
+        },
+        {
+          "path": "ui/js/mini-operations.js",
+          "line": 1,
+          "end_line": null,
+          "symbol": null,
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/ui__js__mini-operations.js.txt",
+          "sha256": "78d52d5a252d849078bccd35cd54d98285300f277fc3667061532aed075a25eb"
+        },
+        {
+          "path": "ui/css/modes/shared/workspace.03.css",
+          "line": 1,
+          "end_line": null,
+          "symbol": null,
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/ui__css__modes__shared__workspace.03.css.txt",
+          "sha256": "4fabdc914fe02fe9992faf8372539f6d5589ce4fa0015f426edfaf7e5d4036c2"
+        },
+        {
+          "path": "ui/css/modes/mobile/product-v2.02.css",
+          "line": 1,
+          "end_line": null,
+          "symbol": null,
+          "git_sha": "712f730757ae440108fc8bcd3c3b572c57124cbc",
+          "offline_path": "data/review-source/ui__css__modes__mobile__product-v2.02.css.txt",
+          "sha256": "7c52f8c81983f2146bdd7009cd99485f1b9cb2a9fc65e0b0322ddb0783d81d5c"
+        }
+      ],
+      "edge_ids": [
+        "depends_on:mechanism:frontend-styles->mechanism:ui-modes"
+      ],
+      "review_kind": "source_review_and_conditional_risk",
+      "runtime_failure_proven": false
+    }
+  ]
+}
