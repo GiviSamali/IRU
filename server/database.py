@@ -299,6 +299,7 @@ def init_db():
             "ALTER TABLE device_memory ADD COLUMN user_id TEXT",
             "ALTER TABLE users ADD COLUMN plan_trial_used INTEGER DEFAULT 0",
             "ALTER TABLE messages ADD COLUMN task_metadata TEXT",
+            "ALTER TABLE chats ADD COLUMN context_compression_failure TEXT",
         ]
         for sql in migrations:
             try:

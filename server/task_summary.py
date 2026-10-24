@@ -103,7 +103,14 @@ def get_last_run_summary(
     source_message_ids: list[int] | None = None,
     source_message_range: dict | None = None,
     expected_source_sha256: str | None = None,
+    summary_archive_offset: int | None = None,
+    source_summary_id: str | None = None,
 ) -> dict[str, Any]:
+    if summary_archive_offset is not None or source_summary_id is not None:
+        try:from .context_history import summary_archive
+        except ImportError:from context_history import summary_archive
+        return summary_archive(user_id,chat_id,summary_archive_offset if summary_archive_offset is not None else 0,
+            summary_id=source_summary_id,report_offset=report_offset,expected_sha256=expected_source_sha256)
     if source_message_ids is not None or source_message_range is not None:
         try:from .context_history import resolve_sources
         except ImportError:from context_history import resolve_sources

@@ -2,6 +2,7 @@
 import codecs
 import hashlib
 import json
+import sqlite3
 import time
 import uuid
 
@@ -66,6 +67,40 @@ def digest(rows):
         hasher.update(json.dumps(row,ensure_ascii=False,sort_keys=True).encode('utf-8'))
     hasher.update(b']')
     return hasher.hexdigest()
+
+
+def summary_archive(owner, chat_id, offset=0, *, summary_id=None, report_offset=0, expected_sha256=None):
+    """Bounded archive directory or an explicitly requested summary text page."""
+    if type(offset) is not int or offset<0 or type(report_offset) is not int or report_offset<0:
+        return {'status':'error','error':'invalid_summary_offset'}
+    if summary_id is not None and (not isinstance(summary_id,str) or not summary_id or len(summary_id)>128):
+        return {'status':'error','error':'invalid_summary_id'}
+    with db.get_db() as c:
+        if not c.execute('SELECT 1 FROM chats WHERE id=? AND user_id=?',(chat_id,owner)).fetchone():
+            return {'status':'error','error':'source_not_available'}
+        if summary_id is not None:
+            row=c.execute('SELECT content,source_ids FROM context_summaries WHERE id=? AND owner_user_id=? AND chat_id=?',(summary_id,owner,chat_id)).fetchone()
+            if row is None:return {'status':'error','error':'source_not_available'}
+            text=json.dumps({'items':json.loads(row['content']),'source_message_ids':json.loads(row['source_ids'])},ensure_ascii=False)
+            revision=hashlib.sha256(text.encode('utf-8')).hexdigest()
+            if report_offset and not expected_sha256:return {'status':'error','error':'source_revision_required'}
+            if expected_sha256 is not None and revision!=expected_sha256:return {'status':'error','error':'source_changed'}
+            if report_offset>=len(text):return {'status':'error','error':'invalid_summary_offset'}
+            return {'status':'success','authority':'historical_data_only','source_verified':False,
+                'summary_id':summary_id,'text':text[report_offset:report_offset+4000],'sha256':revision,
+                'next_offset':report_offset+4000 if report_offset+4000<len(text) else None}
+        # Only compact previews enter the main prompt, never the full archive.
+        rows=c.execute('''SELECT id,created_at,
+            SUBSTR(json_extract(content,'$[0].text'),1,160) AS preview
+            FROM context_summaries WHERE owner_user_id=? AND chat_id=?
+            ORDER BY created_at,id LIMIT 17 OFFSET ?''',(owner,chat_id,offset)).fetchall()
+        total=c.execute('SELECT COUNT(*) FROM context_summaries WHERE owner_user_id=? AND chat_id=?',(owner,chat_id)).fetchone()[0]
+    entries=[{'id':r['id'],'created_at':r['created_at'],'preview':r['preview'],
+        'read_arguments':{'source_summary_id':r['id'],'report_offset':0}} for r in rows[:16]]
+    return {'status':'success','authority':'historical_data_only','source_verified':False,
+        'tool':'system_get_last_run_summary','entries':entries,'total_summaries':total,
+        'next_arguments':{'summary_archive_offset':offset+16} if len(rows)>16 else None,
+        'description':'Archive previews are incomplete. Read summary pages, then cited original messages before explaining a past decision; page the directory when needed.'}
 
 
 def resolve_sources(owner, chat_id, ids=None, offset=0, *, message_range=None, expected_sha256=None):
@@ -166,6 +201,9 @@ def history_for(owner, chat_id, exclude_id=None, *, query="", selection=None):
     if selection is not None:
         selection.update(recent_limit=32,match_limit=16,selection_incomplete=bounds[2]>len(set(ids)|covered),
             first_message_id=bounds[0],last_message_id=bounds[1],total_messages=bounds[2])
+        directory=summary_archive(owner,chat_id)
+        if directory.get('total_summaries',0)>len(summaries):
+            selection['summary_archive']=directory
     return history,summaries
 
 
@@ -243,6 +281,20 @@ async def compress_context(context, cfg, model, message, system, tools, owner, c
         batch = candidate
     if len(batch) < 2: return bounded_context(context, request, cfg)
     ids = [r['id'] for r in batch]
+    # One persisted retry deadline per owned chat, keyed to the actual bounded
+    # fragment and summarizer configuration. New user turns do not reset it.
+    fingerprint=hashlib.sha256(json.dumps([model,cfg.get('base_url'),output,
+        cfg.get('context_window_tokens'),cfg.get('api_key'),SUMMARY_PROMPT],ensure_ascii=False).encode('utf-8')).hexdigest()
+    with db.get_db() as c:
+        row=c.execute('SELECT context_compression_failure FROM chats WHERE id=? AND user_id=?',(chat_id,owner)).fetchone()
+    failure=json.loads(row[0] or '{}') if row else {}
+    failed_ids=failure.get('source_ids') or []
+    same_fragment=(bool(failed_ids) and ids[:len(failed_ids)]==failed_ids
+        and digest(batch[:len(failed_ids)])==failure.get('source_hash'))
+    if failure.get('configuration')==fingerprint and same_fragment and failure.get('retry_at',0)>time.time():
+        context['compression']={'status':'deferred','reason':'retry_cooldown','retry_at':failure['retry_at'],
+            'originals_preserved':True,'trigger':trigger}
+        return bounded_context(context,request,cfg)
     try:
         import httpx
         async with httpx.AsyncClient(timeout=30) as client:
@@ -268,20 +320,39 @@ async def compress_context(context, cfg, model, message, system, tools, owner, c
             existing=c.execute('SELECT 1 FROM context_summaries s,json_each(s.source_ids) j WHERE s.owner_user_id=? AND s.chat_id=? AND j.value IN ('+','.join('?' for _ in ids)+') LIMIT 1',[owner,chat_id,*ids]).fetchone()
             if existing: raise ValueError('context_already_compressed')
             c.execute('INSERT INTO context_summaries VALUES(?,?,?,?,?,?,?,?)', (str(uuid.uuid4()), owner, chat_id, json.dumps(ids), 'v2:'+digest(batch), json.dumps(items, ensure_ascii=False), json.dumps([r for r in related if r]), time.time()))
+            c.execute('UPDATE chats SET context_compression_failure=NULL WHERE id=? AND user_id=?',(chat_id,owner))
         context['history'] = [r for r in history if r['id'] not in ids]
         _, context['history_summaries'] = history_for(owner, chat_id,query=message)
         context['source_messages'] = cited_sources(owner,chat_id,context['history_summaries'],message)
         context['compression'] = {'status': 'saved', 'source_count': len(ids), 'trigger': trigger}
     except Exception as exc:
-        context['compression'] = {'status': 'unavailable', 'error_type': type(exc).__name__, 'originals_preserved': True, 'trigger': trigger}
+        retry_at=time.time()+300
+        retry_saved=True
+        try:
+            with db.get_db() as c:
+                c.execute('UPDATE chats SET context_compression_failure=? WHERE id=? AND user_id=?',
+                    (json.dumps({'configuration':fingerprint,'source_ids':ids,'source_hash':digest(batch),'retry_at':retry_at}),chat_id,owner))
+        except sqlite3.Error:
+            retry_saved=False
+        context['compression'] = {'status': 'unavailable', 'error_type': type(exc).__name__,
+            'originals_preserved': True, 'trigger': trigger,'retry_state_saved':retry_saved,
+            'retry_at':retry_at if retry_saved else None}
     return bounded_context(context, request, cfg)
 
 
 def bounded_context(context, request, cfg):
     context = {**context, 'history': list(context.get('history') or []), 'history_summaries': list(context.get('history_summaries') or [])}
+    selection=dict(context.get('history_selection') or {})
+    archive=selection.get('summary_archive')
+    if archive:
+        archive={**archive,'entries':list(archive.get('entries') or [])}
+        selection['summary_archive']=archive;context['history_selection']=selection
     omitted = []
     while request_budget(request(context), cfg)['estimated_input_tokens'] > request_budget(request(context), cfg)['input_limit_tokens']:
-        if len(context['history'])>6:
+        if archive and archive['entries']:
+            archive['entries'].pop()
+            archive['next_arguments']={'summary_archive_offset':len(archive['entries'])}
+        elif len(context['history'])>6:
             omitted.append(context['history'].pop(0)['id'])
         elif context.get('source_messages'):
             omitted.append(context['source_messages'].pop(0)['id'])
@@ -291,6 +362,7 @@ def bounded_context(context, request, cfg):
             omitted.append(context['history'].pop(0)['id'])
         else: raise ValueError('context_mandatory_request_exceeds_budget')
         context['context_truncated'] = True
-        context['source_recovery'] = {'first_message_id': min(omitted), 'last_message_id': max(omitted),
-            'tool':'system_get_last_run_summary','arguments':{'source_message_range':{'first':min(omitted),'last':max(omitted)},'report_offset':0}, 'source_not_in_prompt':True}
+        if omitted:
+            context['source_recovery'] = {'first_message_id': min(omitted), 'last_message_id': max(omitted),
+                'tool':'system_get_last_run_summary','arguments':{'source_message_range':{'first':min(omitted),'last':max(omitted)},'report_offset':0}, 'source_not_in_prompt':True}
     return context
