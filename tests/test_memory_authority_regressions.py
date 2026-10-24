@@ -10,7 +10,8 @@ from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_tools import NON_PIPELINE_TOOLS
 from server.runtime_state import tasks
 from server.worker_scheduler import WorkerScheduler, init_worker_storage
-from server.controller_shared import MAX_MEMORY_BLOCK, build_memory_block
+from server.controller_shared import build_memory_block
+from server.context_budget import estimate_tokens
 from server.memory_intent_guard import memory_permissions_from_human_request
 
 
@@ -170,7 +171,7 @@ def test_memory_block_hard_limit_complete_readable_records(client, with_commands
             db.add_command_memory("guid", "device", f"command {i}", None, 0, "x" * 500, "", str(user["id"]))
     block = build_memory_block("guid", str(user["id"]), "device")
     parsed = json.loads(block)
-    assert len(block) <= MAX_MEMORY_BLOCK
+    assert estimate_tokens(block) <= 2048
     assert parsed["selection_incomplete"] is True
     assert parsed["omitted_facts"] == len(texts) - len(parsed["facts"])
     assert all(f["text"] in texts for f in parsed["facts"])
@@ -185,7 +186,7 @@ def test_memory_facts_and_command_previews_share_budget(client):
         db.add_command_memory("guid", "device", f"command {i}", None, 0, "x" * 500, "", str(user["id"]))
     block = build_memory_block("guid", str(user["id"]), "device")
     parsed = json.loads(block)
-    assert len(block) <= MAX_MEMORY_BLOCK and parsed["facts"] and parsed["commands"]
+    assert estimate_tokens(block) <= 2048 and parsed["facts"] and parsed["commands"]
     assert parsed["omitted_commands"] > 0 and parsed["selection_incomplete"]
 
 
@@ -368,3 +369,9 @@ def test_non_pipeline_explicit_remember_and_forget_still_work(client):
                _message(tool_calls=[_answer_call("a", "Result")])],
               user_message="Забудь факт о чае", user_id=user["id"], mem_user_id=str(user["id"]))
     assert db.get_user_facts(str(user["id"])) == []
+
+
+@pytest.fixture(autouse=True)
+def bounded_token_memory_budget(monkeypatch):
+    from server import context_budget
+    monkeypatch.setattr(context_budget,'configured_context_budget',lambda output_tokens=2400:16384)

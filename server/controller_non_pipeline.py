@@ -297,6 +297,7 @@ async def process_non_pipeline_command(
     elif chat_history:
         messages.extend(build_chat_messages(chat_history[:-1], filter_onboarding=True))
     messages.append({"role": "user", "content": user_message})
+    current_user_index=len(messages)-1
     commands_log = []
     recovery_only = bool(runtime_tasks.get(poll_task_id, {}).get("_action_outcome_unknown"))
     if recovery_only:
@@ -437,7 +438,7 @@ async def process_non_pipeline_command(
                     tools=non_pipeline_tools,
                     max_tokens=cfg.get("max_tokens", 32768),
                     tool_choice="required",
-                    usage_context={**(usage_context or {}), "phase": phase},
+                    usage_context={**(usage_context or {}), "phase": phase,"context_current_user_index":current_user_index},
                     phase=phase,
                 )
             except httpx.HTTPStatusError as exc:
@@ -823,7 +824,7 @@ async def process_non_pipeline_command(
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call["id"],
-                        "content": json.dumps(duplicate_message, ensure_ascii=False)[:4000],
+                        "content": json.dumps(duplicate_message, ensure_ascii=False),
                     })
                     previous_step_id = duplicate_message["previous_step_id"]
                     add_correction(
@@ -914,6 +915,8 @@ async def process_non_pipeline_command(
                         include_success=bool(fn_args.get("include_success", True)),
                         exclude_task_id=poll_task_id,
                         source_task_id=fn_args.get("source_task_id"),
+                        source_message_ids=fn_args.get("source_message_ids"),
+                        source_message_range=fn_args.get("source_message_range"),expected_source_sha256=fn_args.get("expected_source_sha256"),
                         report_offset=fn_args.get("report_offset", 0),
                         allowed_devices={str(target_device).split(":")[-1]},
                     )

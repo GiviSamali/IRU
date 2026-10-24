@@ -100,7 +100,14 @@ def get_last_run_summary(
     source_task_id: str | None = None,
     report_offset: int = 0,
     allowed_devices: set[str] | None = None,
+    source_message_ids: list[int] | None = None,
+    source_message_range: dict | None = None,
+    expected_source_sha256: str | None = None,
 ) -> dict[str, Any]:
+    if source_message_ids is not None or source_message_range is not None:
+        try:from .context_history import resolve_sources
+        except ImportError:from context_history import resolve_sources
+        return resolve_sources(user_id,chat_id,source_message_ids,report_offset,message_range=source_message_range,expected_sha256=expected_source_sha256)
     if source_task_id:
         # Explicit persisted source: ownership/chat/device boundaries precede all content access.
         try:

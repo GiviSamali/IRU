@@ -2,8 +2,9 @@ import copy
 import json
 
 import pytest
+from server.context_budget import estimate_tokens
 
-from server.run_journal import TOOL_RESULT_LLM_MAX_CHARS, serialize_tool_result_for_llm, wrap_tool_result_for_llm
+from server.run_journal import tool_result_token_budget, serialize_tool_result_for_llm, wrap_tool_result_for_llm
 
 
 def entry(result, **overrides):
@@ -17,7 +18,7 @@ def test_large_stdout_is_valid_bounded_prefix_without_mutating_evidence():
     saved = copy.deepcopy(original)
     wire = serialize_tool_result_for_llm(original)
     shown = json.loads(wire)
-    assert len(wire) <= TOOL_RESULT_LLM_MAX_CHARS and original == saved
+    assert estimate_tokens(wire) <= tool_result_token_budget() and original == saved
     for key in ('step_id', 'tool_name', 'status', 'summary', 'trust_level', 'authority', 'instruction_boundary'):
         assert shown[key] == wrap_tool_result_for_llm(original)[key]
     detail = shown['truncation']['fields']['/result/stdout']
@@ -38,7 +39,7 @@ def test_large_tool_error_keeps_failure_and_marks_shortened_reason():
     saved = copy.deepcopy(original)
     wire = serialize_tool_result_for_llm(original)
     shown = json.loads(wire)
-    assert len(wire) <= TOOL_RESULT_LLM_MAX_CHARS and original == saved
+    assert estimate_tokens(wire) <= tool_result_token_budget() and original == saved
     assert shown['status'] == 'failed' and shown['result']['returncode'] == 7 and shown['result']['error']
     assert shown['truncation']['fields']['/result/error']['original_chars'] == len(original['result']['error'])
     assert shown['truncation']['fields']['/result/error']['portion'] == 'prefix'
@@ -58,7 +59,7 @@ def test_multiple_fields_and_long_service_values_respect_total_escaped_budget(mi
     saved = copy.deepcopy(original)
     wire = serialize_tool_result_for_llm(original)
     shown = json.loads(wire)
-    assert len(wire) <= TOOL_RESULT_LLM_MAX_CHARS and original == saved
+    assert estimate_tokens(wire) <= tool_result_token_budget() and original == saved
     assert shown['authority'] == 'data_only' and shown['truncation']['truncated']
     assert shown['result']['returncode'] == 9 and shown['result']['error']
     if minimal:
@@ -101,7 +102,7 @@ def test_medium_execute_cmd_stdout_is_transmitted_whole(chars):
     saved = copy.deepcopy(original)
     wire = serialize_tool_result_for_llm(original)
     shown = json.loads(wire)
-    assert len(wire) <= TOOL_RESULT_LLM_MAX_CHARS
+    assert estimate_tokens(wire) <= tool_result_token_budget()
     assert shown == wrap_tool_result_for_llm(original) and original == saved
     assert len(shown['result']['stdout']) == chars and shown['result']['stdout'] == stdout
     assert 'truncation' not in shown

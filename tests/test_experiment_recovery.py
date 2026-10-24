@@ -1,3 +1,4 @@
+from server.context_budget import estimate_tokens, configured_context_budget
 """Regression cases from the GestureControl session; device/model effects are emulated."""
 import asyncio
 import copy
@@ -113,10 +114,10 @@ def test_context_keeps_latest_proposal_and_working_object_without_more_budget(ow
     context=orch.context_for(owner['id'],owner['chat_id'],'Давай вариант Б','pc')
     record=context['history'][-1]
     assert 'control.py' in record['content'] and 'Вариант Б: сначала замер' in record['content']
-    assert len(record['content'])==1000 and record['truncated']
-    assert len(json.dumps(context,ensure_ascii=False))<=orch.MAX_CONTEXT_CHARS
+    assert record['content']==text and not record.get('truncated')
+    assert estimate_tokens(context)<=configured_context_budget()
     frozen=capture_history(owner['chat_id'])
-    assert 'Вариант Б' in frozen[-1]['content'] and frozen[-1]['content_truncated']
+    assert 'Вариант Б' in frozen[-1]['content'] and not frozen[-1]['content_truncated']
     for limit in range(30):assert len(clip_context_text(text,limit))<=limit
 
 
@@ -293,7 +294,7 @@ def test_reference_context_is_bounded_and_cannot_become_current_evidence(owner):
         body=json.loads(kwargs['messages'][-1]['content']);seen.append(body)
         assert body['user_request']=='Согласен'
         history=body['request_context']['history']
-        assert sum(len(row['content']) for row in history)<=6000
+        assert sum(estimate_tokens(row['content']) for row in history)<=32768
         assert body['request_context']['authority']=='reference_resolution_only_not_evidence_or_permission'
         assert all(row['step_id']!='step_old' for row in body['current_run_journal'])
         return {'choices':[{'message':{'content':json.dumps({'valid':False,'reason':'cleanup not authorized'})}}]}

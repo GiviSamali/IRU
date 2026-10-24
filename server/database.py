@@ -102,6 +102,16 @@ def init_db():
                 created_at  REAL    NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS context_summaries (
+                id TEXT PRIMARY KEY,
+                owner_user_id INTEGER NOT NULL REFERENCES users(id),
+                chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                source_ids TEXT NOT NULL, source_hash TEXT NOT NULL,
+                content TEXT NOT NULL, related_tasks TEXT NOT NULL,
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS context_summaries_chat ON context_summaries(owner_user_id,chat_id);
+
             CREATE TABLE IF NOT EXISTS training_data (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id     INTEGER NOT NULL REFERENCES users(id),
@@ -296,6 +306,26 @@ def init_db():
             except sqlite3.OperationalError:
                 pass  # Колонка уже существует
 
+        # Invalidate derived data transactionally; normal reads need not reload
+        # every original covered by a cached summary just to check freshness.
+        conn.executescript("""
+            CREATE INDEX IF NOT EXISTS context_summaries_chat_only ON context_summaries(chat_id);
+            CREATE TRIGGER IF NOT EXISTS context_source_updated
+            AFTER UPDATE OF chat_id,role,content,commands,task_metadata,created_at ON messages
+            WHEN OLD.chat_id IS NOT NEW.chat_id OR OLD.role IS NOT NEW.role
+              OR OLD.content IS NOT NEW.content OR OLD.commands IS NOT NEW.commands
+              OR OLD.task_metadata IS NOT NEW.task_metadata OR OLD.created_at IS NOT NEW.created_at
+            BEGIN
+                DELETE FROM context_summaries WHERE chat_id=OLD.chat_id
+                AND EXISTS(SELECT 1 FROM json_each(CASE WHEN json_valid(source_ids) THEN source_ids ELSE '[]' END) WHERE value=OLD.id);
+            END;
+            CREATE TRIGGER IF NOT EXISTS context_source_deleted AFTER DELETE ON messages
+            BEGIN
+                DELETE FROM context_summaries WHERE chat_id=OLD.chat_id
+                AND EXISTS(SELECT 1 FROM json_each(CASE WHEN json_valid(source_ids) THEN source_ids ELSE '[]' END) WHERE value=OLD.id);
+            END;
+        """)
+
         # Создать admin-пользователя, если его нет
         admin = conn.execute("SELECT id FROM users WHERE name = 'admin'").fetchone()
         if not admin:
@@ -459,6 +489,7 @@ def delete_chat(chat_id: int, user_id: int) -> bool:
         ).fetchone()
         if owner is None:
             return False
+        conn.execute("DELETE FROM context_summaries WHERE chat_id=? AND owner_user_id=?",(chat_id,user_id))
         conn.execute("DELETE FROM training_data WHERE chat_id = ?", (chat_id,))
         conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
         cursor = conn.execute(
@@ -1264,7 +1295,12 @@ def add_llm_usage_event(
     """Store one LLM usage event. Failure must never break user requests."""
     try:
         if isinstance(metadata, dict):
-            metadata_text = json.dumps(metadata, ensure_ascii=False)[:1000]
+            metadata_text = json.dumps(metadata,ensure_ascii=False,separators=(',',':'))
+            if len(metadata_text)>1000:
+                # Preserve usable token diagnostics; never cut a JSON object.
+                compact={"metadata_omitted":True}
+                if 'context_budget' in metadata:compact['context_budget']=metadata['context_budget']
+                metadata_text=json.dumps(compact,ensure_ascii=False,separators=(',',':'))
         elif metadata is None:
             metadata_text = None
         else:

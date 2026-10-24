@@ -23,7 +23,7 @@ _WEEKDAYS_RU = [
 ]
 
 WORKER_MEMORY_QUERY = ContextVar("iru_worker_memory_query", default=None)
-MAX_MEMORY_BLOCK = 2048
+
 LIVE_SNAPSHOT_CONTAINER_KEYS = ("live_snapshot", "current_state", "state_snapshot")
 LIVE_SNAPSHOT_FIELDS = (
     "cpu_usage",
@@ -462,6 +462,9 @@ def build_memory_block(machine_guid: str | None, user_id: str | None = None,
     commands = db.get_recent_commands(machine_guid, user_id, 20, device_id) if machine_guid else []
     if not facts and not commands:
         return ""
+    try:from .context_budget import estimate_tokens, configured_context_budget
+    except ImportError:from context_budget import estimate_tokens, configured_context_budget
+    token_budget=max(128,configured_context_budget()//8)
     selected_facts, selected_commands = [], []
 
     def assemble():
@@ -474,20 +477,20 @@ def build_memory_block(machine_guid: str | None, user_id: str | None = None,
             "omitted_facts": omitted_facts, "omitted_commands": omitted_commands,
         }, ensure_ascii=False, separators=(",", ":"))
 
-    if len(assemble()) > MAX_MEMORY_BLOCK:
+    if estimate_tokens(assemble()) > token_budget:
         marker = '{"selection_incomplete":true}'
-        return marker if len(marker) <= MAX_MEMORY_BLOCK else ""
+        return marker if estimate_tokens(marker) <= token_budget else ""
     # Stable ordering; retain complete records and skip oversized ones, never slice JSON.
     for fact in facts:
         selected_facts.append(fact)
-        if len(assemble()) > MAX_MEMORY_BLOCK:
+        if estimate_tokens(assemble()) > token_budget:
             selected_facts.pop()
     for command in commands:
         record = {key: command.get(key) for key in ("id", "command", "intent", "exit_code", "success")}
-        record["stdout_preview"] = (command.get("stdout_preview") or "")[:200]
-        record["stderr_preview"] = (command.get("stderr_preview") or "")[:200]
+        record["stdout_preview"] = command.get("stdout_preview") or ""
+        record["stderr_preview"] = command.get("stderr_preview") or ""
         selected_commands.append(record)
-        if len(assemble()) > MAX_MEMORY_BLOCK:
+        if estimate_tokens(assemble()) > token_budget:
             selected_commands.pop()
     return assemble()
 

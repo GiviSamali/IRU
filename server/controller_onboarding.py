@@ -81,6 +81,7 @@ async def process_onboarding_message(
     messages.append({"role": "user", "content": user_message})
     usage_ctx = {
         **(usage_context or {}),
+        "context_current_user_index":len(messages)-1,
         "route": (usage_context or {}).get("route") or "onboarding",
         "phase": (usage_context or {}).get("phase") or "onboarding",
     }
@@ -197,6 +198,7 @@ async def process_onboarding_message(
                     args = json.loads(fn.get("arguments") or "{}")
                     result = get_last_run_summary(user_id=user_id, chat_id=(usage_context or {}).get("chat_id"),
                         exclude_task_id=(usage_context or {}).get("poll_task_id"), source_task_id=args.get("source_task_id"),
+                        source_message_ids=args.get("source_message_ids"),source_message_range=args.get("source_message_range"),expected_source_sha256=args.get("expected_source_sha256"),
                         report_offset=args.get("report_offset", 0), allowed_devices={"server"})
                 except (ValueError, TypeError, AttributeError):
                     result = {"status":"blocked", "error":"invalid_source_arguments"}

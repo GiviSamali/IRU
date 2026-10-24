@@ -1,3 +1,4 @@
+from server.context_budget import estimate_tokens, configured_context_budget
 import asyncio
 import json
 import time
@@ -581,7 +582,7 @@ def test_orchestrator_worker_history_keeps_result_instead_of_file_ready(owner):
         task_metadata={'taskKind':'worker','executionDetails':raw})
     context=orch.context_for(owner['id'],owner['chat_id'],'Продолжим','pc')
     assert context['history'][-1]['content']==raw
-    assert len(json.dumps(context,ensure_ascii=False))<=orch.MAX_CONTEXT_CHARS
+    assert estimate_tokens(context)<=configured_context_budget()
 
 
 def test_orchestrator_context_keeps_newest_result_when_old_reports_exceed_budget(owner,monkeypatch):
@@ -601,10 +602,11 @@ def test_orchestrator_context_keeps_newest_result_when_old_reports_exceed_budget
                 (job['task_id'], owner['id'], owner['chat_id'], job['state'], job['payload'], job['report'], job['created_at'], job['created_at']),
             )
     context=orch.context_for(owner['id'],owner['chat_id'],'Продолжить','pc')
-    assert context['context_truncated'] is True
+    assert not context.get('context_truncated')
+    assert all(t['report'] for t in context['tasks'])
     assert context['tasks'][0]['report']['summary'].startswith('CURRENT-0 ')
     assert 'STALE_COLUMN' not in json.dumps(context)
-    assert len(json.dumps(context,ensure_ascii=False))<=orch.MAX_CONTEXT_CHARS
+    assert estimate_tokens(context)<=configured_context_budget()
 
 
 def test_chat_recovery_audited_write_report_is_primary_and_helper_stays_separate(owner):

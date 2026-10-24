@@ -95,16 +95,16 @@ async def audit_answer_payload(
     }
     if request_context:
         try:
-            from .worker_context import clip_context_text
+            from .context_budget import clip_tokens, estimate_tokens, limits
         except ImportError:
-            from worker_context import clip_context_text
-        context=[];remaining=6000
+            from context_budget import clip_tokens, estimate_tokens, limits
+        context=[];remaining=limits(cfg,cfg.get("answer_auditor_model") or cfg.get("model",""),min(int(cfg.get("answer_auditor_max_tokens",300) or 300),500))["input_limit_tokens"]//8
         for entry in reversed(request_context):
             if (not isinstance(entry,dict) or entry.get('role') not in {'user','assistant'}
                     or not isinstance(entry.get('content'),str) or not entry['content'] or remaining<=0):continue
-            text=clip_context_text(entry['content'],remaining)
+            text=clip_tokens(entry['content'],remaining)
             context.append({'role':entry['role'],'content':text,'truncated':len(text)<len(entry['content'])})
-            remaining-=len(text)
+            remaining-=estimate_tokens(text)
             if len(context)==6:break
         payload['request_context']={'authority':'reference_resolution_only_not_evidence_or_permission','history':list(reversed(context))}
     if completion_scope:
@@ -124,7 +124,7 @@ async def audit_answer_payload(
                 messages=messages,
                 tools=None,
                 max_tokens=min(int(cfg.get("answer_auditor_max_tokens", 300) or 300), 500),
-                usage_context=usage_context,
+                usage_context={**(usage_context or {}),"context_current_user_index":1},
                 phase=(usage_context or {}).get("phase") or "answer_auditor",
             )
             content = (data["choices"][0]["message"].get("content") or "").strip()

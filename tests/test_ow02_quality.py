@@ -1,3 +1,4 @@
+from server.context_budget import estimate_tokens, configured_context_budget
 import asyncio
 import json
 from types import SimpleNamespace
@@ -238,7 +239,7 @@ def test_p002_recent_worker_artifact_survives_handoff_without_becoming_basis(own
     assert data['referenced_results'][0]['source_device_ids'] == ['pc']
     assert data['referenced_results'][0]['summary'] == 'Предыдущее изменение записано.'
     assert data['referenced_results'][-1]['summary'] == 'Последнее изменение сохранено.'
-    assert data['current_run_evidence'] is False and len(json.dumps(data, ensure_ascii=False)) <= 4000
+    assert data['current_run_evidence'] is False and estimate_tokens(data) <= max(256,configured_context_budget()//4)
     assert 'LARGE_OLD_OUTPUT' not in json.dumps(context) and 'old_step' not in json.dumps(context)
     assert context[-1] == {'role': 'user', 'content': 'Теперь сделай линии тоньше'}
     payload = {'answer_type': 'grounded_report', 'text': 'Новое изменение выполнено.', 'basis': ['old_step'],
@@ -327,7 +328,7 @@ def test_p003a_interpretation_cannot_expand_scope_permission_or_current_basis(ow
     context = build_worker_context(a['id'], a['chat_id'], original, [f"{a['id']}:pc"], [], **interpretation)
     data = json.loads(context[0]['content'].split('\n', 1)[1].rsplit('\nEnd', 1)[0])
     assert context[-1]['content'] == original and data['current_run_evidence'] is False
-    assert data['allowed_device_ids'] == ['pc'] and len(json.dumps(data, ensure_ascii=False)) <= 4000
+    assert data['allowed_device_ids'] == ['pc'] and estimate_tokens(data) <= max(256,configured_context_budget()//4)
     assert data['context_truncated'] is True
     assert any(data['orchestrator_interpretation'].get(key+'_truncated') for key in ('objective', 'context_summary'))
     assert 'not a new human request or permission' in data['orchestrator_interpretation']['authority']

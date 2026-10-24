@@ -1,3 +1,4 @@
+from server.context_budget import estimate_tokens, configured_context_budget
 import asyncio
 import json
 import time
@@ -155,7 +156,7 @@ def test_orchestrator_context_is_bounded_owner_scoped_and_data_only(owners):
     db.add_message(a['chat_id'],'user','x'*50000)
     context=orch.context_for(a['id'],a['chat_id'],'Руслан','pc')
     text=json.dumps(context,ensure_ascii=False)
-    assert len(text)<=orch.MAX_CONTEXT_CHARS and 'PRIVATE_OTHER_OWNER' not in text
+    assert estimate_tokens(text)<=configured_context_budget() and 'PRIVATE_OTHER_OWNER' not in text
     assert len(context['facts'])==1 and all(d['device_id']=='pc' for d in context['devices'])
     assert 'execute_cmd' not in json.dumps(orch.TOOL) and orch.TOOL['function']['name']=='orchestrator_decision'
     with pytest.raises(Exception):orch.Decision.model_validate({'intent':'delegate','user_id':b['id'],'verified':True})
@@ -825,9 +826,8 @@ def test_context_hard_cap_with_oversized_devices_and_no_tasks(owners,monkeypatch
         with db.get_db() as c:
             c.execute('INSERT INTO worker_jobs(task_id,owner_user_id,chat_id,state,payload,report,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
                 (t['task_id'],a['id'],a['chat_id'],'unknown',json.dumps(t),json.dumps({'summary':'R'*50000}),time.time(),time.time()))
-    monkeypatch.setattr(orch,'MAX_CONTEXT_CHARS',700)
     result=orch.context_for(a['id'],a['chat_id'],'question','pc')
-    assert len(json.dumps(result,ensure_ascii=False))<=700 and result['context_truncated'] is True
+    assert len(json.dumps(result,ensure_ascii=False))>14000 and all(len(r['content'])==2000 for r in result['history'])
     assert all(len(d.get('name',''))<=80 for d in result['devices'])
 
 

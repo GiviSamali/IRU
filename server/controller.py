@@ -224,6 +224,11 @@ async def _chat_completion_request(
     if model == base_model and not thinking:
         request_json["temperature"] = cfg.get("temperature", 0.0)
 
+    try:from .context_budget import fit_request, calibrated_config
+    except ImportError:from context_budget import fit_request, calibrated_config
+    request_json, token_budget = fit_request(request_json, calibrated_config(cfg,model), usage_context.get('context_current_user_index'))
+    usage_context['metadata']['context_budget'] = token_budget
+
     resp = None
     last_error: Exception | None = None
     for _attempt in range(2):
@@ -323,6 +328,11 @@ async def _chat_completion_request(
 
     try:
         data = resp.json()
+        actual = (data.get('usage') or {}).get('prompt_tokens')
+        if isinstance(actual, int):
+            token_budget['actual_input_tokens'] = actual
+            token_budget['estimate_underflow'] = actual > token_budget['estimated_input_tokens']
+            token_budget['estimate_to_actual_ratio'] = token_budget['estimated_input_tokens']/max(1,actual)
         usage_context["metadata"]["latency_ms"]=int((time.monotonic()-request_started)*1000)
         record_llm_usage_event(
             usage_context=usage_context,

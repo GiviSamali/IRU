@@ -169,7 +169,10 @@ INSUFFICIENT_EVIDENCE_CORRECTION = (
 
 ANSWER_TEXT_TYPES = {"pure_text", "grounded_report", "partial_report", "error_report", "clarification", "failure"}
 WRITE_CONTENT_PREVIEW_CHARS = 120
-TOOL_RESULT_LLM_MAX_CHARS = 32000
+def tool_result_token_budget():
+    try:from .context_budget import configured_context_budget
+    except ImportError:from context_budget import configured_context_budget
+    return max(2048,configured_context_budget()//4)
 
 
 class ProtocolValidationError(ValueError):
@@ -438,9 +441,12 @@ def wrap_tool_result_for_llm(entry: dict[str, Any]) -> dict[str, Any]:
 
 def serialize_tool_result_for_llm(entry: dict[str, Any]) -> str:
     """Bound the model's projection without slicing JSON or changing evidence."""
+    try:from .context_budget import estimate_tokens
+    except ImportError:from context_budget import estimate_tokens
+    token_budget=tool_result_token_budget()
     wrapped = wrap_tool_result_for_llm(entry)
     payload = json.dumps(wrapped, ensure_ascii=False)
-    if canonical_tool_name(str(wrapped["tool_name"])).startswith("web.") or len(payload) <= TOOL_RESULT_LLM_MAX_CHARS:
+    if canonical_tool_name(str(wrapped["tool_name"])).startswith("web.") or estimate_tokens(payload) <= token_budget:
         return payload
 
     # JSON round-trip detaches all nested fields from the original journal.
@@ -479,7 +485,7 @@ def serialize_tool_result_for_llm(entry: dict[str, Any]) -> str:
         original = fields.get(pointer, {}).get("original_chars", len(text))
         fields[pointer] = {"original_chars": original, "shown_chars": shown, "portion": "prefix"}
         candidate = json.dumps(compact, ensure_ascii=False)
-        if len(candidate) <= TOOL_RESULT_LLM_MAX_CHARS:
+        if estimate_tokens(candidate) <= token_budget:
             return candidate
 
     # No list/dict prefix is represented as a complete tool result. Keep outcomes
@@ -528,7 +534,7 @@ def serialize_tool_result_for_llm(entry: dict[str, Any]) -> str:
         minimal["status"] = "unknown"
     projected = json.dumps(minimal, ensure_ascii=False)
     # Enforce the budget even for nonstandard service values supplied by a caller.
-    if len(projected) > TOOL_RESULT_LLM_MAX_CHARS:
+    if estimate_tokens(projected) > token_budget:
         minimal["step_id"] = None
         minimal["tool_name"] = str(wrapped["tool_name"])[:32]
         minimal["summary"] = "Tool result details omitted; consult original evidence."

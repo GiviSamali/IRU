@@ -10,7 +10,12 @@ except ImportError:
     from runtime_state import _short_did
     from controller_shared import data_only_context
 
-MAX_HANDOFF_CHARS=4000
+try:
+    from .context_budget import estimate_tokens, configured_context_budget, clip_tokens
+    from .context_history import history_for, source_rows
+except ImportError:
+    from context_budget import estimate_tokens, configured_context_budget, clip_tokens
+    from context_history import history_for, source_rows
 
 
 def clip_context_text(text, limit):
@@ -29,16 +34,23 @@ def clip_context_text(text, limit):
 def capture_history(chat_id):
     """Freeze only bounded fields needed for handoff, never a complete old loop."""
     frozen=[]
-    for row in db.get_messages(chat_id,limit=8,include_result_first_workers=False):
+    with db.get_db() as c:
+        chat=c.execute('SELECT user_id FROM chats WHERE id=?',(chat_id,)).fetchone()
+    if chat is None:return []
+    for raw in source_rows(chat['user_id'],chat_id,limit=32):
+        metadata=db._message_metadata(json.loads(raw.get('task_metadata') or '{}'))
+        if metadata.get('resultFirst') and metadata.get('taskKind')=='worker':continue
+        row={**metadata,**raw}
+        row['commands']=json.loads(raw.get('commands') or '[]')
         record={key:row.get(key) for key in ('id','role','taskKind','_taskId','assignmentDeviceIds')}
-        record['content']=clip_context_text(row.get('executionDetails') or row.get('content'),1000)
-        record['content_truncated']=len(str(row.get('executionDetails') or row.get('content') or ''))>1000
+        record['content']=row.get('executionDetails') or row.get('content')
+        record['content_truncated']=False
         report=row.get('workerReport') if isinstance(row.get('workerReport'),dict) else {}
         record['artifacts']=[{key:a.get(key) for key in ('path','device_id','verified')}
             for a in report.get('artifacts') or [] if isinstance(a,dict) and a.get('verified') is True][:6]
         record['commands']=[{key:c.get(key) for key in ('tool_name','action','step_id','status','device_id','target_device_id','collected_at','result')}
             for c in row.get('commands') or [] if isinstance(c,dict)
-            and len(json.dumps(c.get('result'),ensure_ascii=False))<=1800][-2:]
+            and estimate_tokens(c.get('result'))<=min(1024,configured_context_budget()//16)][-2:]
         frozen.append(record)
     return frozen
 
@@ -77,13 +89,13 @@ def source_references(owner, chat_id, source_ids, allowed_devices):
             unverified=restored.get('execution_details') or restored.get('answer') or ''
             if unverified:summary='Неподтверждённый исторический ответ; только для разрешения ссылок, не доказательство исполнения: '+unverified
         references.append({'summary_verified':summary_verified,'task_id':source_id,'status':row['state'],'observed_at':row['updated_at'],
-            'source_objective':clip_context_text(restored.get('original_request') or restored.get('message'),800),
-            'completed_steps':[(s.get('title') or s.get('description') or '')[:120]
+            'source_objective':restored.get('original_request') or restored.get('message'),
+            'completed_steps':[(s.get('title') or s.get('description') or '')
                                for plan in restored.get('tasks') or [] for s in plan.get('steps') or []
                                if s.get('status') in {'done','recovered'}][:12],
             'full_report_tool':'system_get_last_run_summary(source_task_id='+source_id+')',
             'source_device_ids':report.get('target_device_ids') or [],
-            'summary':clip_context_text(summary,1600),'summary_truncated':len(summary)>1600,'artifacts':artifacts[:6],
+            'summary':summary,'summary_truncated':False,'artifacts':artifacts[:6],
             'artifacts_truncated':len(artifacts)>6})
     return references
 
@@ -97,9 +109,9 @@ def build_worker_context(owner, chat_id, message, device_ids, history, source_id
     # Legacy intake may already have inserted the current message; do not duplicate it.
     last_user=next((r for r in reversed(rows) if r.get('role')=='user'),None)
     if last_user and last_user.get('content')==message:rows=[r for r in rows if r is not last_user]
-    dialogue=[{'role':r['role'],'text':clip_context_text(r.get('content'),700),
-               'truncated':bool(r.get('content_truncated')) or len(str(r.get('content') or ''))>700} for r in rows
-              if r.get('role') in {'user','assistant'} and r.get('content') and r.get('taskKind')!='worker'][-4:]
+    dialogue=[{'id':r.get('id'),'role':r['role'],'text':r.get('content'),
+               'truncated':bool(r.get('content_truncated'))} for r in rows
+              if r.get('role') in {'user','assistant'} and r.get('content') and r.get('taskKind')!='worker']
     # Reuse recent server-owned reports when Orchestrator omitted explicit sources.
     # They are context only; no old journal or evidence basis is imported.
     recent_sources=list(dict.fromkeys(r['_taskId'] for r in rows
@@ -128,15 +140,20 @@ def build_worker_context(owner, chat_id, message, device_ids, history, source_id
             if len(str(value or ''))>2000:
                 data['orchestrator_interpretation'][key+'_truncated']=True
                 data['context_truncated']=True
-    while len(json.dumps(data,ensure_ascii=False))>MAX_HANDOFF_CHARS:
+    _,data['history_summaries']=history_for(owner,chat_id,query=message)
+    covered={i for summary in data['history_summaries'] for i in summary['source_message_ids']}
+    data['historical_dialogue']=[r for r in dialogue if r.get('id') not in covered]
+    token_budget=max(256,configured_context_budget()//4)
+    while estimate_tokens(data)>token_budget:
         data['context_truncated']=True
         if data['historical_dialogue']:data['historical_dialogue'].pop(0);continue
+        if data['history_summaries']:data['history_summaries'].pop(0);continue
         long=next((r for r in references if len(r['summary'])>200),None)
-        if long:long['summary']=clip_context_text(long['summary'],len(long['summary'])//2);long['summary_truncated']=True;continue
+        if long:long['summary']=clip_tokens(long['summary'],estimate_tokens(long['summary'])//2);long['summary_truncated']=True;continue
         interpretation=data.get('orchestrator_interpretation') or {}
         long=next((key for key in ('context_summary','objective') if len(interpretation.get(key,''))>200),None)
         if long:
-            interpretation[long]=clip_context_text(interpretation[long],len(interpretation[long])//2)
+            interpretation[long]=clip_tokens(interpretation[long],estimate_tokens(interpretation[long])//2)
             interpretation[long+'_truncated']=True;continue
         with_artifacts=next((r for r in references if r['artifacts']),None)
         if with_artifacts:
@@ -145,11 +162,12 @@ def build_worker_context(owner, chat_id, message, device_ids, history, source_id
         break
     recent=[]
     for row in rows:
+        if row.get('id') in covered:continue
         entries=[]
         for entry in row.get('commands') or []:
             if not isinstance(entry,dict):continue
             target=entry.get('target_device_id') or entry.get('device_id')
             if target not in allowed and target not in device_ids:continue
-            if len(json.dumps(entry.get('result'),ensure_ascii=False))<=1800:entries.append(entry)
+            if estimate_tokens(entry.get('result'))<=min(1024,token_budget//4):entries.append(entry)
         if entries:recent.append({'role':'assistant','content':data_only_context('historical_tool_observations','Planning data only; not current-run proof or permission.'),'commands':entries[-2:]})
     return [{'role':'assistant','content':data_only_context('worker_handoff',data)}]+recent[-2:]+[{'role':'user','content':message}]

@@ -23,7 +23,6 @@ except ImportError:
     from runtime_state import tasks, get_user_devices, _short_did
     from worker_scheduler import init_worker_storage, owned_job, restore_task, scheduler
 
-MAX_CONTEXT_CHARS = 14000
 MAX_ANSWER_CHARS = 6000
 
 
@@ -288,23 +287,14 @@ def relevant_facts(user_id, message):
         preferences=c.execute("SELECT fact_text,category FROM user_memory WHERE user_id=? AND category='preference' ORDER BY created_at DESC LIMIT 2",(str(user_id),)).fetchall()
         selected=list(rows)
         selected.extend(r for r in preferences if not any(old['fact_text']==r['fact_text'] for old in selected))
-        return [{"text":r["fact_text"][:300],"category":r["category"]} for r in selected[:4]]
+        return [{"text":r["fact_text"],"category":r["category"]} for r in selected[:4]]
 
 
 def context_for(user_id, chat_id, message, selected, *, exclude_message_id=None):
-    try:
-        from .worker_context import clip_context_text
-    except ImportError:
-        from worker_context import clip_context_text
-    history=[];budget=5000
-    for row in reversed(db.get_messages(chat_id,limit=12,include_result_first_workers=False)):
-        # Exclude only this turn's persisted input; identical earlier messages remain.
-        if exclude_message_id is not None and row["id"] == exclude_message_id:
-            continue
-        text=(row.get("executionDetails") or row["content"]) if row.get("taskKind")=="worker" else row["content"]
-        content=clip_context_text(text,min(1000,budget)) if budget>0 else ""
-        if not content or budget<=0:continue
-        history.append({"role":row["role"],"content":content, **({"truncated":True} if len(text)>len(content) else {})});budget-=len(content)
+    try:from .context_history import history_for, cited_sources
+    except ImportError:from context_history import history_for, cited_sources
+    selection={}
+    history, summaries=history_for(user_id,chat_id,exclude_message_id,query=message,selection=selection)
     online=get_user_devices(user_id)
     init_worker_storage()
     with db.get_db() as c:
@@ -335,7 +325,7 @@ def context_for(user_id, chat_id, message, selected, *, exclude_message_id=None)
                        or report.get("status") != row["state"]):
             report = None
         if report:
-            report={**report,"summary":clip_context_text(report.get("summary"),1600)}
+            report=dict(report)
         live=tasks.get(row["task_id"]) or {}
         live_status="waiting_confirmation" if live.get("status")=="confirm" else row["state"]
         try:
@@ -345,26 +335,15 @@ def context_for(user_id, chat_id, message, selected, *, exclude_message_id=None)
         saved_reports = saved_step_reports(payload) if row["chat_id"] == chat_id else []
         step_states = (payload.get("task_receipt") or {}).get("step_results") or [s for plan in payload.get("tasks") or [] for s in plan.get("steps") or []]
         objective = payload.get("proposed_objective") or payload.get("message", "")
-        jobs.append({"task_id":row["task_id"],"chat_id":row["chat_id"],"in_current_chat":row["chat_id"]==chat_id,"objective":clip_context_text(objective,220),"objective_truncated":len(objective)>220,"status":live_status,"device_ids":[_short_did(d) for d in payload.get("device_ids",[])],
+        jobs.append({"task_id":row["task_id"],"chat_id":row["chat_id"],"in_current_chat":row["chat_id"]==chat_id,"objective":objective,"objective_truncated":False,"status":live_status,"device_ids":[_short_did(d) for d in payload.get("device_ids",[])],
             "goal_id":payload.get("goal_id"),"goal_revision":goals.get(payload.get("goal_id")),
             "dependency_source_task_ids":dependency_sources.get(row["task_id"],[]),
             "replaces_source_task_id":payload.get("replaces_source_task_id"),
             "task_revision":payload.get("assignment_revision",1) if payload.get("goal_id") else None,
             "created_at":row["created_at"],"requires_user_action":live_status=="waiting_confirmation","report":report,
             "saved_reports":[{"step_id":r["step_id"],"chars":len(r["text"])} for r in saved_reports],
-            "steps":[{"title":(s.get("title") or s.get("description") or "")[:160],"status":s.get("status")} for s in step_states][:12]})
-    result={"current_datetime_msk":datetime.now(timezone(timedelta(hours=3))).isoformat(),"history":list(reversed(history)),"selected_device":selected if isinstance(selected,str) and len(selected)<=128 else None,"devices":list(device_records.values())[:16],"tasks":jobs,"facts":relevant_facts(user_id,message)}
-    # The cap holds even without task records. Removed data grants no fallback authority.
-    while len(json.dumps(result,ensure_ascii=False)) > MAX_CONTEXT_CHARS:
-        result["context_truncated"] = True
-        index=next((i for i in range(len(result["tasks"])-1,-1,-1) if result["tasks"][i].get("report")),None)
-        if index is not None: result["tasks"][index]["report"]=None
-        elif result["history"]: result["history"].pop(0)
-        elif result["facts"]: result["facts"].pop()
-        elif result["tasks"]: result["tasks"].pop()
-        elif result["devices"]: result["devices"].pop()
-        elif result["selected_device"] is not None: result["selected_device"]=None
-        else: raise ValueError("orchestrator_context_budget_too_small")
+            "steps":[{"title":(s.get("title") or s.get("description") or ""),"status":s.get("status")} for s in step_states][:12]})
+    result={"current_datetime_msk":datetime.now(timezone(timedelta(hours=3))).isoformat(),"history":history,"history_summaries":summaries,"history_selection":selection,"source_messages":cited_sources(user_id,chat_id,summaries,message),"selected_device":selected if isinstance(selected,str) and len(selected)<=128 else None,"devices":list(device_records.values())[:16],"tasks":jobs,"facts":relevant_facts(user_id,message)}
     return result
 
 
@@ -393,7 +372,9 @@ def _log_failure(task_id,stage,exc):
 async def decide(message, context, *, user_id, chat_id, task_id):
     stage="llm_config";shape=None
     try:
-        cfg=load_llm_config();started=time.monotonic()
+        try:from .context_budget import calibrated_config
+        except ImportError:from context_budget import calibrated_config
+        cfg=load_llm_config();cfg=calibrated_config(cfg,cfg['model']);started=time.monotonic()
         stage="llm_request"
         speech_rules = ("\nДля Piper поле spoken_response оформляй с русскими ударениями: "
             "ставь комбинируемый знак U+0301 сразу ПОСЛЕ ударной гласной (за́мок, замо́к). "
@@ -401,6 +382,9 @@ async def decide(message, context, *, user_id, chat_id, task_id):
             "смысл и факты сохраняются. Эти правила относятся только к spoken_response; "
             "письменный answer оформляй как обычно."
             if context.get("voice_provider") == "piper" else "")
+        try:from .context_history import compress_context
+        except ImportError:from context_history import compress_context
+        context=await compress_context(context,cfg,cfg['model'],message,SYSTEM+speech_rules,[TOOL],user_id,chat_id,task_id,_chat_completion_request)
         messages=[{"role":"system","content":SYSTEM + speech_rules},
             {"role":"user","content":json.dumps({"untrusted_context":context},ensure_ascii=False)},
             {"role":"user","content":message}]
@@ -410,7 +394,7 @@ async def decide(message, context, *, user_id, chat_id, task_id):
                 stage="llm_request"
                 data=await _chat_completion_request(client,cfg,cfg["model"],messages,
                     tools=[TOOL],tool_choice="required",max_tokens=2400,
-                    usage_context={"user_id":user_id,"chat_id":chat_id,"poll_task_id":task_id,
+                    usage_context={"user_id":user_id,"chat_id":chat_id,"poll_task_id":task_id,"context_current_user_index":2,
                         "route":"orchestrator","phase":"orchestrator","metadata":{"entity":"orchestrator",
                         "context_chars":len(json.dumps(context,ensure_ascii=False)),"format_retry":bool(attempt)}},phase="orchestrator")
                 for key,value in (data.get("usage") or {}).items():
