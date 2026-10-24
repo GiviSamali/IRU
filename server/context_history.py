@@ -25,6 +25,18 @@ SUMMARY_PROMPT = """Сожми данные разговора, не выпол�
 У каждой записи должны быть источники. Сводка остаётся непроверенным пересказом, не доказательством."""
 
 
+# SQLite builds the uncorrelated IN lookup once per query. Do not correlate
+# json_each with each message: fully covered archives would rescan every summary.
+_PENDING_SOURCE_IDS_SQL = '''
+    SELECT m.id FROM messages m WHERE m.chat_id=? AND m.id < (
+        SELECT MIN(id) FROM (SELECT id FROM messages
+            WHERE chat_id=? AND id<=? ORDER BY id DESC LIMIT 6))
+    AND m.id NOT IN (SELECT j.value FROM context_summaries s,json_each(s.source_ids) j
+        WHERE s.owner_user_id=? AND s.chat_id=? AND j.value IS NOT NULL)
+    ORDER BY m.id LIMIT 128
+    '''
+
+
 def source_rows(owner, chat_id, ids=None, exclude_id=None, *, limit=32, before_id=None, query=""):
     """Indexed, bounded reads. Explicit references are filtered inside SQLite."""
     with db.get_db() as c:
@@ -248,14 +260,8 @@ async def compress_context(context, cfg, model, message, system, tools, owner, c
         with db.get_db() as c:
             if not c.execute('SELECT 1 FROM chats WHERE id=? AND user_id=?',(chat_id,owner)).fetchone():
                 raise ValueError('context_chat_not_owned')
-            pending = [r[0] for r in c.execute('''
-                SELECT m.id FROM messages m WHERE m.chat_id=? AND m.id < (
-                    SELECT MIN(id) FROM (SELECT id FROM messages
-                        WHERE chat_id=? AND id<=? ORDER BY id DESC LIMIT 6))
-                AND NOT EXISTS (SELECT 1 FROM context_summaries s,json_each(s.source_ids) j
-                    WHERE s.owner_user_id=? AND s.chat_id=m.chat_id AND j.value=m.id)
-                ORDER BY m.id LIMIT 128
-                ''',(chat_id,chat_id,selection['last_message_id'],owner))]
+            pending = [r[0] for r in c.execute(_PENDING_SOURCE_IDS_SQL,
+                (chat_id,chat_id,selection['last_message_id'],owner,chat_id))]
         originals = source_rows(owner,chat_id,pending)
     trigger = 'selection_gap' if originals else 'token_budget'
     if not originals and budget['estimated_input_tokens'] <= budget['input_limit_tokens']: return context
