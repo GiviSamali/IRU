@@ -211,3 +211,53 @@ def test_controller_keeps_failed_measurement_and_returns_partial_receipt(owners)
     assert len(sent)==3,[(e.get('tool_name'),e.get('result')) for e in result.get('commands',[])]
     assert result['task_receipt']['task_status']=='partial' and result['task_receipt']['goal_completed'] is False
     assert result['commands'][1]['status']=='failed'
+
+
+@pytest.mark.parametrize('other_count',[0,3])
+@pytest.mark.parametrize('outcome',['partial','success'])
+def test_ordinary_named_followup_returns_short_content_from_main_call(owners,monkeypatch,other_count,outcome):
+    from test_context_token_budget import config
+    a,b=owners;t=diagnostic(a);t['proposed_objective']='Диагностика интернета'
+    if outcome=='success':
+        t['commands'][1]['status']='success';t['commands'][1]['result']['returncode']=0
+        t['status']='success';t['worker_report']=build_worker_report(t)
+    store(t)
+    for n in range(other_count):
+        other=diagnostic(a);other['proposed_objective']=f'Проверка документа {n}'
+        other['answer']=other['commands'][-1]['result']['text']=f'Документ {n}: 42 страницы.'
+        store(other)
+    short='Интернет работал: GitHub ответил в 17 из 20 запросов, загрузка — 15 Мбит/с. Сигнал Wi-Fi не измерен; причина таймаутов не установлена.'
+    calls=[]
+    async def complete(*args,**kwargs):
+        calls.append(kwargs.get('phase'))
+        messages=kwargs.get('messages') if not args else args[3]
+        context=json.loads(messages[1]['content'])['untrusted_context']
+        source=next(job for job in context['tasks'] if job['task_id']==t['task_id'])
+        assert source['objective']=='Диагностика интернета'
+        assert source['saved_reports'][0]['text']==t['answer']
+        assert source['saved_reports'][0]['historical_material_only'] is True
+        return {'choices':[{'finish_reason':'stop','message':{'tool_calls':[{'function':{
+            'name':'orchestrator_decision','arguments':json.dumps({'intent':'task_status',
+                'task_id':t['task_id'],'reference':'explicit','answer':short})}}]}}]}
+    monkeypatch.setattr(orch,'load_llm_config',lambda:config())
+    monkeypatch.setattr(orch,'_chat_completion_request',complete)
+    result=asyncio.run(orch.run_turn(cmd('Что там с анализом интернета?'),a,a['chat_id'],None))
+    assert short in result['answer'] and len(result['answer'])<400
+    assert ('частично' in result['answer'])==(outcome=='partial') and '42 страницы' not in result['answer']
+    assert calls==['orchestrator'] and result['worker_task_id'] is None
+    assert tasks[result['task_id']]['worker_report']['task_id']==t['task_id']
+    with db.get_db() as c:
+        assert c.execute('SELECT COUNT(*) FROM worker_jobs WHERE owner_user_id=?',(a['id'],)).fetchone()[0]==1+other_count
+
+
+def test_report_previews_are_bounded_and_owner_scoped(owners):
+    from server.context_budget import estimate_tokens
+    a,b=owners
+    for n in range(8):
+        t=diagnostic(a);t['answer']=t['commands'][-1]['result']['text']='Материал '+('длинные данные '*2000);store(t)
+    hidden=diagnostic(b);hidden['answer']=hidden['commands'][-1]['result']['text']='PRIVATE-OTHER-OWNER';store(hidden)
+    ctx=orch.context_for(a['id'],a['chat_id'],'Что с результатами?','pc')
+    previews=[r for job in ctx['tasks'] for r in job['saved_reports']]
+    assert sum(estimate_tokens(r['text']) for r in previews)<=8192
+    assert all(r['truncated'] for r in previews)
+    assert 'PRIVATE-OTHER-OWNER' not in json.dumps(ctx)

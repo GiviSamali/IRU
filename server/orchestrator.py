@@ -191,6 +191,11 @@ chat — вся очередь текущего чата, только если 
 clarify нужен только для реально отсутствующих данных или неоднозначного объекта. Если файл/устройство однозначно описаны
 проверенным результатом текущего чата, передай source_task_ids этих результатов, а не проси повторить известное.
 task_status выбирай только для вопроса о ходе или результате существующего поручения.
+Для обычного уточнения о завершённой диагностике заполни answer кратким содержательным итогом
+именно выбранной задачи: что наблюдалось и что осталось неизвестным. Используй saved_reports и
+историю как сохранённые данные, не как новое исполнение. Статус команды не определяет достоверность
+каждого измерения в её выводе: failed может содержать частичные наблюдения, а rc=0 не доказывает вывод модели.
+Не выдавай предполагаемую причину за измеренный факт. Не заменяй итог предложением посмотреть подробности.
 Поручение установить, изменить или обеспечить состояние объекта — delegate, даже если похожая задача уже завершалась.
 Если действие сейчас не требуется, объясни это как прошлый проверенный результат, не утверждай новое исполнение
 или актуальное состояние без нового наблюдения. Новое независимое поручение можно поставить в очередь.
@@ -316,7 +321,9 @@ def context_for(user_id, chat_id, message, selected, *, exclude_message_id=None)
         device_records[short]={"device_id":short,"name":str(info.get("hostname") or short)[:80],"platform":str(info.get("os") or "unknown")[:24],
             "registered":short in device_records,"online":bool(dev.get("ws")),"availability":"connection_observed_not_execution_verified",
             "last_seen":dev.get("last_seen") if isinstance(dev.get("last_seen"),(int,float)) else None,"capabilities":[str(cap)[:80] for cap in list((dev.get("activation_summary") or {}).get("capabilities_summary") or [])[:8]]}
-    jobs=[]
+    try:from .context_budget import clip_tokens,estimate_tokens
+    except ImportError:from context_budget import clip_tokens,estimate_tokens
+    jobs=[];saved_report_budget=8192
     for row in recent_jobs:
         payload=json.loads(row["payload"]);snapshot=payload.get("worker_report")
         report=(snapshot if isinstance(snapshot,dict) and snapshot.get("task_id")==row["task_id"]
@@ -333,6 +340,13 @@ def context_for(user_id, chat_id, message, selected, *, exclude_message_id=None)
         except ImportError:
             from response_presentation import saved_step_reports
         saved_reports = saved_step_reports(payload) if row["chat_id"] == chat_id else []
+        report_previews=[]
+        allowance=min(4096,saved_report_budget//max(1,len(recent_jobs)-len(jobs)))
+        for saved in saved_reports:
+            text=clip_tokens(saved['text'],allowance)
+            report_previews.append({'step_id':saved['step_id'],'chars':len(saved['text']),
+                'text':text,'truncated':text!=saved['text'],'historical_material_only':True})
+            used=estimate_tokens(text);allowance=max(0,allowance-used);saved_report_budget=max(0,saved_report_budget-used)
         step_states = (payload.get("task_receipt") or {}).get("step_results") or [s for plan in payload.get("tasks") or [] for s in plan.get("steps") or []]
         objective = payload.get("proposed_objective") or payload.get("message", "")
         jobs.append({"task_id":row["task_id"],"chat_id":row["chat_id"],"in_current_chat":row["chat_id"]==chat_id,"objective":objective,"objective_truncated":False,"status":live_status,"device_ids":[_short_did(d) for d in payload.get("device_ids",[])],
@@ -341,7 +355,7 @@ def context_for(user_id, chat_id, message, selected, *, exclude_message_id=None)
             "replaces_source_task_id":payload.get("replaces_source_task_id"),
             "task_revision":payload.get("assignment_revision",1) if payload.get("goal_id") else None,
             "created_at":row["created_at"],"requires_user_action":live_status=="waiting_confirmation","report":report,
-            "saved_reports":[{"step_id":r["step_id"],"chars":len(r["text"])} for r in saved_reports],
+            "saved_reports":report_previews,
             "steps":[{"title":(s.get("title") or s.get("description") or ""),"status":s.get("status")} for s in step_states][:12]})
     result={"current_datetime_msk":datetime.now(timezone(timedelta(hours=3))).isoformat(),"history":history,"history_summaries":summaries,"history_selection":selection,"source_messages":cited_sources(user_id,chat_id,summaries,message),"selected_device":selected if isinstance(selected,str) and len(selected)<=128 else None,"devices":list(device_records.values())[:16],"tasks":jobs,"facts":relevant_facts(user_id,message)}
     return result
@@ -549,11 +563,21 @@ async def run_turn(cmd, user, chat_id, delegate):
             else:
                 source=tasks.get(choice.task_id) or restore_task(job)
                 try:
-                    from .response_presentation import worker_presentation, normalized_worker_report
+                    from .response_presentation import worker_presentation, normalized_worker_report, saved_step_reports
                 except ImportError:
-                    from response_presentation import worker_presentation, normalized_worker_report
+                    from response_presentation import worker_presentation, normalized_worker_report, saved_step_reports
                 view=worker_presentation(source,source.get("worker_report"))
                 answer=view["conversational_response"]
+                source_report=normalized_worker_report(source,source.get('worker_report'))
+                task.update(worker_report=source_report,execution_source_task_id=choice.task_id)
+                terminal=next((entry for entry in reversed(source.get('commands') or [])
+                    if entry.get('tool_name')=='answer.text' and entry.get('status')=='terminal'),{})
+                informational=((terminal.get('result') or {}).get('self_check') or {}).get('claims_completed_action') is False
+                if (source_report['status'] in {'success','partial','unknown'} and informational
+                        and choice.answer.strip() and saved_step_reports(source)):
+                    answer='По сохранённым наблюдениям: '+choice.answer.strip()
+                    if source_report['status']=='partial':answer+='\n\nДиагностика выполнена частично; полного подтверждения результата нет.'
+                    elif source_report['status']=='unknown':answer+='\n\nИтог задачи не подтверждён.'
                 if choice.show_execution_details or choice.result_view == "saved_report":
                     source_report=normalized_worker_report(source,source.get("worker_report"))
                     if source_report["status"]=="success":
