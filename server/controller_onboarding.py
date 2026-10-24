@@ -170,7 +170,7 @@ async def process_onboarding_message(
                         rejection_code = "terminal_audit_rejected"
                         raise ValueError(reason)
                     append_answer_step(commands,"answer_text",payload,target_device_id="server")
-                    receipt=audited_task_receipt(payload,audited=answer_auditor_enabled(cfg),audit_details=audit_details)
+                    receipt=audited_task_receipt(payload,audited=answer_auditor_enabled(cfg),audit_details=audit_details,journal=commands)
                     return {"answer":payload["text"],"commands":commands,
                             **({"task_receipt":receipt} if receipt else {})}
                 except (ValueError,TypeError) as exc:

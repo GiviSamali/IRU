@@ -599,15 +599,27 @@ def audited_action_evidence(payload, journal, user_request, details):
             'digest':sha256(json.dumps(content,ensure_ascii=False,sort_keys=True).encode('utf-8')).hexdigest()}
 
 
-def audited_task_receipt(payload: dict[str, Any], *, audited: bool, audit_details=None) -> dict[str, Any] | None:
+def audited_task_receipt(payload: dict[str, Any], *, audited: bool, audit_details=None, journal=None) -> dict[str, Any] | None:
     """Project an accepted audit, never the model's self_check alone."""
     kind = payload.get("answer_type")
     if not audited or kind not in {"grounded_report", "partial_report", "error_report", "failure"}:
         return None
     completed = kind == "grounded_report"
+    # An accepted informational text may explain failed measurements. Those
+    # references do not establish completion of the diagnostic goal.
+    mixed_diagnostic = (completed and (payload.get('self_check') or {}).get('claims_completed_action') is False
+        and any(entry.get('step_id') in (payload.get('basis') or [])
+            and canonical_tool_name(entry.get('tool_name') or entry.get('action') or '')=='execute_cmd'
+            and (entry.get('status') in {'failed','error','blocked'} or execute_cmd_result_is_negative(entry.get('result')))
+            for entry in journal or []))
+    if mixed_diagnostic:completed=False
+    diagnostic_observation=any(entry.get('step_id') in (payload.get('basis') or [])
+        and entry.get('tool_name')=='execute_cmd' and entry.get('status')=='success'
+        and execute_cmd_result_is_complete(entry.get('result')) for entry in journal or []) if mixed_diagnostic else False
     return {"task_status": "completed" if completed else "partial" if kind == "partial_report" else "failed",
             "goal_completed": completed, "final_verification_status": "verified" if completed else "unverified",
             "answer_source": "audited_terminal",
+            **({'task_status':'partial' if diagnostic_observation else 'unknown','terminal_reason':'mixed_diagnostic_evidence'} if mixed_diagnostic else {}),
             **({'action_evidence':audit_details['action_evidence']} if isinstance(audit_details,dict)
                and isinstance(audit_details.get('action_evidence'),dict) else {})}
 

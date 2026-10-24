@@ -591,7 +591,7 @@ async def process_non_pipeline_command(
                             hostname=device_info.get("hostname") or target_device,
                             iteration=iteration + 1,
                         )
-                        receipt = audited_task_receipt(answer_payload, audited=answer_auditor_enabled(cfg), audit_details=audit_details)
+                        receipt = audited_task_receipt(answer_payload, audited=answer_auditor_enabled(cfg), audit_details=audit_details, journal=commands_log)
                         if recovery_only:
                             # Observations cannot establish the outcome of a
                             # mutation whose response was lost. Never replay it.

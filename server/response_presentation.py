@@ -26,6 +26,7 @@ OBSERVATION_TOOLS = {
 FILE_TYPES = {".pptx":"Презентация", ".ppt":"Презентация", ".docx":"Документ", ".doc":"Документ",
               ".xlsx":"Таблица", ".xls":"Таблица", ".html":"Страница сайта", ".pdf":"PDF-документ"}
 ERRORS = {
+    "mixed_diagnostic_evidence":"Часть диагностических проверок завершилась с ошибками; данные этих шагов нельзя считать полностью подтверждёнными.",
     "model_output_truncated":"Модель исчерпала выходной бюджет; ответ был обрезан и не исполнялся.",
     "recovery_exhausted":"Попытки исправления ошибки шага исчерпаны.",
     "confirmation_expired":"Время подтверждения истекло; команда не выполнялась.",
@@ -105,8 +106,9 @@ def saved_step_reports(task):
                 or not isinstance(payload, dict) or payload.get("answer_type") not in {"grounded_report", "pure_text", "partial_report"}):
             continue
         text = payload.get("text")
-        validator = has_grounded_terminal_answer if payload.get("answer_type") == "grounded_report" else has_validated_terminal_answer
-        if isinstance(text, str) and validator(text, commands[:index + 1]):
+        # Readability of a historical report is independent of whole-goal
+        # completion. Failed measurements are not promoted to positive evidence.
+        if isinstance(text, str) and has_validated_terminal_answer(text, commands[:index + 1]):
             reports.append({"step_id": command.get("step_id"), "text": text,
                             "device_id": command.get("target_device_id") or command.get("device_id"),
                             "observed_at": command.get("collected_at") or command.get("created_at")})
@@ -160,7 +162,9 @@ def normalized_worker_report(task, report=None):
     attention_status={"confirm":"waiting_confirmation", "waiting_input":"waiting_input"}.get(task.get("status"))
     attention_changed=attention_status is not None and report["status"]!=attention_status
     incomplete=report["status"]=="success" and (task.get("task_receipt") or {}).get("goal_completed") is False
-    if report["status"]=="success" or status_changed or attention_changed or task.get("cancel_requested") or incomplete:
+    legacy_diagnostic=(report['status']=='unknown' and report.get('error_code')=='action_evidence_unconfirmed'
+        and (task.get('task_receipt') or {}).get('answer_source')=='audited_terminal')
+    if report["status"]=="success" or legacy_diagnostic or status_changed or attention_changed or task.get("cancel_requested") or incomplete:
         # A cache cannot grant completion after the authoritative journal/receipt
         # changed or an older validation contract was replaced.
         report=build_worker_report(task)
@@ -244,7 +248,9 @@ def worker_presentation(task, report=None):
             if not human:
                 human=answer if has_grounded_terminal_answer(answer,commands) else report["summary"]
     elif status=="partial":
-        if result:human=result+" Но задача выполнена не полностью."
+        if report.get('error_code')=='mixed_diagnostic_evidence':
+            human="Диагностика выполнена частично: получены измерения, но часть проверок завершилась с ошибками. Сохранённый отчёт доступен; его выводы не подтверждены полностью."
+        elif result:human=result+" Но задача выполнена не полностью."
         elif any(positive_evidence(c) for c in commands):human="Получилось выполнить только часть задачи."
         else:human="Не получилось завершить задачу полностью."
     elif status=="failed":human=(result+" Но закончить задачу не удалось.") if result else "Не получилось завершить задачу."

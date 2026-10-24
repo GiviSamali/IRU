@@ -350,6 +350,15 @@ def context_for(user_id, chat_id, message, selected, *, exclude_message_id=None)
 
 logger=logging.getLogger("iru.orchestrator")
 
+HANDOFF_ERRORS = {
+    'device_not_owned_or_unavailable':'Не удалось передать поручение: выбранное устройство недоступно для выполнения. Проверь его подключение к ИРУ. Новая задача не запущена.',
+    'selected_device_not_owned_or_connected':'Не удалось передать поручение: выбранное устройство недоступно для выполнения. Проверь его подключение к ИРУ. Новая задача не запущена.',
+    'target_device_required':'Для передачи поручения нужно выбрать доступное устройство. Новая задача не запущена.',
+    'duplicate_target_device':'Не удалось передать поручение: устройство указано несколько раз. Новая задача не запущена.',
+    'execution_mode_unsupported':'Не удалось передать поручение: выбранный способ исполнения не поддерживается. Новая задача не запущена.',
+    'mixed_goal_requires_explicit_assignment_devices':'Для передачи поручения нужно указать устройство для каждого задания. Новая задача не запущена.',
+}
+
 
 def _log_failure(task_id,stage,exc):
     """Protected diagnostics: frame coordinates/types only, no message, inputs or locals."""
@@ -357,7 +366,7 @@ def _log_failure(task_id,stage,exc):
         "traceback":[{"file":f.filename.replace("\\","/").rsplit("/",1)[-1],"line":f.lineno,"function":f.name}
                      for f in traceback.extract_tb(exc.__traceback__)]}
     code=str(exc)
-    if code in {"invalid_orchestrator_decision","orchestrator_invalid_json","orchestrator_response_truncated","missing_objective","target_device_required","task_not_found","ambiguous_task_reference","missing_answer"}:record["error_code"]=code
+    if code in HANDOFF_ERRORS or code in {"invalid_orchestrator_decision","orchestrator_invalid_json","orchestrator_response_truncated","missing_objective","target_device_required","task_not_found","ambiguous_task_reference","missing_answer"}:record["error_code"]=code
     shape=getattr(exc,"orchestrator_response_shape",None)
     if isinstance(shape,dict):record["response_shape"]=shape
     response=getattr(exc,"response",None)
@@ -510,7 +519,16 @@ async def run_turn(cmd, user, chat_id, delegate):
                 # A bounded model context is not proof that another active job
                 # does not exist. Resolve cardinality from owned durable state.
                 with db.get_db() as c:
-                    active = c.execute("SELECT task_id FROM worker_jobs WHERE owner_user_id=? AND chat_id=? AND state IN (" + ",".join("?" for _ in eligible) + ") LIMIT 2", (owner,chat_id,*eligible)).fetchall()
+                    if choice.intent=='task_status' and choice.task_id:
+                        active=c.execute('SELECT task_id FROM worker_jobs WHERE owner_user_id=? AND chat_id=? AND task_id=?',
+                            (owner,chat_id,choice.task_id)).fetchall()
+                    else:
+                        active = c.execute("SELECT task_id FROM worker_jobs WHERE owner_user_id=? AND chat_id=? AND state IN (" + ",".join("?" for _ in eligible) + ") LIMIT 2", (owner,chat_id,*eligible)).fetchall()
+                    if not active and choice.intent=='task_status' and not choice.task_id:
+                        # Only a read may fall back to the sole job in this chat.
+                        # Cancellation/amendment retain the active-only check.
+                        active=c.execute('SELECT task_id FROM worker_jobs WHERE owner_user_id=? AND chat_id=? LIMIT 2',
+                            (owner,chat_id)).fetchall()
                 if len(active)!=1 or (choice.task_id and choice.task_id!=active[0]["task_id"]):raise ValueError("ambiguous_task_reference")
                 choice.task_id=active[0]["task_id"]
             job=owned_job(choice.task_id,owner) if choice.task_id else None
@@ -544,7 +562,14 @@ async def run_turn(cmd, user, chat_id, delegate):
                         from .response_presentation import failure_explanation, saved_step_reports
                     except ImportError:
                         from response_presentation import failure_explanation, saved_step_reports
-                    if source_report["status"] in {"failed", "partial"}:
+                    if (source_report.get('error_code')=='mixed_diagnostic_evidence'
+                            or source_report['status'] in {'unknown','blocked','cancelled'}):
+                        saved=saved_step_reports(source)
+                        if saved:
+                            answer=view['conversational_response']+'\n\nСохранённый отчёт приведён ниже как исходный материал. Это не новая проверка и не подтверждение завершения задачи.\n\n'+'\n\n'.join(r['text'] for r in saved)
+                        elif choice.result_view=='saved_report':
+                            answer+='\n\nСохранённого текстового отчёта нет.'
+                    elif source_report["status"] in {"failed", "partial"}:
                         answer = failure_explanation(source, source_report, include_reports=True)
                     elif choice.result_view == "saved_report":
                         saved = saved_step_reports(source)
@@ -597,6 +622,9 @@ async def run_turn(cmd, user, chat_id, delegate):
             "orchestrator_invalid_json":"Не удалось обработать ответ модели: она дважды вернула некорректный формат. Новое выполнение не начато. Повторите сообщение.",
             "orchestrator_response_truncated":"Ответ модели оказался неполным. Новое выполнение не начато. Повторите сообщение.",
             "ambiguous_task_reference":"Уточните, о какой задаче идёт речь. Действие не выполнено."}.get(str(exc),"Не удалось обработать реплику безопасно. Уточните поручение, устройство или ID задачи; новое выполнение не начато.")
+        if failure_stage=='handoff':
+            error_message=HANDOFF_ERRORS.get(str(exc),error_message if str(exc) in {'worker_queue_full','daily_command_limit_exceeded'}
+                else 'Не удалось подтвердить передачу поручения исполнителю. Причина сохранена в диагностике.')
         task.update(status="failed",answer=error_message,commands=[],tasks=[],orchestrator_error=type(exc).__name__)
     task.setdefault("orchestrator_metrics",{})["first_response_ms"]=int((time.monotonic()-turn_started)*1000)
     metadata=db.message_task_metadata(task,task_id=tid)

@@ -25,12 +25,12 @@ class WorkerReport(BaseModel):
 
 
 try:
-    from .controller_trust import has_grounded_terminal_answer
+    from .controller_trust import has_grounded_terminal_answer, has_validated_terminal_answer
     from .runtime_state import _short_did
     from .tool_completion import execute_cmd_outcome_marker, execute_cmd_result_is_negative, execute_cmd_result_is_complete, execute_cmd_returncode_is_zero, write_content_result_is_ok, tool_result_terminal_sufficient
     from .command_confirmation import confirmed_command_outcome
 except ImportError:
-    from controller_trust import has_grounded_terminal_answer
+    from controller_trust import has_grounded_terminal_answer, has_validated_terminal_answer
     from runtime_state import _short_did
     from tool_completion import execute_cmd_outcome_marker, execute_cmd_result_is_negative, execute_cmd_result_is_complete, execute_cmd_returncode_is_zero, write_content_result_is_ok, tool_result_terminal_sufficient
     from command_confirmation import confirmed_command_outcome
@@ -70,11 +70,16 @@ def build_worker_report(task):
     check = answer_payload.get("self_check") if isinstance(answer_payload.get("self_check"), dict) else {}
     basis = answer_payload.get("basis") if isinstance(answer_payload.get("basis"), list) else []
     observations = [c for c in commands if c.get("step_id") in basis]
-    informational = (grounded and check.get("claims_completed_action") is False and bool(observations)
+    audited_information = (check.get("claims_completed_action") is False and bool(observations)
                      and receipt.get("answer_source")=="audited_terminal"
                      and receipt.get("goal_completed") is True and receipt.get("final_verification_status")=="verified"
-                     and receipt.get("task_status")=="completed"
-                     and all(positive_evidence(c, observation=True) for c in observations))
+                     and receipt.get("task_status")=="completed")
+    informational = grounded and audited_information and all(positive_evidence(c, observation=True) for c in observations)
+    mixed_information = (audited_information and not informational
+        and has_validated_terminal_answer(task.get('answer') or '',commands)
+        and any(positive_evidence(c, observation=True) for c in observations)
+        and any(c.get('tool_name')=='execute_cmd' and (c.get('status') in {'failed','error','blocked'}
+            or execute_cmd_result_is_negative(c.get('result'))) for c in observations))
     # Require both operation evidence and the existing original-goal answer audit.
     try:
         from .run_journal import audited_action_evidence
@@ -113,6 +118,7 @@ def build_worker_report(task):
     elif raw == "confirm": status = "waiting_confirmation"
     elif raw == "waiting_input": status = "waiting_input"
     elif raw not in TERMINAL: status = "running"
+    elif mixed_information and raw in {'done','completed','completed_with_recovery','success','unknown'}:status='partial'
     elif raw in negative: status = negative[raw]
     elif receipt.get("task_status") in negative: status = negative[receipt["task_status"]]
     elif terminal_negative:status=terminal_negative
@@ -220,6 +226,7 @@ def build_worker_report(task):
         error_code = "artifact_receipt_missing"
     if not isinstance(error_code, str):error_code=None
     if clarification and status=='blocked':error_code='clarification_required'
+    if mixed_information and status=='partial':error_code='mixed_diagnostic_evidence'
     if status=='unknown' and not error_code:
         if grounded and receipt.get('answer_source')=='audited_terminal':error_code='action_evidence_unconfirmed'
         elif terminal.get('tool_name')=='answer.text':error_code='goal_not_completed'

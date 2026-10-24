@@ -126,4 +126,4 @@ async def run_answer_only_repair_turn(
         iteration=iteration,
     )
     return {"ok": True, "answer": answer_payload["text"], "entry": entry,
-            "task_receipt": audited_task_receipt(answer_payload, audited=answer_auditor_enabled(cfg), audit_details=audit_details)}
+            "task_receipt": audited_task_receipt(answer_payload, audited=answer_auditor_enabled(cfg), audit_details=audit_details,journal=journal)}
