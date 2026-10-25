@@ -316,11 +316,12 @@ TOOL_METADATA = {
         "category": "files",
         "tool_type": "typed",
         "tool_label": "Запись файла",
-        "purpose": "Canonical transport for long, multiline, or generated text file content without shell escaping",
+        "purpose": "Write text or replace one exact fragment with an observed SHA-256 precondition, without shell escaping",
         "when_to_use": [
             "write scripts, HTML, JSON, TXT, CSV, Markdown, or source code",
             "long or multiline generated content would be unsafe/noisy in execute_cmd",
             "create or overwrite a text file",
+            "replace a unique fragment using expected_text, content and expected_sha256",
         ],
         "returns": "compact write evidence: path, append, encoding, chars_written, bytes_written, content_sha256, preview and OK/NO/ERROR summary",
         "danger": "write",

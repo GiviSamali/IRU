@@ -116,7 +116,9 @@ def validate_and_sanitize_tool_args(
                 "tool_name": canonical_tool_name(tool_name),
             }
 
-    missing = sorted(key for key in _schema_required(schema) if raw_args.get(key) in (None, ""))
+    missing = sorted(key for key in _schema_required(schema) if raw_args.get(key) in (None, "")
+        and not (tool_name == 'write_content' and key == 'content' and raw_args.get(key) == ''
+                 and isinstance(raw_args.get('expected_text'), str) and raw_args['expected_text']))
     if missing:
         return {}, warnings, {
             "status": "validation_error",

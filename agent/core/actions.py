@@ -190,14 +190,63 @@ def _file_fingerprint(path):
 
 
 def write_content(path: str, content: str, append: bool = False, encoding: str = "utf-8",
-                  _write_transaction: dict | None = None) -> dict:
+                  _write_transaction: dict | None = None, expected_text: str | None = None,
+                  expected_sha256: str | None = None) -> dict:
     # Serialize commit against other IRU writes; external changes are detected
     # against the initial fingerprint before replacing the destination.
     with _WRITE_LOCK:
+        if expected_sha256 is not None and expected_text is None:
+            return {"status":"error", "error":"expected_sha256_requires_expected_text", "committed":False}
+        if expected_text is not None:
+            return _replace_content(path, expected_text, content, encoding, expected_sha256,
+                                    append, _write_transaction)
         return _write_content(path, content, append, encoding, _write_transaction)
 
 
-def _write_content(path, content, append, encoding, transaction):
+def _replace_content(path, expected, replacement, encoding, expected_sha256, append, transaction):
+    """Exact, single replacement using the existing atomic writer and write lock."""
+    try:
+        if append or transaction or not isinstance(expected, str) or not expected:
+            raise ValueError("invalid_exact_replacement")
+        if not isinstance(expected_sha256, str) or not re.fullmatch('[a-fA-F0-9]{64}', expected_sha256):
+            raise ValueError("replacement_requires_observed_sha256")
+        target = Path(path)
+        if not target.is_absolute() or target.is_symlink() or not target.is_file():
+            raise ValueError("replacement_target_not_regular_file")
+        original = _file_fingerprint(target)
+        raw = target.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != original[2]:
+            raise ValueError("write_target_changed_before_read")
+        if expected_sha256 is not None and expected_sha256.lower() != original[2]:
+            raise ValueError("replacement_precondition_hash_mismatch")
+        # Preserve BOM and newline bytes; decoding is strict, never lossy.
+        codec = encoding
+        bom = b""
+        if encoding.lower().replace('_', '-') in {'utf-8', 'utf-8-sig'}:
+            codec = 'utf-8'
+            if raw.startswith(b'\xef\xbb\xbf'):
+                bom, raw = raw[:3], raw[3:]
+        text = raw.decode(codec)
+        if text.encode(codec) != raw:
+            raise ValueError("replacement_encoding_not_roundtrippable")
+        first = text.find(expected)
+        if first < 0 or text.find(expected, first + 1) >= 0:
+            raise ValueError("replacement_source_missing" if first < 0 else "replacement_source_ambiguous")
+        updated = text.replace(expected, replacement, 1)
+        # Preserve existing bytes outside the exact span, including line endings.
+        encoded = bom + updated.encode(codec)
+        return _write_content(path, updated, False, codec, None,
+                              expected_original=original, exact_bytes=encoded,
+                              replacement_info={"mode": "replace", "matches": 1,
+                                  "previous_sha256": original[2],
+                                  "replacement_sha256": hashlib.sha256(replacement.encode('utf-8')).hexdigest(),
+                                  "verification_scope": "file_bytes_only"})
+    except Exception as exc:
+        return {"status": "error", "error": str(exc), "committed": False}
+
+
+def _write_content(path, content, append, encoding, transaction, *, expected_original=None,
+                   exact_bytes=None, replacement_info=None):
     committed = False
     output_tmp = None
     try:
@@ -207,6 +256,8 @@ def _write_content(path, content, append, encoding, transaction):
         text_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         file_path.parent.mkdir(parents=True, exist_ok=True)
         original = _file_fingerprint(file_path)
+        if expected_original is not None and original != expected_original:
+            raise ValueError("write_target_changed_before_commit")
         operation = None
         if transaction is not None:
             operation = transaction["id"]
@@ -247,10 +298,16 @@ def _write_content(path, content, append, encoding, transaction):
         os.close(fd)
         if append and original is not None:
             shutil.copyfile(file_path, output_tmp)
-        with open(output_tmp, "a" if append else "w", encoding=actual_encoding, newline="") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
+        if exact_bytes is not None:
+            with open(output_tmp, 'wb') as handle:
+                handle.write(exact_bytes)
+                handle.flush()
+                os.fsync(handle.fileno())
+        else:
+            with open(output_tmp, "a" if append else "w", encoding=actual_encoding, newline="") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
         final = _file_fingerprint(Path(output_tmp))
         if file_path.is_symlink() or _file_fingerprint(file_path) != original:
             raise ValueError("write_target_changed_before_commit")
@@ -271,6 +328,8 @@ def _write_content(path, content, append, encoding, transaction):
             "file_sha256": observed[2],
             "bytes_written": final[0] - (original[0] if append and original else 0),
             "mode": "append" if append else "overwrite",
+            "previous_sha256": original[2] if original else None,
+            **(replacement_info or {}),
             "total_size": observed[0],
             **({"operation_id": operation, "chunk_index": index, "chunk_sha256": text_digest} if operation else {}),
         }
@@ -326,6 +385,7 @@ def collect_system_info(device_id: str = "") -> dict:
     info = {
         "office_tools_version": 1,
         "file_write_protocol": 2,
+        "file_replace_protocol": 1,
         "artifact_receipt_protocol": 1,
         "office_content_preservation_version": 1,
         "device_id": device_id,

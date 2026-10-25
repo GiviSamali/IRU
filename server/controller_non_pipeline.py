@@ -838,6 +838,8 @@ async def process_non_pipeline_command(
                     stalled_calls[source_id] = stalled_calls.get(source_id, 0) + 1
                     messages.append({'role':'tool','tool_call_id':tool_call['id'],'content':json.dumps({
                         'status':'reused_observation','dispatched':False,'source_step_id':source_id,
+                        'previous_attempt_status':prior_static.get('status'),
+                        'outcome_note':'Reusing diagnostic data does not establish success or absence of side effects.',
                         'trust_level':'untrusted_tool_data',
                         'evidence':json.loads(serialize_tool_result_for_llm(prior_static))},ensure_ascii=False)})
                     record_lifecycle_event('recovery',source='protocol_recovery',terminal_reason='no_progress',iteration=iteration+1,tool_name=fn_name,step_index=prior_static.get('idx'))
@@ -846,10 +848,11 @@ async def process_non_pipeline_command(
                             'Полученные доказательства сохранены. Исходная задача выполнена не полностью: '
                             + (assigned_objective or user_message),
                             'commands':commands_log,'tasks':[], 'training_context':_training_context(device_info),
-                            'task_receipt':{'task_status':'partial','goal_completed':False,
+                            'task_receipt':{'task_status':'partial' if any(e.get('status') == 'success' for e in commands_log) else 'failed','goal_completed':False,
                                 'final_verification_status':'unverified','answer_source':'server_fallback',
                                 'terminal_reason':'no_progress'}}
-                    add_correction('The device was NOT called. Reuse '+source_id+'. ORIGINAL assigned goal: '
+                    add_correction('The device was NOT called. Reuse the result or error in '+source_id+
+                        '. For a syntax error correct the command or use write_content expected_text for an exact edit. ORIGINAL assigned goal: '
                         +(assigned_objective or user_message)+
                         '\nSelect a DIFFERENT necessary action for the remaining authorized work (including final verification and cleanup when assigned), '
                         'or answer_text partial_report with the precise unfinished requirements. Do not request new permission for already assigned work. '
@@ -1432,9 +1435,9 @@ async def process_non_pipeline_command(
         status="failed",
         summary="model did not choose answer tool",
     ))
-    return {
-        "answer": "Не удалось завершить задачу: модель не выбрала инструмент ответа.",
-        "commands": commands_log,
-        "training_context": _training_context(device_info),
-        "tasks": [],
-    }
+    try:
+        from .run_journal import unfinished_execution_result
+    except ImportError:
+        from run_journal import unfinished_execution_result
+    return {**unfinished_execution_result(commands_log, 'terminal_answer_missing'),
+            'training_context': _training_context(device_info)}

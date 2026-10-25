@@ -340,6 +340,10 @@ async def send_command_to_agent(
             validate_write_path_for_device(path, (dev or {}).get("info", {}), profile)
         except ValueError as exc:
             raise RuntimeError(f"BLOCKED: {exc}") from exc
+        if action == 'write_content' and params.get('expected_text') is not None:
+            if ((dev or {}).get('info') or {}).get('file_replace_protocol') != 1:
+                return {'status':'error', 'error':'agent_update_required_for_exact_replacement',
+                        'dispatched':False, 'committed':False}
 
     if not dev:
         raise RuntimeError(f"Устройство '{device_id}' не подключено")
@@ -1048,7 +1052,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 if (target_dev.get("info") or {}).get("artifact_receipt_protocol") != 1:
                     return {"status":"error", "error":"agent_update_required_for_artifact_receipts", "dispatched":False}
                 params = {**params, "_artifact_task_id":task_id}
-            if action == "write_content" and len(params.get("content", "")) > 4000:
+            if action == "write_content" and params.get("expected_text") is None and len(params.get("content", "")) > 4000:
                 if (target_dev.get("info") or {}).get("file_write_protocol") != 2:
                     return {"status":"error", "error":"agent_update_required_for_atomic_large_write",
                             "dispatched":False, "committed":False}

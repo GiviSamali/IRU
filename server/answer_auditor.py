@@ -5,9 +5,9 @@ import os
 from typing import Any
 
 try:
-    from .run_journal import wrap_tool_result_for_llm, audited_action_evidence
+    from .run_journal import wrap_tool_result_for_llm, audited_action_evidence, latest_file_states
 except ImportError:
-    from run_journal import wrap_tool_result_for_llm, audited_action_evidence  # type: ignore
+    from run_journal import wrap_tool_result_for_llm, audited_action_evidence, latest_file_states  # type: ignore
 
 
 AUDITOR_SYSTEM_PROMPT = """\
@@ -92,6 +92,7 @@ async def audit_answer_payload(
         "user_request": user_request,
         "current_run_journal": _compact_journal(current_run_journal),
         "answer_payload": answer_payload,
+        "latest_verified_file_states": latest_file_states(current_run_journal),
     }
     if request_context:
         try:

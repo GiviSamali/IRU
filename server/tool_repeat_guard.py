@@ -143,6 +143,24 @@ def command_observation_key(args):
 
 def unchanged_command_evidence(journal, args, device_id, human_request):
     """Budget guard, not shell classification or permission. Never fabricate a new observation."""
+    # A repeated parser failure is evidence about a failed attempt, not proof
+    # that the requested mutation completed or that retrying is safe.
+    failures = []
+    for entry in reversed(journal):
+        result = entry.get('result') or {}
+        if (entry.get('command') != args.get('command')
+                or (entry.get('target_device_id') or entry.get('device_id')) != device_id
+                or entry.get('status') != 'failed' or result.get('status') == 'unknown'
+                or result.get('error_type') != 'shell_syntax_error'
+                or result.get('returncode') in (None, 0, '0')
+                or not result.get('stderr')
+                or entry.get('execution_key') != command_observation_key(args)):
+            break
+        if failures and result.get('stderr') != failures[0]['result'].get('stderr'):
+            break
+        failures.append(entry)
+    if len(failures) >= 2:
+        return failures[0]
     if args.get('artifact_paths'):
         return None
     contract = args.get('observation_contract') or {}

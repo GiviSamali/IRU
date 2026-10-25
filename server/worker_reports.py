@@ -3,6 +3,16 @@ from pathlib import PureWindowsPath
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+def bounded_report_summary(text, limit=2000):
+    """Keep whole paragraphs/sentences and explicitly link to the saved source."""
+    if len(text) <= limit:
+        return text
+    import re
+    marker = '\n[Сокращено. Полный текст сохранён в отчёте задачи.]'
+    budget = limit - len(marker)
+    boundaries = [m.end() for m in re.finditer(r'\n\s*\n|[.!?](?=\s|$)', text[:budget + 1]) if m.end() <= budget]
+    return (text[:max(boundaries)].rstrip() if boundaries else 'Подробный результат сохранён в отчёте задачи.') + marker
+
 class WorkerReport(BaseModel):
     model_config=ConfigDict(extra="forbid",strict=True)
     schema_version: Literal[1]
@@ -231,8 +241,14 @@ def build_worker_report(task):
         if grounded and receipt.get('answer_source')=='audited_terminal':error_code='action_evidence_unconfirmed'
         elif terminal.get('tool_name')=='answer.text':error_code='goal_not_completed'
         elif any(c.get('tool_name')=='tool_only_protocol' for c in commands):error_code='terminal_answer_missing'
+    if receipt.get('answer_source') == 'server_fallback' and status in {'partial', 'unknown'}:
+        try:
+            from .run_journal import unfinished_execution_result
+        except ImportError:
+            from run_journal import unfinished_execution_result
+        summaries[status] = bounded_report_summary(unfinished_execution_result(commands, error_code)['answer'])
     report = {"schema_version":1, "task_id":task["task_id"], "worker_id":task.get("worker_id") or "worker-1", "status":status,
-        "goal_completed":status == "success", "summary":payload['question'][:2000] if clarification and status=='blocked' else payload["text"][:2000] if not artifact_incomplete and (terminal_negative or confirmed) and isinstance(payload.get("text"),str) and payload["text"] == task.get("answer") else summaries[status],
+        "goal_completed":status == "success", "summary":bounded_report_summary(payload['question']) if clarification and status=='blocked' else bounded_report_summary(payload["text"]) if not artifact_incomplete and (terminal_negative or confirmed) and isinstance(payload.get("text"),str) and payload["text"] == task.get("answer") else summaries[status],
         "target_device_ids":[_short_did(d) for d in task.get("device_ids") or []], "artifacts":artifacts,
         "evidence_refs":refs, "requires_user_action":status in {"waiting_confirmation","waiting_input","blocked"},
         "error_code":error_code}

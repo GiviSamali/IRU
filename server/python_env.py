@@ -138,7 +138,10 @@ def classify_command_error(result: dict[str, Any] | None, command: str = "") -> 
         "the string is missing the terminator",
     )
     if any(marker in lowered for marker in parser_markers):
-        return {"error_type": "shell_syntax_error", "recoverable": True}
+        return {"error_type": "shell_syntax_error", "recoverable": True,
+                "retry_identical_useful": False,
+                "recovery_hint": "Correct the syntax before retrying. For an exact text edit use write_content with expected_text and the observed expected_sha256.",
+                "effect_verification": "not_established_by_error_classification"}
 
     if "traceback (most recent call last)" in lowered or lowered.lstrip().startswith("traceback"):
         return {"error_type": "python_runtime_error", "recoverable": True}

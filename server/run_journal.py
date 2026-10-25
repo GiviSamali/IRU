@@ -251,7 +251,8 @@ def compact_write_content_result(args: dict[str, Any] | None, result: Any = None
     }
     if original.get("total_size") is not None:
         compact["total_size"] = original.get("total_size")
-    for key in ("verified", "committed", "file_sha256", "chunks_confirmed", "chunks_total", "chunk_receipts"):
+    for key in ("verified", "committed", "file_sha256", "previous_sha256", "mode", "matches",
+                "replacement_sha256", "verification_scope", "chunks_confirmed", "chunks_total", "chunk_receipts"):
         if key in original:
             compact[key] = original[key]
     if error:
@@ -756,6 +757,56 @@ def validate_basis_references(
     return basis
 
 
+def file_state_history(journal):
+    """Only executor-produced hashes; never parse shell stdout or model prose."""
+    from pathlib import PureWindowsPath
+    states = {}
+    for entry in journal:
+        result = entry.get('result') or {}
+        if not isinstance(result, dict) or (entry.get('tool_name') or entry.get('action')) not in {
+                'execute_cmd', 'write_content', 'office_docx', 'office_xlsx', 'office_pptx'}:
+            continue
+        receipts = list(result.get('artifact_receipts') or [])
+        if ((entry.get('tool_name') or entry.get('action')) == 'write_content'
+                and result.get('verified') is True and result.get('committed') is True):
+            receipts.append({'path': result.get('path'), 'sha256': result.get('file_sha256'),
+                             'previous_sha256': result.get('previous_sha256'), 'verified': True})
+        for receipt in receipts:
+            if not isinstance(receipt, dict):
+                continue
+            path, digest = receipt.get('path'), receipt.get('sha256')
+            if (receipt.get('verified') is not True or not isinstance(path, str)
+                    or not isinstance(digest, str) or not re.fullmatch('[a-fA-F0-9]{64}', digest)):
+                continue
+            device = receipt.get('device_id') or entry.get('target_device_id') or entry.get('device_id')
+            key = (device, PureWindowsPath(path).as_posix().casefold() if PureWindowsPath(path).drive else path)
+            states.setdefault(key, []).append({'path': path, 'device_id': device, 'sha256': digest.lower(),
+                'previous_sha256': receipt.get('previous_sha256'), 'step_id': entry.get('step_id')})
+    return states
+
+
+def latest_file_states(journal):
+    return [history[-1] for history in file_state_history(journal).values()]
+
+
+def unfinished_execution_result(journal, reason):
+    states = latest_file_states(journal)
+    unknown = any((e.get('result') or {}).get('status') == 'unknown'
+                  or (e.get('result') or {}).get('error') == 'confirmed_transport_outcome_unknown'
+                  for e in journal)
+    attempts = [e for e in journal if e.get('tool_type') not in {'system', 'answer'}
+                and e.get('tool_name') not in {'tool_only_protocol', 'llm_request'}]
+    failed_only = bool(attempts) and all(e.get('status') in {'failed', 'error', 'blocked'} for e in attempts)
+    status = 'unknown' if unknown else 'partial' if states else 'failed' if failed_only else 'unknown'
+    lines = ['Завершение поручения не подтверждено. Журнал выполненных действий сохранён.']
+    for state in states:
+        lines.append(f"Последняя подтверждённая версия {state['path']}: SHA-256 {state['sha256']} ({state['step_id']}).")
+    return {'answer': '\n'.join(lines), 'commands': journal, 'tasks': [],
+            'task_receipt': {'task_status': status, 'goal_completed': False,
+                'final_verification_status': 'unverified', 'answer_source': 'server_fallback',
+                'terminal_reason': reason}}
+
+
 def validate_answer_text_payload(payload: Any, journal: list[dict[str, Any]]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ProtocolValidationError("answer_text arguments must be an object", GROUNDED_CORRECTION)
@@ -795,6 +846,15 @@ def validate_answer_text_payload(payload: Any, journal: list[dict[str, Any]]) ->
         or bool(self_check.get("claims_completed_action"))
     )
     basis = validate_basis_references(payload.get("basis"), journal, require_non_empty=requires_basis)
+    # A historical version cannot establish the current file after another
+    # verified write. This applies to partial reports as well as full success.
+    for history in file_state_history(journal).values():
+        latest = history[-1]
+        stale = [s for s in history[:-1] if s['step_id'] in basis and s['sha256'] != latest['sha256']]
+        if stale and latest['step_id'] not in basis:
+            raise ProtocolValidationError('file_state_superseded: ' + json.dumps(latest, ensure_ascii=False),
+                'Use the last verified file state and its step_id; earlier writes were superseded. '
+                'Describe an undo as an undo, including in a partial report.')
     if self_check.get("claims_completed_action"):
         negative_execute_cmd = _negative_execute_cmd_step_ids(journal)
         negative_write_content = _negative_write_content_step_ids(journal)

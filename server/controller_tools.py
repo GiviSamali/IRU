@@ -19,7 +19,7 @@ EXECUTE_CMD_DESCRIPTION = (
     "For search/analysis, prefer local search or extraction and return only relevant facts; reuse current-run observations instead of overlapping rereads without a new need. "
     "For formatting-only Office edits, use preserve_content=true on office_* or preserve_content_paths on execute_cmd; "
     "these paths must also be in artifact_paths. Content verification failure does not authorize repeating a mutation. "
-    "For limited edits, reliably transform the current original data on the device, preserving untouched elements, and verify the requested change and preservation against the original. "
+    "For an exact text edit prefer write_content with expected_text and expected_sha256; it preserves untouched bytes and verifies the write. "
     "Do not reconstruct untouched content from LLM memory or infer duplicates from historical claims. Existing permissions, device scope, and confirmations still apply. "
     "Keep commands short. Use write_content for new generated content or a requested full replacement; content length alone does not justify rewriting an existing file."
 )
@@ -29,7 +29,8 @@ WRITE_CONTENT_DESCRIPTION = (
     "and atomically commits only after integrity verification. Do not manually split a valid complete write. "
     "Path is literal: resolve environment/home variables on the target device first; never pass $env:, %VAR% or ~. "
     "Canonical tool for creating text content or performing an explicitly requested full replacement. Prefer it for long, multiline, or generated new content. "
-    "For a limited edit, prefer a reliable local transformation of the current original using existing tools; do not reconstruct unchanged elements in the LLM. "
+    "For a limited edit of text set expected_text to the exact unique original fragment and content to its replacement; "
+    "bind expected_sha256 to the observed file hash. The agent preserves other bytes and verifies the committed file. "
     "Overwrite replaces the entire file; neither overwrite nor append guarantees preservation. Verify the requested change and preservation against the original before claiming success. "
     "Suitable for scripts, HTML, JSON, TXT, CSV, Markdown, "
     "and source code. For standard Office documents prefer office_docx, office_xlsx or office_pptx. "
@@ -88,6 +89,10 @@ TOOLS = [
                         "type": "string",
                         "description": "Содержимое для записи"
                     },
+                    "expected_text": {"type": "string", "minLength": 1, "maxLength": 64000,
+                        "description": "Exact unique fragment to replace; omit for a complete write. Newlines must match. Missing or ambiguous fragments leave the file unchanged."},
+                    "expected_sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$",
+                        "description": "Required with expected_text: SHA-256 of the observed original file. Prevents stale edits and repeated mutations."},
                     "append": {
                         "type": "boolean",
                         "description": "true = дописать в конец; false = перезаписать. По умолчанию false.",
