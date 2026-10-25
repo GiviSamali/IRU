@@ -72,14 +72,18 @@ def _prepare_storage(connection):
     )""")
 
 
-def _cached(goal, owner, chat, fingerprint):
+def _cached(goal, owner, chat, fingerprint, projected):
     with db.get_db() as c:
         _prepare_storage(c)
         row = c.execute("""SELECT fingerprint,answer,spoken FROM goal_completion_replies
             WHERE goal_id=? AND revision=? AND owner_user_id=? AND chat_id=?""",
             (goal["goal_id"], goal["revision"], owner, chat)).fetchone()
-    if not row or row["fingerprint"] != fingerprint:
+    if not row:
         return None
+    if row["fingerprint"] != fingerprint:
+        # A contradictory terminal snapshot must not trigger a fresh LLM call
+        # on every poll under the same revision. Fail closed to current evidence.
+        return {"message": projected["message"], "spoken_message": projected["spoken_message"]}
     return {"message": row["answer"], "spoken_message": row["spoken"]}
 
 
@@ -159,7 +163,7 @@ async def present_completed_goal(goal, projected, owner, chat):
     if not projected.get("terminal"):
         return projected
     fingerprint = _fingerprint(goal, projected)
-    stored = _cached(goal, owner, chat, fingerprint)
+    stored = _cached(goal, owner, chat, fingerprint, projected)
     if stored:
         return {**projected, **stored}
     key = (goal["goal_id"], goal["revision"], owner, chat)
@@ -168,7 +172,7 @@ async def present_completed_goal(goal, projected, owner, chat):
         lock = asyncio.Lock()
         _LOCKS[key] = lock
     async with lock:
-        stored = _cached(goal, owner, chat, fingerprint)
+        stored = _cached(goal, owner, chat, fingerprint, projected)
         if stored:
             return {**projected, **stored}
         # Only full success is paraphrased by a model. Partial/unknown/failed
@@ -188,5 +192,5 @@ async def present_completed_goal(goal, projected, owner, chat):
                 (goal["goal_id"], goal["revision"], owner, chat, fingerprint,
                  reply["message"], reply["spoken_message"], time.time()))
             _persist_to_dialogue(c, goal, reply, owner, chat)
-        stored = _cached(goal, owner, chat, fingerprint)
+        stored = _cached(goal, owner, chat, fingerprint, projected)
         return {**projected, **(stored or reply)}
