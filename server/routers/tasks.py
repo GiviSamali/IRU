@@ -677,7 +677,14 @@ async def api_get_task(task_id: str, request: Request):
             from worker_scheduler import goal_view
             from goal_presentation import goal_presentation
         try:
-            presentation = goal_presentation(goal_view(task["goal_id"], user["id"], task["chat_id"]))
+            goal = goal_view(task["goal_id"], user["id"], task["chat_id"])
+            presentation = goal_presentation(goal)
+            if presentation["terminal"]:
+                try:
+                    from ..goal_completion import present_completed_goal
+                except ImportError:
+                    from goal_completion import present_completed_goal
+                presentation = await present_completed_goal(goal, presentation, user["id"], task["chat_id"])
         except ValueError:
             # A deleted or inaccessible Goal never gives access to another chat.
             presentation = {"status": "unknown", "terminal": True,
