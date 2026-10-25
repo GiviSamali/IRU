@@ -194,6 +194,14 @@ def worker_presentation(task, report=None):
     report=normalized_worker_report(task,report)
     answer=task.get("answer") if isinstance(task.get("answer"),str) else ""
     receipt=task.get("task_receipt") or {}
+    if (report['status']=='unknown' and not has_validated_terminal_answer(answer,task.get('commands') or [])
+            and any(c.get('status')=='success' or c.get('tool_name')=='tool_only_protocol'
+                    for c in task.get('commands') or [] if isinstance(c,dict))):
+        try:
+            from .task_summary import recovered_execution_summary
+        except ImportError:
+            from task_summary import recovered_execution_summary
+        return {'conversational_response':recovered_execution_summary(task), 'execution_details':answer}
     if (report["status"]=="success" and receipt.get("answer_source")=="audited_terminal"
             and receipt.get("goal_completed") is True and receipt.get("final_verification_status")=="verified"
             and has_grounded_terminal_answer(answer,task.get("commands") or [])):

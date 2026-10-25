@@ -3,9 +3,9 @@ import re
 
 import httpx
 try:
-    from .run_journal import append_answer_step, append_tool_step, audited_task_receipt, validate_answer_text_payload, build_terminal_answer_repair_prompt, record_lifecycle_event
+    from .run_journal import append_answer_step, append_tool_step, audited_task_receipt, validate_answer_text_payload, build_terminal_answer_repair_prompt, record_lifecycle_event, TERMINAL_VALIDATION_CONDITIONS, TERMINAL_VALIDATION_FIELDS
 except ImportError:
-    from run_journal import append_answer_step, append_tool_step, audited_task_receipt, validate_answer_text_payload, build_terminal_answer_repair_prompt, record_lifecycle_event
+    from run_journal import append_answer_step, append_tool_step, audited_task_receipt, validate_answer_text_payload, build_terminal_answer_repair_prompt, record_lifecycle_event, TERMINAL_VALIDATION_CONDITIONS, TERMINAL_VALIDATION_FIELDS
 
 try:
     from .web_search import run_web_search
@@ -88,11 +88,11 @@ async def process_onboarding_message(
 
     last_rejection = "No accepted terminal answer."
 
-    def rejected(reason_code, reason, iteration):
+    def rejected(reason_code, reason, iteration, validation=None):
         nonlocal last_rejection
         last_rejection = str(reason)[:600]
         record_lifecycle_event("recovery", source="protocol_recovery", status="failed",
-                               terminal_reason=reason_code, iteration=iteration + 1)
+                               terminal_reason=reason_code, iteration=iteration + 1, validation=validation)
 
     try:
         from .runtime_state import tasks as runtime_tasks
@@ -174,7 +174,15 @@ async def process_onboarding_message(
                     return {"answer":payload["text"],"commands":commands,
                             **({"task_receipt":receipt} if receipt else {})}
                 except (ValueError,TypeError) as exc:
-                    rejected(rejection_code, exc, iteration)
+                    validation = None
+                    if rejection_code == 'invalid_terminal_payload':
+                        # Persist contract descriptions, never model text or arbitrary exception values.
+                        description = str(exc)
+                        safe = next((prefix for prefix in TERMINAL_VALIDATION_CONDITIONS
+                                     if description.startswith(prefix)), 'terminal_contract_condition')
+                        fields = TERMINAL_VALIDATION_FIELDS
+                        validation = {'condition':safe,'fields':sorted(field for field in fields if field in description)}
+                    rejected(rejection_code, exc, iteration, validation=validation)
                     messages.append({"role":"tool","tool_call_id":call["id"],"content":"Terminal answer rejected: " + str(exc)[:600] + ". Use actual current step_id; if the requested facts are missing, return partial_report."})
                     continue
             result = {"error": "Инструмент недоступен без подключённого устройства"}
@@ -247,4 +255,10 @@ async def process_onboarding_message(
                 append_tool_step(commands,entry)
                 result={"step_id":entry["step_id"],"status":entry["status"],"trust_level":"untrusted_tool_data","result":result}
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(result, ensure_ascii=False)})
+    if strict_worker:
+        try:
+            from .task_summary import recovered_execution_summary
+        except ImportError:
+            from task_summary import recovered_execution_summary
+        return {'answer':recovered_execution_summary({'commands':commands,'user_id':user_id}), 'commands':commands}
     return {"answer": "Не удалось получить корректный ответ от ИИ. Попробуйте повторить запрос.", "commands": commands}

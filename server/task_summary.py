@@ -5,9 +5,11 @@ import json
 import hashlib
 
 try:
+    from . import database as db
     from .runtime_state import tasks
     from .tool_registry import canonical_tool_name, compact_tool_summary
 except ImportError:
+    import database as db
     from runtime_state import tasks  # type: ignore
     from tool_registry import canonical_tool_name, compact_tool_summary  # type: ignore
 
@@ -31,6 +33,32 @@ def _flatten_commands(task: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _action_for(entry: dict[str, Any]) -> str:
     return canonical_tool_name(str(entry.get("tool_name") or entry.get("action") or "").strip())
+
+
+def recovered_execution_summary(task: dict[str, Any], *, user_id=None) -> str:
+    """Read existing receipts only; never infer goal completion or repeat an action."""
+    items = []
+    for entry in _flatten_commands(task):
+        result = entry.get('result')
+        if not isinstance(result, dict) or entry.get('status') != 'success' or result.get('error'):
+            continue
+        name = _action_for(entry)
+        if name == 'remember_fact' and result.get('status') == 'ok' and type(result.get('fact_id')) is int:
+            # A historical receipt proves the write, not that the fact still exists.
+            owner = user_id if user_id is not None else task.get('user_id')
+            with db.get_db() as c:
+                fact = c.execute('SELECT fact_text FROM user_memory WHERE id=? AND user_id=?',
+                                 (result['fact_id'], str(owner))).fetchone()
+            if fact:
+                items.append(f"Факт №{result['fact_id']} сохранён и присутствует в памяти: «{fact['fact_text']}».")
+            else:
+                items.append(f"Журнал подтверждает запись факта №{result['fact_id']}, но сейчас эта запись в памяти не найдена.")
+        else:
+            # Describe a completed tool step, never promote rc=0 to goal success.
+            items.append(f"В журнале есть успешный шаг {entry.get('step_id', '')} ({name}); это не подтверждает выполнение всего поручения.")
+    if not items:
+        return 'Исход задачи не подтверждён. Сохранённые результаты не позволяют подтвердить выполненное действие. Повторное исполнение не запускал.'
+    return '\n'.join(items[-4:]) + '\nИтог всего поручения не подтверждён. Повторное исполнение не запускал.'
 
 
 def _entry_failed(entry: dict[str, Any]) -> bool:

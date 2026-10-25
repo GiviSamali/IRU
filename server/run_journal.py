@@ -24,6 +24,20 @@ except ImportError:
 # normal Uvicorn stderr/systemd journal persists it; no second trace store.
 _DIAGNOSTIC_CONTEXT = ContextVar("iru_diagnostic_context", default=None)
 _TRACE_LOGGER = logging.getLogger("uvicorn.error.iru.lifecycle")
+TERMINAL_VALIDATION_CONDITIONS = (
+    'answer_text arguments must be an object', 'answer_text missing required fields',
+    'answer_text answer_type is invalid', 'answer_text text must be a non-empty string',
+    'answer_text self_check must be an object', 'answer_text self_check missing fields',
+    'answer_text declares insufficient evidence', 'completed-action answer uses NO/ERROR evidence',
+    'answer_text needs a human answer', 'basis must be an array of step_id strings',
+    'basis is required for grounded answer', 'basis references are not current non-answer steps',
+    *(f'answer_text self_check.{field} must be boolean' for field in (
+        'depends_on_current_external_state','claims_completed_action','has_sufficient_evidence')),
+    'answer_text self_check.missing_evidence_question must be string',
+    'Read all immutable dependency pages before claiming completion', 'terminal_contract_condition',
+)
+TERMINAL_VALIDATION_FIELDS = frozenset({'answer_type','text','basis','self_check',
+    'depends_on_current_external_state','claims_completed_action','has_sufficient_evidence','missing_evidence_question'})
 _TRACE_LABELS = frozenset({"nl", "onboarding", "pipeline", "non_pipeline", "broadcast", "PLAN", "SIMPLE", "skipped",
     "running", "done", "completed", "completed_with_recovery", "failed", "error", "blocked", "cancelled", "confirm",
     "success", "unknown", "partial", "terminal", "pending", "server", "model", "answer_text", "answer_tool", "audited_terminal",
@@ -70,6 +84,10 @@ def record_lifecycle_event(event: str, **metadata) -> None:
             tool = canonical_tool_name(str(metadata["tool_name"]))
             # Registry membership, not arbitrary model output or arguments.
             row["tool_name"] = tool if tool in _TRACE_TOOLS else "unknown_tool"
+        validation = metadata.get('validation')
+        if isinstance(validation,dict) and validation.get('condition') in TERMINAL_VALIDATION_CONDITIONS:
+            row['validation']={'condition':validation['condition'],
+                'fields':[field for field in validation.get('fields',[]) if field in TERMINAL_VALIDATION_FIELDS]}
         if len(context["events"]) < 256:
             context["events"].append(row)
         elif event == "request_finished":

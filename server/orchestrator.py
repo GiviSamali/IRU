@@ -252,6 +252,7 @@ depends_on — локальные key этого решения. required_source
 goal_revision и replaces_source_task_id неуспешной Task в новом assignment. Сохрани
 её назначенный результат и устройства; source_task_ids используй только как контекст.
 Не заменяй успешные, работающие, отменённые или unknown Task; новую цель не подменяй повтором.
+При просьбе повторить unknown Task сначала выбери task_status этой задачи: сверяем сохранённые результаты, не запускаем старые действия заново.
 При замене неуспешного исследования Scheduler перепривяжет его ожидающих потребителей;
 не создавай новые копии документных поручений, уже ожидающих это исследование.
 Для изменения ещё не начатого поручения выбери amend с task_id, task_revision из контекста
@@ -485,6 +486,16 @@ async def run_turn(cmd, user, chat_id, delegate):
             stats={"entity":"orchestrator","llm_calls":0,"snapshot_calls":0}
         else:
             choice,stats=await decide(cmd.message,routing_context,user_id=owner,chat_id=chat_id,task_id=tid)
+        if choice.intent=='delegate':
+            replacements=[a.replaces_source_task_id for a in choice.assignments if a.replaces_source_task_id]
+            uncertain=[]
+            for source_id in replacements:
+                source_job=owned_job(source_id,owner)
+                if not source_job or source_job['chat_id']!=chat_id:raise ValueError('task_not_found')
+                if source_job['state']=='unknown':uncertain.append(source_id)
+            if uncertain:
+                # Reconcile saved state first. Never silently submit other assignments or retry side effects.
+                choice=Decision(intent='task_status',task_id=uncertain[0],reference='explicit')
         if choice.intent=="delegate":
             stage="handoff"
             if not choice.objective.strip():
