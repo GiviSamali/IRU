@@ -129,9 +129,34 @@ async def _narrate(goal, projected):
             "spoken_message": "Готово. " + speech}
 
 
+def _persist_to_dialogue(connection, goal, reply, owner, chat):
+    """Update exactly the originating Orchestrator message, never add a new turn.
+
+    The actual Worker journals stay in Operations. Re-rendering chat history
+    after F5 gets the same grounded, completed response as live polling.
+    """
+    rows = connection.execute("""SELECT t.message_id,m.content,m.task_metadata
+        FROM orchestrator_turns t JOIN messages m ON m.id=t.message_id
+        WHERE t.owner_user_id=? AND t.chat_id=? AND m.role='assistant'
+        ORDER BY t.created_at DESC LIMIT 200""", (owner, chat)).fetchall()
+    for row in rows:
+        metadata = json.loads(row["task_metadata"] or "{}")
+        if metadata.get("goalId") != goal["goal_id"] or metadata.get("resultFirst") is not True:
+            continue
+        # Do not overwrite another conversation or a manually authored answer.
+        if row["content"] and metadata.get("goalCompletionRevision") is None:
+            continue
+        metadata.update(goalCompletionRevision=goal["revision"],
+                        conversationalResponse=reply["message"])
+        connection.execute("""UPDATE messages SET content=?,task_metadata=?
+            WHERE id=? AND role='assistant'""",
+            (reply["message"], json.dumps(metadata, ensure_ascii=False), row["message_id"]))
+        break
+
+
 async def present_completed_goal(goal, projected, owner, chat):
     """Return one stable post-goal reply; never downgrade a task on LLM failure."""
-    if not projected.get("terminal") or projected.get("status") != "success":
+    if not projected.get("terminal"):
         return projected
     fingerprint = _fingerprint(goal, projected)
     stored = _cached(goal, owner, chat, fingerprint)
@@ -146,12 +171,15 @@ async def present_completed_goal(goal, projected, owner, chat):
         stored = _cached(goal, owner, chat, fingerprint)
         if stored:
             return {**projected, **stored}
-        try:
-            reply = await asyncio.wait_for(_narrate(goal, projected), timeout=9)
-        except Exception:
-            # Provider unavailability must never invalidate verified execution.
-            reply = {"message": projected["message"],
-                     "spoken_message": projected["spoken_message"]}
+        # Only full success is paraphrased by a model. Partial/unknown/failed
+        # outcomes remain deterministic, so a stylistic model cannot erase a warning.
+        reply = {"message": projected["message"],
+                 "spoken_message": projected["spoken_message"]}
+        if projected["status"] == "success":
+            try:
+                reply = await asyncio.wait_for(_narrate(goal, projected), timeout=9)
+            except Exception:
+                pass  # A language-model failure never changes a Worker outcome.
         with db.get_db() as c:
             _prepare_storage(c)
             c.execute("""INSERT OR IGNORE INTO goal_completion_replies
@@ -159,5 +187,6 @@ async def present_completed_goal(goal, projected, owner, chat):
                 VALUES(?,?,?,?,?,?,?,?)""",
                 (goal["goal_id"], goal["revision"], owner, chat, fingerprint,
                  reply["message"], reply["spoken_message"], time.time()))
+            _persist_to_dialogue(c, goal, reply, owner, chat)
         stored = _cached(goal, owner, chat, fingerprint)
         return {**projected, **(stored or reply)}
