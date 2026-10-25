@@ -85,7 +85,14 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
             from worker_scheduler import goal_view
             from goal_presentation import goal_presentation
         try:
-            goal_result = goal_presentation(goal_view(task["goal_id"], user["id"], task["chat_id"]))
+            goal = goal_view(task["goal_id"], user["id"], task["chat_id"])
+            goal_result = goal_presentation(goal)
+            if goal_result["terminal"]:
+                try:
+                    from ..goal_completion import present_completed_goal
+                except ImportError:
+                    from goal_completion import present_completed_goal
+                goal_result = await present_completed_goal(goal, goal_result, user["id"], task["chat_id"])
         except ValueError:
             raise HTTPException(404, "Результат цели недоступен") from None
         if not goal_result["terminal"]:
