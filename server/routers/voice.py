@@ -56,6 +56,15 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
     if provider not in {"yandex", "piper", "elevenlabs"}:
         raise HTTPException(400, "Неизвестный обработчик озвучки")
     task = tasks.get(task_id)
+    if task is None:
+        # A persisted dialogue can outlive the process-local voice/task cache.
+        try:
+            from ..orchestrator import restore_dialogue
+        except ImportError:
+            from orchestrator import restore_dialogue
+        task = restore_dialogue(task_id, user["id"])
+        if task is not None:
+            tasks[task_id] = task
     if not task or task.get("user_id") != user["id"]:
         raise HTTPException(404, "Задача не найдена")
     try:
