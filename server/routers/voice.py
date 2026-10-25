@@ -64,6 +64,27 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
     except ImportError:
         from window_policy import silent_window_success
         from browser_policy import silent_browser_success
+    # A delegated Goal is projected from frozen Worker Reports, not from the
+    # initiating Orchestrator turn (whose answer is intentionally empty).
+    # Reading this endpoint cannot start, retry, or grant a Worker permission.
+    goal_speech_task = None
+    if task.get("kind") == "orchestrator" and task.get("result_first") and task.get("goal_id"):
+        try:
+            from ..worker_scheduler import goal_view
+            from ..goal_presentation import goal_presentation
+        except ImportError:
+            from worker_scheduler import goal_view
+            from goal_presentation import goal_presentation
+        try:
+            goal_result = goal_presentation(goal_view(task["goal_id"], user["id"], task["chat_id"]))
+        except ValueError:
+            raise HTTPException(404, "Результат цели недоступен") from None
+        if not goal_result["terminal"]:
+            raise HTTPException(409, "Задача ещё не завершена")
+        spoken = goal_result["spoken_message"]
+        goal_speech_task = {**task, "answer": spoken, "status": "done",
+            "dialogue_intent": "conversation", "dialogue_spoken_response": spoken,
+            "dialogue_speech_answer": spoken, "worker_report": None, "task_receipt": None}
     normalized = None
     if task.get("worker_id"):
         try:
@@ -89,9 +110,9 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
         raise HTTPException(409, "Требуется идентификатор вопроса")
     if task.get("status") not in TERMINAL_STATUSES and not ordinary and not input_question:
         raise HTTPException(409, "Задача ещё не завершена")
-    human_answer = task.get("answer") or ""
+    human_answer = goal_speech_task["answer"] if goal_speech_task else (task.get("answer") or "")
     # An empty written handoff can still have optional context-bound speech.
-    if task.get("kind")=="orchestrator" and task.get("dialogue_speech_answer")==task.get("answer"):
+    if not goal_speech_task and task.get("kind")=="orchestrator" and task.get("dialogue_speech_answer")==task.get("answer"):
         human_answer = task.get("dialogue_spoken_response") or human_answer
     if task.get("worker_id") and not ordinary:
         try:
@@ -111,7 +132,7 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
     _active_users.add(user_id)
     try:
         if not ordinary:
-            parts = await voice.spoken_parts(task)
+            parts = await voice.spoken_parts(goal_speech_task or task)
         if part >= len(parts):
             raise HTTPException(404, "Часть ответа не найдена")
         media_type = "audio/ogg"
