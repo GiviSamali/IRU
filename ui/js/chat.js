@@ -1159,7 +1159,16 @@ function forgetActiveTask(taskId) {
 
 function restoreActiveChatTasks(chatId) {
   if (!chatId) return;
-  for(const message of state.messages) if(message._taskId && message.taskKind && !isTaskTerminalStatus(message.taskStatus))rememberActiveTask(message._taskId,chatId);
+  for(const message of state.messages) {
+    // The initiating Orchestrator turn finishes before its delegated Goal.
+    // Restore an unanswered Goal even after the browser lost sessionStorage.
+    const unansweredGoal = message.resultFirst === true && message.goalId
+      && message.taskKind === 'orchestrator'
+      && !String(message.content || message.conversationalResponse || '').trim();
+    if(message._taskId && message.taskKind
+        && (!isTaskTerminalStatus(message.taskStatus) || unansweredGoal))
+      rememberActiveTask(message._taskId,chatId);
+  }
   const tasksToRestore = readActiveTasks().filter(item => Number(item?.chatId) === Number(chatId));
   if (!tasksToRestore.length) return;
 
