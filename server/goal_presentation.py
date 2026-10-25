@@ -94,8 +94,14 @@ def goal_presentation(goal: dict) -> dict:
                 if len(shown) < 8:
                     shown.append(artifact)
 
+    # Only the owner's frozen WorkerReport is used to describe what actually happened.
+    # The Orchestrator is not re-running a Worker or inventing a new verification.
+    single = members[0] if total == 1 and members else None
+    detail = str((single.get("report") or {}).get("summary") or "").strip() if single else ""
     if success:
         message = ("Готово." if total == 1 else f"Готово. Подтверждены все {total} результата.")
+        if detail and detail.casefold().rstrip(".!") not in {"готово", "задача выполнена", "успешно"}:
+            message += " " + detail
     elif status == "running":
         message = f"Выполняю цель: подтверждено {done} из {total} результатов."
         attention = [m for m in members if m.get("status") in {"waiting_confirmation", "waiting_input"}]
@@ -105,6 +111,8 @@ def goal_presentation(goal: dict) -> dict:
         message = f"Исход цели не подтверждён. Подтверждено {done} из {total} результатов; автоматически не повторяю."
     elif status == "partial":
         message = f"Выполнено частично: подтверждено {done} из {total} результатов. Остальные требуют внимания."
+        if detail and detail.casefold() not in {"частично", "выполнено частично"}:
+            message += " " + detail
     elif status == "cancelled":
         message = "Цель отменена."
     else:
@@ -114,8 +122,21 @@ def goal_presentation(goal: dict) -> dict:
     if terminal and not success:
         message += " Подробности по отдельным поручениям — в Операциях."
 
+    # Short, evidence-aligned voice notification: never read arbitrary paths or
+    # a long technical report aloud. Full detail stays in the conversation.
+    spoken = message.split("\\n", 1)[0].strip()
+    if len(spoken) > 380 or "://" in spoken or "\\\\" in spoken or "\\n" in spoken:
+        spoken = {
+            "success": "Работу закончил. Проверенный результат и подробности уже в чате.",
+            "partial": "Закончил с частичным результатом. Часть действий подтверждена, остальное ещё не выполнено.",
+            "unknown": "Работу остановил: подтвердить результат не удалось.",
+            "failed": "Задачу завершить не удалось. Причина сохранена в отчёте.",
+            "cancelled": "Задача отменена.",
+        }.get(status, message.split("\\n", 1)[0].strip())
+
     return {"goal_id": goal.get("goal_id"), "status": status,
             "terminal": terminal, "goal_completed": success, "completed_count": done,
+            "spoken_message": spoken,
             "total_count": total, "message": message, "artifacts": artifacts,
             "result_artifacts": result_artifacts,
             "requires_user_action": any(m.get("status") in {"waiting_confirmation", "waiting_input"}
