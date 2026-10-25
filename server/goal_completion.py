@@ -163,7 +163,10 @@ async def present_completed_goal(goal, projected, owner, chat):
     if not projected.get("terminal"):
         return projected
     fingerprint = _fingerprint(goal, projected)
-    stored = _cached(goal, owner, chat, fingerprint, projected)
+    try:
+        stored = _cached(goal, owner, chat, fingerprint, projected)
+    except Exception:
+        return projected  # Speech/presentation never invalidate execution.
     if stored:
         return {**projected, **stored}
     key = (goal["goal_id"], goal["revision"], owner, chat)
@@ -172,7 +175,10 @@ async def present_completed_goal(goal, projected, owner, chat):
         lock = asyncio.Lock()
         _LOCKS[key] = lock
     async with lock:
-        stored = _cached(goal, owner, chat, fingerprint, projected)
+        try:
+            stored = _cached(goal, owner, chat, fingerprint, projected)
+        except Exception:
+            return projected
         if stored:
             return {**projected, **stored}
         # Only full success is paraphrased by a model. Partial/unknown/failed
@@ -184,13 +190,16 @@ async def present_completed_goal(goal, projected, owner, chat):
                 reply = await asyncio.wait_for(_narrate(goal, projected), timeout=9)
             except Exception:
                 pass  # A language-model failure never changes a Worker outcome.
-        with db.get_db() as c:
-            _prepare_storage(c)
-            c.execute("""INSERT OR IGNORE INTO goal_completion_replies
-                (goal_id,revision,owner_user_id,chat_id,fingerprint,answer,spoken,created_at)
-                VALUES(?,?,?,?,?,?,?,?)""",
-                (goal["goal_id"], goal["revision"], owner, chat, fingerprint,
-                 reply["message"], reply["spoken_message"], time.time()))
-            _persist_to_dialogue(c, goal, reply, owner, chat)
-        stored = _cached(goal, owner, chat, fingerprint, projected)
-        return {**projected, **(stored or reply)}
+        try:
+            with db.get_db() as c:
+                _prepare_storage(c)
+                c.execute("""INSERT OR IGNORE INTO goal_completion_replies
+                    (goal_id,revision,owner_user_id,chat_id,fingerprint,answer,spoken,created_at)
+                    VALUES(?,?,?,?,?,?,?,?)""",
+                    (goal["goal_id"], goal["revision"], owner, chat, fingerprint,
+                     reply["message"], reply["spoken_message"], time.time()))
+                _persist_to_dialogue(c, goal, reply, owner, chat)
+            stored = _cached(goal, owner, chat, fingerprint, projected)
+            return {**projected, **(stored or reply)}
+        except Exception:
+            return projected
