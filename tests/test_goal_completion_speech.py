@@ -8,7 +8,7 @@ import json
 import time
 
 import pytest
-from server import database as db, voice
+from server import database as db, voice, goal_completion, orchestrator
 from server.runtime_state import tasks
 from server.worker_scheduler import init_worker_storage
 from server.goal_presentation import goal_presentation
@@ -72,11 +72,25 @@ def test_api_speaks_terminal_goal_even_when_orchestrator_handoff_was_empty(clien
         c.execute("INSERT INTO worker_results VALUES(?,?,?,?,?,?,?)",
                   ("result:" + member_id, member_id, owner["id"], chat_id,
                    frozen, hashlib.sha256(frozen.encode()).hexdigest(), now))
+    orchestrator.init_turn_storage()
+    with db.get_db() as c:
+        m = c.execute("INSERT INTO messages(chat_id,role,content,task_metadata,created_at) VALUES(?,?,?,?,?)",
+            (chat_id, "assistant", "", json.dumps({"_taskId": turn_id, "taskStatus": "done",
+                "taskKind": "orchestrator", "resultFirst": True, "goalId": goal_id}), now)).lastrowid
+        c.execute("INSERT INTO orchestrator_turns VALUES(?,?,?,?,?,?,?,?)",
+            (owner["id"], "voice-request", "mock-fingerprint", turn_id, chat_id, m, "{}", now))
     tasks[turn_id] = {"task_id": turn_id, "user_id": owner["id"], "chat_id": chat_id,
                       "kind": "orchestrator", "result_first": True, "goal_id": goal_id,
                       "status": "done", "answer": "", "device_ids": [],
                       "message": "Проверь управление сценой", "created_at": now}
     spoken = []
+    model_calls = []
+    async def fake_goal_orchestrator(goal, projected):
+        model_calls.append(goal["goal_id"])
+        assert projected["goal_completed"]
+        return {"message": "Готово. Я проверил канал управления сценой: команды работают.",
+                "spoken_message": "Готово. Я проверил канал управления сценой: команды работают."}
+    monkeypatch.setattr(goal_completion, "_narrate", fake_goal_orchestrator)
     monkeypatch.setattr(voice, "speech_configured", lambda: True)
     async def fake_tts(text):
         spoken.append(text)
@@ -92,6 +106,13 @@ def test_api_speaks_terminal_goal_even_when_orchestrator_handoff_was_empty(clien
     speech = client.post("/api/voice/tasks/" + turn_id + "/speech", headers=headers)
     assert speech.status_code == 200
     assert len(spoken) == 1 and "Я проверил канал" in spoken[0]
+    assert model_calls == [goal_id]  # Poll and TTS reuse the same conclusion.
+    with db.get_db() as c:
+        history = c.execute("SELECT content FROM messages WHERE id=?", (m,)).fetchone()
+        assert history["content"] == spoken[0]
+    tasks.pop(turn_id)  # A cache-evicted dialogue still has its saved answer and voice.
+    again = client.post("/api/voice/tasks/" + turn_id + "/speech", headers=headers)
+    assert again.status_code == 200 and model_calls == [goal_id]
     assert client.post("/api/voice/tasks/" + turn_id + "/speech",
                        headers={"X-Token": other["token"]}).status_code == 404
     with db.get_db() as c:
