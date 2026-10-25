@@ -129,7 +129,12 @@ window.IRUOperations = (() => {
       if(queue.textContent!==text)queue.textContent=text;
     }
     const i=displayedTask();
-    const visible=Boolean(i && (surface() ? (!terminal(i.status) || !dismissedSurfaceTasks.has(i.task_id)) : mirrorClosed!==selected));
+    // Completed successful work belongs to the conversation/history, not a
+    // permanently visible mini-operation. Explicitly reopened history stays visible.
+    const visible=Boolean(i && (surface() ?
+      (i.status === 'success' ? (manualSelection && !dismissedSurfaceTasks.has(i.task_id))
+        : (!terminal(i.status) || !dismissedSurfaceTasks.has(i.task_id)))
+      : mirrorClosed!==selected));
     const mirror=document.getElementById('operationMirror'), toggle=document.getElementById('mirrorToggle');
     if(mirror.hidden!==!visible)mirror.hidden=!visible;
     if(toggle.hidden!==!i)toggle.hidden=!i;
@@ -169,7 +174,9 @@ window.IRUOperations = (() => {
     if(manualSelection && selectedItem && replaced(selectedItem))scoped.push({...selectedItem,goal_id:null,can_cancel:false,title:'История: '+selectedItem.title});
     if(historicalItem?.task_id===selected && !scoped.some(item=>item.task_id===selected))scoped.push(historicalItem);
     for(const item of scoped)if(!terminal(item.status) || item.task_id===selected)surfaceSeenTasks.add(item.task_id);
-    return scoped.filter(item=>!terminal(item.status) || (surfaceSeenTasks.has(item.task_id) && !dismissedSurfaceTasks.has(item.task_id)));
+    return scoped.filter(item=>item.status === 'success'
+      ? (manualSelection && item.task_id === selected && !dismissedSurfaceTasks.has(item.task_id))
+      : !terminal(item.status) || (surfaceSeenTasks.has(item.task_id) && !dismissedSurfaceTasks.has(item.task_id)));
   }
   function renderSurfaceGroups() {
     const rows=surfaceRows().map(item=>detail?.task_id===item.task_id && detail.status==='confirm'
