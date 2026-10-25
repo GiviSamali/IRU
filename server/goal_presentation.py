@@ -124,15 +124,15 @@ def goal_presentation(goal: dict) -> dict:
 
     # Short, evidence-aligned voice notification: never read arbitrary paths or
     # a long technical report aloud. Full detail stays in the conversation.
-    spoken = message.split("\\n", 1)[0].strip()
-    if len(spoken) > 380 or "://" in spoken or "\\\\" in spoken or "\\n" in spoken:
+    spoken = message.split("\n", 1)[0].strip()
+    if len(spoken) > 380 or "://" in spoken or "\\" in spoken or "\n" in spoken:
         spoken = {
             "success": "Работу закончил. Проверенный результат и подробности уже в чате.",
             "partial": "Закончил с частичным результатом. Часть действий подтверждена, остальное ещё не выполнено.",
             "unknown": "Работу остановил: подтвердить результат не удалось.",
             "failed": "Задачу завершить не удалось. Причина сохранена в отчёте.",
             "cancelled": "Задача отменена.",
-        }.get(status, message.split("\\n", 1)[0].strip())
+        }.get(status, message.split("\n", 1)[0].strip())
 
     return {"goal_id": goal.get("goal_id"), "status": status,
             "terminal": terminal, "goal_completed": success, "completed_count": done,
