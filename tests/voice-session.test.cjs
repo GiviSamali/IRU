@@ -22,7 +22,7 @@ function setup(overrides = {}) {
     for (const [id, timer] of [...timers]) if (timer.at <= time && timers.delete(id)) timer.fn();
   }
   session.enable();
-  return { session, submitted, spoken, errors, commandChoices, cues, advance, get listening() { return listening; } };
+  return { session, submitted, spoken, errors, commandChoices, cues, advance, jump:ms=>{time+=ms;}, get listening() { return listening; } };
 }
 
 test('wake word sends only final text after silence, ignoring background speech', () => {
@@ -310,7 +310,7 @@ test('OW background Worker does not occupy dialogue and sleep never cancels it',
  // The short dialogue response is a different tracked lifecycle.
  const ticket=tickets[0];h.session.endRequest(ticket,'dialogue');
  h.session.taskFinished('dialogue',{answer:'Ответ'});h.spoken[0].onSpeaking();
- assert.equal(h.listening,false); // No self-dictation during TTS.
+ assert.equal(h.listening,true); // Recognition remains available for control words only.
  h.session.transcript('Иру повтори собственный ответ',true);h.advance(1500);
  assert.equal(h.submitted.length,1);
  h.spoken[0].resolve();await Promise.resolve();
@@ -343,6 +343,55 @@ test('OW dangerous confirmation does not arm generic yes and background slot rem
  assert.equal(h.listening,true);
  h.session.transcript('Иру да',true);h.advance(1300);
  assert.equal(h.commandChoices.length,0);
+});
+
+test('continuous speech keeps control recognition active during synthesis and playback',()=>{
+ const h=setup();h.session.enable([],{continuous:true});h.session.watchTask('goal',undefined,true);
+ h.session.taskFinished('goal',{answer:'Отчёт'});
+ assert.equal(h.session.phase,'synthesizing');assert.equal(h.listening,true);
+ h.session.transcript('да',true);h.session.transcript('Иру удали файл',true);
+ assert.deepEqual(h.submitted,[]);assert.deepEqual(h.commandChoices,[]);
+ h.spoken[0].onSpeaking();assert.equal(h.listening,true);
+ h.session.transcript('стоп',false);
+ assert.equal(h.spoken[0].signal.aborted,true);assert.equal(h.listening,true);
+ assert.deepEqual(h.submitted,[]);assert.deepEqual(h.commandChoices,[]);
+});
+
+test('stop during synthesis or concurrent request aborts audio without cancelling background work',()=>{
+ for(const speaking of [false,true]){
+  const h=setup();h.session.enable([],{continuous:true});h.session.watchTask('report',undefined,true);
+  h.session.taskFinished('report',{answer:'Отчёт'});if(speaking)h.spoken[0].onSpeaking();
+  const ticket=h.session.beginRequest();h.session.watchTask('still-running',undefined,true);
+  h.session.transcript('Иру, стоп!',true);assert.equal(h.spoken[0].signal.aborted,true);
+  h.session.endRequest(ticket);assert.equal(h.listening,true);
+  h.session.taskFinished('still-running',{answer:'Результат'});
+  assert.equal(h.spoken.at(-1).id,'still-running');assert.deepEqual(h.submitted,[]);
+ }
+});
+
+test('expired dictation is discarded even if browser delays its silence timer for a minute',()=>{
+ const h=setup();h.session.enable([],{continuous:true});
+ h.session.transcript('Иру старый вопрос',true);h.jump(60000);h.advance(0);
+ assert.deepEqual(h.submitted,[]);assert.equal(h.session.phase,'idle');
+ h.session.transcript('посторонняя фраза',true);h.advance(1100);assert.deepEqual(h.submitted,[]);
+});
+
+test('new speech after a suspended minute cannot join stale dictation and needs a wake word',()=>{
+ for(const wake of [false,true]){
+  const h=setup();h.session.enable([],{continuous:true});
+  h.session.transcript('Иру старый вопрос',true);h.jump(60000);
+  h.session.transcript(wake?'Иру новый вопрос':'новый вопрос',true);h.advance(1100);
+  assert.deepEqual(h.submitted,wake?['новый вопрос']:[]);
+ }
+});
+
+test('background polling and late report do not reopen an expired followup window',async()=>{
+ const h=setup();h.session.enable([],{continuous:true});h.session.transcript('Иру',true);h.advance(11000);
+ h.session.watchTask('goal',undefined,true);assert.equal(h.listening,true);
+ h.session.transcript('случайный разговор',true);h.advance(1100);assert.deepEqual(h.submitted,[]);
+ h.session.taskFinished('goal',{answer:'Фоновый отчёт'});h.advance(200);h.spoken[0].onSpeaking();
+ h.spoken[0].resolve();await Promise.resolve();assert.equal(h.session.phase,'idle');
+ h.session.transcript('ещё случайная фраза',true);h.advance(1100);assert.deepEqual(h.submitted,[]);
 });
 
 

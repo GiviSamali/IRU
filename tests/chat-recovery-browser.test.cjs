@@ -24,6 +24,30 @@ async function setup(width=1280){
 }
 const item=(id,status='running',chat_id=1)=>({task_id:id,chat_id,title:'Работа с документом '+id,status,device_ids:['Second'],summary:'Данные API',waiting_confirmation:status==='waiting_confirmation',can_cancel:['running','queued','waiting_confirmation'].includes(status)});
 const task=(id,status='running',chat_id=1)=>({task_id:id,chat_id,status,kind:'worker',worker_id:'worker-1',message:'Работа с документом',device_ids:['Second'],answer:'Результат API',conversational_response:'Результат API',commands:[],tasks:[]});
+
+test('Result First goal leaves continuous microphone available through submit and polling',async()=>{
+ const f=await setup(),p=f.page;
+ try{
+  f.setDetails({'voice-goal-turn':{...task('voice-goal-turn'),kind:'goal',worker_id:null,
+   goal_id:'voice-goal',answer:'',conversational_response:''}});
+  await p.route('**/nl_command',route=>route.fulfill({json:{status:'ok',response_type:'orchestrator',
+   task_id:'voice-goal-turn',goal_id:'voice-goal',worker_task_ids:['internal-worker'],chat_id:1}}));
+  await p.evaluate(async()=>{
+   window.voiceTest={listening:false,submitted:[]};
+   window.iruVoice=createVoiceSession({state(){},listen:value=>voiceTest.listening=value,
+    stopAudio(){},error(){},speak:()=>Promise.resolve(),submit:text=>voiceTest.submitted.push(text)});
+   iruVoice.enable([],{continuous:true});
+   document.querySelector('#chatInput').value='Создай документ';await sendMessage();
+  });
+  assert.equal(await p.evaluate(()=>voiceTest.listening),true);
+  await p.waitForTimeout(900);
+  assert.equal(await p.evaluate(()=>voiceTest.listening),true);
+  await p.evaluate(()=>iruVoice.transcript('Иру ещё вопрос',true));
+  await p.waitForFunction(()=>voiceTest.submitted.length===1);
+  assert.deepEqual(await p.evaluate(()=>voiceTest.submitted),['ещё вопрос']);
+  assert.deepEqual(f.errors,[]);
+ }finally{await p.close();}
+});
 test('Goal dependency wait survives a suspended-tab clock gap',async()=>{
  const f=await setup(),p=f.page;let reads=0;
  try{

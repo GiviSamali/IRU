@@ -971,7 +971,7 @@ async function sendMessage(options = {}) {
 async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.currentChatId) {
   if (taskPollLoops.has(taskId)) return;
   taskPollLoops.set(taskId,true);
-  window.iruVoice?.watchTask(taskId,voiceTicket,state.pendingTasks.find(item=>item.task_id===taskId)?.kind === 'worker');
+  window.iruVoice?.watchTask(taskId,voiceTicket,['worker','goal'].includes(state.pendingTasks.find(item=>item.task_id===taskId)?.kind));
   let startTime = Date.now();
   const MAX_POLL_MS = 3600000; // Один час: соответствует предельному времени Worker.
   let stopped = false;
@@ -996,7 +996,7 @@ async function pollTask(taskId, msgIndex, voiceTicket, sourceChatId = state.curr
       }
       const data = await r.json();
       const task = data.task;
-      if (task.worker_id && task.status !== 'waiting_input') window.iruVoice?.watchTask(taskId,voiceTicket,true);
+      if ((task.worker_id || task.kind === 'goal') && task.status !== 'waiting_input') window.iruVoice?.watchTask(taskId,voiceTicket,true);
       if (['queued','waiting_dependency'].includes(task.status)) startTime=Date.now();
       if (!isTaskTerminalStatus(task.status) && Date.now() - startTime > MAX_POLL_MS) {
         window.iruVoice?.taskLost(taskId);

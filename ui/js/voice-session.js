@@ -10,6 +10,8 @@
   function createVoiceSession(io) {
     let enabled = false, epoch = 0, phase = 'off', activeUntil = 0;
     let utterance = '', silenceTimer = null, wakeTimer = null, playback = null;
+    let lastHeardAt = null;
+    const MAX_SILENCE_AGE_MS = 5000;
     const requests = new Set(), tasks = new Set(), finished = new Set(), backgroundTasks = new Set();
     let continuous=false, humanUntil=0, reportTimer=null;
     let queue = [];
@@ -22,7 +24,7 @@
       if (readyPhases.has(next) && !readyPhases.has(previous) || previous === 'off' && next === 'idle') io.cue?.('on');
       else if (readyPhases.has(previous) && !readyPhases.has(next) || next === 'off' && previous !== 'off') io.cue?.('off');
     }
-    function clearUtterance() { utterance = ''; clear(silenceTimer); silenceTimer = null; }
+    function clearUtterance() { utterance = ''; lastHeardAt = null; clear(silenceTimer); silenceTimer = null; }
     function stopPlayback() { if (playback) playback.abort(); playback = null; io.stopAudio(); }
     function busy() { return requests.size > 0 || [...tasks].some(id=>!continuous || !backgroundTasks.has(id)); }
     function pause() { clearUtterance(); clear(wakeTimer); stopPlayback(); io.listen(false); setPhase('working'); }
@@ -46,20 +48,24 @@
         return;
       }
       if (standby) { resume(); return; }
-      if (!queue.length) { resume(true); return; }
+      if (!queue.length) { resume(!continuous); return; }
       const item = queue.shift(), taskId = item.id, savedEpoch = epoch;
       const controller = new AbortController(); playback = controller;
       let heard = false;
-      setPhase('synthesizing'); io.listen(false);
+      clearUtterance(); clear(wakeTimer);
+      setPhase('synthesizing'); io.listen(true); // Control words only; never dictate TTS into chat.
       try {
         await io.speak(taskId, controller.signal, () => {
-          if (!controller.signal.aborted && enabled && epoch === savedEpoch) { heard = true; setPhase('speaking'); io.listen(!continuous); }
+          if (!controller.signal.aborted && enabled && epoch === savedEpoch) { heard = true; setPhase('speaking'); io.listen(true); }
         }, item.confirmation || item.question);
         if (item.confirmation && !controller.signal.aborted && enabled && epoch === savedEpoch) commandHeard = heard;
       } catch (error) {
         if (!controller.signal.aborted && enabled && epoch === savedEpoch) io.error(error);
       } finally {
-        if (playback === controller && enabled && epoch === savedEpoch) { playback = null; io.listen(false); drain(); }
+        if (playback === controller && enabled && epoch === savedEpoch) {
+          playback = null; io.listen(false);
+          if (queue.length) drain(); else resume(!continuous || !item.background);
+        }
       }
     }
     function stopSpeech() {
@@ -135,8 +141,17 @@
       if(!continuous)queue=[];tasks.add(taskId);if(continuous && backgroundTasks.has(taskId))drain();else pause();
     }
     function transcript(text, final) {
-      if(!enabled || busy())return;
+      if(!enabled)return;
       const clean=text.trim();
+      if (['speaking','synthesizing'].includes(phase)) {
+        if (decisionWords(clean) === 'стоп') stopSpeech();
+        else if (final && decisionWords(clean) === 'усни') {
+          clearUtterance(); clear(wakeTimer); queue=[]; standby=true; activeUntil=0;
+          stopPlayback(); io.listen(false); resume();
+        }
+        return;
+      }
+      if(busy())return;
       if(continuous && clean && !['speaking','synthesizing'].includes(phase))humanUntil=now()+1200;
       if (final && decisionWords(clean) === 'усни') {
         clearUtterance(); clear(wakeTimer); queue = [];
@@ -169,24 +184,26 @@
         return;
         }
       }
-      if (phase === 'speaking') {
-        if (decisionWords(clean) === 'стоп') stopSpeech();
-        return;
-      }
       if (!['idle', 'listening'].includes(phase)) return;
+      if (lastHeardAt !== null && now()-lastHeardAt > MAX_SILENCE_AGE_MS) {
+        clearUtterance(); activeUntil=0; resume();
+      }
       const woke = wake.test(clean);
       if (!woke && now() >= activeUntil && !utterance) return;
       if (woke) activeUntil = now() + 10000;
       setPhase('listening'); clear(wakeTimer);
+      lastHeardAt=now();
       if (final) {
         const words = (woke ? clean.replace(wake, '$1').replace(separators, '') : clean).trim();
         if (hasWords(words)) utterance = [utterance, words].filter(Boolean).join(' ');
       }
       clear(silenceTimer);
       silenceTimer = later(() => {
+        const expired=lastHeardAt !== null && now()-lastHeardAt > MAX_SILENCE_AGE_MS;
         const textToSend = utterance.trim(); clearUtterance();
         if (!enabled || busy()) return;
-        if (!hasWords(textToSend) || decisionWords(textToSend) === 'стоп') { resume(true); return; }
+        if (expired) { activeUntil=0; resume(); return; }
+        if (!hasWords(textToSend) || decisionWords(textToSend) === 'стоп') { resume(); return; }
         io.listen(false); setPhase('working');
         const savedEpoch = epoch;
         Promise.resolve(io.submit(textToSend)).then(() => {
