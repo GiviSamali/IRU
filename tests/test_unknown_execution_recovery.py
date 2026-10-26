@@ -69,9 +69,9 @@ def test_validation_diagnostic_survives_and_does_not_store_candidate(owners,monk
             usage_context={'worker_execution':True,'user_id':owners[0]['id']},
             load_llm_config_fn=lambda:{'model':'test'},current_datetime_msk_fn=lambda:'now'))
     diagnostics=[e['validation'] for e in state['diagnostic_trace'] if 'validation' in e]
-    assert len(diagnostics)==5
+    assert diagnostics==[]  # Minimal text is a valid candidate; no five-turn basis repair.
     assert all(d['condition']=='answer_text missing required fields' for d in diagnostics)
     assert all('basis' in d['fields'] for d in diagnostics)
     assert 'PRIVATE' not in json.dumps(diagnostics)
-    assert not result['commands']
+    assert result['commands'][-1]['tool_name']=='answer.text'
     assert build_worker_report({**task(owners[0]),'status':'done',**result})['status']=='unknown'

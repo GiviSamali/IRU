@@ -13,10 +13,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 try:
-    from .tool_completion import execute_cmd_result_is_negative, execute_cmd_result_is_complete
+    from .tool_completion import execute_cmd_result_is_negative, execute_cmd_result_is_complete, operation_step_status
     from .tool_registry import canonical_tool_name, compact_tool_summary, tool_log_fields
 except ImportError:
-    from tool_completion import execute_cmd_result_is_negative, execute_cmd_result_is_complete  # type: ignore
+    from tool_completion import execute_cmd_result_is_negative, execute_cmd_result_is_complete, operation_step_status  # type: ignore
     from tool_registry import canonical_tool_name, compact_tool_summary, tool_log_fields  # type: ignore
 
 
@@ -255,6 +255,9 @@ def compact_write_content_result(args: dict[str, Any] | None, result: Any = None
                 "replacement_sha256", "verification_scope", "chunks_confirmed", "chunks_total", "chunk_receipts"):
         if key in original:
             compact[key] = original[key]
+    if not append and original.get('mode') not in {'replace','replace_exact'} and isinstance(args.get('content'),str):
+        try:compact['expected_content_sha256']=sha256(content.encode(encoding)).hexdigest()
+        except (LookupError,UnicodeError):pass
     if error:
         compact["error"] = error
     if original.get("arg_warnings"):
@@ -297,19 +300,7 @@ def _next_idx(journal: list[dict[str, Any]]) -> int:
     return (max(existing) + 1) if existing else 1
 
 
-def _status_for_result(result: Any, terminal: bool = False, tool_name: str | None = None) -> str:
-    if terminal:
-        return "terminal"
-    if isinstance(result, dict):
-        if canonical_tool_name(tool_name or "") == "execute_cmd" and execute_cmd_result_is_negative(result):
-            return "failed"
-        if result.get("error"):
-            return "failed"
-        if result.get("status") in {"failed", "error"}:
-            return "failed"
-        if result.get("status") == "skipped":
-            return "skipped"
-    return "success"
+
 
 
 def make_run_step(
@@ -330,7 +321,9 @@ def make_run_step(
     idx = _next_idx(journal)
     canonical = canonical_tool_name(tool_name)
     terminal = is_terminal_answer_tool(tool_name)
-    final_status = status or _status_for_result(result, terminal=terminal, tool_name=tool_name)
+    final_status = status or operation_step_status(canonical_tool_name(tool_name or ''), result, terminal=terminal)
+    if not terminal and tool_type != 'system' and final_status == 'success':
+        final_status = operation_step_status(canonical, result)
     final_summary = summary or compact_step_summary(tool_name, result, command)
     fields = tool_log_fields(tool_name, result, command, target_device_id)
     entry = {
@@ -367,6 +360,9 @@ def append_tool_step(journal: list[dict[str, Any]], entry: dict[str, Any]) -> di
     # Preserve a stable storage identity across checkpoints and finalization.
     entry.setdefault("journal_entry_id", uuid4().hex)
     if entry.get("step_id") and entry.get("idx") is not None:
+        if entry.get('tool_type') not in {'system','answer'} and entry.get('status')=='success':
+            entry['status'] = entry['tool_status'] = operation_step_status(
+                canonical_tool_name(entry.get('action') or entry.get('tool_name') or ''),entry.get('result'))
         journal.append(entry)
         _trace_journal_step(entry)
         return entry
@@ -375,7 +371,7 @@ def append_tool_step(journal: list[dict[str, Any]], entry: dict[str, Any]) -> di
     canonical = canonical_tool_name(action)
     result = entry.get("result")
     command = entry.get("command") or f"[tool] {canonical}"
-    status = entry.get("status") or _status_for_result(result, tool_name=action)
+    status = entry.get("status") or operation_step_status(canonical_tool_name(action), result)
     fields = tool_log_fields(action, result, command, entry.get("target_device_id") or entry.get("device_id"))
     entry["step_id"] = f"step_{idx}"
     entry["idx"] = idx
@@ -385,6 +381,8 @@ def append_tool_step(journal: list[dict[str, Any]], entry: dict[str, Any]) -> di
     entry["tool_type"] = fields.get("tool_type") or entry.get("tool_type") or "typed"
     entry["tool_status"] = fields.get("tool_status") or entry.get("tool_status") or status
     entry["status"] = status
+    if entry.get("tool_type") not in {"system","answer"} and entry.get("status")=="success":
+        entry["status"] = entry["tool_status"] = operation_step_status(canonical,result)
     entry["summary"] = entry.get("summary") or fields.get("summary") or compact_step_summary(action, result, command)
     if "target_device_id" not in entry:
         entry["target_device_id"] = entry.get("device_id")
@@ -563,19 +561,6 @@ def serialize_tool_result_for_llm(entry: dict[str, Any]) -> str:
     return projected
 
 
-def _repair_step_line(entry: dict[str, Any]) -> dict[str, Any]:
-    wrapped = wrap_tool_result_for_llm(entry)
-    result = wrapped.get("result")
-    if isinstance(result, dict):
-        compact_result = {
-            key: value
-            for key, value in result.items()
-            if key not in {"stdout", "stderr", "raw_stdout", "raw_stderr", "content"}
-        }
-    else:
-        compact_result = result
-    wrapped["result"] = compact_result
-    return wrapped
 
 
 def confirmed_unknown_answer(journal, target_device_id, reason="confirmed_transport_outcome_unknown"):
@@ -589,99 +574,14 @@ def confirmed_unknown_answer(journal, target_device_id, reason="confirmed_transp
     if expired:payload['text']='Время ожидания подтверждения истекло. Команда не выполнялась; задача остановлена.'
     append_answer_step(journal,'answer_text',validate_answer_text_payload(payload,journal),target_device_id=target_device_id)
     return {'status':'error','answer':payload['text'],'commands':journal,'tasks':[],
-            'task_receipt':{'task_status':'blocked' if expired else 'unknown','goal_completed':False,'final_verification_status':'unverified',
+            'task_receipt':{'task_status':'blocked' if expired else 'unknown',
                             'answer_source':'confirmation_result','terminal_reason':reason}}
 
 
-def audited_action_evidence(payload, journal, user_request, details):
-    """Bind the existing auditor's action/postcondition decision to this exact run and answer."""
-    if not isinstance(details,dict) or payload.get('answer_type')!='grounded_report':return None
-    basis=payload.get('basis') or []
-    groups=[details.get('action_steps'),details.get('verification_steps')]
-    if any(not isinstance(group,list) or not group or len(group)>64
-           or any(not isinstance(ref,str) or ref not in basis for ref in group) for group in groups):return None
-    refs=set(groups[0]+groups[1])
-    selected=[entry for entry in journal if entry.get('step_id') in refs]
-    if len(selected)!=len(refs):return None
-    if any((entry.get('tool_name') or entry.get('action')) not in {'execute_cmd','write_content'}
-           for entry in selected if entry.get('step_id') in groups[0]):return None
-    for entry in selected:
-        result=entry.get('result')
-        if entry.get('status')!='success' or not isinstance(result,dict) or execute_cmd_result_is_negative(result):return None
-        if (entry.get('tool_name') or entry.get('action'))=='execute_cmd':
-            if not isinstance(entry.get('command'),str) or not entry['command'].strip():return None
-            if not execute_cmd_result_is_complete(result):return None
-    content={'request':user_request,'answer':payload,'steps':[
-        {key:entry.get(key) for key in ('step_id','tool_name','action','command','status','target_device_id','device_id','created_at','collected_at','result')}
-        for entry in selected]}
-    return {'action_steps':list(groups[0]),'verification_steps':list(groups[1]),
-            'digest':sha256(json.dumps(content,ensure_ascii=False,sort_keys=True).encode('utf-8')).hexdigest()}
 
 
-def audited_task_receipt(payload: dict[str, Any], *, audited: bool, audit_details=None, journal=None) -> dict[str, Any] | None:
-    """Project an accepted audit, never the model's self_check alone."""
-    kind = payload.get("answer_type")
-    if not audited or kind not in {"grounded_report", "partial_report", "error_report", "failure"}:
-        return None
-    completed = kind == "grounded_report"
-    # An accepted informational text may explain failed measurements. Those
-    # references do not establish completion of the diagnostic goal.
-    mixed_diagnostic = (completed and (payload.get('self_check') or {}).get('claims_completed_action') is False
-        and any(entry.get('step_id') in (payload.get('basis') or [])
-            and canonical_tool_name(entry.get('tool_name') or entry.get('action') or '')=='execute_cmd'
-            and (entry.get('status') in {'failed','error','blocked'} or execute_cmd_result_is_negative(entry.get('result')))
-            for entry in journal or []))
-    if mixed_diagnostic:completed=False
-    diagnostic_observation=any(entry.get('step_id') in (payload.get('basis') or [])
-        and entry.get('tool_name')=='execute_cmd' and entry.get('status')=='success'
-        and execute_cmd_result_is_complete(entry.get('result')) for entry in journal or []) if mixed_diagnostic else False
-    return {"task_status": "completed" if completed else "partial" if kind == "partial_report" else "failed",
-            "goal_completed": completed, "final_verification_status": "verified" if completed else "unverified",
-            "answer_source": "audited_terminal",
-            **({'task_status':'partial' if diagnostic_observation else 'unknown','terminal_reason':'mixed_diagnostic_evidence'} if mixed_diagnostic else {}),
-            **({'action_evidence':audit_details['action_evidence']} if isinstance(audit_details,dict)
-               and isinstance(audit_details.get('action_evidence'),dict) else {})}
 
 
-def build_terminal_answer_repair_prompt(user_request: str, journal: list[dict[str, Any]]) -> str:
-    evidence_steps = [
-        _repair_step_line(entry)
-        for entry in journal
-        if entry.get("step_id")
-        and entry.get("tool_type") != "answer"
-        and not is_terminal_answer_tool(entry.get("tool_name"))
-        and entry.get("status") not in {"failed", "error", "blocked"}
-    ]
-    failed_steps = [
-        _repair_step_line(entry)
-        for entry in journal
-        if entry.get("step_id")
-        and entry.get("tool_type") != "answer"
-        and not is_terminal_answer_tool(entry.get("tool_name"))
-        and entry.get("status") in {"failed", "error", "blocked"}
-    ]
-    evidence_ids = [str(step.get("step_id")) for step in evidence_steps if step.get("step_id")]
-    failed_ids = [str(step.get("step_id")) for step in failed_steps if step.get("step_id")]
-
-    return (
-        "Terminal answer repair turn.\n"
-        "The normal tool-only loop reached its iteration limit without a terminal answer_text.\n"
-        "You must call exactly one tool: answer_text. No other tool is available.\n"
-        "Use only current-run journal entries below as evidence. Old chat history is context only, not evidence.\n"
-        "Do not pretend success if the evidence is missing or failed.\n"
-        "Do not ask the human to say continue or re-authorize work already requested. Report the actual incomplete work and stopping reason; ask only for a genuinely missing parameter or required confirmation.\n"
-        "If successful evidence supports the answer, use answer_type=grounded_report and basis with existing step_id values.\n"
-        "If only partial evidence exists, use answer_type=partial_report and cite the supporting step_id values.\n"
-        "If there are no valid evidence steps or the task failed, use answer_type=error_report, set has_sufficient_evidence=false, "
-        "and keep basis empty unless citing failed current-run step_id values helps explain the failure.\n"
-        f"Original user request:\n{user_request}\n\n"
-        f"Successful evidence step_ids: {evidence_ids}\n"
-        f"Failed step_ids: {failed_ids}\n"
-        "Successful evidence steps:\n"
-        f"{json.dumps(evidence_steps[-12:], ensure_ascii=False, indent=2)}\n\n"
-        "Failed/blocked steps:\n"
-        f"{json.dumps(failed_steps[-12:], ensure_ascii=False, indent=2)}"
-    )
 
 
 def validate_tool_call_batch(tool_calls: list[dict[str, Any]] | None) -> dict[str, Any]:
@@ -704,40 +604,10 @@ def _current_non_answer_step_ids(journal: list[dict[str, Any]]) -> set[str]:
     }
 
 
-def _negative_execute_cmd_step_ids(journal: list[dict[str, Any]]) -> set[str]:
-    return {
-        str(entry.get("step_id"))
-        for entry in journal
-        if entry.get("step_id")
-        and canonical_tool_name(entry.get("tool_name") or entry.get("action") or "") == "execute_cmd"
-        and execute_cmd_result_is_negative(entry.get("result"))
-    }
 
 
-def _negative_write_content_step_ids(journal: list[dict[str, Any]]) -> set[str]:
-    negative_prefixes = ("NO:", "ERROR:")
-    return {
-        str(entry.get("step_id"))
-        for entry in journal
-        if entry.get("step_id")
-        and canonical_tool_name(entry.get("tool_name") or entry.get("action") or "") == "write_content"
-        and isinstance(entry.get("result"), dict)
-        and (
-            entry["result"].get("error")
-            or entry["result"].get("status") in {"failed", "error"}
-            or str(entry["result"].get("summary") or "").lstrip().upper().startswith(negative_prefixes)
-        )
-    }
 
 
-def _has_failed_non_answer_step(journal: list[dict[str, Any]]) -> bool:
-    return any(
-        entry.get("step_id")
-        and entry.get("tool_type") != "answer"
-        and not is_terminal_answer_tool(entry.get("tool_name"))
-        and entry.get("status") in {"failed", "error", "blocked"}
-        for entry in journal
-    )
 
 
 def validate_basis_references(
@@ -790,6 +660,9 @@ def latest_file_states(journal):
 
 
 def unfinished_execution_result(journal, reason):
+    def redact(value):
+        value = re.sub(r'(?i)((?:user_token|access_token|api_key|password|secret)\s*[=:]\s*["\x27]?)[^\s"\x27&,;]+',r'\1[REDACTED]',str(value))
+        return re.sub(r'(?i)(Bearer\s+)[A-Za-z0-9._-]+',r'\1[REDACTED]',value)
     states = latest_file_states(journal)
     unknown = any((e.get('result') or {}).get('status') == 'unknown'
                   or (e.get('result') or {}).get('error') == 'confirmed_transport_outcome_unknown'
@@ -799,96 +672,97 @@ def unfinished_execution_result(journal, reason):
     failed_only = bool(attempts) and all(e.get('status') in {'failed', 'error', 'blocked'} for e in attempts)
     status = 'unknown' if unknown else 'partial' if states else 'failed' if failed_only else 'unknown'
     lines = ['Завершение поручения не подтверждено. Журнал выполненных действий сохранён.']
+    lines.append(f'Причина остановки: {reason}.')
+    lines.append('')
     for state in states:
         lines.append(f"Последняя подтверждённая версия {state['path']}: SHA-256 {state['sha256']} ({state['step_id']}).")
+    if states:
+        lines.append('')
+    if attempts:
+        lines.append('Сохранённые результаты инструментов (статус шага не означает выполнение поручения):')
+    for entry in attempts:
+        result = entry.get('result')
+        result = result if isinstance(result, dict) else {}
+        step = entry.get('step_id') or 'без step_id'
+        tool = entry.get('tool_name') or entry.get('action') or 'tool'
+        device = entry.get('target_device_id') or entry.get('device_id') or 'server'
+        lines.append(f"- {step}: {device}, {tool}; статус {entry.get('status', 'unknown')}; "
+                     f"returncode={result.get('returncode', 'нет')}; "
+                     f"сохранено символов stdout: {len(str(result.get('stdout') or ''))}.")
+        device = entry.get('target_device_id') or entry.get('device_id') or 'server'
+        detail = result.get('error') or result.get('stderr')
+        if detail:
+            lines.append(f"{device}: {redact(detail)[:1200]}")
+    lines.append('')
+    # Preserve useful observations without inventing a semantic conclusion or
+    # treating a failing shell pipeline as wholly empty. Never promote model text.
+    observations = [e for e in attempts if isinstance(e.get('result'), dict)
+                    and isinstance(e['result'].get('stdout'), str) and e['result']['stdout'].strip()]
+    for entry in observations[-3:]:
+        text = entry['result']['stdout']
+        text = re.sub(r'(?i)((?:user_token|access_token|api_key|password|secret)\s*[=:]\s*["\x27]?)[^\s"\x27&,;]+',
+                      r'\1[REDACTED]', text)
+        text = re.sub(r'(?i)(Bearer\s+)[A-Za-z0-9._-]+', r'\1[REDACTED]', text)
+        text = text[:1200].replace('```', '[code fence]')
+        device = entry.get('target_device_id') or entry.get('device_id') or 'server'
+        lines.append(f"{device}: {text}\nФрагмент вывода {entry.get('step_id')} (до 1200 символов; материал инструмента, не проверенный вывод по поручению).\n"
+                     'Полный вывод и ошибки сохранены в журнале шага.')
     return {'answer': '\n'.join(lines), 'commands': journal, 'tasks': [],
-            'task_receipt': {'task_status': status, 'goal_completed': False,
-                'final_verification_status': 'unverified', 'answer_source': 'server_fallback',
+            'task_receipt': {'task_status': status,
+                 'answer_source': 'server_fallback',
                 'terminal_reason': reason}}
 
 
-def validate_answer_text_payload(payload: Any, journal: list[dict[str, Any]]) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        raise ProtocolValidationError("answer_text arguments must be an object", GROUNDED_CORRECTION)
-    required = {"answer_type", "text", "basis", "self_check"}
-    missing = sorted(required - set(payload))
-    if missing:
-        raise ProtocolValidationError(f"answer_text missing required fields: {missing}", GROUNDED_CORRECTION)
-    if payload.get("answer_type") not in ANSWER_TEXT_TYPES:
-        raise ProtocolValidationError("answer_text answer_type is invalid", GROUNDED_CORRECTION)
-    if not isinstance(payload.get("text"), str) or not payload.get("text").strip():
-        raise ProtocolValidationError("answer_text text must be a non-empty string", GROUNDED_CORRECTION)
-
-    self_check = payload.get("self_check")
-    if not isinstance(self_check, dict):
-        raise ProtocolValidationError("answer_text self_check must be an object", GROUNDED_CORRECTION)
-    self_required = {
-        "depends_on_current_external_state",
-        "claims_completed_action",
-        "has_sufficient_evidence",
-        "missing_evidence_question",
-    }
-    self_missing = sorted(self_required - set(self_check))
-    if self_missing:
-        raise ProtocolValidationError(f"answer_text self_check missing fields: {self_missing}", GROUNDED_CORRECTION)
-    for key in ("depends_on_current_external_state", "claims_completed_action", "has_sufficient_evidence"):
-        if not isinstance(self_check.get(key), bool):
-            raise ProtocolValidationError(f"answer_text self_check.{key} must be boolean", GROUNDED_CORRECTION)
-    if not isinstance(self_check.get("missing_evidence_question"), str):
-        raise ProtocolValidationError("answer_text self_check.missing_evidence_question must be string", GROUNDED_CORRECTION)
-
-    answer_type = payload["answer_type"]
-    if self_check.get("has_sufficient_evidence") is False and answer_type not in {"clarification", "failure", "error_report", "partial_report"}:
-        raise ProtocolValidationError("answer_text declares insufficient evidence", INSUFFICIENT_EVIDENCE_CORRECTION)
-    requires_basis = (
-        answer_type in {"grounded_report", "partial_report"}
-        or bool(self_check.get("depends_on_current_external_state"))
-        or bool(self_check.get("claims_completed_action"))
-    )
-    basis = validate_basis_references(payload.get("basis"), journal, require_non_empty=requires_basis)
-    # A historical version cannot establish the current file after another
-    # verified write. This applies to partial reports as well as full success.
-    for history in file_state_history(journal).values():
-        latest = history[-1]
-        stale = [s for s in history[:-1] if s['step_id'] in basis and s['sha256'] != latest['sha256']]
-        if stale and latest['step_id'] not in basis:
-            raise ProtocolValidationError('file_state_superseded: ' + json.dumps(latest, ensure_ascii=False),
-                'Use the last verified file state and its step_id; earlier writes were superseded. '
-                'Describe an undo as an undo, including in a partial report.')
-    if self_check.get("claims_completed_action"):
-        negative_execute_cmd = _negative_execute_cmd_step_ids(journal)
-        negative_write_content = _negative_write_content_step_ids(journal)
-        invalid = [step_id for step_id in basis if step_id in negative_execute_cmd or step_id in negative_write_content]
-        if invalid:
-            raise ProtocolValidationError(
-                f"completed-action answer uses NO/ERROR evidence: {invalid}",
-                GROUNDED_CORRECTION,
-            )
-    # Legacy suggestions are optional metadata, not part of the audited human answer.
-    # Normalize before audit/journaling; never edit a terminal answer after acceptance.
-    suggestion=re.search(r"\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]",payload['text'])
+def validate_answer_text_payload(payload, journal):
+    """Minimal model result; legacy fields are hints, never completion authority."""
+    if not isinstance(payload,dict):
+        raise ProtocolValidationError('answer_text arguments must be an object')
+    allowed = {'answer','text','answer_type','effects','remaining','basis','self_check','suggested_fact'}
+    if set(payload)-allowed:
+        raise ProtocolValidationError('Unknown answer fields; report answer/effects/remaining only.')
+    text = payload.get('answer',payload.get('text'))
+    if not isinstance(text,str) or not text.strip() or len(text)>100000:
+        raise ProtocolValidationError('answer_text text must be a non-empty string (max 100000 characters)')
+    effects = payload.get('effects') or {}
+    if not isinstance(effects,dict) or set(effects)-{'read','changed','created'}:
+        raise ProtocolValidationError('effects must contain only read/changed/created path arrays')
+    for paths in effects.values():
+        if not isinstance(paths,list) or len(paths)>32 or any(not isinstance(p,str) or not p.strip() or len(p)>4096 for p in paths):
+            raise ProtocolValidationError('Invalid result object paths')
+    remaining = payload.get('remaining',[])
+    if not isinstance(remaining,list) or len(remaining)>32 or any(not isinstance(v,str) or len(v)>1000 for v in remaining):
+        raise ProtocolValidationError('remaining must be a bounded string array')
+    kind = payload.get('answer_type','result')
+    if kind not in {'result','pure_text','grounded_report','partial_report','error_report','failure','clarification'}:
+        raise ProtocolValidationError('answer_text answer_type is invalid')
+    # References are assembled by the server. Never ask the model to repair IDs.
+    result = {'text':text,'answer_type':kind,'effects':effects,'remaining':remaining,
+              'basis':[e['step_id'] for e in journal if e.get('step_id') and e.get('tool_type') not in {'system','answer'}],
+              '_result_contract':2}
+    if payload.get('suggested_fact') is not None:result['suggested_fact']=payload['suggested_fact']
+    suggestion=re.search(r'\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]',text)
     if suggestion:
-        payload={**payload,'text':re.sub(r'\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]','',payload['text']).strip(),
-                 'suggested_fact':{'text':suggestion.group(1).strip(),'category':suggestion.group(2).strip()}}
-    plan=re.search(r"\[\[SUGGEST_PLAN:\s*([^\[\]]+?)\s*\]\]",payload['text'])
-    if plan:payload={**payload,'text':re.sub(r'\[\[SUGGEST_PLAN:\s*([^\[\]]+?)\s*\]\]','',payload['text']).strip()}
-    if not payload['text'].strip():raise ProtocolValidationError('answer_text needs a human answer, not only an internal annotation',GROUNDED_CORRECTION)
-    return payload
+        result['text']=re.sub(r'\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]','',text).strip()
+        result['suggested_fact']={'text':suggestion.group(1).strip(),'category':suggestion.group(2).strip()}
+    result['text']=re.sub(r'\[\[SUGGEST_PLAN:\s*([^\[\]]+?)\s*\]\]','',result['text']).strip()
+    if not result['text']:raise ProtocolValidationError('answer_text needs a human answer, not only an internal annotation')
+    return result
+
 
 
 def validate_answer_report_failure_payload(payload: Any, journal: list[dict[str, Any]]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ProtocolValidationError("answer_report_failure arguments must be an object", GROUNDED_CORRECTION)
-    required = {"message", "reason", "recoverable", "suggested_next_action", "basis"}
+    required = {"message", "reason", "recoverable", "suggested_next_action"}
     missing = sorted(required - set(payload))
     if missing:
         raise ProtocolValidationError(f"answer_report_failure missing required fields: {missing}", GROUNDED_CORRECTION)
     if not isinstance(payload.get("recoverable"), bool):
         raise ProtocolValidationError("answer_report_failure recoverable must be boolean", GROUNDED_CORRECTION)
-    basis = validate_basis_references(payload.get("basis"), journal, require_non_empty=False)
-    if not basis and _has_failed_non_answer_step(journal):
-        raise ProtocolValidationError("answer_report_failure must reference the failed current-run step", GROUNDED_CORRECTION)
-    return payload
+    # The server binds the answer to this journal. A missing/stale model basis
+    # must not discard a useful failure report or consume another model turn.
+    allowed = _current_non_answer_step_ids(journal)
+    return {**payload, 'basis':list(dict.fromkeys(e['step_id'] for e in journal if e.get('step_id') in allowed))}
 
 
 def validate_answer_confirmation_payload(payload: Any, journal: list[dict[str, Any]]) -> dict[str, Any]:

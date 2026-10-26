@@ -7,14 +7,14 @@ from server.controller_tools import NON_PIPELINE_TOOLS
 from server.worker_scheduler import WorkerScheduler, init_worker_storage, goal_view, owned_job
 from server.worker_reports import build_worker_report
 from test_goal_parallel_scheduler import complete
-from server.controller_trust import enforce_trusted_answer, has_grounded_terminal_answer
+from server.controller_trust import sanitize_result_text
 from server.run_journal import append_answer_step, append_tool_step, validate_answer_text_payload
-from server.tool_completion import synthesize_terminal_answer_payload
+from server.tool_completion import render_operation_answer
 from test_controller_trust import _run_non_pipeline_case
 
 
 def _execute_call(call_id, command, device_id=None):
-    args={"command":command}
+    args={"command":command,"artifact_paths":[]}
     if device_id:args["device_id"]=device_id
     return {"id":call_id,"function":{"name":"execute_cmd","arguments":json.dumps(args)}}
 
@@ -28,17 +28,20 @@ def test_grounded_recovered_answer_is_not_replaced_by_old_error():
     journal = []
     evidence(journal, "Second", {"error": "timeout"}, "failed")
     evidence(journal, "Second", {"returncode": 0, "stdout": "OK: steam_process_running"})
-    payload = validate_answer_text_payload(synthesize_terminal_answer_payload(journal[-1]), journal)
+    payload = validate_answer_text_payload(render_operation_answer(journal[-1]), journal)
     append_answer_step(journal, "answer_text", payload, target_device_id="Second")
-    assert enforce_trusted_answer(payload["text"], journal) == payload["text"]
+    assert sanitize_result_text(payload["text"], journal) == payload["text"]
     evidence(journal, "Second", {"error": "new failure"}, "failed")
-    assert "ошибкой" in enforce_trusted_answer(payload["text"], journal)
+    report=build_worker_report({'task_id':'recovered','status':'done','device_ids':['Second'],'commands':journal,'answer':payload['text']})
+    assert report['status']=='unknown' and not report['goal_completed']
+    assert any(e.get('result',{}).get('error')=='new failure' for e in journal)
 
 
 def test_unvalidated_success_does_not_hide_failure():
     journal = []
     evidence(journal, "Second", {"error": "not found"}, "failed")
-    assert "not found" in enforce_trusted_answer("Готово", journal)
+    report=build_worker_report({'task_id':'failed','status':'done','device_ids':['Second'],'commands':journal,'answer':'Готово'})
+    assert not report['goal_completed'] and 'not found' in report['summary']
 
 
 @pytest.mark.parametrize("tool,result", [
@@ -112,6 +115,9 @@ def test_goal_preserves_each_device_result_without_summary_llm(tmp_path,monkeypa
             task["commands"][0].update(tool_name="execute_cmd", device_id=target,
                 command="Get-Content C:/Temp/note.txt",
                 result={"returncode":0,"stdout":f"Observed state on {target}","stderr":""})
+            from server.worker_reports import coverage_binding
+            task['commands'][-1]['result']['_coverage']={'coverage':'complete','evidence_refs':['source-1'],
+                'binding':coverage_binding(task['proposed_objective'],task['commands'][:-1],task['answer'])}
         else:
             evidence(journal,target,{"returncode":0,"stdout":"OK: opened_verified"})
             task.update(status="done",answer="Opened",commands=journal)
@@ -120,7 +126,7 @@ def test_goal_preserves_each_device_result_without_summary_llm(tmp_path,monkeypa
         try:
             devices=[f"{owner['id']}:{name}" for name in ("a","b")]
             admitted=await scheduler.submit_goal({"user_id":owner["id"],"chat_id":chat,
-                "message":"Read both devices","device_ids":devices},[
+                "message":"Read both devices","execution_scope":"analysis","device_ids":devices},[
                     {"key":name,"objective":f"Read device {name}","target_device_ids":[device]}
                     for name,device in zip(("a","b"),devices)],request_key="both-devices")
             await scheduler.runners[owner["id"]]
@@ -144,27 +150,28 @@ def test_other_device_success_cannot_hide_failed_device():
     journal = []
     evidence(journal, "a", {"error": "not opened"}, "failed")
     evidence(journal, "b", {"returncode": 0, "stdout": "OK: opened_verified"})
-    payload = synthesize_terminal_answer_payload(journal[-1])
+    payload = render_operation_answer(journal[-1])
     append_answer_step(journal, "answer_text", payload, target_device_id="b")
-    assert "not opened" in enforce_trusted_answer(payload["text"], journal)
+    report=build_worker_report({'task_id':'both','status':'done','device_ids':['a','b'],'commands':journal,'answer':payload['text']})
+    assert not report['goal_completed'] and 'not opened' in report['summary']
 
 
 def test_broadcast_recovered_grounded_result_is_success():
-    from server.task_runtime import _device_execution_status
+    from server.task_runtime import _device_operation_outcome
     journal = []
     evidence(journal, "a", {"error": "timeout"}, "failed")
     evidence(journal, "a", {"returncode": 0, "stdout": "OK: opened_verified"})
-    payload = synthesize_terminal_answer_payload(journal[-1])
+    payload = render_operation_answer(journal[-1])
     append_answer_step(journal, "answer_text", payload, target_device_id="a")
-    assert _device_execution_status({"answer": payload["text"], "commands": journal}) == "ok"
+    assert _device_operation_outcome({"answer": payload["text"], "commands": journal}) == "unknown"  # A later process observation cannot reconcile a lost mutation.
 
 
 def test_fallback_report_keeps_confirmed_results_from_both_devices():
-    from server.tool_completion import synthesize_device_terminal_report
+    from server.run_journal import unfinished_execution_result
     journal = []
     evidence(journal, "givi", {"returncode": 0, "stdout": "OK: music_opened"})
     evidence(journal, "Second", {"returncode": 0, "stdout": "OK: steam_opened"})
-    payload = validate_answer_text_payload(synthesize_device_terminal_report(journal, journal[-1]), journal)
+    payload = validate_answer_text_payload({'answer':unfinished_execution_result(journal,'test')['answer']}, journal)
     assert "givi: OK: music_opened" in payload["text"]
     assert "Second: OK: steam_opened" in payload["text"]
     assert len(payload["basis"]) == 2
@@ -175,7 +182,7 @@ def test_runtime_keeps_validated_markdown_recovery_answer(monkeypatch):
     journal = []
     evidence(journal, "a", {"error": "timeout"}, "failed")
     evidence(journal, "a", {"returncode": 0, "stdout": "OK: opened_verified"})
-    payload = synthesize_terminal_answer_payload(journal[-1])
+    payload = render_operation_answer(journal[-1])
     payload["text"] = "**Приложение открыто.**"
     append_answer_step(journal, "answer_text", payload, target_device_id="a")
     rt.devices["1:a"] = {"user_id": 1, "info": {"os": "Linux"}, "ws": object()}
@@ -187,7 +194,7 @@ def test_runtime_keeps_validated_markdown_recovery_answer(monkeypatch):
     monkeypatch.setattr(rt, "process_nl_command", process)
     asyncio.run(rt.run_nl_task("report", 1, "open", ["1:a"], 1))
     assert rt.tasks["report"]["answer"] == payload["text"]
-    assert has_grounded_terminal_answer(rt.tasks["report"]["answer"], journal)
+    assert build_worker_report({**rt.tasks["report"], "task_id":"report"})["goal_completed"] is False
 
 
 def test_broadcast_runtime_keeps_each_recovered_answer(monkeypatch):
@@ -202,37 +209,37 @@ def test_broadcast_runtime_keeps_each_recovered_answer(monkeypatch):
         journal = []
         evidence(journal, device, {"error": "old timeout"}, "failed")
         evidence(journal, device, {"returncode": 0, "stdout": "OK: opened_verified"})
-        payload = synthesize_terminal_answer_payload(journal[-1])
+        payload = render_operation_answer(journal[-1])
         append_answer_step(journal, "answer_text", payload, target_device_id=device)
         return {"answer": payload["text"], "commands": journal}
     monkeypatch.setattr(rt, "process_nl_command", process)
     asyncio.run(rt.run_nl_task("broadcast-report", 1, "open", ["1:a", "1:b"], 1))
     task = rt.tasks["broadcast-report"]
-    assert task["status"] == "done" and task["overall_status"] == "success"
-    assert "[a] ok" in task["answer"] and "[b] ok" in task["answer"]
+    assert task["status"] == "unknown" and task["overall_status"] == "unknown"
+    assert "[a] unknown" in task["answer"] and "[b] unknown" in task["answer"]
     assert "old timeout" not in task["answer"]
 
 
 def test_device_fallback_preserves_failure_without_claiming_whole_goal():
-    from server.tool_completion import synthesize_device_terminal_report
+    from server.run_journal import unfinished_execution_result
     journal = []
     evidence(journal, "a", {"returncode": 0, "stdout": "OK: observed_a"})
     evidence(journal, "b", {"error": "device disconnected"}, "failed")
-    payload = validate_answer_text_payload(synthesize_device_terminal_report(journal, journal[-1]), journal)
+    payload = validate_answer_text_payload({'answer':unfinished_execution_result(journal,'test')['answer']}, journal)
     assert "a: OK: observed_a" in payload["text"]
     assert "b: device disconnected" in payload["text"]
     assert len(payload["basis"]) == 2
-    assert payload["answer_type"] == "partial_report"
-    assert payload["self_check"]["claims_completed_action"] is False
+    assert payload['answer_type']=='result' and 'self_check' not in payload
+    assert not build_worker_report({'task_id':'partial-fallback','status':'done','commands':journal,'answer':payload['text']})['goal_completed']
 
 
 def test_device_observations_are_preserved_without_action_completion():
-    from server.tool_completion import synthesize_device_terminal_report
+    from server.run_journal import unfinished_execution_result
     journal = []
     evidence(journal, "a", {"returncode": 0, "stdout": "existing.txt"})
     evidence(journal, "b", {"returncode": 0, "stdout": "process started"})
-    payload = validate_answer_text_payload(synthesize_device_terminal_report(journal, journal[-1]), journal)
+    payload = validate_answer_text_payload({'answer':unfinished_execution_result(journal,'test')['answer']}, journal)
     assert "a: existing.txt" in payload["text"] and "b: process started" in payload["text"]
     assert len(payload["basis"]) == 2
-    assert payload["answer_type"] == "partial_report"
-    assert payload["self_check"]["claims_completed_action"] is False
+    assert payload['answer_type']=='result' and 'self_check' not in payload
+    assert not build_worker_report({'task_id':'partial-fallback','status':'done','commands':journal,'answer':payload['text']})['goal_completed']

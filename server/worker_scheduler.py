@@ -13,13 +13,13 @@ try:
     from . import database as db
     from .runtime_state import tasks, mark_task_cancelled, request_task_cancel
     from .api_support import ADMIN_USER_ID
-    from .worker_reports import build_worker_report, TERMINAL
+    from .worker_reports import build_worker_report, result_binding, receipt_from_report, saved_worker_report, TERMINAL
     from .response_presentation import worker_presentation
 except ImportError:
     import database as db
     from runtime_state import tasks, mark_task_cancelled, request_task_cancel
     from api_support import ADMIN_USER_ID
-    from worker_reports import build_worker_report, TERMINAL
+    from worker_reports import build_worker_report, result_binding, receipt_from_report, saved_worker_report, TERMINAL
     from response_presentation import worker_presentation
 
 MAX_QUEUED = 4
@@ -28,7 +28,7 @@ WINDOW_EFFECTS = frozenset({"list","find","active","monitors","activate","minimi
 
 
 def validated_execution_scope(scope, effects):
-    if (not isinstance(scope,str) or scope not in {"general","window"} or not isinstance(effects,list) or len(effects)>16
+    if (not isinstance(scope,str) or scope not in {"general","window","analysis"} or not isinstance(effects,list) or len(effects)>16
             or any(not isinstance(effect,str) or effect not in WINDOW_EFFECTS for effect in effects)
             or (scope != "window" and effects)):
         raise ValueError("invalid_worker_execution_scope")
@@ -292,12 +292,17 @@ def goal_view(goal_id, owner, chat_id):
         required = [member for member in members if member["required_for_goal"]]
         completed = bool(required) and all(member["status"] == "success"
             and member["report"].get("goal_completed") is True and member["result"] for member in required)
-        states = {member["status"] for member in required}
-        status = ("success" if completed else "running" if states.intersection(ACTIVE_STATES)
-                  else "queued" if "queued" in states else "waiting_dependency" if "waiting_dependency" in states
-                  else "unknown" if "unknown" in states else "cancelled" if states == {"cancelled"}
-                  else "partial" if "success" in states or "partial" in states else "failed")
-        return {**dict(goal), "status": status, "goal_completed": completed, "tasks": members}
+        states = {member['status'] for member in required}
+        by_id = {m['task_id']:m for m in required}
+        dependent_blocked = [m['task_id'] for m in required if m['status']=='waiting_dependency' and any(
+            by_id.get(e['source_task_id'],{}).get('status') in {'failed','partial','unknown','cancelled','blocked'} for e in m['dependencies'])]
+        active = any(m['status'] in ACTIVE_STATES or m['status']=='queued' or
+                     m['status']=='waiting_dependency' and m['task_id'] not in dependent_blocked for m in required)
+        status = ('success' if completed else 'running' if active else 'unknown' if 'unknown' in states
+                  else 'cancelled' if states=={'cancelled'} else 'partial' if states.intersection({'success','partial'}) else 'failed')
+        return {**dict(goal),'status':status,'goal_completed':completed,'terminal':not active,
+                'dependent_blocked':dependent_blocked,'tasks':members}
+
 
 
 def list_jobs(user_id, limit=8, *, queue_first=False):
@@ -321,10 +326,17 @@ def restore_task(job):
             and snapshot_report.get("task_id")==job["task_id"] else json.loads(job["report"]) if job.get("report") else None)
     if report:
         final_snapshot=payload.get("worker_report")==report and isinstance(payload.get("answer"),str)
-        payload.update(status=report["status"], worker_report=report,
+        bound_snapshot = payload.get('worker_report_binding') == result_binding(payload,report)
+        # A legacy presentation cache must not overwrite the persisted execution
+        # outcome before the deterministic adapter gets to read it.
+        payload.update(status=report["status"] if bound_snapshot else job.get('state','unknown'), worker_report=report,
             answer=payload.get("answer") or report["summary"], commands=payload.get("commands") or [],
             tasks=payload.get("tasks") or [], worker_id=report.get("worker_id") or "worker-1")
         if final_snapshot:
+            payload["worker_report"] = saved_worker_report(payload,report)
+            payload['status']=payload['worker_report']['status']
+            payload['worker_report_binding']=result_binding(payload,payload['worker_report'])
+            payload["task_receipt"] = receipt_from_report(payload["worker_report"],payload.get("task_receipt"))
             return payload
         # Legacy jobs restore evidence from the same persisted message, never another user/chat.
         with db.get_db() as c:
@@ -405,9 +417,10 @@ def _final_snapshot(task, report, previous):
     # Never serialize transient controller locks/events or transport objects.
     for key in ("answer","commands","tasks","task_receipt","diagnostic_trace","worker_started_at",
                 "conversational_response","execution_details","cancel_requested","worker_error_code",
-                "history_message_id","history_metadata","input_required"):
+                "history_message_id","history_metadata","input_required","_action_outcome_unknown"):
         if key in task:snapshot[key]=task[key]
-    snapshot.update(status=report["status"],worker_report=report)
+    snapshot.update(status=report["status"],worker_report=report,task_receipt=receipt_from_report(report,task.get("task_receipt")))
+    snapshot["worker_report_binding"]=result_binding(snapshot,report)
     return snapshot
 
 
@@ -421,6 +434,8 @@ def persist_report(task, *, include_report_column=True):
         # An empty or shortened runtime result cannot erase checkpointed evidence.
         task["commands"] = _retain_journal(json.loads(row["payload"]).get("commands"), task.get("commands"))
         report=build_worker_report(task);task["worker_report"]=report
+        task["worker_report_binding"]=result_binding(task,report)
+        task["task_receipt"]=receipt_from_report(report,task.get("task_receipt"))
         if task.get("input_required"):
             try:
                 from .orchestrator import present_window_input_result

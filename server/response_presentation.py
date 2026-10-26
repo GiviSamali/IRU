@@ -6,13 +6,13 @@ from pydantic import ValidationError
 
 try:
     from . import database as db
-    from .worker_reports import build_worker_report, positive_evidence, WorkerReport
-    from .controller_trust import has_grounded_terminal_answer, has_validated_terminal_answer
+    from .worker_reports import build_worker_report, operation_facts, saved_worker_report, WorkerReport
+    from .controller_trust import accepted_result_text
     from .tool_registry import CANONICAL_TOOL_NAMES
 except ImportError:
     import database as db
-    from worker_reports import build_worker_report, positive_evidence, WorkerReport
-    from controller_trust import has_grounded_terminal_answer, has_validated_terminal_answer
+    from worker_reports import build_worker_report, operation_facts, saved_worker_report, WorkerReport
+    from controller_trust import accepted_result_text
     from tool_registry import CANONICAL_TOOL_NAMES
 
 # These are tool contracts, not a classifier of the user's words.
@@ -103,12 +103,12 @@ def saved_step_reports(task):
     for index, command in enumerate(commands):
         payload = command.get("result") or {}
         if (_tool(command) != "answer.text" or command.get("status") != "terminal"
-                or not isinstance(payload, dict) or payload.get("answer_type") not in {"grounded_report", "pure_text", "partial_report"}):
+                or not isinstance(payload, dict) or payload.get("answer_type") not in {"grounded_report", "pure_text", "partial_report", "result"}):
             continue
         text = payload.get("text")
         # Readability of a historical report is independent of whole-goal
         # completion. Failed measurements are not promoted to positive evidence.
-        if isinstance(text, str) and has_validated_terminal_answer(text, commands[:index + 1]):
+        if isinstance(text, str) and accepted_result_text(text, commands[:index + 1]):
             reports.append({"step_id": command.get("step_id"), "text": text,
                             "device_id": command.get("target_device_id") or command.get("device_id"),
                             "observed_at": command.get("collected_at") or command.get("created_at")})
@@ -148,27 +148,8 @@ def failure_explanation(task, report=None, *, include_reports=False):
 
 
 def normalized_worker_report(task, report=None):
-    try:
-        report=WorkerReport.model_validate(report or build_worker_report(task)).model_dump()
-    except ValidationError:
-        # Invalid cached presentation cannot replace the current journal/receipt.
-        logging.getLogger("iru.presentation").warning("worker_report_cache_invalid")
-        report=build_worker_report(task)
-    if report["task_id"]!=task["task_id"]:
-        logging.getLogger("iru.presentation").warning("worker_report_cache_task_mismatch")
-        report=build_worker_report(task)
-    raw_negative={"error":"failed","failed":"failed","partial":"partial","blocked":"blocked","unknown":"unknown","cancelled":"cancelled","interrupted":"unknown"}
-    status_changed=task.get("status") in raw_negative and report["status"]!=raw_negative[task["status"]]
-    attention_status={"confirm":"waiting_confirmation", "waiting_input":"waiting_input"}.get(task.get("status"))
-    attention_changed=attention_status is not None and report["status"]!=attention_status
-    incomplete=report["status"]=="success" and (task.get("task_receipt") or {}).get("goal_completed") is False
-    legacy_diagnostic=(report['status']=='unknown' and report.get('error_code')=='action_evidence_unconfirmed'
-        and (task.get('task_receipt') or {}).get('answer_source')=='audited_terminal')
-    if report["status"]=="success" or legacy_diagnostic or status_changed or attention_changed or task.get("cancel_requested") or incomplete:
-        # A cache cannot grant completion after the authoritative journal/receipt
-        # changed or an older validation contract was replaced.
-        report=build_worker_report(task)
-    return report
+    return saved_worker_report(task, report)
+
 
 
 def running_progress(task):
@@ -190,147 +171,41 @@ def running_progress(task):
 
 
 def worker_presentation(task, report=None):
-    """Keep raw protocol text unchanged; derive prose only from normalized evidence."""
-    report=normalized_worker_report(task,report)
-    answer=task.get("answer") if isinstance(task.get("answer"),str) else ""
-    receipt=task.get("task_receipt") or {}
-    if (report['status']=='unknown' and not has_validated_terminal_answer(answer,task.get('commands') or [])
-            and any(c.get('status')=='success' or c.get('tool_name')=='tool_only_protocol'
-                    for c in task.get('commands') or [] if isinstance(c,dict))):
+    report = normalized_worker_report(task, report)
+    answer = task.get('answer') if isinstance(task.get('answer'),str) else ''
+    if report.get('error_code') in {'artifact_receipt_missing','worker_report_binding_mismatch','required_file_change_reverted','artifact_postcondition_unconfirmed','clarification_required','clarification_binding_mismatch'} or report['status']=='failed':
+        answer = report['summary']
+    if report['status'] in {'partial','unknown'} and len(report['target_device_ids'])>1:
+        answer = report['summary']
+    status = report['status']
+    if status=='success' and not accepted_result_text(answer,task.get('commands') or []):
+        answer=report['summary']
+    if status == 'running': human = running_progress(task)
+    elif status in {'queued','waiting_dependency','waiting_confirmation','waiting_input'}: human = report['summary']
+    elif report.get('error_code')=='clarification_required':human=report['summary']
+    else:
+        human = answer or report['summary']
+        if answer and status != 'success':
+            label = {'partial':'Поручение выполнено частично.', 'unknown':'Итог поручения не подтверждён.',
+                     'failed':'Поручение завершилось с ошибкой.', 'cancelled':'Поручение отменено.',
+                     'blocked':'Поручение остановлено.'}[status]
+            human = label + '\n\n' + answer
+    if status in {'unknown','partial'} and any(_tool(c)=='remember_fact' for c in task.get('commands') or []):
         try:
             from .task_summary import recovered_execution_summary
         except ImportError:
             from task_summary import recovered_execution_summary
-        return {'conversational_response':recovered_execution_summary(task), 'execution_details':answer}
-    if (report["status"]=="success" and receipt.get("answer_source")=="audited_terminal"
-            and receipt.get("goal_completed") is True and receipt.get("final_verification_status")=="verified"
-            and has_grounded_terminal_answer(answer,task.get("commands") or [])):
-        # A legacy presentation cache or helper artifact cannot replace an audited result.
-        return {"conversational_response":answer,"execution_details":""}
-    if (report.get('error_code') in {'confirmed_transport_outcome_unknown','confirmation_expired'}
-            and receipt.get('answer_source')=='confirmation_result'
-            and has_validated_terminal_answer(answer,task.get('commands') or [])):
-        return {'conversational_response':answer,'execution_details':''}
-    saved=task.get("history_metadata")
-    if report["status"] != "running" and isinstance(saved,dict) and saved.get("workerReport")==report and isinstance(saved.get("conversationalResponse"),str):
-        details=saved.get("executionDetails") or ""
-        if (details or saved["conversationalResponse"])==answer:
-            return {"conversational_response":saved["conversationalResponse"],"execution_details":details}
-    status=report["status"]
-    commands=[c for c in task.get("commands") or [] if isinstance(c,dict)]
-    operations=[c for c in commands if not _tool(c).startswith("answer.")]
-    artifacts=_artifacts(task,report)
-    result=_artifact_result(artifacts)
-    if task.get("plan_suggestion"):
-        human=answer or "Предлагаю составить план. Запустить?"
-    elif status=="waiting_input":human=answer or "Какое окно выбрать?"
-    elif status=="waiting_confirmation":human="Нужно твоё подтверждение, прежде чем продолжить."
-    elif status=="queued":human="Поручение в очереди. Начну после текущей задачи."
-    elif status=="waiting_dependency":human="Жду подтверждённого результата связанного поручения."
-    elif status=="running":human=running_progress(task)
-    elif status=="success":
-        terminal=next((c for c in reversed(commands) if _tool(c)=="answer.text" and c.get("status")=="terminal"),{})
-        payload=terminal.get("result") if isinstance(terminal.get("result"),dict) else {}
-        self_check=payload.get("self_check") if isinstance(payload.get("self_check"),dict) else {}
-        informational=self_check.get("claims_completed_action") is False
-        receipt=task.get("task_receipt") or {}
-        audited_command_report=(receipt.get("answer_source")=="audited_terminal"
-            and receipt.get("goal_completed") is True
-            and any(_tool(c)=="execute_cmd" and c.get("step_id") in (payload.get("basis") or []) for c in operations))
-        if operations and has_grounded_terminal_answer(answer,commands) and (informational or audited_command_report or all(_tool(c) in OBSERVATION_TOOLS for c in operations)):
-            # A validated informational result can include execute_cmd processing.
-            # No guessing intent from shell text and no extra classifier/model.
-            human=answer
-        elif any(_tool(c)=="transfer_file" and positive_evidence(c) and c["result"].get("sha256_verified") is True for c in operations):
-            human="Файл передан."
-            location=_desktop_location(task,artifacts)
-            if location:human+=" "+location
-        elif result:
-            human=result
-            location=_desktop_location(task,artifacts)
-            if location:human+=" "+location
-        else:
-            actions=[_tool(c) for c in operations if positive_evidence(c) and _tool(c) not in OBSERVATION_TOOLS]
-            human={"app.launch":"Приложение открыто.","app.open_url":"Страница открыта.",
-                   "web.focus":"Вкладка выбрана.","remember_fact":"Запомнил."}.get(actions[-1] if actions else "")
-            if not human:
-                human=answer if has_grounded_terminal_answer(answer,commands) else report["summary"]
-    elif status=="partial":
-        if report.get('error_code')=='mixed_diagnostic_evidence':
-            human="Диагностика выполнена частично: получены измерения, но часть проверок завершилась с ошибками. Сохранённый отчёт доступен; его выводы не подтверждены полностью."
-        elif result:human=result+" Но задача выполнена не полностью."
-        elif any(positive_evidence(c) for c in commands):human="Получилось выполнить только часть задачи."
-        else:human="Не получилось завершить задачу полностью."
-    elif status=="failed":human=(result+" Но закончить задачу не удалось.") if result else "Не получилось завершить задачу."
-    elif status=="blocked":
-        if report.get('error_code')=='clarification_required':
-            terminal=next((c for c in reversed(commands) if c.get('status')=='terminal'),{})
-            payload=terminal.get('result') or {}
-            if terminal.get('tool_name')=='answer.ask_clarification' and payload.get('question')==answer:
-                options=payload.get('options')
-                suffix='\n\n'+'\n'.join(f'{i}. {option}' for i,option in enumerate(options,1)) if isinstance(options,list) and options and all(isinstance(o,str) for o in options) else ''
-                return {'conversational_response':answer+suffix,'execution_details':''}
-        receipt=task.get("task_receipt") or {}
-        if receipt.get("command_outcome")=="success" and any(positive_evidence(c) for c in commands):
-            human="Команда выполнена, но остальную задачу завершить не удалось."
-        else:human="Не могу продолжить без твоего решения."
-    elif status=="cancelled":human="Задача отменена."
-    else:
-        human={
-            'action_evidence_unconfirmed':'Не могу подтвердить результат: проверка не связала изменение с доказательствами текущей задачи. Подробности сохранены в ходе выполнения.',
-            'goal_not_completed':'Не могу подтвердить результат: полученный ответ не завершает исходное поручение. Подробности сохранены в ходе выполнения.',
-            'terminal_answer_missing':'Не могу подтвердить результат: выполнение остановилось без проверенного итогового ответа. Уже выполненные действия автоматически не повторяю.',
-        }.get(report.get('error_code'),'Не могу подтвердить результат. Подробности сохранены в ходе выполнения.')
-    if status=="blocked" and (task.get("task_receipt") or {}).get("answer_source")=="trust_guard":
-        return {"conversational_response":answer,"execution_details":""}
-    if status in {"partial","failed","blocked"}:
-        terminal=next((c for c in reversed(commands) if _tool(c)=="answer.text" and c.get("status")=="terminal"),{})
-        payload=terminal.get("result") if isinstance(terminal.get("result"),dict) else {}
-        terminal_status={"partial_report":"partial","error_report":"failed","failure":"failed","clarification":"blocked"}.get(payload.get("answer_type"))
-        receipt=task.get("task_receipt") or {}
-        continuation_partial=(status=="blocked" and terminal_status=="partial"
-            and receipt.get("answer_source")=="confirmation_result"
-            and receipt.get("task_status")=="partial" and receipt.get("continuation_status")=="unavailable")
-        if (terminal_status==status or continuation_partial) and has_validated_terminal_answer(answer,commands):
-            return {"conversational_response":answer,"execution_details":""}
-        reason=_reason(task,report)
-        if reason:human+=" "+reason
-    if status in {"partial", "failed"} and ((receipt.get("step_results") or task.get("tasks"))):
-        human = failure_explanation(task, report)
-    return {"conversational_response":human,"execution_details":answer if answer!=human else ""}
+        human=recovered_execution_summary(task)
+    details = task.get('answer') or ''
+    if status in {'partial','unknown','failed','cancelled','blocked'}:
+        history = saved_step_reports(task)
+        if history:
+            details='Это сохранённый исходный материал, не подтверждение завершения.\n\n' + '\n\n'.join(r['text'] for r in history)
+    else:details=''
+    return {'conversational_response':human,'execution_details':details}
+
 
 
 
 def worker_spoken_response(task, report=None):
-    """Compose from verified structured outcomes; never rewrite model prose by replacements."""
-    report=normalized_worker_report(task,report)
-    human=worker_presentation(task,report)["conversational_response"]
-    # A ready clarification is the actual question, not a generic incomplete-task summary.
-    if report.get('error_code')=='clarification_required':return human
-    # Incomplete/permission-sensitive results stay protected; informational answers stay intact.
-    if report["status"]!="success":
-        if len(human)>420:
-            # Reuse the existing structured negative summary for concise speech.
-            # The canonical terminal text stays intact in chat and storage.
-            return worker_presentation({**task,"answer":""},report)["conversational_response"]
-        return human
-    commands=[c for c in task.get("commands") or [] if isinstance(c,dict)]
-    operations=[c for c in commands if not _tool(c).startswith("answer.")]
-    terminal=next((c for c in reversed(commands) if _tool(c)=="answer.text" and c.get("status")=="terminal"),{})
-    payload=terminal.get("result") if isinstance(terminal.get("result"),dict) else {}
-    check=payload.get("self_check") if isinstance(payload.get("self_check"),dict) else {}
-    informational=check.get("claims_completed_action") is False
-    if operations and has_grounded_terminal_answer(task.get("answer") or "",commands) and (informational or all(_tool(c) in OBSERVATION_TOOLS for c in operations)):
-        return human
-    artifacts=_artifacts(task,report)
-    if any(isinstance(c,dict) and _tool(c)=="transfer_file" and positive_evidence(c) and c["result"].get("sha256_verified") is True for c in task.get("commands") or []):
-        return "Передал файл. "+(_desktop_location(task,artifacts) or "Копия проверена.")
-    if artifacts:
-        # Location is only the owner-scoped, verified location. Do not infer a write from existence.
-        return human
-    actions=[_tool(c) for c in task.get("commands") or [] if isinstance(c,dict) and positive_evidence(c) and _tool(c) not in OBSERVATION_TOOLS]
-    if len(actions)==1 and actions[0]=="app.launch":return "Открыл приложение."
-    if len(actions)==1 and actions[0]=="app.open_url":return "Открыл страницу."
-    if len(actions)==1 and actions[0]=="web.focus":return "Переключил вкладку."
-    if len(actions)==1 and actions[0]=="remember_fact":return "Запомнил."
-    return human
+    return worker_presentation(task, report)['conversational_response']

@@ -100,12 +100,12 @@ except ImportError:
 
 
 try:
-    from ..command_confirmation import confirmed_command_outcome, ConfirmedAction
+    from ..command_confirmation import ConfirmedAction
     from ..api_support import assess_action
     from ..tool_completion import execute_cmd_outcome_marker
     from ..run_journal import make_run_step, append_tool_step, append_answer_step, validate_answer_text_payload, diagnostic_context_for_task
 except ImportError:
-    from command_confirmation import confirmed_command_outcome, ConfirmedAction
+    from command_confirmation import ConfirmedAction
     from api_support import assess_action
     from tool_completion import execute_cmd_outcome_marker
     from run_journal import make_run_step, append_tool_step, append_answer_step, validate_answer_text_payload, diagnostic_context_for_task
@@ -837,6 +837,8 @@ async def api_confirm_task(task_id: str, request: Request, confirmation_id: str 
             for name in ("stdout", "stderr"):
                 if isinstance(result.get(name), str):
                     evidence[name + "_chars"] = len(result[name])
+                    evidence[name] = ""
+                    evidence[name + "_redacted"] = True
         if outcome == "failed":
             evidence["error"] = reason
         entry = append_tool_step(journal, make_run_step(journal=journal, tool_name="execute_cmd",
@@ -855,18 +857,14 @@ async def api_confirm_task(task_id: str, request: Request, confirmation_id: str 
         cancelled = is_task_cancel_requested(task_id)
         if cancelled:
             text = "Задача остановлена пользователем. " + text
-        payload = {"answer_type": "error_report" if outcome == "failed" else "partial_report",
-            "text": text, "basis": [entry["step_id"]], "self_check": {
-                "depends_on_current_external_state": True, "claims_completed_action": outcome == "success",
-                "has_sufficient_evidence": outcome != "unknown", "missing_evidence_question":
-                    "Продолжение controller loop и выполнение всей исходной цели не подтверждены."}}
+        payload = {"answer_type": "error_report" if outcome == "failed" else "partial_report", "answer":text}
         append_answer_step(journal, "answer_text", validate_answer_text_payload(payload, journal), target_device_id=short_did)
         task["commands"] = journal
         task["answer"] = text
         task["status"] = "cancelled" if cancelled else "failed" if outcome == "failed" else "blocked"
         task["overall_status"] = "cancelled" if cancelled else "failed" if outcome == "failed" else "partial_failure"
         task["task_receipt"] = {"task_status": "cancelled" if cancelled else "failed" if outcome == "failed" else "partial",
-            "answer_source": "confirmation_result", "command_outcome": outcome, "goal_completed": False,
+            "answer_source": "confirmation_result", "command_outcome": outcome,
             "continuation_status": "unavailable", "terminal_reason": reason, "basis": [entry["step_id"]]}
         task["history_metadata"] = message_task_metadata(task, task_id=task_id)
         try:
@@ -886,7 +884,7 @@ async def api_confirm_task(task_id: str, request: Request, confirmation_id: str 
                 task["status"] = "blocked"
                 task["answer"] = "Подтверждение устарело. Команда не выполнялась; исходная задача не завершена."
                 task["task_receipt"] = {"task_status":"blocked", "command_outcome":"not_executed",
-                    "goal_completed":False, "continuation_status":"unavailable", "terminal_reason":"confirmation_expired"}
+                     "continuation_status":"unavailable", "terminal_reason":"confirmation_expired"}
                 return
             dev = devices.get(confirm_dk)
             if not dev or dev.get("user_id") != user["id"] or not dev.get("ws"):
@@ -904,7 +902,11 @@ async def api_confirm_task(task_id: str, request: Request, confirmation_id: str 
             except (RuntimeError, ValueError):
                 finish(None, "failed", "confirmed_action_not_dispatched")
                 return
-            outcome = confirmed_command_outcome(result)
+            try:
+                from ..tool_completion import normalize_operation_result
+            except ImportError:
+                from tool_completion import normalize_operation_result
+            outcome = normalize_operation_result('execute_cmd',result)
             finish(result, outcome, "confirmation_continuation_unavailable" if outcome == "success"
                    else "confirmed_execution_failed" if outcome == "failed" else "confirmed_execution_unknown")
         finally:
@@ -991,7 +993,7 @@ async def api_deny_task(task_id: str, request: Request):
     if task.get("worker_id"):
         # Denial is a known cancellation, not an unverified completed Worker.
         mark_task_cancelled(task_id, answer=task["answer"], commands=task.get("commands") or [])
-        task["task_receipt"] = {"task_status":"cancelled", "goal_completed":False,
+        task["task_receipt"] = {"task_status":"cancelled",
             "command_outcome":"not_executed", "terminal_reason":"confirmation_denied"}
     task.pop("confirm_data", None)
     task["history_metadata"] = message_task_metadata({**task, "status": "cancelled"}, task_id=task_id)

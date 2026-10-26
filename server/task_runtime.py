@@ -21,7 +21,7 @@ try:
         process_onboarding_message,
         strip_markdown,
     )
-    from .controller_trust import enforce_trusted_answer, has_grounded_terminal_answer, has_validated_terminal_answer
+    from .controller_trust import sanitize_result_text
     from .database import (
         add_message,
         message_task_metadata,
@@ -66,7 +66,7 @@ except ImportError:
         process_onboarding_message,
         strip_markdown,
     )
-    from controller_trust import enforce_trusted_answer, has_grounded_terminal_answer, has_validated_terminal_answer
+    from controller_trust import sanitize_result_text
     from database import (
         add_message,
         message_task_metadata,
@@ -814,24 +814,19 @@ def _format_live_snapshot_summary(results: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _device_execution_status(result: dict) -> str:
-    """Conservative aggregation: a returned answer alone cannot hide a tool failure."""
-    status = (result.get("task_receipt") or {}).get("task_status") or result.get("status")
-    if status in {"failed", "blocked", "error", "partial", "partial_failure"}:
-        return "error"
-    if result.get("cancelled") or status == "cancelled":
-        return "cancelled"
-    if status in {"completed", "completed_with_recovery"}:
-        return "ok"
-    if has_grounded_terminal_answer(result.get("answer", ""), result.get("commands", [])):
-        return "ok"
-    for command in result.get("commands", []):
-        payload = command.get("result") or {}
-        if command.get("status") in {"failed", "error", "blocked"} or command.get("tool_status") in {"failed", "error", "blocked"}:
-            return "error"
-        if isinstance(payload, dict) and (payload.get("error") or payload.get("returncode", 0) not in (0, None) or payload.get("status") in {"failed", "error", "blocked"}):
-            return "error"
-    return "ok"
+def _device_operation_outcome(result):
+    try:
+        from .tool_completion import normalize_operation_result
+    except ImportError:
+        from tool_completion import normalize_operation_result
+    outcomes=[normalize_operation_result(c.get('tool_name') or c.get('action') or '',c.get('result'))
+              for c in result.get('commands',[]) if c.get('tool_type') not in {'system','answer'}]
+    if 'unknown' in outcomes:return 'unknown'
+    if not outcomes:return 'unknown'
+    if all(v=='success' for v in outcomes):return 'ok'
+    if any(v in {'success','partial'} for v in outcomes):return 'partial'
+    return 'error'
+
 
 
 @diagnostic_task("nl", lambda task_id: tasks.get(task_id))
@@ -1240,17 +1235,17 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 return cancellation_payload(result.get("commands", []))
             task_receipt = result.get("task_receipt")
             if task.get("_action_outcome_unknown") and not (task_receipt or {}).get("task_status"):
-                task_receipt = {**(task_receipt or {}), "task_status": "partial", "goal_completed": False,
+                task_receipt = {**(task_receipt or {}), "task_status": "partial",
                                 "terminal_reason": "agent_outcome_unknown"}
             if activation_markers:
                 task_receipt = dict(task_receipt or {})
                 task_receipt["warnings"] = sorted(set((task_receipt.get("warnings") or []) + activation_markers))
             device_answer = result.get("answer", "")
             if is_broadcast:
-                device_answer = enforce_trusted_answer(device_answer, result.get("commands", []))
+                device_answer = sanitize_result_text(device_answer, result.get("commands", []))
             return {
                 "device_id": device_id,
-                "status": _device_execution_status(result) if is_broadcast else "ok",
+                "status": _device_operation_outcome(result) if is_broadcast else "ok",
                 "answer": device_answer,
                 "commands": result.get("commands", []),
                 "tasks": result.get("tasks", []),
@@ -1318,10 +1313,9 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     task["commands"] = combined_commands
                     return
             statuses = [item["status"] for item in task["results"].values()]
-            task["overall_status"] = "success" if all(status == "ok" for status in statuses) else (
-                "partial_failure" if any(status == "ok" for status in statuses) else "failed"
-            )
-            combined_task_receipt = {"task_status": "completed" if task["overall_status"] == "success" else "failed",
+            task["overall_status"] = ('unknown' if 'unknown' in statuses else 'success' if all(status == 'ok' for status in statuses)
+                else 'partial' if any(status in {'ok','partial'} for status in statuses) else 'failed')
+            combined_task_receipt = {"task_status": "completed" if task["overall_status"] == "success" else task["overall_status"],
                                      "answer_source": "per_device_report"}
             combined_answer = "\n\n".join(answers)
         else:
@@ -1389,23 +1383,9 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         if is_task_cancel_requested(task_id):
             finish_cancelled(combined_commands)
             return
-        validated_terminal = has_validated_terminal_answer(combined_answer, combined_commands)
-        if validated_terminal or not ("combined_task_receipt" in locals() and (combined_task_receipt or {}).get("answer_source") == "per_device_report"):
-            before_trust_guard = combined_answer
-            combined_answer = enforce_trusted_answer(combined_answer, combined_commands)
-            if combined_answer != before_trust_guard:
-                record_lifecycle_event("answer_adjusted", source="trust_guard")
-                if validated_terminal:
-                    # The journal retains the original answer and basis. A content
-                    # rejection is not a formatting change or proof of goal success.
-                    combined_task_receipt={**(combined_task_receipt or {}),"task_status":"partial" if any(
-                        isinstance(c.get("result"),dict) and not c["result"].get("error")
-                        and c.get("status")=="success" for c in combined_commands) else "failed",
-                        "goal_completed":False,"final_verification_status":"unverified",
-                        "answer_source":"trust_guard","terminal_reason":"untrusted_terminal_content"}
-        # Preserve the exact audited answer; speech/UI formatting is a projection.
-        if not validated_terminal:
-            combined_answer = strip_markdown(combined_answer)
+        # Content authenticity is independent of execution completion. The
+        # authoritative WorkerReport is produced once by the scheduler.
+        combined_answer = sanitize_result_text(combined_answer,combined_commands)
         history_metadata = message_task_metadata({**task,
             "status": (combined_task_receipt or {}).get("task_status") or "done",
             "task_receipt": combined_task_receipt, "tasks": combined_tasks}, task_id=task_id)
@@ -1519,10 +1499,10 @@ async def continue_window_input(task):
     """Worker continuation: revalidate one exact window; never restart a controller."""
     try:
         from .run_journal import append_tool_step, append_answer_step, validate_answer_text_payload
-        from .tool_completion import synthesize_terminal_answer_payload
+        from .tool_completion import render_operation_answer
     except ImportError:
         from run_journal import append_tool_step, append_answer_step, validate_answer_text_payload
-        from tool_completion import synthesize_terminal_answer_payload
+        from tool_completion import render_operation_answer
     event = task['input_required']
     selected = event['options'][event['choice']]
     target = event['device_id']
@@ -1562,7 +1542,7 @@ async def continue_window_input(task):
             task.update(status='unknown',worker_error_code='input_result_not_verified',
                         answer='Не могу подтвердить переключение выбранного окна. Повторять действие не буду.')
             return
-        payload = validate_answer_text_payload(synthesize_terminal_answer_payload(entry), journal)
+        payload = validate_answer_text_payload(render_operation_answer(entry), journal)
         append_answer_step(journal,'answer_text',payload,target_device_id=target)
         task.update(status='done' if result.get('status')=='success' and result.get('completion_state')=='success' else 'unknown',
                     answer=payload['text'], task_receipt=None)

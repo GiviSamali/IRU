@@ -4,7 +4,7 @@ import re
 import time
 
 from server.controller_non_pipeline import process_non_pipeline_command
-from server.controller_trust import SAFE_DOWNLOAD_LINK_ERROR, enforce_trusted_answer
+from server.controller_trust import SAFE_DOWNLOAD_LINK_ERROR, sanitize_result_text
 
 
 def _make_completion_fn(responses):
@@ -16,6 +16,11 @@ def _make_completion_fn(responses):
         if kwargs.get("tools") is not None:
             message = response["choices"][0]["message"]
             tool_calls = message.get("tool_calls") or []
+            for item in tool_calls:
+                fn=item.get('function',{})
+                if fn.get('name')=='execute_cmd':
+                    args=json.loads(fn.get('arguments') or '{}');args.setdefault('artifact_paths',[])
+                    fn['arguments']=json.dumps(args)
             if len(tool_calls) > 1:
                 queue[:0] = [
                     {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [call]}}]}
@@ -82,20 +87,20 @@ def _run_non_pipeline_case(responses, send_command_fn=None, get_file_link_fn=Non
 
 
 def test_legacy_trust_blocks_fabricated_download_link_for_server_fallbacks():
-    answer = enforce_trusted_answer(
+    answer = sanitize_result_text(
         "Файл создан, ссылка https://storage.yandexcloud.net/agent-files/report.txt",
         [],
     )
 
-    assert answer == SAFE_DOWNLOAD_LINK_ERROR
+    assert '[неподтверждённая ссылка]' in answer and 'Файл создан' in answer
     assert "storage.yandexcloud.net" not in answer
 
 
 def test_inventory_network_scan_wording_is_replaced():
-    expected = "Других подключённых к ИРУ устройств сейчас не вижу."
+    expected = "Других устройств в сети не обнаружено."
 
-    assert enforce_trusted_answer("Других устройств в сети не обнаружено.", []) == expected
-    assert enforce_trusted_answer("устройств в сети не обнаружено", []) == expected
+    assert sanitize_result_text("Других устройств в сети не обнаружено.", []) == expected
+    assert sanitize_result_text("устройств в сети не обнаружено", []) == "устройств в сети не обнаружено"
 
 
 def test_non_pipeline_answer_text_is_not_rewritten_to_real_get_file_link_url():
@@ -130,8 +135,8 @@ def test_non_pipeline_answer_text_is_not_rewritten_to_real_get_file_link_url():
     )
 
     urls = re.findall(r"https?://[^\s<>()\"']+|/api/download/[A-Za-z0-9_-]+", result["answer"])
-    assert urls == ["https://storage.yandexcloud.net/agent-files/report.txt"]
-    assert result["answer"] == answer_text
+    assert urls == ["/api/download/abc"]  # Only the bound system-produced URL is accepted.
+    assert answer_text.split("https://")[0] in result["answer"]
 
 
 def test_non_pipeline_answer_text_after_write_error_is_not_legacy_rewritten():

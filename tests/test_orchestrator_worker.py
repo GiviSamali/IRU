@@ -852,13 +852,13 @@ def test_p001_information_without_marker_preserves_verified_answer(owners):
 
 def test_p001_stdout_markers_and_model_flags_cannot_confirm_goal(owners):
     from server.command_confirmation import confirmed_command_outcome
-    from server.tool_completion import tool_result_terminal_sufficient
+    from test_tool_only_protocol import _goal_completed_without_requirements
     a, _ = owners
     for output in ('OK: effect_verified', 'WorkerDoIt', 'SUCCESS', 'DONE', 'NO: absent'):
         result = {'returncode': 0, 'stdout': output, 'terminal_sufficient': True}
         entry = {'tool_name': 'execute_cmd', 'step_id': 'step_1', 'status': 'success', 'result': result}
         assert confirmed_command_outcome(result) == 'success'  # Execution only.
-        assert not tool_result_terminal_sufficient(entry)
+        assert not _goal_completed_without_requirements(entry)
         t = task(a)
         t.update(status='done', answer='Всё выполнено.', commands=[entry,
             {'tool_name': 'answer.text', 'status': 'terminal', 'result': {
@@ -870,7 +870,8 @@ def test_p001_stdout_markers_and_model_flags_cannot_confirm_goal(owners):
 
 def test_p001_intermediate_write_keeps_artifact_without_confirming_whole_goal(owners):
     from server.run_journal import compact_write_content_result
-    from server.tool_completion import write_content_result_is_ok, tool_result_terminal_sufficient
+    from server.tool_completion import write_content_result_is_ok
+    from test_tool_only_protocol import _goal_completed_without_requirements
     a, _ = owners
     args = {'path': 'C:/Temp/grid.html', 'content': '<body style="background:black">'}
     missing = compact_write_content_result(args, {})
@@ -879,7 +880,7 @@ def test_p001_intermediate_write_keeps_artifact_without_confirming_whole_goal(ow
     result = compact_write_content_result(args, {'path': args['path'], 'bytes_written': 30})
     entry = {'tool_name': 'write_content', 'status': 'success', 'step_id': 'step_1',
         'device_id': 'pc', 'result': result}
-    assert write_content_result_is_ok(result) and not tool_result_terminal_sufficient(entry)
+    assert write_content_result_is_ok(result) and not _goal_completed_without_requirements(entry)
     t = task(a)
     t.update(status='done', commands=[entry], task_receipt={'task_status': 'completed', 'final_verification_status': 'verified'})
     report = build_worker_report(t)

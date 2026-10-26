@@ -45,63 +45,15 @@ const IRUSmartUI = (() => {
   function lastTerminal(commands) {
     return [...commands].reverse().find(command => key(command.status) === 'terminal' && key(command.tool_name || command.action).startsWith('answer'));
   }
-  function confirmedTerminal(commands) {
-    const terminal = lastTerminal(commands), result = terminal?.result || {}, check = result.self_check || {};
-    const basis = Array.isArray(result.basis) ? result.basis : [];
-    const before = commands.slice(0, commands.indexOf(terminal));
-    if (commands.slice(commands.indexOf(terminal) + 1).some(command => !key(command.tool_name || command.action).startsWith('answer'))) return false;
-    return key(result.answer_type) === 'grounded_report' && check.has_sufficient_evidence === true
-      && basis.length > 0 && basis.every(id => before.some(command => command.step_id === id))
-      && basis.some(id => before.some(command => command.step_id === id && commandState(command) === 'success'));
-  }
   function taskState(message, tasks, commands = []) {
-    const receipt = message.taskReceipt || message.task_receipt || {};
-    const report=message.workerReport || message.worker_report;
-    // WorkerReport is the server's validated outcome. Legacy step snapshots are
-    // details and cannot re-decide it in the presentation layer.
-    if (report?.schema_version === 1 && ['queued','waiting_dependency','running','waiting_confirmation','waiting_input','success','partial','blocked','failed','cancelled','unknown'].includes(report.status)) return normalizeStatus(report.status);
-    const explicit = [report?.status,message.taskStatus,message.task_status,receipt.task_status,message.overallStatus];
-    const states = explicit.map(normalizeStatus).filter(Boolean);
-    const finalConfirmed = normalizeStatus(receipt.task_status) === 'success'
-      && receipt.goal_completed !== false
-      && (receipt.goal_completed === true || receipt.final_verification_status === 'verified');
-    if (receipt.final_verification_status === 'failed') states.unshift('failed');
-    // An ordinary task's `done` can mean only that a terminal report was produced.
-    // Use its structured report type; never inspect answer prose or old failures.
-    if (!finalConfirmed && !tasks.length) {
-      const terminal = lastTerminal(commands), tool = key(terminal?.tool_name || terminal?.action), type = key(terminal?.result?.answer_type);
-      const outcome = Object.hasOwn(ANSWER_STATUS,tool) ? ANSWER_STATUS[tool] : Object.hasOwn(ANSWER_STATUS,type) ? ANSWER_STATUS[type] : null;
-      if (outcome) states.unshift(outcome);
-      if (!terminal) {
-        // These are existing terminal system failures, not historical action errors.
-        const guard = [...commands].reverse().find(command => ['tool_only_protocol','answer_auditor','budget_guard'].includes(key(command.tool_name || command.action)));
-        if (guard && ['failed','blocked'].includes(commandState(guard))) states.unshift(commandState(guard));
-      }
-    }
-    if (states.includes('cancelled')) return 'cancelled';
-    if (states.includes('failed')) return 'failed';
-    if (states.includes('blocked')) return 'blocked';
-    if (states.includes('partial')) return 'partial';
-    if (states.includes('unknown')) return 'unknown';
-    if (receipt.goal_completed === false) return 'partial';
-    if (report?.status === 'queued' || message.taskStatus === 'queued') return 'waiting';
-    if (message.cancelRequested || message.loading || states.includes('running')) return 'running';
-    if (message.confirmTaskId || message.planReview || states.includes('waiting')) return 'waiting';
-    if (finalConfirmed) return 'success';
-    // Runtime `done` is not sufficient to hide unfinished/failed nested tasks or steps.
-    // Only the existing, verified final receipt above can supersede stale recovered details.
-    const taskStates = list(tasks).flatMap(item => [
-      normalizeStatus(item.status) || 'unknown',
-      ...list(item.steps).map(step => normalizeStatus(step.status) || 'unknown'),
-    ]);
-    for (const status of ['cancelled', 'failed', 'blocked', 'partial', 'unknown', 'running', 'waiting']) {
-      if (taskStates.includes(status)) return status;
-    }
-    if (taskStates.length && taskStates.every(status => status === 'success')) return 'success';
-    if (confirmedTerminal(commands)) return 'success';
-    const outcomes = commands.filter(command => !key(command.tool_name || command.action).startsWith('answer')).map(commandState);
-    for (const status of ['failed','blocked','partial','unknown']) if (outcomes.includes(status)) return status;
-    return 'unknown'; // done or a successful intermediate call does not prove the whole goal
+    const report = message.workerReport || message.worker_report;
+    if (report?.schema_version === 1) return normalizeStatus(report.status) || 'unknown';
+    // Old history is normalized on the server. Browser prose/steps cannot
+    // establish completion when an authoritative report is unavailable.
+    const raw = normalizeStatus(message.taskStatus || message.task_status);
+    if (message.confirmTaskId || message.planReview) return 'waiting';
+    if (message.loading) return 'running';
+    return ['running','waiting','queued','waiting_confirmation','waiting_input','waiting_dependency','cancelled','failed','partial','blocked','unknown'].includes(raw) ? raw : 'unknown';
   }
 
   function filesFromCommands(commands) {
@@ -204,7 +156,7 @@ const IRUSmartUI = (() => {
     const conversationNegative = [m.taskStatus, (m.taskReceipt || m.task_receipt || {}).task_status, m.overallStatus].some(value => ['failed','blocked','partial','unknown','cancelled'].includes(normalizeStatus(value)));
     const pureConversation = !executionDetails && !m.loading && !m.confirmTaskId && !m.planReview && !conversationNegative && !tasks.length && !operations.length
       && (key(lastTerminal(commands)?.result?.answer_type) === 'pure_text' || (m.taskMode === 'conversation' && normalizeStatus(m.taskStatus) === 'success'));
-    const hasTask = !pureConversation && (tasks.length || operations.length || m.loading || m.taskStatus || m.taskReceipt || m.task_receipt || m.confirmTaskId || m.planReview || executionDetails);
+    const hasTask = !pureConversation && (m.workerReport || m.worker_report || tasks.length || operations.length || m.loading || m.taskStatus || m.taskReceipt || m.task_receipt || m.confirmTaskId || m.planReview || executionDetails);
     if (hasTask && !goalSummary) {
       const status = taskState(m, tasks, commands);
       const receipt = m.taskReceipt || m.task_receipt || {};
@@ -218,8 +170,9 @@ const IRUSmartUI = (() => {
         tasks, commands, executionDetails, loading:Boolean(m.loading), currentStatus:m.currentStatus,
         unknown: status === 'unknown' });
     }
-    const files=goal || isGoalMessage ? goalFiles : filesFromCommands(commands);
     const report=m.workerReport || m.worker_report;
+    const files=goal || isGoalMessage ? goalFiles : filesFromCommands(report?.schema_version===1
+      ? commands.filter(command=>['get_file_link','download_file'].includes(key(command.tool_name || command.action))) : commands);
     if(!goal && !isGoalMessage && report?.schema_version===1 && Array.isArray(report.artifacts) && Array.isArray(report.target_device_ids)) {
       for(const artifact of report.artifacts) {
         if(!artifact || artifact.verified!==true || !report.target_device_ids.includes(artifact.device_id))continue;

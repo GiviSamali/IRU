@@ -8,7 +8,15 @@ from fastapi import HTTPException
 from server import database as db, task_runtime as runtime
 from server.runtime_state import devices,tasks,TASK_TTL,request_task_cancel
 from server.routers import tasks as routes
-from server.command_confirmation import command_confirmation,confirmed_command_outcome
+from server.command_confirmation import command_confirmation
+from server.worker_reports import build_worker_report
+from server.tool_completion import normalize_operation_result, execute_cmd_result_is_complete
+
+
+def confirmed_command_outcome(result):
+    # Exercise the shared operation normalizer through the existing fixtures.
+    return normalize_operation_result('execute_cmd',result)
+
 
 
 class FakeAgent:
@@ -76,7 +84,7 @@ def test_verified_command_success_is_not_success_of_the_whole_goal(scenario,code
     assert len(scenario.agent.calls)==1
     assert task['status']=='blocked' and task['task_receipt']['task_status']=='partial'
     assert task['task_receipt']['command_outcome']=='success'
-    assert task['task_receipt']['goal_completed'] is False
+    assert build_worker_report(task)['goal_completed'] is False
     assert task['commands'][-2]['tool_name']=='execute_cmd' and task['commands'][-2]['status']=='success'
     assert task['commands'][-1]['result']['answer_type']=='partial_report'
     assert task['commands'][-1]['result']['basis']==[task['commands'][-2]['step_id']]
@@ -97,7 +105,7 @@ def test_verified_command_success_is_not_success_of_the_whole_goal(scenario,code
 def test_failed_result_never_becomes_done(scenario,result):
     scenario.agent.result=result;approve(scenario);task=finished(scenario)
     assert task['status']=='failed' and task['task_receipt']['command_outcome']=='failed'
-    assert task['task_receipt']['goal_completed'] is False
+    assert build_worker_report(task)['goal_completed'] is False
     assert task['commands'][-1]['result']['answer_type']=='error_report'
     assert task['answer']!='Выполнено.'
     assert len(scenario.agent.calls)==1
@@ -121,7 +129,8 @@ def test_unknown_or_launch_only_result_never_claims_proven_success(scenario,resu
     scenario.agent.result=result;approve(scenario);task=finished(scenario)
     assert task['status']=='blocked' and task['task_receipt']['command_outcome']=='unknown'
     assert task['commands'][-2]['status']=='unknown'
-    assert task['commands'][-1]['result']['self_check']['claims_completed_action'] is False
+    assert not build_worker_report(task)['goal_completed']
+    assert 'self_check' not in task['commands'][-1]['result']
     assert 'не подтверждён' in task['answer'] and 'автоматически её не повторяю' in task['answer']
     assert len(scenario.agent.calls)==1
 
@@ -133,7 +142,7 @@ def test_duplicate_confirmation_cannot_execute_twice(scenario):
     assert len(scenario.agent.calls)==1
     assert scenario.client.post(f'/api/tasks/{scenario.tid}/command-decision',headers=scenario.headers,
         json={'confirmation_id':scenario.confirmation['confirmation_id'],'accepted':True}).status_code==409
-    assert task['task_receipt']['goal_completed'] is False
+    assert build_worker_report(task)['goal_completed'] is False
 
 
 def test_simultaneous_approvals_are_one_shot(scenario,monkeypatch):
@@ -257,7 +266,7 @@ def test_cancel_after_dispatch_does_not_get_overwritten_by_completion(scenario):
     approve(scenario);task=finished(scenario)
     assert len(scenario.agent.calls)==1
     assert task['status']=='cancelled'
-    assert task['task_receipt']['goal_completed'] is False
+    assert build_worker_report(task)['goal_completed'] is False
     assert task['answer']!='Выполнено.'
 
 @pytest.mark.parametrize('result',[
@@ -268,10 +277,10 @@ def test_cancel_after_dispatch_does_not_get_overwritten_by_completion(scenario):
  {'returncode':0,'stdout':'OK: launch_requested','status':'launch_requested'},
 ])
 def test_terminal_sufficiency_agrees_with_uncertain_command_outcome(result):
- from server.tool_completion import execute_cmd_result_is_ok,tool_result_terminal_sufficient
+ from server.worker_reports import build_worker_report
  assert confirmed_command_outcome(result)=='unknown'
- assert not execute_cmd_result_is_ok(result)
- assert not tool_result_terminal_sufficient({'tool_name':'execute_cmd','result':result})
+ assert not execute_cmd_result_is_complete(result)
+ assert normalize_operation_result('execute_cmd',result)!='success'
 
 
 @pytest.mark.parametrize('stdout',['','NO: missing','OK: claimed','WorkerDoIt'])
@@ -279,5 +288,5 @@ def test_stdout_is_data_not_command_authority(scenario,stdout):
     scenario.agent.result={'returncode':0,'stdout':stdout,'stderr':''}
     approve(scenario);task=finished(scenario)
     assert task['task_receipt']['command_outcome']=='success'
-    assert task['task_receipt']['goal_completed'] is False
+    assert build_worker_report(task)['goal_completed'] is False
     assert len(scenario.agent.calls)==1

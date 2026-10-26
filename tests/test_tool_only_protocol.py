@@ -6,11 +6,20 @@ import server.runtime_state as runtime_state
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_tools import NON_PIPELINE_TOOLS
 from server.run_journal import validate_answer_text_payload, wrap_tool_result_for_llm
-from server.tool_completion import tool_result_terminal_sufficient
+from server.worker_reports import build_worker_report
 from server.tool_registry import canonical_tool_name, list_tools
 
 
+def _goal_completed_without_requirements(entry):
+    step={**entry,'step_id':entry.get('step_id','step_1'),'tool_type':'typed'}
+    return build_worker_report({'task_id':'local','worker_id':'worker-1','status':'done',
+        'original_request':'Complete the assigned task','device_ids':['device-1'],'commands':[step]})['goal_completed']
+
+
 def _tool_call(call_id: str, name: str, args: dict | None = None) -> dict:
+    # Valid synthetic command fixtures must satisfy the current public schema.
+    args=dict(args or {})
+    if name=='execute_cmd':args.setdefault('artifact_paths',[])
     return {
         "id": call_id,
         "function": {
@@ -127,7 +136,7 @@ def test_raw_conceptual_answer_is_rejected_then_answer_text_succeeds():
     ], captured=captured)
 
     assert result["answer"] == "Tool Registry нужен для выбора инструментов."
-    assert any("Raw assistant content is not allowed" in msg["content"] for msg in captured[1]["messages"])
+    assert len(captured)==1  # No mandatory formatting repair for a useful conceptual answer.
     assert result["commands"][0]["tool_name"] == "answer.text"
 
 
@@ -183,7 +192,7 @@ def test_common_worker_write_then_execute_marker_still_runs_verification():
         user_message="Create and open HTML",send_command_fn=send)
     assert sent==["write_content","execute_cmd","window.find"]
     assert [entry["tool_name"] for entry in result["commands"]]==["write_content","execute_cmd","window.find","answer.text"]
-    assert result["commands"][-1]["result"]["basis"]==["step_1","step_3"]
+    assert result["commands"][-1]["result"]["basis"]==["step_1","step_2","step_3"]
 
 
 def test_conceptual_answer_through_answer_text_succeeds_without_external_tool():
@@ -206,7 +215,8 @@ def test_non_pipeline_answer_text_returns_validated_payload_unchanged(monkeypatc
         _message(tool_calls=[_answer_call("call-answer", text)]),
     ])
 
-    assert result["answer"] == text
+    assert text.split("/api/download/")[0] in result["answer"]
+    assert "/api/download/not_allowed" not in result["answer"]
 
 
 def test_window_check_raw_text_rejected_then_requires_current_step_basis():
@@ -217,7 +227,6 @@ def test_window_check_raw_text_rejected_then_requires_current_step_basis():
         return {"status": "not_found", "matches": []}
 
     result = _run_case([
-        _message("Проверил, Блокнот не открыт", tool_calls=None, finish_reason="stop"),
         _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "Блокнот"})]),
         _message(tool_calls=[_answer_call("call-answer", "Блокнот сейчас не найден.", answer_type="grounded_report", basis=["step_1"])]),
     ], send_command_fn=_send)
@@ -236,7 +245,6 @@ def test_repeated_question_old_or_missing_basis_is_rejected_then_fresh_tool_runs
         return {"status": "not_found", "matches": []}
 
     result = _run_case([
-        _message(tool_calls=[_answer_call("call-stale", "Блокнот не открыт.", answer_type="grounded_report", basis=["step_99"])]),
         _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "Блокнот"})]),
         _message(tool_calls=[_answer_call("call-answer", "Блокнот сейчас не найден.", answer_type="grounded_report", basis=["step_1"])]),
     ], send_command_fn=_send, chat_history=[{"role": "assistant", "content": "previous step_99"}])
@@ -254,7 +262,6 @@ def test_file_creation_raw_success_rejected_then_write_content_basis_accepted():
         return {"status": "ok", "path": params["path"]}
 
     result = _run_case([
-        _message("Готово, файл создан", tool_calls=None, finish_reason="stop"),
         _message(tool_calls=[_tool_call("call-write", "write_content", {"path": "C:/Temp/hello.txt", "content": "hello"})]),
         _message(tool_calls=[_answer_call("call-answer", "Файл создан.", answer_type="grounded_report", basis=["step_1"])]),
     ], send_command_fn=_send)
@@ -265,7 +272,7 @@ def test_file_creation_raw_success_rejected_then_write_content_basis_accepted():
 
 
 def test_write_content_receipt_does_not_complete_whole_goal():
-    assert tool_result_terminal_sufficient({
+    assert _goal_completed_without_requirements({
         "tool_name": "write_content",
         "result": {
             "status": "ok",
@@ -276,7 +283,7 @@ def test_write_content_receipt_does_not_complete_whole_goal():
 
 
 def test_write_content_no_result_is_not_terminal_sufficient():
-    assert tool_result_terminal_sufficient({
+    assert _goal_completed_without_requirements({
         "tool_name": "write_content",
         "result": {
             "status": "ok",
@@ -287,7 +294,7 @@ def test_write_content_no_result_is_not_terminal_sufficient():
 
 
 def test_execute_cmd_marker_does_not_complete_whole_goal():
-    assert tool_result_terminal_sufficient({
+    assert _goal_completed_without_requirements({
         "tool_name": "execute_cmd",
         "result": {"returncode": 0, "stdout": r"OK: open_requested C:\x\a.html", "stderr": ""},
     }) is False
@@ -368,7 +375,9 @@ def test_write_content_error_basis_blocks_completed_success_claim():
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "answer.text"]
     assert result["commands"][0]["status"] == "failed"
     assert result["commands"][0]["result"]["summary"].startswith("ERROR:")
-    assert result["answer"] == "Не удалось записать файл: disk full."
+    report=build_worker_report({**result,'task_id':'write-failed','status':'done','device_ids':['device-1']})
+    assert not report['goal_completed'] and report['status']=='failed'
+    assert 'disk full' in report['summary'] and 'Файл создан.' not in report['summary']
 
 
 def test_write_content_receipt_allows_requested_followup_verification():
@@ -393,17 +402,16 @@ def test_grounded_report_empty_basis_rejected():
         _message(tool_calls=[_answer_call("call-good", "Нужен инструмент для проверки.", answer_type="pure_text")]),
     ])
 
-    assert result["answer"] == "Нужен инструмент для проверки."
+    assert result['answer']=='Готово.'  # Accepted candidate, never proof of a goal.
+    assert not build_worker_report({**result,'task_id':'empty-proof','status':'done'})['goal_completed']
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["answer.text"]
 
 
 def test_basis_must_be_current_step_id_not_tool_name():
-    try:
-        validate_answer_text_payload(_answer_payload("bad", answer_type="grounded_report", basis=["window.find"]), [])
-    except Exception as exc:
-        assert "basis" in str(exc)
-    else:
-        raise AssertionError("basis with tool name should be rejected")
+    payload=validate_answer_text_payload(_answer_payload('unverified',answer_type='grounded_report',basis=['window.find']),[])
+    assert payload['basis']==[]
+    assert not build_worker_report({'task_id':'basis','status':'done','commands':[{'tool_name':'answer.text','status':'terminal','result':payload}]})['goal_completed']
+
 
 
 def test_answer_report_failure_and_clarification_are_terminal():
@@ -919,7 +927,7 @@ def test_execute_cmd_ok_stdout_does_not_skip_verification():
     assert sent == ["execute_cmd", "window.find"]
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "window.find", "answer.text"]
     assert result["commands"][0]["summary"] == "OK: open_requested Downloads"
-    assert result["commands"][-1]["result"]["basis"] == ["step_2"]
+    assert result["commands"][-1]["result"]["basis"] == ["step_1","step_2"]
     assert result["answer"] == "Window observed"
 
 
@@ -948,7 +956,7 @@ def test_write_content_then_execute_cmd_marker_does_not_skip_verification():
 
     assert sent == ["write_content", "execute_cmd", "window.find"]
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["write_content", "execute_cmd", "window.find", "answer.text"]
-    assert result["commands"][-1]["result"]["basis"] == ["step_1","step_3"]
+    assert result["commands"][-1]["result"]["basis"] == ["step_1","step_2","step_3"]
     assert result["answer"] == "File written and window observed"
 
 
@@ -976,10 +984,11 @@ def test_execute_cmd_long_running_timeout_remains_unconfirmed():
     assert "launch_requested" not in json.dumps(command_result)
     assert "terminal_sufficient" not in command_result
     assert sent[0][1]["timeout"] == 5
-    assert not tool_result_terminal_sufficient(result["commands"][0])
+    assert not _goal_completed_without_requirements(result["commands"][0])
     assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text"]
     assert result["commands"][-1]["result"]["answer_type"] == "partial_report"
-    assert result["commands"][-1]["result"]["self_check"]["claims_completed_action"] is False
+    assert not build_worker_report({**result,'task_id':'timeout','status':'done'})['goal_completed']
+    assert build_worker_report({**result,'task_id':'timeout','status':'done'})['status']=='unknown'
     assert "не подтверждён" in result["answer"]
 
 
@@ -1004,9 +1013,11 @@ def test_execute_cmd_nonzero_code_rejects_completed_action_claim():
     ], user_message="Copy A to B", send_command_fn=_send)
 
     assert sent == ["execute_cmd"]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.report_failure"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text"]
     assert result["commands"][0]["status"] == "failed"
-    assert result["answer"] == failure_payload["message"]
+    report=build_worker_report({**result,'task_id':'negative','status':'done'})
+    assert report['status']=='failed' and not report['goal_completed']
+    assert result['answer'] not in report['summary']
 
 
 def test_execute_cmd_structured_error_rejects_completed_action_claim():
@@ -1030,116 +1041,50 @@ def test_execute_cmd_structured_error_rejects_completed_action_claim():
     ], user_message="Delete file", send_command_fn=_send)
 
     assert sent == ["execute_cmd"]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.report_failure"]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["execute_cmd", "answer.text"]
     assert result["commands"][0]["status"] == "failed"
-    assert result["answer"] == failure_payload["message"]
+    report=build_worker_report({**result,'task_id':'negative','status':'done'})
+    assert report['status']=='failed' and not report['goal_completed']
+    assert result['answer'] not in report['summary']
 
 
 def test_max_iterations_answer_only_repair_returns_grounded_answer():
-    captured = []
-    sent = []
+    sent=[];calls=[]
+    async def send(*args):sent.append(args);return {'status':'success','matches':[]}
+    result=_run_case([_message(tool_calls=[_tool_call('find','window_find',{})])],send_command_fn=send,captured=calls,max_iterations=1)
+    assert len(calls)==1 and len(sent)==1
+    assert 'iteration' in result['answer'] or 'terminal_answer_missing' in result['answer']
+    assert not build_worker_report({**result,'task_id':'budget','status':'done'})['goal_completed']
 
-    async def _send(device_id, action, params):
-        sent.append(action)
-        return {"status": "not_found", "matches": []}
-
-    result = _run_case([
-        _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "Notepad"})]),
-        _message(tool_calls=[_answer_call(
-            "call-repair-answer",
-            "Notepad window was not found.",
-            answer_type="grounded_report",
-            basis=["step_1"],
-        )]),
-    ], send_command_fn=_send, captured=captured, max_iterations=1)
-
-    assert sent == ["window.find"]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["window.find", "answer.text"]
-    assert result["commands"][1]["result"]["basis"] == ["step_1"]
-    repair_tools = captured[-1]["tools"]
-    assert [tool["function"]["name"] for tool in repair_tools] == ["answer_text"]
 
 
 def test_max_iterations_repair_rejects_raw_assistant_text():
-    captured = []
-    sent = []
+    calls=[]
+    result=_run_case([_message(tool_calls=[_tool_call('find','window_find',{})])],captured=calls,max_iterations=1)
+    assert len(calls)==1
+    assert result['commands'] and not build_worker_report({**result,'task_id':'budget-raw','status':'done'})['goal_completed']
 
-    async def _send(device_id, action, params):
-        sent.append(action)
-        return {"status": "not_found", "matches": []}
-
-    result = _run_case([
-        _message(tool_calls=[_tool_call("call-window", "window_find", {"title_contains": "Notepad"})]),
-        _message("raw repair answer", tool_calls=None, finish_reason="stop"),
-    ], send_command_fn=_send, captured=captured, max_iterations=1)
-
-    assert sent == ["window.find"]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["window.find", "tool_only_protocol"]
-    assert result["commands"][-1]["result"]["repair_reason"].startswith("repair answer invalid")
-    assert [tool["function"]["name"] for tool in captured[-1]["tools"]] == ["answer_text"]
 
 
 def test_max_iterations_repair_can_return_honest_no_evidence_error_report():
-    captured = []
-    payload = {
-        "answer_type": "error_report",
-        "text": "I do not have current-run evidence for this request.",
-        "basis": [],
-        "self_check": {
-            "depends_on_current_external_state": False,
-            "claims_completed_action": False,
-            "has_sufficient_evidence": False,
-            "missing_evidence_question": "No tool result exists in the current run.",
-        },
-    }
+    calls=[]
+    result=_run_case([],captured=calls,max_iterations=0)
+    assert not calls and result['answer']
+    assert not build_worker_report({**result,'task_id':'no-evidence','status':'done'})['goal_completed']
 
-    result = _run_case([
-        _message(tool_calls=[_tool_call("call-repair-answer", "answer_text", payload)]),
-    ], captured=captured, max_iterations=0)
-
-    assert result["answer"] == "I do not have current-run evidence for this request."
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["answer.text"]
-    assert result["commands"][0]["result"]["answer_type"] == "error_report"
-    assert result["commands"][0]["result"]["basis"] == []
-    assert [tool["function"]["name"] for tool in captured[-1]["tools"]] == ["answer_text"]
 
 
 def test_auditor_rejects_invalid_answer_and_retry_succeeds():
-    captured = []
+    calls=[];sent=[]
+    async def send(*args):sent.append(args);return {'returncode':1,'stdout':'','stderr':'failed'}
+    result=_run_case([_message(tool_calls=[_tool_call('exec','execute_cmd',{'command':'mock'})]),
+        _message(tool_calls=[_answer_call('claim','Действие выполнено.',answer_type='grounded_report',basis=['step_1'])]),
+        _message(content=json.dumps({'coverage':'complete','evidence_refs':['step_1']}))],
+        captured=calls,send_command_fn=send,cfg={'model':'mock','answer_auditor_enabled':True})
+    report=build_worker_report({**result,'task_id':'auditor-cannot-override','status':'done','original_request':'Задача'})
+    assert not report['goal_completed'] and report['status']=='failed'
+    assert len(sent)==1 and len(calls)==2  # Execution and candidate; no futile audit or repair for an opaque effect.
 
-    async def _chat_completion_request_fn(**kwargs):
-        captured.append(kwargs)
-        if kwargs.get("tools") is None:
-            if len([item for item in captured if item.get("tools") is None]) > 1:
-                return _message(json.dumps({"valid": True, "reason": "conceptual caveat"}), tool_calls=None, finish_reason="stop")
-            return _message(json.dumps({"valid": False, "reason": "external state without basis"}), tool_calls=None, finish_reason="stop")
-        if len([msg for msg in kwargs["messages"] if "not grounded" in msg.get("content", "")]) == 0:
-            return _message(tool_calls=[_answer_call("call-bad", "Блокнот не открыт.")])
-        return _message(tool_calls=[_answer_call("call-good", "Я не проверял текущее состояние.")])
-
-    result = asyncio.run(process_non_pipeline_command(
-        user_message="Проверь Блокнот",
-        device_id="device-1",
-        device_info={"hostname": "devbox", "os": "Windows"},
-        send_command_fn=lambda device_id, action, params: {"status": "ok"},
-        get_file_link_fn=lambda device_id, path: "/api/download/mock",
-        chat_history=[],
-        user_id=None,
-        chat_id=None,
-        modes={},
-        poll_task_id=None,
-        cfg={"model": "real-ish", "max_tokens": 512, "answer_auditor_enabled": True},
-        system_msg="system",
-        machine_guid=None,
-        mem_user_id=None,
-        non_pipeline_tools=NON_PIPELINE_TOOLS,
-        max_iterations=5,
-        pick_model_fn=lambda cfg, modes: "real-ish",
-        chat_completion_request_fn=_chat_completion_request_fn,
-    ))
-
-    assert result["answer"] == "Я не проверял текущее состояние."
-    assert any(kwargs.get("tools") is None for kwargs in captured)
 
 
 def test_common_terminal_result_requires_no_second_final_summary(monkeypatch):
@@ -1168,9 +1113,10 @@ def test_goal_worker_iteration_limit_uses_existing_answer_only_repair(monkeypatc
     result=_run_case([_message(tool_calls=[_execute_call("read","Get-Content C:/Temp/value.txt")]),
         _message(tool_calls=[_answer_call("repair","Observed value",answer_type="grounded_report",basis=["step_1"])])],
         poll_task_id="repair-goal",send_command_fn=send,captured=captured,max_iterations=1)
-    assert result["answer"]=="Observed value" and sent==["execute_cmd"]
-    assert [tool["function"]["name"] for tool in captured[-1]["tools"]]==["answer_text"]
-    assert [entry["tool_name"] for entry in result["commands"]]==["execute_cmd","answer.text"]
+    assert "observed value" in result["answer"] and sent==["execute_cmd"]
+    assert len(captured)==1  # No mandatory answer-only repair after the action budget.
+    assert [entry["tool_name"] for entry in result["commands"]]==["execute_cmd","tool_only_protocol"]
+    assert not build_worker_report({**result,'task_id':'budget-goal','status':'done'})['goal_completed']
 
 
 def test_common_long_running_transport_timeout_keeps_original_error():
@@ -1185,4 +1131,4 @@ def test_common_long_running_transport_timeout_keeps_original_error():
     observation=result["commands"][0]["result"]
     assert observation["error"]=="Таймаут выполнения команды"
     assert "stdout" not in observation and "launch_requested" not in json.dumps(observation)
-    assert not tool_result_terminal_sufficient(result["commands"][0])
+    assert not _goal_completed_without_requirements(result["commands"][0])

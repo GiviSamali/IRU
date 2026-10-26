@@ -52,38 +52,8 @@ def _infer_action(command_entry: dict) -> str | None:
     return None
 
 
-def _extract_error_text(result: dict) -> str:
-    if not isinstance(result, dict):
-        return "Неизвестная ошибка"
-
-    error = str(result.get("error") or "").strip()
-    if error:
-        return error
-
-    stderr = str(result.get("stderr") or "").strip()
-    if stderr:
-        return stderr
-
-    returncode = result.get("returncode")
-    if returncode not in (None, 0, "0"):
-        return f"код возврата {returncode}"
-
-    return "Неизвестная ошибка"
 
 
-def _is_failed_action(command_entry: dict) -> bool:
-    action = _infer_action(command_entry)
-    result = command_entry.get("result")
-    if not isinstance(result, dict):
-        return False
-
-    if action == "write_content":
-        return bool(result.get("error"))
-
-    if action == "execute_cmd":
-        return execute_cmd_result_is_negative(result)
-
-    return False
 
 
 def _allowed_download_urls(commands_log: list[dict]) -> list[str]:
@@ -141,18 +111,12 @@ def _sanitize_download_urls(answer: str, commands_log: list[dict]) -> str:
             sanitized = sanitized.replace(invalid_url, safe_url)
         return sanitized
 
-    return SAFE_DOWNLOAD_LINK_ERROR
+    sanitized=answer
+    for invalid_url in invalid_urls:
+        sanitized=sanitized.replace(invalid_url,'[неподтверждённая ссылка]')
+    return sanitized
 
 
-def _build_failure_answer(command_entry: dict) -> str:
-    action = _infer_action(command_entry)
-    error_text = _extract_error_text(command_entry.get("result") or {})
-
-    if action == "write_content":
-        return f"Не удалось записать файл: {error_text}"
-    if action == "execute_cmd":
-        return f"Команда завершилась с ошибкой: {error_text}"
-    return f"Действие завершилось с ошибкой: {error_text}"
 
 
 def _has_successful_memory_action(commands_log: list[dict], action_name: str) -> bool:
@@ -171,121 +135,20 @@ def _sanitize_memory_claims(answer: str, commands_log: list[dict]) -> str:
     if not has_remember_claim and not has_forget_claim:
         return answer
     if has_remember_claim and not _has_successful_memory_action(commands_log, "remember_fact"):
-        return "Я не менял память: для этого нужно подтверждённое действие памяти."
+        return _MEMORY_REMEMBER_CLAIM_RE.sub('[запись в память не подтверждена]',answer)
     if has_forget_claim and not _has_successful_memory_action(commands_log, "forget_fact"):
-        return "Я не менял память: для этого нужно подтверждённое действие памяти."
+        return _MEMORY_FORGET_CLAIM_RE.sub('[удаление из памяти не подтверждено]',answer)
     return answer
 
 
-def _sanitize_device_inventory_wording(answer: str) -> str:
-    lowered = (answer or "").lower()
-    for phrase in _DEVICE_INVENTORY_SCAN_PHRASES:
-        if phrase.lower() in lowered:
-            return _DEVICE_INVENTORY_CONNECTED_ONLY_ANSWER
-    return answer
 
 
-def has_validated_terminal_answer(answer: str, commands_log: list[dict]) -> bool:
-    """Bind raw presentation text to the existing validated terminal payload.
-
-    This checks identity/structure only; it never decides goal completion.
-    """
-    for index in range(len(commands_log) - 1, -1, -1):
-        entry = commands_log[index]
-        if entry.get("tool_name") != "answer.text" or entry.get("status") != "terminal":
-            continue
-        payload = entry.get("result")
-        if not isinstance(payload, dict) or payload.get("text") != answer:
-            return False
-        try:
-            try:
-                from .run_journal import validate_answer_text_payload
-            except ImportError:
-                from run_journal import validate_answer_text_payload
-            validate_answer_text_payload(payload, commands_log[:index])
-        except (ValueError, TypeError):
-            return False
-        return True
-    return False
+def accepted_result_text(answer, commands_log):
+    """Presentation identity only; no schema revalidation or goal decision."""
+    terminal = next((e for e in reversed(commands_log or []) if e.get('tool_name')=='answer.text' and e.get('status')=='terminal'),{})
+    return isinstance(terminal.get('result'),dict) and terminal['result'].get('text') == answer
 
 
-def has_grounded_terminal_answer(answer: str, commands_log: list[dict]) -> bool:
-    """Respect validated terminal evidence without masking later/other-device failures."""
-    for index in range(len(commands_log) - 1, -1, -1):
-        entry = commands_log[index]
-        if entry.get("tool_name") != "answer.text" or entry.get("status") != "terminal":
-            continue
-        payload = entry.get("result")
-        if not isinstance(payload, dict):
-            return False
-        if payload.get("answer_type") != "grounded_report" or payload.get("text") != answer:
-            return False
-        if any(_is_failed_action(item) for item in commands_log[index + 1:]):
-            return False
-        try:
-            try:
-                from .run_journal import validate_answer_text_payload
-            except ImportError:
-                from run_journal import validate_answer_text_payload
-            validate_answer_text_payload(payload, commands_log[:index])
-        except (ValueError, TypeError):
-            return False
-        basis = set(payload.get("basis") or [])
-        for failed_index, failed in enumerate(commands_log[:index]):
-            if not _is_failed_action(failed):
-                continue
-            target = failed.get("target_device_id") or failed.get("device_id")
-            result = failed.get("result") or {}
-            # A rejected extra call performed no action. Retain the earlier
-            # verified file write only when it is in this answer's basis and on
-            # the same device; the normal goal audit and basis checks still apply.
-            if result.get("status") == "validation_error" and result.get("dispatched") is False and target and any(
-                item.get("step_id") in basis and _infer_action(item) == "write_content"
-                and item.get("status") == "success"
-                and (item.get("target_device_id") or item.get("device_id")) == target
-                and isinstance(write := item.get("result"), dict) and not write.get("error")
-                and write.get("verified") is True and write.get("committed") is True and write.get("path")
-                and isinstance(write.get("file_sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", write["file_sha256"])
-                and write["file_sha256"] == write.get("content_sha256")
-                for item in commands_log[:failed_index]
-            ):
-                continue
-            if not target or not any(
-                item.get("step_id") in basis and not _is_failed_action(item)
-                and (item.get("target_device_id") or item.get("device_id")) == target
-                and item.get("status") in {"success", "ok"}
-                for item in commands_log[failed_index + 1:index]
-            ):
-                return False
-        return True
-    return False
-
-
-def enforce_trusted_answer(answer: str, commands_log: list[dict] | None) -> str:
-    commands_log = commands_log or []
-    safe_answer = _sanitize_download_urls(answer or "", commands_log)
-    if safe_answer == SAFE_DOWNLOAD_LINK_ERROR:
-        return safe_answer
-    safe_answer = _sanitize_memory_claims(safe_answer, commands_log)
-    safe_answer = _sanitize_device_inventory_wording(safe_answer)
-
-    if has_grounded_terminal_answer(answer, commands_log):
-        return safe_answer
-
-    failed_actions = [entry for entry in commands_log if _is_failed_action(entry)]
-    if not failed_actions:
-        return safe_answer
-
-    # Honest negative terminals may describe a verified subset and a failure.
-    # Their typed outcome is incomplete; a bare completion claim still fails.
-    if has_validated_terminal_answer(answer, commands_log):
-        terminal=next((c for c in reversed(commands_log) if c.get("tool_name")=="answer.text" and c.get("status")=="terminal"), {})
-        payload=terminal.get("result") or {}
-        if payload.get("answer_type") in {"partial_report","error_report","failure"} and (payload.get("self_check") or {}).get("has_sufficient_evidence") is False:
-            if not _SUCCESS_CLAIM_RE.search(safe_answer) or _ERROR_TEXT_RE.search(safe_answer):
-                return safe_answer
-
-    if _SUCCESS_CLAIM_RE.search(safe_answer) or not _ERROR_TEXT_RE.search(safe_answer):
-        return _build_failure_answer(failed_actions[0])
-
-    return safe_answer
+def sanitize_result_text(answer, journal):
+    """Content authenticity, without deciding or replacing execution outcomes."""
+    return _sanitize_memory_claims(_sanitize_download_urls(answer, journal), journal)

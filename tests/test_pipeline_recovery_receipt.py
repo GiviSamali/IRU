@@ -8,7 +8,7 @@ from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_tools import NON_PIPELINE_TOOLS
 from server.controller_shared import build_recent_artifact_context, format_recent_artifact_context_block
 from server.worker_reports import build_worker_report
-from server.tool_completion import tool_result_terminal_sufficient
+from test_tool_only_protocol import _goal_completed_without_requirements
 
 
 def _execute_call(call_id: str, command: str) -> dict:
@@ -142,7 +142,7 @@ def test_recent_file_context_preserves_exact_paths_without_promoting_past_eviden
 def test_printed_markers_are_not_whole_goal_verification(stdout):
     entry={"tool_name":"execute_cmd","step_id":"step_1","status":"success",
         "result":{"returncode":0,"stdout":stdout,"stderr":""}}
-    assert not tool_result_terminal_sufficient(entry)
+    assert not _goal_completed_without_requirements(entry)
     report=build_worker_report({"task_id":"printed-marker","message":"Create and verify documents",
         "status":"done","commands":[entry],"task_receipt":{"task_status":"completed",
             "final_verification_status":"verified","goal_completed":True}})

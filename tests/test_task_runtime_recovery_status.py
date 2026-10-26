@@ -46,7 +46,7 @@ def test_common_receipt_recovery_status_is_preserved_at_runtime_boundary(monkeyp
     monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id, **kw: None)
     monkeypatch.setattr(task_runtime, "add_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(task_runtime, "add_training_record", lambda *args, **kwargs: None)
-    monkeypatch.setattr(task_runtime, "enforce_trusted_answer", lambda answer, commands: answer)
+    monkeypatch.setattr(task_runtime, "sanitize_result_text", lambda answer, commands: answer)
 
     try:
         asyncio.run(task_runtime.run_nl_task(task_id, 1, "create files", [full_device_id], 1))
@@ -100,13 +100,15 @@ def test_runtime_preserves_grounded_markdown_before_report(monkeypatch):
     monkeypatch.setattr(task_runtime, "get_device_profile", lambda device_id, **kw: None)
     monkeypatch.setattr(task_runtime, "add_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(task_runtime, "add_training_record", lambda *args, **kwargs: None)
-    monkeypatch.setattr(task_runtime, "enforce_trusted_answer", lambda answer, commands: answer)
+    monkeypatch.setattr(task_runtime, "sanitize_result_text", lambda answer, commands: answer)
 
     try:
         asyncio.run(task_runtime.run_nl_task(task_id, 1, "create files", [full_device_id], 1))
 
         assert task_runtime.tasks[task_id]["answer"] == "**Observed:** IRU"
-        assert task_runtime.has_grounded_terminal_answer(task_runtime.tasks[task_id]["answer"],task_runtime.tasks[task_id]["commands"])
+        from server.worker_reports import build_worker_report
+        report=build_worker_report({**task_runtime.tasks[task_id],'status':'done'})
+        assert not report['goal_completed']  # Markdown and self_check never certify a missing file.
     finally:
         task_runtime.tasks.pop(task_id, None)
         task_runtime.devices.pop(full_device_id, None)

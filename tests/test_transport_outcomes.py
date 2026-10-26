@@ -195,5 +195,8 @@ def test_plan_worker_can_observe_after_unknown_without_dispatching_mutations(ini
     assert result['commands'][1]['result']['error'] == 'mutation_blocked_after_unknown'
     assert result['commands'][2]['result']['files'] == []
     assert result['commands'][-1]['result']['answer_type'] == 'partial_report'
-    assert result['task_receipt']['task_status'] == 'unknown'
-    assert result['task_receipt']['goal_completed'] is False
+    from server.worker_reports import build_worker_report
+    report = build_worker_report({'task_id':'local-unknown','status':'done',
+        'device_ids':['pc'],'commands':result['commands'],'answer':result['answer']})
+    assert report['status'] == 'unknown'
+    assert report['goal_completed'] is False

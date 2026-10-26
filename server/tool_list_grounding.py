@@ -33,12 +33,12 @@ def _format_tool_list(result: dict[str, Any]) -> str:
 
 
 def sanitize_system_list_tools_answer(answer_payload: dict[str, Any], journal: list[dict[str, Any]]) -> dict[str, Any]:
-    basis = set(answer_payload.get("basis") or [])
-    if not basis:
+    # This is authenticity of an inventory result, not a model-selected basis.
+    actual = [e for e in journal if canonical_tool_name(str(e.get('tool_name') or e.get('action') or ''))=='system.list_tools'
+              or e.get('tool_type') not in {'system','answer'}]
+    if not actual or canonical_tool_name(str(actual[-1].get('tool_name') or actual[-1].get('action') or ''))!='system.list_tools':
         return answer_payload
-    for entry in journal:
-        if entry.get("step_id") not in basis:
-            continue
+    for entry in reversed(actual):
         if canonical_tool_name(str(entry.get("tool_name") or entry.get("action") or "")) != "system.list_tools":
             continue
         result = entry.get("result")

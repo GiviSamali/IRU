@@ -30,7 +30,7 @@ def terminal(text, count=1, kind='grounded_report', action=False, sufficient=Tru
 
 
 def shell(command, stdout, code=0):
-    return ('execute_cmd',{'command':command},{'returncode':code,'stdout':stdout,'stderr':''})
+    return ('execute_cmd',{'command':command,'artifact_paths':[]},{'returncode':code,'stdout':stdout,'stderr':''})
 
 
 INFO = {
@@ -133,8 +133,10 @@ def install(world,steps,answer,number):
     audits=[]
     async def auditor(**kw):
         audits.append(kw['answer_payload']['text'])
-        return (kw['answer_payload']['text']!='Я создала файл.','unsupported creation' if kw['answer_payload']['text']=='Я создала файл.' else '',False)
-    monkeypatch.setattr(controller,'audit_answer_payload',auditor)
+        from server.worker_reports import coverage_binding
+        return {'coverage':'complete','evidence_refs':[e['step_id'] for e in kw['current_run_journal']],
+            'binding':coverage_binding(kw['user_request'],kw['current_run_journal'],kw['answer_payload']['text'])}
+    monkeypatch.setattr(controller,'assess_result_coverage',auditor)
     async def process(**kw):
         complete=_completion_fn(copy.deepcopy(responses))
         return await controller.process_non_pipeline_command(
@@ -148,14 +150,14 @@ def install(world,steps,answer,number):
     return device,audits
 
 
-async def admit(world,scheduler,goal,tid, *, execution_scope="general", window_effects=()):
+async def admit(world,scheduler,goal,tid, *, execution_scope="general", window_effects=(), assigned_artifacts=()):
     client,owner,key,monkeypatch=world
     async def decide(*a,**kw):return orch.Decision(intent='delegate',objective=goal,scope='device',target_device_ids=['pc'],execution_mode='simple',execution_scope=execution_scope,window_effects=list(window_effects)),{}
     monkeypatch.setattr(orch,'decide',decide)
     async def delegate(choice,**kw):
         assert choice.objective==goal
         return await scheduler.submit({'task_id':tid,'user_id':owner['id'],'chat_id':owner['chat_id'],
-            'message':goal,'original_request':goal,'device_ids':[key],'modes':{},'kind':'worker',
+            'message':goal,'original_request':goal,'assigned_artifacts':list(assigned_artifacts),'device_ids':[key],'modes':{},'kind':'worker',
             'orchestrated':True,'orchestrator_execution_mode':'simple','execution_scope':execution_scope,'window_effects':list(window_effects),'created_at':time.time(),'status':'running','results':{}},**kw)
     cmd=SimpleNamespace(message=goal,request_id=tid+'-turn',device_id='pc',modes={},broadcast=False)
     reply=await orch.run_turn(cmd,owner,owner['chat_id'],delegate)

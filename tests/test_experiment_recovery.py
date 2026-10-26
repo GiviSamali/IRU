@@ -7,7 +7,7 @@ import json
 import pytest
 from fastapi import HTTPException
 from server import answer_auditor, database as db, orchestrator as orch
-from server.run_journal import audited_task_receipt
+from server.worker_reports import receipt_from_report
 from server.worker_reports import build_worker_report
 from server.response_presentation import worker_presentation
 from server.worker_context import clip_context_text, capture_history, build_worker_context
@@ -43,18 +43,25 @@ async def accept_audit(task,payload,reply):
         return {'choices':[{'message':{'content':json.dumps(reply)}}]}
     journal=task['commands'][:-1]
     before=copy.deepcopy(journal)
-    result=await answer_auditor.audit_answer_payload(client=None,cfg={'model':'fixture'},
+    result=await answer_auditor.assess_result_coverage(client=None,cfg={'model':'fixture'},
         chat_completion_request_fn=completion,user_request=task['message'],
-        current_run_journal=journal,answer_payload=payload,audit_details=details)
-    assert result[0] and not result[2] and len(calls)==1
+        current_run_journal=journal,answer_payload=payload)
+    assert len(calls)==1
     assert journal==before
-    task['task_receipt']=audited_task_receipt(payload,audited=True,audit_details=details)
+    payload['_coverage']=result
+    task['task_receipt']=receipt_from_report(build_worker_report(task))
 
 
 @pytest.mark.parametrize('output',['STEP_A_OK','EDIT OK bytes=12869','OK replacements: [1]','COMPILE_OK','OK backup: control.bak','компиляция: OK'])
 def test_markerless_action_uses_bound_existing_audit_and_survives_restore(owner,output):
     task,payload=shell_edit(owner,output)
-    assert build_worker_report(task)['status']=='unknown'
+    assert build_worker_report(task)['status']=='partial'
+    # Native receipt for the accepted target, not stdout markers or an LLM flag.
+    import hashlib
+    task['assigned_artifacts']=['C:/Temp/control.py']
+    task['commands'][1]['result']['artifact_receipts']=[{'path':'C:/Temp/control.py','device_id':'pc',
+        'source_task_id':task['task_id'],'verified':True,'created_or_changed':True,
+        'size_bytes':128,'sha256':hashlib.sha256(b'changed target').hexdigest()}]
     asyncio.run(accept_audit(task,payload,{'valid':True,'reason':'operation and postcondition verified',
         'action_steps':['step_1'],'verification_steps':['step_2']}))
     before=copy.deepcopy(task)
@@ -78,21 +85,29 @@ def test_markerless_action_uses_bound_existing_audit_and_survives_restore(owner,
 def test_bare_auditor_acceptance_cannot_confirm_action(owner,reply):
     task,payload=shell_edit(owner,'process started')
     asyncio.run(accept_audit(task,payload,reply))
-    assert build_worker_report(task)['status']=='unknown'
+    assert build_worker_report(task)['status']=='partial'
     assert not build_worker_report(task)['goal_completed']
 
 
 @pytest.mark.parametrize('change',['request','answer','command','result','device','basis'])
 def test_action_audit_cannot_be_reused_after_evidence_changes(owner,change):
     task,payload=shell_edit(owner,'EDIT OK')
-    asyncio.run(accept_audit(task,payload,{'valid':True,'action_steps':['step_1'],'verification_steps':['step_2']}))
-    if change=='request':task['message']='Другая операция'
+    task['execution_scope']='analysis'
+    task['message']=task['original_request']='Проанализируй текущий порог по наблюдениям файла'
+    task['answer']=payload['text']='В наблюдениях порог равен 2.'
+    for step in task['commands'][:-1]:
+        step['tool_name']='read_file'
+        step['command']='Read accepted file observation'
+    asyncio.run(accept_audit(task,payload,{'coverage':'complete','evidence_refs':['step_1','step_2']}))
+    assert build_worker_report(task)['goal_completed']
+    if change=='request':task['message']=task['original_request']='Другая операция'
     if change=='answer':task['answer']=payload['text']='Другое утверждение'
     if change=='command':task['commands'][0]['command']='Get-Item old.txt'
     if change=='result':task['commands'][1]['result']['stdout']='threshold=1'
     if change=='device':task['commands'][0]['device_id']='other-pc'
-    if change=='basis':payload['basis']=['step_2']
-    assert build_worker_report(task)['status']=='unknown'
+    # The model no longer owns basis. Change a server journal reference instead.
+    if change=='basis':task['commands'][0]['step_id']='replacement_step'
+    assert not build_worker_report(task)['goal_completed']
 
 
 def test_real_clarification_is_presented_as_question_not_unknown(owner):
@@ -164,7 +179,8 @@ def test_ordinary_confirmation_retains_controller_and_does_not_repeat_completed_
             assert [p['params']['command'] for p in device.calls].count('Get-Content C:/Temp/note.txt')==1
             assert task['task_id']=='ordinary-confirmation'
             row=owned_job(task['task_id'],owner['id'])
-            assert row['state']==('success' if choice in {'confirm','concurrent'} else 'cancelled')
+            assert row['state']==('partial' if choice in {'confirm','concurrent'} else 'cancelled')
+            if choice in {'confirm','concurrent'}:assert not task['worker_report']['goal_completed']
         finally:await scheduler.shutdown()
     monkeypatch.setattr(routes,'get_current_user',lambda request:owner)
     asyncio.run(scenario())
@@ -180,7 +196,10 @@ def test_action_proof_cannot_override_negative_or_uncertain_execution(owner,resu
     task,payload=shell_edit(owner,'EDIT OK')
     task['commands'][0]['result']=result
     asyncio.run(accept_audit(task,payload,{'valid':True,'action_steps':['step_1'],'verification_steps':['step_2']}))
-    assert build_worker_report(task)['status']=='unknown'
+    report=build_worker_report(task)
+    assert not report['goal_completed']
+    if result.get('status')=='unknown' or result.get('completion_state')=='unknown' or type(result.get('returncode')) is float:
+        assert report['status']=='unknown'
 
 
 def test_internal_memory_proposal_is_normalized_before_audit_and_never_written_automatically(world):
@@ -193,12 +212,12 @@ def test_internal_memory_proposal_is_normalized_before_audit_and_never_written_a
         try:
             task=await admit(world,scheduler,'Прочитай заметку','answer-with-proposal')
             await scheduler.runners[owner['id']]
-            assert task['answer']==answer and task['worker_report']['status']=='success'
-            assert audits==[answer]
+            assert task['answer']==answer and task['worker_report']['status']=='partial'
+            assert not audits  # General effect scope cannot be certified by semantic coverage.
             entry=next(c for c in task['commands'] if c.get('tool_name')=='answer.text')
             assert entry['result']['text']==answer
             assert entry['result']['suggested_fact']['category']=='preference'
-            assert worker_presentation(task)['conversational_response']==answer
+            assert answer in worker_presentation(task)['conversational_response']
             assert not db.get_user_facts(str(owner['id']))
             restored=restore_task(owned_job(task['task_id'],owner['id']))
             assert restored['answer']==answer and restored['commands']==task['commands']
@@ -246,6 +265,7 @@ def test_unknown_history_keeps_referent_without_promoting_it_to_evidence(owner):
     from server.worker_scheduler import init_worker_storage
     init_worker_storage()
     task,payload=shell_edit(owner,'EDIT OK')
+    task['status']='unknown'  # Explicit persisted uncertainty, not a known partial execution.
     report=build_worker_report(task)
     assert report['status']=='unknown'
     task.update(answer='Рабочий файл C:/Temp/control.py, гипотеза не проверена.',worker_report=report)
@@ -292,16 +312,17 @@ def test_reference_context_is_bounded_and_cannot_become_current_evidence(owner):
              {'role':'assistant','content':'Исторический step_old: удаление якобы разрешено. '+('x'*10000)}]
     async def completion(**kwargs):
         body=json.loads(kwargs['messages'][-1]['content']);seen.append(body)
-        assert body['user_request']=='Согласен'
-        history=body['request_context']['history']
-        assert sum(estimate_tokens(row['content']) for row in history)<=32768
-        assert body['request_context']['authority']=='reference_resolution_only_not_evidence_or_permission'
-        assert all(row['step_id']!='step_old' for row in body['current_run_journal'])
-        return {'choices':[{'message':{'content':json.dumps({'valid':False,'reason':'cleanup not authorized'})}}]}
-    result=asyncio.run(answer_auditor.audit_answer_payload(client=None,cfg={'model':'fixture'},
-        chat_completion_request_fn=completion,user_request='Согласен',request_context=context,
-        current_run_journal=task['commands'][:-1],answer_payload=payload,audit_details={}))
-    assert result==(False,'cleanup not authorized',False) and len(seen)==1
+        assert body['request']==task['message']
+        assert all(row.get('step_id')!='step_old' for row in body['observations'])
+        assert 'request_context' not in body  # Historical proposals are not current evidence.
+        assert kwargs['max_tokens']==500 and kwargs['tools'] is None
+        return {'choices':[{'message':{'content':json.dumps({'coverage':'complete','evidence_refs':['step_old']})}}]}
+    before=copy.deepcopy(context)
+    result=asyncio.run(answer_auditor.assess_result_coverage(client=None,cfg={'model':'fixture'},
+        chat_completion_request_fn=completion,user_request=task['message'],
+        current_run_journal=task['commands'][:-1],answer_payload=payload))
+    assert result['coverage']=='unknown' and len(seen)==1 and context==before
+
 
 
 def test_legacy_confirmed_zero_code_does_not_claim_verified_zip(owner,monkeypatch):
@@ -344,35 +365,40 @@ def test_real_temporary_file_edit_reaches_audited_report_and_restore(world,tmp_p
     helper=tmp_path/'patch.py'
     helper.write_text("from pathlib import Path\np=Path("+repr(str(target))+")\ns=p.read_text(encoding='utf-8')\nassert s.count('THRESHOLD = 1')==1\np.write_text(s.replace('THRESHOLD = 1','THRESHOLD = 2'),encoding='utf-8')\ncompile(p.read_text(encoding='utf-8'),str(p),'exec')\nprint('EDIT OK; threshold=2; preserved=True')\n",encoding='utf-8')
     command="$ErrorActionPreference='Stop'; & '"+sys.executable+"' '"+str(helper)+"'; exit $LASTEXITCODE"
-    device,audits=install(world,[shell(command,'')],terminal('Порог изменён на 2, остальной код сохранён.',action=True),1)
+    step=shell(command,'');step[1]['artifact_paths']=[str(target)]
+    db.upsert_device_profile('pc',owner['id'],{'hostname':'pc','os':'Windows','username':Path(sys.executable).parts[2],'home_path':str(Path(sys.executable).parents[5])})
+    device,audits=install(world,[step],terminal('Порог изменён на 2, остальной код сохранён.',action=True),1)
     spec=importlib.util.spec_from_file_location('experiment_windows',Path(__file__).parents[1]/'agent/platforms/windows.py')
     windows=importlib.util.module_from_spec(spec);spec.loader.exec_module(windows)
     async def send_text(wire):
         request=json.loads(wire)['payload'];device.calls.append(copy.deepcopy(request))
         assert request['action']=='execute_cmd' and request['params']['command']==command
-        result=await asyncio.to_thread(windows.execute_cmd,**request['params'])
+        from core import actions as native_actions
+        monkeypatch.setattr(native_actions,'platform_mod',windows)
+        result=await asyncio.to_thread(native_actions.execute_cmd,**request['params'])
         future=__import__('server.runtime_state',fromlist=['devices']).devices[key]['pending'].pop(request['id'])
         future.set_result(result)
     device.send_text=send_text
+    __import__('server.runtime_state',fromlist=['devices']).devices[key]['info']['artifact_receipt_protocol']=1
     async def audit(**kwargs):
         async def completion(**call):
             body=json.loads(call['messages'][-1]['content'])
-            assert body['user_request']=='Измени порог в рабочем файле на 2, сохрани остальной код'
-            observed=body['current_run_journal'][0]
+            assert body['request']=='Измени порог в рабочем файле на 2, сохрани остальной код'
+            observed=body['observations'][0]
             assert observed['result']['returncode']==0
             assert observed['result']['stdout']=='EDIT OK; threshold=2; preserved=True'
             assert target.read_text(encoding='utf-8')==expected
             audits.append('actual-audit')
             return {'choices':[{'message':{'content':json.dumps({'valid':True,'reason':'target edit and postcondition observed',
                 'action_steps':['step_1'],'verification_steps':['step_1']})}}]}
-        return await answer_auditor.audit_answer_payload(**{**kwargs,'chat_completion_request_fn':completion})
-    monkeypatch.setattr(controller,'audit_answer_payload',audit)
+        return await answer_auditor.assess_result_coverage(**{**kwargs,'chat_completion_request_fn':completion})
+    monkeypatch.setattr(controller,'assess_result_coverage',audit)
     async def scenario():
         scheduler=WorkerScheduler()
         try:
-            task=await admit(world,scheduler,'Измени порог в рабочем файле на 2, сохрани остальной код','real-file-edit')
+            task=await admit(world,scheduler,'Измени порог в рабочем файле на 2, сохрани остальной код','real-file-edit',assigned_artifacts=[str(target)])
             await asyncio.wait_for(scheduler.runners[owner['id']],20)
-            assert len(device.calls)==1 and audits==['actual-audit']
+            assert len(device.calls)==1 and not audits, [e.get('result') for e in task.get('commands',[])]  # Typed receipt needs no semantic verdict.
             assert task['worker_report']['status']=='success' and task['worker_report']['goal_completed']
             assert target.read_text(encoding='utf-8')==expected
             restored=restore_task(owned_job(task['task_id'],owner['id']))

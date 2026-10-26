@@ -8,7 +8,7 @@ import pytest
 from server import database as db, task_runtime as runtime
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_tools import NON_PIPELINE_TOOLS
-from server.controller_trust import has_grounded_terminal_answer
+from server.worker_reports import build_worker_report
 from server.worker_scheduler import WorkerScheduler, owned_job
 from test_orchestrator_worker import owners, task
 
@@ -27,7 +27,8 @@ def test_schema_rejection_exception_cannot_hide_other_device_or_later_failure(va
         'self_check': {'depends_on_current_external_state': True, 'claims_completed_action': True,
                        'has_sufficient_evidence': True, 'missing_evidence_question': ''}}}
     journal = [write, rejected, terminal] if variant == 'other_device' else [write, terminal, rejected]
-    assert has_grounded_terminal_answer('File created.', journal) is False
+    assert not build_worker_report({'task_id':'local','worker_id':'worker-1','status':'done',
+        'device_ids':['pc','other'],'commands':journal,'answer':'File created.'})['goal_completed']
 
 
 @pytest.mark.parametrize('case', [
@@ -60,7 +61,7 @@ def test_file_result_acceptance_through_runtime_report_and_history(owners, tmp_p
                     'committed': True, 'append': False}
         assert action == 'execute_cmd' and case in {'execution_error', 'unknown', 'pre_dispatch_denial'}
         if case == 'unknown':
-            return {'status': 'unknown', 'error': 'confirmed_transport_outcome_unknown', 'dispatched': False}
+            return {'status': 'unknown', 'error': 'confirmed_transport_outcome_unknown', 'dispatched': True}
         if case == 'pre_dispatch_denial':
             return {'status': 'blocked', 'error': 'policy_denied', 'dispatched': False}
         return {'returncode': 1, 'stdout': '', 'stderr': 'actual execution failed'}
@@ -113,6 +114,7 @@ def test_file_result_acceptance_through_runtime_report_and_history(owners, tmp_p
         try:
             template = task(owner, request)
             template['results'] = {}
+            template['assigned_artifacts']=[str(path)]
             job = await scheduler.submit(template, request_key='file-acceptance')
             await scheduler.runners[owner['id']]
             saved = owned_job(job['task_id'], owner['id'])
@@ -122,14 +124,14 @@ def test_file_result_acceptance_through_runtime_report_and_history(owners, tmp_p
                                     (saved['message_id'],)).fetchone()
             metadata = json.loads(message['task_metadata'])
             assert metadata['workerReport'] == report
-            if case == 'schema_rejection':
+            if case in {'schema_rejection','auditor_rejects','pre_dispatch_denial','execution_error'}:
                 assert path.read_text(encoding='utf-8') == content
-                assert sent == ['write_content'] and audits
+                assert sent == (['write_content','execute_cmd'] if case in {'pre_dispatch_denial','execution_error'} else ['write_content']) and not audits
                 assert report['status'] == 'success' and report['goal_completed'] is True
                 rejected = job['commands'][1]['result']
-                assert rejected['status'] == 'validation_error' and rejected['dispatched'] is False
-                assert job['task_receipt']['answer_source'] == 'audited_terminal'
-                assert job['task_receipt']['action_evidence']
+                if case in {'schema_rejection','auditor_rejects'}:assert rejected['status'] == 'validation_error' and rejected['dispatched'] is False
+                assert job['task_receipt']['answer_source'] == 'worker_report'
+                assert job['commands'][0]['result']['verified'] and job['commands'][0]['result']['committed']
                 assert job['answer'] == message['content'] == answer
                 assert report['artifacts'][0]['sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
             else:

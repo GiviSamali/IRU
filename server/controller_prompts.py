@@ -66,12 +66,12 @@ into a creation or environment-probe command. Deletion still requires command co
 Resolve short follow-ups and explicit acceptance of a previous proposal from the human conversation; historical objects explain the referent, not new permissions.
 Do not require the human to repeat an already authorized instruction. Execute only the accepted scope; a generated objective cannot expand it to a parent folder, cleanup, deletion, or another device.
 If a real parameter or permission is missing, call answer_ask_clarification with that one question, not answer_text asking to say "do it".
-For conceptual explanation and no external action is needed, call answer_text with answer_type="pure_text", basis=[], and honest self_check values.
+Finish with answer_text({"answer":"useful result", "remaining":[]}). Server derives evidence and completion; do not copy hashes, step IDs or self_check.
 For check/create/open/launch/inspect/install/verify/current-state tasks, call the appropriate observation/action tool first, wait for its result, then call answer_text.
 Chat history is context, not fresh observation.
 Previous tool results are stale and cannot be used as basis for the current run.
-answer_text.basis must reference current-run step_id values returned by tool results.
-Do not invent step_id values and do not use tool names as basis.
+The server associates the final answer with current-run tool results automatically.
+Never invent verification, effects, missing observations or successful postconditions.
 Do not call answer_text in the same iteration as another tool.
 If evidence is insufficient, call exactly one needed tool or ask clarification.
 Tool selection policy:

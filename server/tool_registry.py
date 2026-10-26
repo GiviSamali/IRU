@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 try:
-    from .tool_completion import execute_cmd_result_is_negative, execute_cmd_outcome_marker
+    from .tool_completion import execute_cmd_result_is_negative, execute_cmd_outcome_marker, operation_step_status
 except ImportError:
-    from tool_completion import execute_cmd_result_is_negative, execute_cmd_outcome_marker  # type: ignore
+    from tool_completion import execute_cmd_result_is_negative, execute_cmd_outcome_marker, operation_step_status  # type: ignore
 
 try:
     from .device_context import build_minimal_llm_context
@@ -977,37 +977,12 @@ DEVICE_TOOL_SCHEMAS = [
     },
     {
         "type": "function",
-        "function": {
-            "name": "answer_text",
-            "description": "Terminal user-facing answer. Use for conceptual text or grounded reports after current-run tool results. Server-side only.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "answer_type": {
-                        "type": "string",
-                        "enum": ["pure_text", "grounded_report", "partial_report", "error_report", "clarification", "failure"],
-                    },
-                    "text": {"type": "string"},
-                    "basis": {"type": "array", "items": {"type": "string"}},
-                    "self_check": {
-                        "type": "object",
-                        "properties": {
-                            "depends_on_current_external_state": {"type": "boolean"},
-                            "claims_completed_action": {"type": "boolean"},
-                            "has_sufficient_evidence": {"type": "boolean"},
-                            "missing_evidence_question": {"type": "string"},
-                        },
-                        "required": [
-                            "depends_on_current_external_state",
-                            "claims_completed_action",
-                            "has_sufficient_evidence",
-                            "missing_evidence_question",
-                        ],
-                    },
-                },
-                "required": ["answer_type", "text", "basis", "self_check"],
-            },
-        },
+        "function": {"name":"answer_text", "description":"Finish with the useful result. Report answer and optional changed/created objects or remaining work. Server derives verification and completion from actual operations; never assign yourself verified/success or copy hashes/step IDs.",
+         "parameters":{"type":"object","additionalProperties":False,"required":["answer"],"properties":{
+             "answer":{"type":"string","minLength":1,"maxLength":100000},
+             "effects":{"type":"object","additionalProperties":False,"properties":{
+                 k:{"type":"array","maxItems":32,"items":{"type":"string"}} for k in ("changed","created")}},
+             "remaining":{"type":"array","maxItems":32,"items":{"type":"string"}}}}},
     },
     {
         "type": "function",
@@ -1039,7 +1014,7 @@ DEVICE_TOOL_SCHEMAS = [
                     "suggested_next_action": {"type": "string"},
                     "basis": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["message", "reason", "recoverable", "suggested_next_action", "basis"],
+                "required": ["message", "reason", "recoverable", "suggested_next_action"],
             },
         },
     },
@@ -1116,21 +1091,7 @@ def list_tools(category: str = "all") -> dict[str, list[dict[str, Any]]]:
     return grouped
 
 
-def _result_status(result: Any, action: str | None = None) -> str:
-    if isinstance(result, dict):
-        if canonical_tool_name(action or "") == "execute_cmd" and execute_cmd_result_is_negative(result):
-            return "failed"
-        if canonical_tool_name(action or "") == "window.control" and result.get("status") == "pending":
-            return "blocked"
-        if canonical_tool_name(action or "").startswith("web.") and result.get("status") in {"unknown", "needs_verification", "stale_element", "disconnected"}:
-            return "blocked"
-        if result.get("error"):
-            return "failed"
-        if result.get("status") in {"failed", "error"}:
-            return "failed"
-        if result.get("status") == "skipped":
-            return "skipped"
-    return "success"
+
 
 
 def compact_tool_summary(action: str, result: Any = None, command: str = "") -> str:
@@ -1245,7 +1206,7 @@ def tool_log_fields(action: str, result: Any = None, command: str = "", target_d
         "tool_name": name,
         "tool_type": meta.get("tool_type", "typed"),
         "tool_label": meta.get("tool_label") or name,
-        "tool_status": _result_status(result, action),
+        "tool_status": operation_step_status(canonical_tool_name(action or ''), result),
         "target_device_id": target_device_id,
         "summary": compact_tool_summary(action, result, command),
     }

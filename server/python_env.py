@@ -89,6 +89,16 @@ def classify_command_error(result: dict[str, Any] | None, command: str = "") -> 
     if not has_error:
         return {"error_type": "none", "recoverable": False}
 
+    if ('u+feff' in lowered or '\ufeff' in text
+            or ("$'\\r'" in text and 'command not found' in lowered)):
+        return {"error_type":"shell_syntax_error", "recoverable":True,
+                "retry_identical_useful":False,
+                "recovery_hint":"Script transport contains BOM or CR bytes. Check the transmitted bytes, not just the source file. "
+                    "Windows PowerShell UTF8 string pipelines can add BOM and CRLF. Use a byte-preserving transport "
+                    "with UTF-8 without BOM and LF for the remote interpreter. Do not create another diagnostic script "
+                    "or install packages to fix this encoding failure. Earlier stdout may still contain observations.",
+                "effect_verification":"not_established_by_error_classification"}
+
     missing_packages = _module_not_found_packages(text)
     if missing_packages:
         return {
@@ -135,6 +145,7 @@ def classify_command_error(result: dict[str, Any] | None, command: str = "") -> 
         "parsing failed",
         "missing expression after",
         "unexpected token",
+        "unexpected eof while looking for matching",
         "the string is missing the terminator",
     )
     if any(marker in lowered for marker in parser_markers):

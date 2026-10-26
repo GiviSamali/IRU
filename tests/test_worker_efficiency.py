@@ -94,7 +94,9 @@ def test_stubborn_parser_error_uses_two_dispatches_not_sixteen():
         sent.append(args); return syntax_error()
     result = _run_case([call('broken')]*16, send_command_fn=send, captured=captured, max_iterations=20)
     assert len(sent) == 2 and len(captured) == 4
-    assert result['task_receipt']['goal_completed'] is False
+    from server.worker_reports import build_worker_report
+    report=build_worker_report({**result,'task_id':'stubborn-parser','status':'done'})
+    assert report['goal_completed'] is False
     assert result['task_receipt']['task_status'] == 'failed'
     assert 'shell_syntax_error' in str(captured[2]['messages'])
 
@@ -130,11 +132,11 @@ def test_october_25_stale_basis_rejected_even_for_partial(kind):
     journal=[file_step(4,b'0.42',b'0.21'),file_step(18,b'0.21',b'0.42'),
              file_step(19,b'0.42',b'0.21'),file_step(20,b'0.21',b'0.42')]
     payload=_answer_payload('Reduced to 0.21',answer_type=kind,basis=['step_4','step_19'])
-    with pytest.raises(ProtocolValidationError,match='file_state_superseded'):
-        validate_answer_text_payload(payload,journal)
+    normalized=validate_answer_text_payload(payload,journal)
+    assert normalized['basis']==['step_4','step_18','step_19','step_20']  # Server, not model, binds all facts.
     assert latest_file_states(journal)[0]['sha256']==digest(b'0.42')
     payload.update(text='The edit was undone. Remaining task incomplete.',basis=['step_20'])
-    assert validate_answer_text_payload(payload,journal)==payload
+    assert validate_answer_text_payload(payload,journal)['text']==payload['text']
 
 
 def test_dependency_debug_json_does_not_cost_five_model_calls():

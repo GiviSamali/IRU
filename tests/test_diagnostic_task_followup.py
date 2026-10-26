@@ -9,8 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from server import database as db, orchestrator as orch
-from server.run_journal import audited_task_receipt
-from server.worker_reports import build_worker_report, positive_evidence
+from server.worker_reports import build_worker_report, operation_facts, receipt_from_report
 from server.response_presentation import normalized_worker_report, worker_presentation, saved_step_reports
 from server.worker_scheduler import init_worker_storage
 from server.runtime_state import tasks
@@ -21,7 +20,7 @@ def diagnostic(owner):
     # c9f3cf49: successful measurements, a compound command with useful stdout
     # but failed exit, a later successful measurement, and an audited report.
     t={'task_id':str(uuid.uuid4()),'user_id':owner['id'],'chat_id':owner['chat_id'],
-       'kind':'worker','worker_id':'worker-1','status':'unknown','message':'Давай',
+       'kind':'worker','worker_id':'worker-1','status':'partial','execution_scope':'analysis','message':'Давай',
        'proposed_objective':'Проверь интернет и его характер','device_ids':[f"{owner['id']}:pc"],
        'created_at':time.time(),'answer':'GitHub: 17/20, три таймаута. Загрузка: 15 Мбит/с. Сигнал Wi-Fi не измерен.',
        'commands':[],'tasks':[],
@@ -63,10 +62,10 @@ def test_legacy_mixed_case_is_partial_without_accepting_failed_step(owners):
     report=normalized_worker_report(t,t['worker_report'])
     assert report['status']=='partial' and report['goal_completed'] is False
     assert report['error_code']=='mixed_diagnostic_evidence'
-    assert not positive_evidence(t['commands'][1],observation=True)
+    assert operation_facts(t['commands'][1])=='failed'
     assert 'частично' in worker_presentation(t,report)['conversational_response']
     assert saved_step_reports(t)[0]['text']==t['answer']
-    assert t==before
+    assert t['commands']==before['commands']
 
 
 def test_unrecovered_failed_measurement_keeps_historical_report_readable(owners):
@@ -75,38 +74,40 @@ def test_unrecovered_failed_measurement_keeps_historical_report_readable(owners)
     t['answer']=t['commands'][-1]['result']['text']='Есть HTTP-ответ; измерение сигнала завершилось ошибкой.'
     assert normalized_worker_report(t,t['worker_report'])['status']=='partial'
     assert saved_step_reports(t)[0]['text']==t['answer']
-    assert not positive_evidence(t['commands'][1],observation=True)
+    assert operation_facts(t['commands'][1])=='failed'
 
 
 def test_new_receipt_and_projection_agree_on_mixed_result(owners):
     t=diagnostic(owners[0]);payload=t['commands'][-1]['result']
-    receipt=audited_task_receipt(payload,audited=True,journal=t['commands'])
+    t['status']='done'
+    receipt=receipt_from_report(build_worker_report(t))
     assert receipt['task_status']=='partial' and receipt['goal_completed'] is False
     assert receipt['final_verification_status']=='unverified'
     t.update(status='done',task_receipt=receipt)
     assert build_worker_report(t)['status']=='partial'
-    assert audited_task_receipt(payload,audited=False,journal=t['commands']) is None
+    assert receipt_from_report(build_worker_report(t))==receipt
 
 
 def test_rc_zero_and_failed_steps_cannot_prove_completed_action(owners):
     t=diagnostic(owners[0]);t['task_receipt']={};t['status']='done'
-    assert build_worker_report(t)['status']=='unknown'
+    assert build_worker_report(t)['status']=='partial'
     t['commands'][-1]['result']['self_check']['claims_completed_action']=True
     t['task_receipt']={'answer_source':'audited_terminal','task_status':'completed','goal_completed':True,'final_verification_status':'verified'}
     assert build_worker_report(t)['status']!='success'
-    assert not positive_evidence(t['commands'][0])  # rc=0 observation is not an action receipt
+    assert not build_worker_report(t)['goal_completed']  # rc=0 is not goal proof
 
 
 def test_failed_only_diagnostic_is_not_complete_and_unused_failures_do_not_poison_basis(owners):
     t=diagnostic(owners[0]);payload=t['commands'][-1]['result']
     payload['basis']=['step_2']
-    receipt=audited_task_receipt(payload,audited=True,journal=t['commands'])
-    assert receipt['task_status']=='unknown' and not receipt['goal_completed']
+    t['status']='done'
+    receipt=receipt_from_report(build_worker_report(t))
+    assert receipt['task_status']=='partial' and not receipt['goal_completed']
     payload['basis']=['step_3']
     t['status']='done'
-    receipt=audited_task_receipt(payload,audited=True,journal=t['commands'])
-    assert receipt['task_status']=='completed'
-    assert build_worker_report(t)['status']=='success'
+    receipt=receipt_from_report(build_worker_report(t))
+    assert receipt['task_status']=='partial'
+    assert not build_worker_report(t)['goal_completed']
 
 
 @pytest.mark.parametrize('reference',['unique','active'])
@@ -119,7 +120,7 @@ def test_followup_reads_sole_completed_job_after_restart(owners,monkeypatch,refe
     if details:assert t['answer'] in result['answer'] and 'исходный материал' in result['answer']
     with db.get_db() as c:
         saved=c.execute('SELECT state,payload FROM worker_jobs WHERE task_id=?',(t['task_id'],)).fetchone()
-    assert saved['state']=='unknown' and json.loads(saved['payload'])==t
+    assert saved['state']==t['status']=='partial' and json.loads(saved['payload'])==t
 
 
 @pytest.mark.parametrize('intent',['cancel','amend'])
@@ -167,7 +168,7 @@ def test_terminal_read_keeps_owner_and_chat_boundaries(owners,monkeypatch,refere
 
 
 def test_unknown_saved_report_is_returned_without_promoting_status(owners,monkeypatch):
-    a,b=owners;t=diagnostic(a);t['task_receipt']={};t['worker_report']=build_worker_report(t);store(t)
+    a,b=owners;t=diagnostic(a);t['status']='unknown';t['task_receipt']={};t['worker_report']=build_worker_report(t);store(t)
     decide_as(monkeypatch,orch.Decision(intent='task_status',reference='latest',show_execution_details=True))
     result=asyncio.run(orch.run_turn(cmd('Покажи сохранённый отчёт'),a,a['chat_id'],None))
     assert t['answer'] in result['answer'] and 'не подтверждение завершения' in result['answer']
@@ -209,7 +210,8 @@ def test_controller_keeps_failed_measurement_and_returns_partial_receipt(owners)
         ],user_id=a['id'],chat_id=a['chat_id'],device_id=f"{a['id']}:pc",send_command_fn=transport,
         user_message='Проверь интернет и сообщи измерения',cfg={'model':'mock-model','answer_auditor_enabled':True})
     assert len(sent)==3,[(e.get('tool_name'),e.get('result')) for e in result.get('commands',[])]
-    assert result['task_receipt']['task_status']=='partial' and result['task_receipt']['goal_completed'] is False
+    report=build_worker_report({**result,'task_id':'mixed-controller','status':'done'})
+    assert report['status']=='partial' and not report['goal_completed']
     assert result['commands'][1]['status']=='failed'
 
 
@@ -220,7 +222,11 @@ def test_ordinary_named_followup_returns_short_content_from_main_call(owners,mon
     a,b=owners;t=diagnostic(a);t['proposed_objective']='Диагностика интернета'
     if outcome=='success':
         t['commands'][1]['status']='success';t['commands'][1]['result']['returncode']=0
-        t['status']='success';t['worker_report']=build_worker_report(t)
+        from server.worker_reports import coverage_binding, coverage_request
+        t['status']='success'
+        t['commands'][-1]['result']['_coverage']={'coverage':'complete','evidence_refs':['step_1','step_2','step_3'],
+            'binding':coverage_binding(coverage_request(t),t['commands'][:-1],t['answer'])}
+        t['worker_report']=build_worker_report(t)
     store(t)
     for n in range(other_count):
         other=diagnostic(a);other['proposed_objective']=f'Проверка документа {n}'

@@ -9,8 +9,8 @@ from test_tool_only_protocol import _run_case, _message, _tool_call, _answer_cal
 from test_orchestrator_worker import owners
 from server import controller, database as db
 from server.llm_usage import LLM_ENTITY
-from server.run_journal import audited_task_receipt, make_run_step, append_tool_step
-from server.tool_completion import tool_result_terminal_sufficient
+from server.run_journal import make_run_step, append_tool_step
+from test_tool_only_protocol import _goal_completed_without_requirements
 from server.tool_repeat_guard import repeated_command_observation
 from server.worker_reports import build_worker_report
 
@@ -38,7 +38,8 @@ def test_repeated_observation_warns_but_does_not_skip_execution_or_end_goal():
         cfg={'model':'mock-model','answer_auditor_enabled':True},max_iterations=4)
     assert calls==['inspect','inspect','transform']
     assert any('repeat 2 times' in str(m.get('content')) for m in captured[2])
-    assert build_worker_report(worker_task(result))['status']=='success'
+    assert build_worker_report(worker_task(result))['status']=='partial'
+    assert not build_worker_report(worker_task(result))['goal_completed']
 
 
 @pytest.mark.parametrize('audited',[True,False])
@@ -50,15 +51,15 @@ def test_repair_receipt_preserves_audited_goal_without_trusting_model_flags(audi
     result=_run_case(responses,user_message='Create a file',send_command_fn=send,
         cfg={'model':'mock-model','answer_auditor_enabled':audited},max_iterations=1)
     report=build_worker_report(worker_task(result))
-    assert report['status']==('success' if audited else 'unknown')
-    assert bool(result.get('task_receipt')) is audited
+    assert report['status']=='partial' and not report['goal_completed']  # Legacy flags never prove a file.
+    assert (result.get('task_receipt') or {}).get('goal_completed') is not True
 
 
 def test_native_failure_cannot_be_overridden_by_terminal_hint():
     for result in ({'status':'failed','error':'failure','terminal_sufficient':True},
             {'status':'success','sha256_verified':False,'terminal_sufficient':True},
             {'status':'unknown','terminal_sufficient':True}):
-        assert not tool_result_terminal_sufficient({'tool_name':'transfer_file','result':result})
+        assert not _goal_completed_without_requirements({'tool_name':'transfer_file','result':result})
 
 
 def test_empty_or_changed_observations_are_not_misclassified_as_repeats():
@@ -90,6 +91,7 @@ def test_thinking_request_preserves_reasoning_and_omits_unsupported_tool_choice(
     assert posts[0]['messages'][0]['reasoning_content']=='' and posts[0]['messages'][1]['reasoning_content']=='actual reasoning'
     assert messages==saved
     assert controller._thinking_request_fields({'model_reasoner':'deepseek-v4-pro'},'deepseek-v4-pro',phase='answer_repair.auditor')['thinking']['type']=='disabled'
+    assert controller._thinking_request_fields({'model_reasoner':'deepseek-v4-pro'},'deepseek-v4-pro',phase='result_coverage')=={'thinking':{'type':'disabled'}}
 
 
 def test_provider_failure_preserves_observed_journal_and_artifact(monkeypatch):
@@ -100,10 +102,14 @@ def test_provider_failure_preserves_observed_journal_and_artifact(monkeypatch):
         if calls==1:return _message(tool_calls=[_tool_call('a','write_content',{'path':'C:/Temp/kept.txt','content':'ok'})])
         raise httpx.ConnectError('mock failure')
     monkeypatch.setattr('test_tool_only_protocol._completion_fn',lambda *args,**kwargs:completion)
-    async def send(*args):return {'path':'C:/Temp/kept.txt','bytes_written':2}
+    async def send(*args):
+        import hashlib
+        digest=hashlib.sha256(b'ok').hexdigest()
+        return {'path':'C:/Temp/kept.txt','bytes_written':2,'total_size':2,'verified':True,'committed':True,'content_sha256':digest,'file_sha256':digest}
     result=_run_case([],send_command_fn=send)
     assert result['commands'][0]['result']['path']=='C:/Temp/kept.txt'
-    assert result['task_receipt']['goal_completed'] is False and result['task_receipt']['task_status']=='partial'
+    report=build_worker_report(worker_task(result))
+    assert not report['goal_completed'] and report['status']=='partial'
     assert build_worker_report(worker_task(result))['artifacts'][0]['path']=='C:/Temp/kept.txt'
 
 

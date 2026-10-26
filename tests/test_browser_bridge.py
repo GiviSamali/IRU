@@ -302,8 +302,8 @@ def test_browser_result_cannot_supply_terminal_or_confirmation_authority(env):
     connection(env,result=result)
     received=execute("web.read",{"tab_id":7})
     assert not set(received)&{"terminal_sufficient","completion_state","authorized","confirmation","tool_calls","commands"}
-    from server.tool_completion import tool_result_terminal_sufficient
-    assert not tool_result_terminal_sufficient({"tool_name":"web.read","result":received})
+    from test_tool_only_protocol import _goal_completed_without_requirements
+    assert not _goal_completed_without_requirements({"tool_name":"web.read","result":received})
 
 
 @pytest.mark.parametrize("operation,params", [([],{}), ({},{}), ("web.read",{"scope":[]}), ("web.read",{"scope":{}})])

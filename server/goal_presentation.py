@@ -20,32 +20,10 @@ def goal_presentation(goal: dict) -> dict:
                 and m.get("result")]
     done = len(finished)
     total = len(members)
-    by_id = {m.get("task_id"): m for m in members}
-    dependent_blocked = []
-    for member in members:
-        if member.get("status") != "waiting_dependency":
-            continue
-        sources = [by_id.get(edge.get("source_task_id")) for edge in member.get("dependencies") or []]
-        if any(source and source.get("status") in TERMINAL - {"success"} for source in sources):
-            dependent_blocked.append(member.get("task_id"))
-    waiting = [m for m in members if m.get("status") == "waiting_dependency"
-               and m.get("task_id") not in dependent_blocked]
-    running = any(m.get("status") in ACTIVE for m in members) or bool(waiting)
-    terminal = not running and (all(m.get("status") in TERMINAL for m in members)
-                                or len(dependent_blocked) + sum(m.get("status") in TERMINAL for m in members) == total)
-    success = bool(total and goal.get("goal_completed") is True and done == total)
-    if success:
-        status = "success"
-    elif not terminal:
-        status = "running"
-    elif any(m.get("status") == "unknown" for m in members):
-        status = "unknown"
-    elif done or any(m.get("status") == "partial" for m in members):
-        status = "partial"
-    elif all(m.get("status") == "cancelled" for m in members):
-        status = "cancelled"
-    else:
-        status = "failed"
+    dependent_blocked = goal.get('dependent_blocked') or []
+    terminal = goal.get('terminal', goal.get('status') in TERMINAL)
+    status = goal.get('status','unknown')
+    success = status == 'success' and goal.get('goal_completed') is True
 
     artifacts = []
     result_artifacts = []
