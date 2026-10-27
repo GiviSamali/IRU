@@ -1151,7 +1151,6 @@ async def process_non_pipeline_command(
                     recovery_only = True
                     non_pipeline_tools = recovery_observation_tools(non_pipeline_tools or DEFAULT_CONTROLLER_TOOLS)
                     tool_schemas.update({tool['function']['name']: tool for tool in non_pipeline_tools})
-                    add_correction("Action outcome is unknown. Do not repeat it or use another mutating tool. Observe with recovery tools, or report partial.")
                 if tool_result.get('error') == 'confirmation_expired':
                     try:
                         from .run_journal import confirmed_unknown_answer
@@ -1167,6 +1166,10 @@ async def process_non_pipeline_command(
                     commands_log[-1]['execution_key'] = command_observation_key({**repeat_guard_args,'command':fn_args.get('command')})
                 mark_read_only_tool_step(commands_log[-1], fn_name, repeat_guard_args)
                 append_tool_message(tool_call["id"], commands_log[-1])
+                if tool_result.get('error') == 'confirmed_transport_outcome_unknown':
+                    # Close the assistant/tool exchange before adding a user correction.
+                    # Providers reject a user message between tool_calls and its result.
+                    add_correction("Action outcome is unknown. Do not repeat it or use another mutating tool. Observe with recovery tools, or report partial.")
                 if (tool_result.get("error") and (tool_result.get("dispatched") is False
                         or tool_result.get("committed") is False) and tool_result.get("status") != "unknown"):
                     key = (fn_name, json.dumps(repeat_guard_args, sort_keys=True, ensure_ascii=False), str(tool_result["error"]))

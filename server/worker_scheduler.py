@@ -27,6 +27,14 @@ ACTIVE_STATES = ("running", "waiting_confirmation", "waiting_input")
 WINDOW_EFFECTS = frozenset({"list","find","active","monitors","activate","minimize","maximize","restore","left","right","move_monitor","close","open"})
 
 
+def unknown_recovery_required(payload):
+    """Persist uncertainty across explicitly requested follow-ups, never replay it."""
+    return bool(payload.get('_action_outcome_unknown') or any(
+        (entry.get('status') == 'unknown' or (entry.get('result') or {}).get('status') == 'unknown')
+        and entry.get('tool_type') not in {'system','answer'}
+        for entry in payload.get('commands') or []))
+
+
 def validated_execution_scope(scope, effects):
     if (not isinstance(scope,str) or scope not in {"general","window","analysis"} or not isinstance(effects,list) or len(effects)>16
             or any(not isinstance(effect,str) or effect not in WINDOW_EFFECTS for effect in effects)
@@ -704,7 +712,9 @@ class WorkerScheduler:
                         WHERE j.task_id=? AND j.owner_user_id=? AND j.chat_id=?""", (replacement,owner,chat)).fetchone()
                     if not source or not goal_id or source["goal_id"]!=goal_id:
                         raise ValueError("dependency_scope_mismatch")
-                    if source["state"] not in {"partial","failed"}:
+                    source_payload = json.loads(source['payload'])
+                    if source["state"] not in {"partial","failed"} and not (
+                            source['state']=='unknown' and unknown_recovery_required(source_payload)):
                         raise ValueError("replacement_source_not_failed")
                     if any(json.loads(row[0]).get("replaces_source_task_id")==replacement for row in c.execute(
                         "SELECT j.payload FROM worker_jobs j JOIN worker_goal_tasks g ON g.task_id=j.task_id WHERE g.goal_id=?",(goal_id,))):
@@ -755,6 +765,10 @@ class WorkerScheduler:
                 if assignment.get("replaces_source_task_id"):
                     task["replaces_source_task_id"] = assignment["replaces_source_task_id"]
                     task["source_task_ids"] = list(dict.fromkeys([*(task.get("source_task_ids") or []),assignment["replaces_source_task_id"]]))
+                    previous = c.execute('SELECT payload FROM worker_jobs WHERE task_id=?',
+                        (assignment['replaces_source_task_id'],)).fetchone()
+                    if unknown_recovery_required(json.loads(previous['payload'])):
+                        task['_action_outcome_unknown'] = True
                 task["device_ids"] = assignment_devices[key]
                 task["execution_scope"], task["window_effects"] = assignment_scopes[key]
                 if assignment.get("target_device_ids") is not None:

@@ -256,8 +256,11 @@ depends_on — локальные key этого решения. required_source
 попытка ТОГО ЖЕ результата, а не третий независимый результат цели. Передай goal_id,
 goal_revision и replaces_source_task_id неуспешной Task в новом assignment. Сохрани
 её назначенный результат и устройства; source_task_ids используй только как контекст.
-Не заменяй успешные, работающие, отменённые или unknown Task; новую цель не подменяй повтором.
-При просьбе повторить unknown Task сначала выбери task_status этой задачи: сверяем сохранённые результаты, не запускаем старые действия заново.
+Не заменяй успешные, работающие или отменённые Task; новую цель не подменяй повтором.
+При явной просьбе продолжить unknown Task передай ту же цель и replaces_source_task_id.
+Scheduler разрешит только сверку состояния инструментами чтения, без повтора неизвестных действий.
+Сохрани исходный objective и artifacts: сама сверка не означает выполнение поручения.
+При обычном вопросе о состоянии выбирай task_status, без нового Worker.
 При замене неуспешного исследования Scheduler перепривяжет его ожидающих потребителей;
 не создавай новые копии документных поручений, уже ожидающих это исследование.
 Для изменения ещё не начатого поручения выбери amend с task_id, task_revision из контекста
@@ -499,7 +502,13 @@ async def run_turn(cmd, user, chat_id, delegate):
             for source_id in replacements:
                 source_job=owned_job(source_id,owner)
                 if not source_job or source_job['chat_id']!=chat_id:raise ValueError('task_not_found')
-                if source_job['state']=='unknown':uncertain.append(source_id)
+                if source_job['state']=='unknown':
+                    try:
+                        from .worker_scheduler import unknown_recovery_required
+                    except ImportError:
+                        from worker_scheduler import unknown_recovery_required
+                    if not unknown_recovery_required(json.loads(source_job['payload'])):
+                        uncertain.append(source_id)
             if uncertain:
                 # Reconcile saved state first. Never silently submit other assignments or retry side effects.
                 choice=Decision(intent='task_status',task_id=uncertain[0],reference='explicit')
@@ -515,7 +524,9 @@ async def run_turn(cmd, user, chat_id, delegate):
             worker=await delegate(choice,request_key="turn:"+key)
             task.update(goal_id=worker.get("goal_id"),result_first=True)
             # One Goal is presented to the human; members are internal Operations.
-            answer=""
+            answer=("Начинаю сверку состояния по сохранённым результатам. Неизвестные действия не повторяю; "
+                    "выполнение исходного поручения пока не подтверждено."
+                    if worker.get('_action_outcome_unknown') else "")
         elif choice.intent == "cancel" and choice.cancel_scope in {"goal", "chat"}:
             result = await scheduler.cancel_group(owner, chat_id, scope=choice.cancel_scope,
                 goal_id=choice.goal_id, task_id=choice.task_id)
@@ -540,6 +551,16 @@ async def run_turn(cmd, user, chat_id, delegate):
             answer = "Цель: " + goal["original_request"] + "\n" + labels.get(goal["status"], goal["status"])
             answer += "\n" + "\n".join(f"{index}. {member['objective']}: {labels.get(member['status'],member['status'])}"
                 for index, member in enumerate(goal["tasks"], 1))
+            if goal.get('terminal'):
+                try:
+                    from .goal_completion import present_completed_goal
+                    from .goal_presentation import goal_presentation
+                except ImportError:
+                    from goal_completion import present_completed_goal
+                    from goal_presentation import goal_presentation
+                reply=await present_completed_goal(goal,goal_presentation(goal),owner,chat_id)
+                answer=reply['message']
+                task.update(dialogue_spoken_response=reply['spoken_message'],dialogue_speech_answer=answer)
         elif choice.intent in {"task_status","cancel","amend"}:
             stage="task_reference"
             if choice.reference=="latest" and not choice.task_id:
@@ -597,6 +618,21 @@ async def run_turn(cmd, user, chat_id, delegate):
                     answer='По сохранённым наблюдениям: '+choice.answer.strip()
                     if source_report['status']=='partial':answer+='\n\nДиагностика выполнена частично; полного подтверждения результата нет.'
                     elif source_report['status']=='unknown':answer+='\n\nИтог задачи не подтверждён.'
+                if source.get('goal_id') and not choice.show_execution_details and choice.result_view != 'saved_report':
+                    try:
+                        from .worker_scheduler import goal_view
+                        from .goal_completion import present_completed_goal
+                        from .goal_presentation import goal_presentation
+                    except ImportError:
+                        from worker_scheduler import goal_view
+                        from goal_completion import present_completed_goal
+                        from goal_presentation import goal_presentation
+                    goal=goal_view(source['goal_id'],owner,chat_id)
+                    required=[member for member in goal['tasks'] if member.get('required_for_goal',True)]
+                    if goal.get('terminal') and len(required)==1 and required[0]['task_id']==choice.task_id:
+                        reply=await present_completed_goal(goal,goal_presentation(goal),owner,chat_id)
+                        answer=reply['message']
+                        task.update(dialogue_spoken_response=reply['spoken_message'],dialogue_speech_answer=answer)
                 if choice.show_execution_details or choice.result_view == "saved_report":
                     source_report=normalized_worker_report(source,source.get("worker_report"))
                     if source_report["status"]=="success":

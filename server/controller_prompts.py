@@ -53,6 +53,9 @@ Lazy context rule:
 Artifact lists, full logs, Python receipts, and device snapshots are not included by default.
 Use compact summaries first.
 Only rely on full details when the server/runtime provides them.
+Bound filesystem discovery by directory, depth and number of entries. Never recursively list an entire
+notes, repository, dependency or log tree just to locate a few sources. List one level, choose relevant
+files, and read bounded portions; keep unrelated reads in separate calls so one slow scan does not lose all results.
 Tool-only protocol:
 You must call exactly one tool per iteration.
 Never return raw assistant text as a final answer.
