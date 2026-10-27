@@ -477,7 +477,14 @@ async def api_goal(goal_id: str, chat_id: int, request: Request):
         from goal_presentation import goal_presentation
     try:
         goal = goal_view(goal_id, user["id"], chat_id)
-        return {"status": "ok", "goal": goal, "presentation": goal_presentation(goal)}
+        presentation=goal_presentation(goal)
+        if presentation['terminal']:
+            try:
+                from ..goal_completion import present_completed_goal
+            except ImportError:
+                from goal_completion import present_completed_goal
+            presentation=await present_completed_goal(goal,presentation,user['id'],chat_id)
+        return {"status": "ok", "goal": goal, "presentation": presentation}
     except ValueError:
         raise HTTPException(status_code=404, detail="goal_not_found")
 
@@ -626,7 +633,11 @@ async def api_get_task(task_id: str, request: Request):
     except ImportError:
         from response_presentation import worker_presentation, normalized_worker_report
     report = normalized_worker_report(task,task.get("worker_report")) if task.get("worker_id") else task.get("worker_report")
-    human = worker_presentation(task,report) if task.get("worker_id") else {
+    try:
+        from ..orchestrator import present_worker_result
+    except ImportError:
+        from orchestrator import present_worker_result
+    human = present_worker_result(task,report) if task.get("worker_id") else {
         "conversational_response":task.get("answer"),"execution_details":task.get("execution_details") or ""}
     response_task = {
         **human,
@@ -638,7 +649,7 @@ async def api_get_task(task_id: str, request: Request):
         "message": task["message"],
         "device_ids": task["device_ids"],
         "status": task["status"],
-        "answer": task.get("answer"),
+        "answer": human['conversational_response'],
         "commands": task.get("commands"),
         "tasks": task.get("tasks", []),
         "task_receipt": task.get("task_receipt"),

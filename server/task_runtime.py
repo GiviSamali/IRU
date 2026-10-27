@@ -869,6 +869,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         mark_task_cancelled(task_id, answer=answer, commands=commands or cancellation_payload().get("commands", []))
         task["answer"] = answer
         task["tasks"] = task.get("tasks", [])
+        if task.get('orchestrated'):return
         try:
             add_message(chat_id, "assistant", answer, task.get("commands", []),
                         task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id"))
@@ -1391,7 +1392,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             "task_receipt": combined_task_receipt, "tasks": combined_tasks}, task_id=task_id)
         task["history_metadata"] = history_metadata
         try:
-            saved_message = add_message(chat_id, "assistant", combined_answer, combined_commands, task_metadata=history_metadata,message_id=task.get("history_message_id"))
+            saved_message = (None if task.get('orchestrated') else add_message(chat_id, "assistant", combined_answer, combined_commands, task_metadata=history_metadata,message_id=task.get("history_message_id")))
             if isinstance(saved_message, dict):task["history_message_id"] = saved_message.get("id")
         except Exception as exc:
             # A secondary chat projection cannot erase the completed execution.
@@ -1451,7 +1452,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         # failure must not erase that evidence from the final snapshot/history.
         task.setdefault("commands", [])
         try:
-            add_message(chat_id, "assistant", task["answer"], task["commands"], task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id"))
+            if not task.get('orchestrated'):
+                add_message(chat_id, "assistant", task["answer"], task["commands"], task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id"))
         except Exception:
             logger.warning("task error history persistence failed task_id=%s", task_id)
 
@@ -1486,8 +1488,8 @@ async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id:
         if result.get("task_receipt"):
             task["task_receipt"] = result["task_receipt"]
             task["status"] = {"completed":"done","partial":"partial","failed":"failed"}.get(result["task_receipt"].get("task_status"),"done")
-        saved_message = add_message(chat_id, "assistant", answer, task["commands"],
-                    task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id"))
+        saved_message = (None if task.get('orchestrated') else add_message(chat_id, "assistant", answer, task["commands"],
+                    task_metadata=message_task_metadata(task, task_id=task_id),message_id=task.get("history_message_id")))
         if isinstance(saved_message, dict):task["history_message_id"] = saved_message.get("id")
     except Exception as exc:
         task["status"] = "error"

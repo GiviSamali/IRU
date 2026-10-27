@@ -59,6 +59,12 @@ def test_file_result_acceptance_through_runtime_report_and_history(owners, tmp_p
                     'content_sha256': digest, 'file_sha256': '0' * 64 if case == 'bad_hash' else digest,
                     'total_size': len(observed), 'verified': case != 'unverified_write',
                     'committed': True, 'append': False}
+        if action == 'execute_cmd' and params['command'].startswith('Get-Content'):
+            observed = path.read_bytes() if path.exists() else b''
+            return {'returncode': 0, 'stdout': observed.decode(), 'stderr': '',
+                    'artifact_receipts': [{'path': str(path), 'device_id': 'pc',
+                        'source_task_id': current_task_id[0], 'verified': True,
+                        'sha256': hashlib.sha256(observed).hexdigest()}]}
         assert action == 'execute_cmd' and case in {'execution_error', 'unknown', 'pre_dispatch_denial'}
         if case == 'unknown':
             return {'status': 'unknown', 'error': 'confirmed_transport_outcome_unknown', 'dispatched': True}
@@ -75,8 +81,9 @@ def test_file_result_acceptance_through_runtime_report_and_history(owners, tmp_p
                 # Deliberately permissive auditor: deterministic guards must still
                 # refuse real failures, unknown outcomes and missing write evidence.
                 return {'choices': [{'message': {'content': json.dumps({
-                    'valid': case != 'auditor_rejects', 'reason': 'file write verified' if case != 'auditor_rejects' else 'goal not established',
-                    'action_steps': ['step_1'], 'verification_steps': ['step_1']})}}]}
+                    'coverage': 'complete' if case != 'auditor_rejects' else 'partial',
+                    'reason': 'read-back compared with requested content' if case != 'auditor_rejects' else 'content coverage not established',
+                    'evidence_refs': ['step_3']})}}]}
             turns.append(1)
             if len(turns) == 1:
                 name, args = 'write_content', {'path': str(path), 'content': content}
@@ -85,6 +92,8 @@ def test_file_result_acceptance_through_runtime_report_and_history(owners, tmp_p
                 if case not in {'execution_error', 'unknown', 'pre_dispatch_denial'}:
                     args['unexpected_argument'] = True
                 name = 'execute_cmd'
+            elif len(turns) == 3:
+                name, args = 'execute_cmd', {'command': f"Get-Content -LiteralPath '{path}'", 'artifact_paths': []}
             else:
                 name, args = 'answer_text', {
                     'answer_type': 'grounded_report', 'text': answer, 'basis': ['step_1'],
@@ -101,13 +110,15 @@ def test_file_result_acceptance_through_runtime_report_and_history(owners, tmp_p
             modes={}, poll_task_id=kwargs['poll_task_id'],
             cfg={'model': 'mock-model', 'answer_auditor_enabled': True}, system_msg='system',
             machine_guid=None, mem_user_id=None, non_pipeline_tools=NON_PIPELINE_TOOLS,
-            max_iterations=4, pick_model_fn=lambda *args: 'mock-model',
+            max_iterations=5, pick_model_fn=lambda *args: 'mock-model',
             chat_completion_request_fn=completion)
 
     monkeypatch.setattr(runtime, 'process_nl_command', process)
+    current_task_id = []
 
     async def scenario():
         async def execute(t):
+            current_task_id[:] = [t['task_id']]
             await runtime.run_nl_task(t['task_id'], owner['id'], t['message'], t['device_ids'], owner['chat_id'])
 
         scheduler = WorkerScheduler(execute)
@@ -124,12 +135,12 @@ def test_file_result_acceptance_through_runtime_report_and_history(owners, tmp_p
                                     (saved['message_id'],)).fetchone()
             metadata = json.loads(message['task_metadata'])
             assert metadata['workerReport'] == report
-            if case in {'schema_rejection','auditor_rejects','pre_dispatch_denial','execution_error'}:
+            if case in {'schema_rejection','pre_dispatch_denial','execution_error'}:
                 assert path.read_text(encoding='utf-8') == content
-                assert sent == (['write_content','execute_cmd'] if case in {'pre_dispatch_denial','execution_error'} else ['write_content']) and not audits
+                assert sent == (['write_content','execute_cmd','execute_cmd'] if case in {'pre_dispatch_denial','execution_error'} else ['write_content','execute_cmd']) and len(audits)==1
                 assert report['status'] == 'success' and report['goal_completed'] is True
                 rejected = job['commands'][1]['result']
-                if case in {'schema_rejection','auditor_rejects'}:assert rejected['status'] == 'validation_error' and rejected['dispatched'] is False
+                if case == 'schema_rejection':assert rejected['status'] == 'validation_error' and rejected['dispatched'] is False
                 assert job['task_receipt']['answer_source'] == 'worker_report'
                 assert job['commands'][0]['result']['verified'] and job['commands'][0]['result']['committed']
                 assert job['answer'] == message['content'] == answer
@@ -138,10 +149,13 @@ def test_file_result_acceptance_through_runtime_report_and_history(owners, tmp_p
                 assert report['status'] != 'success' and report['goal_completed'] is False
                 if case == 'missing_write':
                     assert not path.exists()
-                elif case in {'execution_error', 'unknown', 'pre_dispatch_denial'}:
-                    assert sent == ['write_content', 'execute_cmd']
+                elif case == 'unknown':
+                    assert sent == ['write_content', 'execute_cmd']  # Lost mutation reply stops further dispatch.
                 else:
-                    assert sent == ['write_content']
+                    assert sent == ['write_content','execute_cmd']
+                if case == 'auditor_rejects':
+                    assert path.read_text(encoding='utf-8') == content
+                    assert report['artifacts'][0]['verified'] and not report['artifacts'][0]['content_verified']
         finally:
             await scheduler.shutdown()
 

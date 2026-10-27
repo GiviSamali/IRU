@@ -75,6 +75,8 @@ def result_binding(task, report=None):
     fields = ('task_id','message','original_request','proposed_objective','proposed_context_summary','goal_id','assigned_artifacts',
               'device_ids','execution_scope','window_effects','commands','answer','cancel_requested','_action_outcome_unknown')
     data = {k:task.get(k) for k in fields}
+    if task.get('assignment_scope') or task.get('assignment_constraints'):
+        data.update(assignment_scope=task.get('assignment_scope'),assignment_constraints=task.get('assignment_constraints'))
     raw=task.get('status')
     data['lifecycle'] = ('unknown' if raw in {'unknown','interrupted'} else raw
         if raw in {'queued','running','confirm','waiting_confirmation','waiting_input','waiting_dependency','cancelled','blocked'} else 'terminal')
@@ -88,6 +90,12 @@ def coverage_binding(request, journal, text):
 
 def coverage_request(task, fallback=''):
     """Use the same accepted request at generation and evaluation boundaries."""
+    if task.get('assignment_scope') or task.get('assignment_constraints'):
+        assigned=task.get('proposed_objective') or task.get('message') or fallback
+        return json.dumps({'human_request':assigned if task.get('goal_id') else task.get('original_request') or task.get('message') or fallback,
+            'accepted_objective':task.get('proposed_objective') or '',
+            'scope':task.get('assignment_scope') or '', 'constraints':task.get('assignment_constraints') or []},
+            ensure_ascii=False,sort_keys=True)
     if task.get('goal_id'):
         return task.get('proposed_objective') or task.get('message') or fallback
     original=task.get('original_request') or task.get('message') or fallback
@@ -100,9 +108,10 @@ def coverage_request(task, fallback=''):
 
 
 def needs_semantic_assessment(task):
-    # Native, accepted output contracts have mechanical validators. Free-form
-    # analysis has no mechanical coverage proof; never replace it with rc=0.
-    return task.get('execution_scope')=='analysis' and not task.get('assigned_artifacts') and not task.get('window_effects')
+    # A file receipt proves bytes/format, not coverage of requested content.
+    # Reuse the existing bound observation; it never replaces native effect proof.
+    return bool(task.get('assigned_artifacts')) or (
+        task.get('execution_scope')=='analysis' and not task.get('window_effects'))
 
 
 def receipt_from_report(report, previous=None):
@@ -119,6 +128,18 @@ def saved_worker_report(task, report=None):
     try:
         checked = WorkerReport.model_validate(candidate).model_dump()
         if checked['task_id'] == task['task_id'] and task.get('worker_report_binding') == result_binding(task,checked):
+            if checked['status']=='success' and task.get('execution_scope')=='analysis' and any(
+                    c.get('tool_name') in {'answer.text','answer_text'} and
+                    (c.get('result') or {}).get('_result_contract')==3 for c in task.get('commands') or []):
+                # Apply the same coverage rule to snapshots produced by the
+                # former v3 shortcut. Reading never invokes another model.
+                return build_worker_report(task)
+            # Older bound snapshots certified only file identity/format. Reuse
+            # the one builder to apply content coverage; never call a model on read.
+            if (checked['status']=='success' and task.get('assigned_artifacts')
+                    and checked['artifacts'] and all('content_verified' not in a
+                        and a.get('verification_scope')!='copy_identity' for a in checked['artifacts'])):
+                return build_worker_report(task)
             return checked
     except (ValueError,TypeError):
         pass
@@ -135,6 +156,10 @@ def build_worker_report(task):
     evidence = [c for c in commands if c.get('tool_type') not in {'system','answer'} and operation_facts(c) in {'success','partial'}]
     terminal = next((c for c in reversed(commands) if c.get('tool_name') in {'answer.text','answer_text'} and c.get('status')=='terminal'),{})
     payload = terminal.get('result') if isinstance(terminal.get('result'),dict) else {}
+    compact = payload.get('_result_contract')==3
+    if compact:
+        refs=[c['step_id'] for c in commands if isinstance(c.get('step_id'),str)
+            and c.get('tool_type') not in {'system','answer'} and not str(c.get('tool_name','')).startswith('answer')]
     text = task.get('answer') or payload.get('text') or payload.get('answer') or ''
     clarification = next((c for c in reversed(commands) if c.get('tool_name')=='answer.ask_clarification'),None)
     artifacts = []
@@ -241,6 +266,7 @@ def build_worker_report(task):
     bound = assessment.get('binding') == coverage_binding(request, commands[:commands.index(terminal)] if terminal else commands, text)
     complete_analysis = (bound and assessment.get('coverage')=='complete'
                          and set(assessment.get('evidence_refs') or []).issubset(set(refs)))
+    complete_coverage = complete_analysis
     # Coverage describes an analysis, not a postcondition of arbitrary code.
     # Opaque commands and mutations need an accepted, mechanically verified
     # effect contract. A model cannot opt out of that requirement.
@@ -263,6 +289,12 @@ def build_worker_report(task):
                       if c.get('step_id') in assessment.get('evidence_refs',[])}
     complete_analysis = (complete_analysis and analysis_only and referenced_observation and targets.issubset(observed_targets)
                          and not expected and not task.get('window_effects'))
+    if compact and task.get('execution_scope')=='analysis' and not expected and not task.get('window_effects'):
+        current_observations=[c for c in observations if operation_facts(c)=='success']
+        current_targets={_short_did(c.get('target_device_id') or c.get('device_id') or '') for c in current_observations}
+        complete_analysis=(complete_coverage and bool(current_observations)
+            and any(c.get('step_id') in assessment.get('evidence_refs',[]) for c in current_observations)
+            and targets.issubset(observed_targets))
     # The last confirmed version owns a file. An undo invalidates the old edit.
     try:
         from .run_journal import file_state_history
@@ -310,11 +342,48 @@ def build_worker_report(task):
     unconfirmed_claims = any(not matches_claim(path) for path in claimed_paths)
     file_contract = bool(expected) and not artifact_incomplete and all(
         file_key(a) not in rolled_back and file_key(a) not in invalidated_files for a in matched)
-    window_steps = [c for c in operations if (c.get('tool_name') or c.get('action')) in {'window_control','window.control'}]
+    def content_observed(artifact):
+        # Content must be read at the current version. A create/format receipt,
+        # an old inspection or a model's own prose is not a content check.
+        for entry in operations:
+            if entry.get('step_id') not in assessment.get('evidence_refs', []):continue
+            if operation_facts(entry)!='success':continue
+            result=entry.get('result') or {}
+            if _short_did(entry.get('target_device_id') or entry.get('device_id') or '')!=artifact['device_id']:continue
+            tool=entry.get('tool_name') or entry.get('action')
+            if tool in {'office_docx','office_xlsx','office_pptx'}:
+                if (result.get('action')=='inspect' and result.get('items')
+                        and result.get('path')==artifact['path'] and result.get('sha256')==artifact['sha256']):return True
+            if tool in {'execute_cmd','read_file','get_file_content'}:
+                if not (result.get('stdout') or result.get('content') or result.get('text')):continue
+                candidates=[item for item in result.get('artifact_receipts') or [] if isinstance(item,dict)
+                    and item.get('verified') is True and item.get('source_task_id')==task['task_id']
+                    and item.get('device_id')==artifact['device_id']]
+                candidates.append({'path':result.get('path'),'device_id':artifact['device_id'],
+                    'sha256':result.get('file_sha256') or result.get('sha256')})
+                if any(isinstance(item,dict) and item.get('path')==artifact['path']
+                       and item.get('sha256')==artifact['sha256'] for item in candidates):return True
+        return False
+    content_unconfirmed = False
+    for artifact in matched:
+        if artifact.get('verification_scope')=='copy_identity':continue
+        artifact['verification_scope']=('file_identity_and_format' if PureWindowsPath(artifact['path']).suffix.lower()
+            in {'.docx','.xlsx','.pptx'} else 'file_identity')
+        artifact['content_verified']=bool(complete_coverage and content_observed(artifact))
+        content_unconfirmed = content_unconfirmed or not artifact['content_verified']
+    if content_unconfirmed:file_contract=False
+    window_steps = [c for c in operations if canonical_tool_name(c.get('tool_name') or c.get('action') or '')
+                    in {'window.control','app.launch','app.open_url'}]
+    def window_effect(entry):
+        tool=canonical_tool_name(entry.get('tool_name') or entry.get('action') or '')
+        return 'open' if tool in {'app.launch','app.open_url'} else entry.get('result',{}).get('action')
+    expected_effects=task.get('window_effects') or []
+    final_window_steps=[c for target in targets for c in [s for s in window_steps
+        if _short_did(s.get('target_device_id') or s.get('device_id') or '')==target][-len(expected_effects):]] if expected_effects else []
     window_contract = (task.get('execution_scope')=='window' and bool(task.get('window_effects'))
-        and bool(targets) and all([c.get('result',{}).get('action') for c in window_steps
+        and bool(targets) and all([window_effect(c) for c in final_window_steps
             if _short_did(c.get('target_device_id') or c.get('device_id') or '')==target] == task.get('window_effects') for target in targets)
-        and all(operation_facts(c)=='success' and c.get('result',{}).get('completion_state')=='success' for c in window_steps))
+        and all(operation_facts(c)=='success' and c.get('result',{}).get('completion_state')=='success' for c in final_window_steps))
     covered_targets={a['device_id'] for a in matched}
     for c in operations:
         result=c.get('result') or {}
@@ -337,7 +406,7 @@ def build_worker_report(task):
     elif operations and all(operation_facts(c) in {'failed','not_executed'} for c in operations): status='failed'
     elif useful or any(operation_facts(c) in {'success','partial'} for c in operations): status='partial'
     else: status='unknown'
-    if (payload.get('remaining') or unconfirmed_claims) and status=='success': status='partial'
+    if (payload.get('unresolved') or (not compact and payload.get('remaining')) or unconfirmed_claims) and status=='success': status='partial'
     if task.get('_legacy_read') and status=='success' and raw in {'partial','failed','error','blocked','cancelled'}:
         status='failed' if raw=='error' else raw
     required_rollback = any(file_key(a) in rolled_back for a in matched)
@@ -398,6 +467,11 @@ def build_worker_report(task):
         error_code='artifact_postcondition_unconfirmed'
         text='Последнее состояние обязательного файла не подтверждено. Предыдущий receipt не подтверждает состояние после последней попытки.\n'
         text+='\n'.join(a['path'] for a in matched if file_key(a) in invalidated_files)
+    if content_unconfirmed and not (required_rollback or required_invalid) and status=='partial':
+        error_code='artifact_content_unconfirmed'
+        text='Файл записан; подтверждена его целостность. Полнота запрошенного содержания не подтверждена.\n'
+        text+='\n'.join(f"{a['path']}: SHA-256 {a['sha256']}" for a in matched if a.get('content_verified') is False)
+        if bound and assessment.get('reason'):text+='\nПроверка содержания: '+str(assessment['reason'])
     if task.get('_report_integrity_failed') and status=='unknown':
         error_code='worker_report_binding_mismatch'
         try:
@@ -416,6 +490,18 @@ def build_worker_report(task):
         if failed:lines.append('Ошибки дополнительных шагов сохранены в журнале: '+', '.join(failed)+'.')
         lines.append('Финальный текст модели не подтверждён; приведены факты исполнения.')
         text='\n'.join(lines)
+    if status in {'partial','unknown'} and re.match(
+            r'^\s*(?:[#*>]+\s*)?(?:\*\*)?(?:готово|всё\s+(?:выполнено|готово)|задача\s+выполнена|done|all\s+done)\b',
+            text,re.IGNORECASE):
+        # Keep the original terminal in execution_details, not as the final
+        # verdict. Do not attempt to rewrite arbitrary success claims as facts.
+        try:
+            from .run_journal import unfinished_execution_result
+        except ImportError:
+            from run_journal import unfinished_execution_result
+        text=unfinished_execution_result(commands,error_code or 'goal_not_completed')['answer']
+    if compact and payload.get('unresolved') and status not in {'success','cancelled'}:
+        text+='\n\nСущественно не завершено:\n'+'\n'.join('- '+value for value in payload['unresolved'])
     summary = bounded_report_summary(text) if text else summaries[status]
     report = {"schema_version":1, "task_id":task["task_id"], "worker_id":task.get("worker_id") or "worker-1", "status":status,
         "goal_completed":status == "success", "summary":summary,

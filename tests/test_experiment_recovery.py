@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 from server import answer_auditor, database as db, orchestrator as orch
 from server.worker_reports import receipt_from_report
-from server.worker_reports import build_worker_report
+from server.worker_reports import build_worker_report, coverage_request
 from server.response_presentation import worker_presentation
 from server.worker_context import clip_context_text, capture_history, build_worker_context
 from test_response_presentation import owner, completed
@@ -44,7 +44,7 @@ async def accept_audit(task,payload,reply):
     journal=task['commands'][:-1]
     before=copy.deepcopy(journal)
     result=await answer_auditor.assess_result_coverage(client=None,cfg={'model':'fixture'},
-        chat_completion_request_fn=completion,user_request=task['message'],
+        chat_completion_request_fn=completion,user_request=coverage_request(task),
         current_run_journal=journal,answer_payload=payload)
     assert len(calls)==1
     assert journal==before
@@ -59,11 +59,13 @@ def test_markerless_action_uses_bound_existing_audit_and_survives_restore(owner,
     # Native receipt for the accepted target, not stdout markers or an LLM flag.
     import hashlib
     task['assigned_artifacts']=['C:/Temp/control.py']
+    task['commands'][1]['result']['stdout']="THRESHOLD = 2\nUNCHANGED = 'keep me'\n"
     task['commands'][1]['result']['artifact_receipts']=[{'path':'C:/Temp/control.py','device_id':'pc',
         'source_task_id':task['task_id'],'verified':True,'created_or_changed':True,
-        'size_bytes':128,'sha256':hashlib.sha256(b'changed target').hexdigest()}]
-    asyncio.run(accept_audit(task,payload,{'valid':True,'reason':'operation and postcondition verified',
-        'action_steps':['step_1'],'verification_steps':['step_2']}))
+        'size_bytes':len(task['commands'][1]['result']['stdout']),
+        'sha256':hashlib.sha256(task['commands'][1]['result']['stdout'].encode()).hexdigest()}]
+    asyncio.run(accept_audit(task,payload,{'coverage':'complete','reason':'read-back content compared',
+        'evidence_refs':['step_2']}))
     before=copy.deepcopy(task)
     assert build_worker_report(task)['status']=='success'
     assert worker_presentation(task)['conversational_response']==task['answer']
@@ -358,12 +360,13 @@ def test_real_temporary_file_edit_reaches_audited_report_and_restore(world,tmp_p
     from pathlib import Path
     from server import controller_non_pipeline as controller
     client,owner,key,monkeypatch=world
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]/'agent'))
     target=tmp_path/'control.py'
     original="THRESHOLD = 1\nUNCHANGED = 'keep me'\n"
     expected=original.replace('THRESHOLD = 1','THRESHOLD = 2')
     target.write_text(original,encoding='utf-8')
     helper=tmp_path/'patch.py'
-    helper.write_text("from pathlib import Path\np=Path("+repr(str(target))+")\ns=p.read_text(encoding='utf-8')\nassert s.count('THRESHOLD = 1')==1\np.write_text(s.replace('THRESHOLD = 1','THRESHOLD = 2'),encoding='utf-8')\ncompile(p.read_text(encoding='utf-8'),str(p),'exec')\nprint('EDIT OK; threshold=2; preserved=True')\n",encoding='utf-8')
+    helper.write_text("from pathlib import Path\np=Path("+repr(str(target))+")\ns=p.read_text(encoding='utf-8')\nassert s.count('THRESHOLD = 1')==1\np.write_text(s.replace('THRESHOLD = 1','THRESHOLD = 2'),encoding='utf-8')\ncompile(p.read_text(encoding='utf-8'),str(p),'exec')\nprint(p.read_text(encoding='utf-8'))\n",encoding='utf-8')
     command="$ErrorActionPreference='Stop'; & '"+sys.executable+"' '"+str(helper)+"'; exit $LASTEXITCODE"
     step=shell(command,'');step[1]['artifact_paths']=[str(target)]
     db.upsert_device_profile('pc',owner['id'],{'hostname':'pc','os':'Windows','username':Path(sys.executable).parts[2],'home_path':str(Path(sys.executable).parents[5])})
@@ -386,11 +389,11 @@ def test_real_temporary_file_edit_reaches_audited_report_and_restore(world,tmp_p
             assert body['request']=='Измени порог в рабочем файле на 2, сохрани остальной код'
             observed=body['observations'][0]
             assert observed['result']['returncode']==0
-            assert observed['result']['stdout']=='EDIT OK; threshold=2; preserved=True'
+            assert observed['result']['stdout'].replace('\r\n','\n')==expected.rstrip()
             assert target.read_text(encoding='utf-8')==expected
             audits.append('actual-audit')
-            return {'choices':[{'message':{'content':json.dumps({'valid':True,'reason':'target edit and postcondition observed',
-                'action_steps':['step_1'],'verification_steps':['step_1']})}}]}
+            return {'choices':[{'message':{'content':json.dumps({'coverage':'complete','reason':'actual read-back matches requested edit and preserved code',
+                'evidence_refs':['step_1']})}}]}
         return await answer_auditor.assess_result_coverage(**{**kwargs,'chat_completion_request_fn':completion})
     monkeypatch.setattr(controller,'assess_result_coverage',audit)
     async def scenario():
@@ -398,7 +401,7 @@ def test_real_temporary_file_edit_reaches_audited_report_and_restore(world,tmp_p
         try:
             task=await admit(world,scheduler,'Измени порог в рабочем файле на 2, сохрани остальной код','real-file-edit',assigned_artifacts=[str(target)])
             await asyncio.wait_for(scheduler.runners[owner['id']],20)
-            assert len(device.calls)==1 and not audits, [e.get('result') for e in task.get('commands',[])]  # Typed receipt needs no semantic verdict.
+            assert len(device.calls)==1 and audits==['actual-audit'], [e.get('result') for e in task.get('commands',[])]
             assert task['worker_report']['status']=='success' and task['worker_report']['goal_completed']
             assert target.read_text(encoding='utf-8')==expected
             restored=restore_task(owned_job(task['task_id'],owner['id']))

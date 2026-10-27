@@ -24,7 +24,7 @@ except ImportError:
 
 MAX_QUEUED = 4
 ACTIVE_STATES = ("running", "waiting_confirmation", "waiting_input")
-WINDOW_EFFECTS = frozenset({"list","find","active","monitors","activate","minimize","maximize","restore","left","right","move_monitor","close"})
+WINDOW_EFFECTS = frozenset({"list","find","active","monitors","activate","minimize","maximize","restore","left","right","move_monitor","close","open"})
 
 
 def validated_execution_scope(scope, effects):
@@ -279,12 +279,23 @@ def goal_view(goal_id, owner, chat_id):
             report = snapshot if isinstance(snapshot, dict) else json.loads(row["report"] or "{}")
             if report.get("status") != row["state"] or report.get("task_id") != row["task_id"]:
                 report = {}
+            if report and payload.get('task_id')==row['task_id'] and payload.get('worker_report_binding'):
+                report=saved_worker_report(payload,report)
             result = c.execute("SELECT result_id,sha256 FROM worker_results WHERE task_id=?", (row["task_id"],)).fetchone()
             edges = [dict(edge) for edge in c.execute("SELECT source_task_id,result_id FROM worker_dependencies WHERE task_id=? ORDER BY source_task_id", (row["task_id"],))]
+            terminal=next((entry.get('result') or {} for entry in reversed(payload.get('commands') or [])
+                if entry.get('tool_name') in {'answer.text','answer_text'} and entry.get('status')=='terminal'),{})
             members.append({"task_id": row["task_id"], "revision": row["revision"],
                             "objective": payload.get("proposed_objective") or payload.get("message"),
                             "expected_artifacts": payload.get("assigned_artifacts") or [],
-                            "status": row["state"], "report": report, "dependencies": edges,
+                            "status": report.get('status') or row["state"], "report": report, "dependencies": edges,
+                            "execution_scope": payload.get('execution_scope','general'),
+                            "assignment_scope": payload.get('assignment_scope') or '',
+                            "assignment_constraints": payload.get('assignment_constraints') or [],
+                            "unresolved":terminal.get('unresolved') or [],
+                            "recommendations":terminal.get('remaining') or [],
+                            "coverage_observation":terminal.get('_coverage') or {},
+                            "conversational_response": payload.get("conversational_response") or "",
                             "result": dict(result) if result else None})
         for member in members:
             member["superseded_by"] = replacements.get(member["task_id"])
@@ -443,7 +454,11 @@ def persist_report(task, *, include_report_column=True):
                 from orchestrator import present_window_input_result
             task.update(present_window_input_result(task, report))
         else:
-            task.update(worker_presentation(task,report))
+            try:
+                from .orchestrator import present_worker_result
+            except ImportError:
+                from orchestrator import present_worker_result
+            task.update(present_worker_result(task,report))
         metadata=db.message_task_metadata({**task,"status":report["status"],"worker_report":report},task_id=task["task_id"])
         task["history_metadata"]=metadata
         c.execute("SAVEPOINT worker_history")
@@ -602,6 +617,11 @@ class WorkerScheduler:
         base_scope, base_effects = validated_execution_scope(template.get("execution_scope","general"), template.get("window_effects") or [])
         allowed_devices = template.get("device_ids") or []
         for assignment in assignments:
+            if (not isinstance(assignment.get('scope',''),str) or len(assignment.get('scope',''))>2000
+                    or not isinstance(assignment.get('constraints',[]),list) or len(assignment.get('constraints',[]))>16
+                    or any(not isinstance(value,str) or not value.strip() or len(value)>1000
+                           for value in assignment.get('constraints',[]))):
+                raise ValueError('invalid_assignment_bounds')
             selected = assignment.get("target_device_ids")
             selected = list(allowed_devices) if selected is None else selected
             if (not isinstance(selected,list) or any(not isinstance(device,str) for device in selected)
@@ -726,6 +746,8 @@ class WorkerScheduler:
                 task = {**template, "task_id": ids[key], "goal_id": goal_id,
                         "original_request": original, "message": original,
                         "proposed_objective": assignment["objective"], "status": state,
+                        "assignment_scope": assignment.get("scope") or "",
+                        "assignment_constraints": assignment.get("constraints") or [],
                         "assigned_artifacts": assignment.get("artifacts") or [],
                         "result_first": True,
                         "created_at": now, "worker_id": "worker-1", "orchestrated": True,
@@ -950,7 +972,8 @@ class WorkerScheduler:
                             from worker_context import build_worker_context
                         task['worker_context']=build_worker_context(task['user_id'],task['chat_id'],task['message'] if task.get('goal_id') else task.get('original_request') or task['message'],
                             task['device_ids'],task['context_history'],task.get('source_task_ids') or [],
-                            objective=task.get('proposed_objective') or '',context_summary=task.get('proposed_context_summary') or '')
+                            objective=task.get('proposed_objective') or '',context_summary=task.get('proposed_context_summary') or '',
+                            scope=task.get('assignment_scope') or '',constraints=task.get('assignment_constraints') or [])
                     if task.get("goal_id"):
                         # The original request remains the permission ceiling;
                         # only the assigned deliverable is this Worker's objective.

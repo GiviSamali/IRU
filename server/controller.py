@@ -156,7 +156,7 @@ def _thinking_request_fields(
         # Ordinary window/browser selection reserves output for structured calls.
         return {"thinking": {"type": "disabled"}}
 
-    if (request_phase or "").endswith(("answer_auditor", ".auditor", "result_coverage")):
+    if (request_phase or "").endswith(("answer_auditor", ".auditor", "result_coverage", "goal_completion")):
         # The auditor has a small strict-JSON output budget, not a worker's CoT budget.
         return {"thinking": {"type": "disabled"}}
     base_model = cfg.get("model", "deepseek-v4-flash")

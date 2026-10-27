@@ -171,9 +171,13 @@ def running_progress(task):
 
 
 def worker_presentation(task, report=None):
-    report = normalized_worker_report(task, report)
+    return render_worker_report(task, normalized_worker_report(task, report))
+
+
+def render_worker_report(task, report):
+    """Render an already canonical report; never re-evaluate it."""
     answer = task.get('answer') if isinstance(task.get('answer'),str) else ''
-    if report.get('error_code') in {'artifact_receipt_missing','worker_report_binding_mismatch','required_file_change_reverted','artifact_postcondition_unconfirmed','clarification_required','clarification_binding_mismatch'} or report['status']=='failed':
+    if report.get('error_code') in {'artifact_receipt_missing','worker_report_binding_mismatch','required_file_change_reverted','artifact_postcondition_unconfirmed','clarification_required','clarification_binding_mismatch'} or report['status'] in {'failed','partial','unknown'}:
         answer = report['summary']
     if report['status'] in {'partial','unknown'} and len(report['target_device_ids'])>1:
         answer = report['summary']
@@ -208,4 +212,8 @@ def worker_presentation(task, report=None):
 
 
 def worker_spoken_response(task, report=None):
-    return worker_presentation(task, report)['conversational_response']
+    try:
+        from .orchestrator import present_worker_result
+    except ImportError:
+        from orchestrator import present_worker_result
+    return present_worker_result(task, report)['conversational_response']

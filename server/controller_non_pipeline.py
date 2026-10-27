@@ -251,6 +251,8 @@ async def process_non_pipeline_command(
     window_only, expected_window_actions = worker_window_scope(poll_task_id)
     if window_only:
         allowed_window_tools = {"window_control", "answer_text", "answer_ask_clarification", "answer_report_failure"}
+        if 'open' in expected_window_actions:
+            allowed_window_tools.update({'app_open_url','app_launch'})
         non_pipeline_tools = [tool for tool in DEFAULT_CONTROLLER_TOOLS
                               if tool["function"]["name"] in allowed_window_tools]
     if browser_only:
@@ -628,13 +630,13 @@ async def process_non_pipeline_command(
                         fn_name, {"error": "window_capability_required"},
                         command=f"[tool] {fn_name}", target_device_id=device_id,
                         hostname=device_info.get("hostname") or device_id, iteration=iteration + 1)))
-                    add_correction("Use window_control only for window actions. Shell and synthetic input are forbidden.")
+                    add_correction("Use only the native tools for the accepted window effects. Shell and synthetic input are forbidden.")
                     continue
 
                 if window_only and expected_window_actions and fn_name == "window_control":
                     completed_count = sum(1 for entry in commands_log
-                        if (entry.get("tool_name") or entry.get("action")) in {"window_control", "window.control"}
-                        and (entry.get("result") or {}).get("status") == "success"
+                        if (entry.get("tool_name") or entry.get("action")) in {"window_control", "window.control", "app.launch", "app.open_url"}
+                        and entry.get("status") == "success"
                         and (entry.get("result") or {}).get("completion_state") == "success")
                     expected = expected_window_actions[completed_count] if completed_count < len(expected_window_actions) else None
                     if fn_args.get("action") not in ("active", "list", "find", "monitors", expected):

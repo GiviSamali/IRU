@@ -496,6 +496,7 @@ with TestClient(app) as client:
 @pytest.mark.parametrize('field',['report_summary','diagnostic_metrics','error_code'])
 def test_optional_report_formatting_cannot_block_task_read(owner,monkeypatch,field):
  task=completed(owner)
+ original_answer=task['answer']
  expected='unknown' if field=='error_code' else 'success'
  if field=='error_code':
   task['status']='unknown';task['worker_error_code']={'invalid':'diagnostic'}
@@ -508,7 +509,9 @@ def test_optional_report_formatting_cannot_block_task_read(owner,monkeypatch,fie
  reply=asyncio.run(routes.api_get_task(task['task_id'],SimpleNamespace()))['task']
  assert reply['worker_report']['status']==expected
  assert reply['worker_report']['goal_completed']==(expected=='success')
- assert reply['answer']==task['answer'] and isinstance(reply['conversational_response'],str)
+ assert reply['answer']==reply['conversational_response'] and isinstance(reply['conversational_response'],str)
+ assert task['answer']==original_answer  # Internal Worker material is not rewritten by the API.
+ if field=='error_code':assert original_answer in reply['execution_details']
  assert reply['commands']==task['commands']
 
 

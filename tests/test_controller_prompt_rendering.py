@@ -16,7 +16,7 @@ def test_real_non_pipeline_prompt_renders_literal_answer_json(os_info):
         recent_artifact_context_block="artifact facts",
     )
     prompt = _build_non_pipeline_system_prompt(runtime=runtime, device_id="pc")
-    assert 'answer_text({"answer":"useful result", "remaining":[]})' in prompt
+    assert 'answer_text({"result":"established findings", "unresolved":[]})' in prompt
     assert "prompt-test" in prompt
     assert os_info in prompt
     assert runtime.current_datetime_msk in prompt

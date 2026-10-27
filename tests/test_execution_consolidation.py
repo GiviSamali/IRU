@@ -38,6 +38,18 @@ def task(path, commands, answer='Changed file.'):
             'commands':commands,'answer':answer}
 
 
+def with_content_check(t, path, content=b'new'):
+    """Explicit read-back plus bound comparison, independent of the write receipt."""
+    from server.worker_reports import coverage_binding, coverage_request
+    steps=t['commands']
+    steps.append({'step_id':'step_content','tool_name':'read_file','target_device_id':'pc',
+        'result':{'status':'success','path':str(path),'sha256':digest(content),'content':content.decode()}})
+    payload={'text':t['answer'],'_coverage':{'coverage':'complete','evidence_refs':['step_content'],
+        'binding':coverage_binding(coverage_request(t),steps,t['answer'])}}
+    steps.append({'step_id':'step_final','tool_name':'answer.text','status':'terminal','result':payload})
+    return t
+
+
 @pytest.mark.parametrize('result,expected', [
     ({'returncode':0,'stdout':''},'success'),
     ({'status':'unknown','returncode':0,'stdout':'maybe'},'unknown'),
@@ -56,7 +68,7 @@ def test_one_normalizer(result, expected):
 
 
 def test_verified_file_change_completes_typed_contract(tmp_path):
-    path=tmp_path/'scene.json';t=task(path,[write_step(path)])
+    path=tmp_path/'scene.json';t=with_content_check(task(path,[write_step(path)]),path)
     report=build_worker_report(t)
     assert report['status']=='success' and report['goal_completed']
 
@@ -103,7 +115,7 @@ def test_failed_helper_does_not_erase_verified_deliverable(tmp_path):
     path=tmp_path/'report.txt'
     failed={'step_id':'step_2','tool_name':'execute_cmd','tool_type':'control','status':'failed',
             'result':{'returncode':127,'stdout':'useful observation','stderr':'BOM'}}
-    assert build_worker_report(task(path,[write_step(path),failed]))['status']=='success'
+    assert build_worker_report(with_content_check(task(path,[write_step(path),failed]),path))['status']=='success'
 
 
 def test_helper_alone_does_not_complete_original_goal(tmp_path):
@@ -264,7 +276,9 @@ def test_latest_native_verification_failure_invalidates_old_file_receipt(tmp_pat
     steps=[write_step(path),{'step_id':'step_2','tool_name':'execute_cmd','target_device_id':'pc',
         'result':{'status':'partial','returncode':0,'stdout':'','artifact_errors':[{'path':str(path),'error':'missing file'}]}}]
     if repaired:steps.append(write_step(path,b'new',b'repaired',3))
-    report=build_worker_report(task(path,steps))
+    t=task(path,steps)
+    if repaired:with_content_check(t,path,b'repaired')
+    report=build_worker_report(t)
     assert report['goal_completed'] is repaired
     assert report['artifacts'][0]['verified'] is repaired
     if not repaired:assert report['status']=='unknown' and report['error_code']=='artifact_postcondition_unconfirmed'
@@ -338,6 +352,7 @@ def test_all_accepted_effect_types_must_be_confirmed(tmp_path,file_ok,window_ok)
     if window_ok:steps.append({'step_id':'step_2','tool_name':'window.control','target_device_id':'pc',
         'result':{'status':'success','completion_state':'success','action':'minimize'}})
     t=task(path,steps);t.update(execution_scope='window',window_effects=['minimize'])
+    if file_ok:with_content_check(t,path)
     assert build_worker_report(t)['goal_completed'] is (file_ok and window_ok)
 
 
@@ -394,7 +409,9 @@ def test_office_delivery_accepts_actual_native_package_receipt(tmp_path,monkeypa
     step={'step_id':'step_1','tool_name':'execute_cmd','target_device_id':'pc',
         'result':{'returncode':0,'stdout':'','artifact_receipts':[receipt]}}
     report=build_worker_report(task(path,[step]))
-    assert report['goal_completed'] and report['artifacts'][0]['sha256']==digest(path.read_bytes())
+    assert not report['goal_completed']  # Valid empty DOCX does not prove requested content.
+    assert report['artifacts'][0]['verified'] and report['artifacts'][0]['sha256']==digest(path.read_bytes())
+    assert report['artifacts'][0]['content_verified'] is False
 
 
 def test_office_transfer_attests_copy_identity_without_claiming_format_validation(tmp_path):
@@ -412,9 +429,9 @@ def test_verified_effect_is_not_downgraded_or_misdescribed_by_missing_final_text
     t['commands'].append({'step_id':'step_2','tool_name':'llm_request','tool_type':'system',
         'status':'failed','result':{'error':'model_output_truncated'}})
     report=build_worker_report(t)
-    assert report['goal_completed'] and report['status']=='success'
+    assert not report['goal_completed'] and report['status']=='partial'
     view=worker_presentation(t,report)['conversational_response']
-    assert digest(b'new') in view and 'Обязательные результаты подтверждены' in view
+    assert digest(b'new') in view and 'содержания не подтверждена' in view
     assert 'Unconfirmed truncated model fragment' not in view
 
 

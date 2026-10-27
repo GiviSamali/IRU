@@ -163,7 +163,7 @@ async def spoken_parts(task: dict) -> list[str]:
             from .response_presentation import worker_presentation, worker_spoken_response
         except ImportError:
             from response_presentation import worker_presentation, worker_spoken_response
-        answer = worker_presentation(task, task.get("worker_report"))["conversational_response"]
+        answer = worker_spoken_response(task, task.get("worker_report"))
     candidate=""
     dialogue=(task.get("kind")=="orchestrator" and task.get("status")=="done"
               and task.get("dialogue_intent") in {"conversation","clarify"}

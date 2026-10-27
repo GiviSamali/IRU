@@ -103,6 +103,7 @@ const IRUSmartUI = (() => {
       // Identity is device + full path; two devices may return the same filename.
       const identity=`${device}:${path.replace(/\\/g,'/').toLowerCase()}`;
       if(!files.has(identity))files.set(identity,{type:'file',path,device,name,verified:true,
+        contentVerified:artifact.content_verified===true,verificationScope:artifact.verification_scope || 'file_identity',
         extension:name.includes('.')?name.split('.').pop().toLowerCase():'',
         size:Number.isFinite(artifact.size_bytes) && artifact.size_bytes>=0?artifact.size_bytes:null});
     }
@@ -122,6 +123,9 @@ const IRUSmartUI = (() => {
     const goalFiles=filesFromGoal(goal);
     const blocks = [];
     let content = text(m.conversationalResponse) || text(m.conversational_response) || text(m.content) || text(m.text);
+    const workerReport=m.workerReport || m.worker_report;
+    if(m.role!=='user' && !goal && workerReport?.schema_version===1
+        && ['partial','unknown'].includes(workerReport.status) && text(workerReport.summary))content=text(workerReport.summary);
     // Replace only exact server-generated file lines represented by real File blocks.
     // Keep all other prose, statuses and unavailable/unverified paths unchanged.
     if(m.role!=='user' && goalFiles.length)content=content.split('\n').map(line=>{
@@ -143,6 +147,7 @@ const IRUSmartUI = (() => {
       const canonical=source===text(goal.message);
       blocks.push({type:'goal',key:id+'-goal',goalId:goal.goal_id,status:goal.status,
         done:goal.completed_count,total:goal.total_count,attention:goal.requires_user_action===true,
+        message:text(goal.message),
         details:canonical?content:text(goal.message)});
       // Replace only the server Goal summary; preserve independent answer text.
       if(canonical)content='';
@@ -179,8 +184,12 @@ const IRUSmartUI = (() => {
         const path=text(artifact.path), device=text(artifact.device_id), name=path.split(/[\\/]/).pop();
         if(!path || !device || !name || /[\x00-\x1f]/.test(path+device))continue;
         try {encodeURIComponent(path);encodeURIComponent(device);} catch {continue;}
-        if(!files.some(file=>file.path===path && file.device===device))files.push({type:'file',path,device,name,
-          extension:name.includes('.')?name.split('.').pop().toLowerCase():'',size:null});
+        let file=files.find(file=>file.path===path && file.device===device);
+        if(!file){file={type:'file',path,device,name,
+          extension:name.includes('.')?name.split('.').pop().toLowerCase():'',size:null};files.push(file);}
+        file.verified=true;
+        file.contentVerified=artifact.content_verified===true;
+        file.verificationScope=artifact.verification_scope || 'file_identity';
       }
     }
     blocks.push(...files.map((file,i)=>({...file,key:id+'-file-'+i})));
@@ -222,10 +231,10 @@ const IRUSmartUI = (() => {
       const icon=block.status==='success'?'✓':block.status==='running'?'':block.status==='partial'?'◐':block.status==='cancelled'?'—':'!';
       const percent=100*block.done/block.total;
       return `<section class="smart-block smart-goal" data-block-type="goal" data-status="${esc(block.status)}" data-single-operation="${block.total===1}" data-goal-id="${esc(block.goalId||'')}" data-smart-key="${esc(block.key)}" aria-label="Итог цели">
-        <div class="smart-goal-heading"><span class="smart-goal-icon" aria-hidden="true">${icon}</span><strong>${esc(labels[block.status])}</strong><span class="smart-goal-count" aria-label="Подтверждено ${block.done} из ${block.total} результатов">${block.done} / ${block.total}</span></div>
-        <div class="smart-goal-meter" role="meter" aria-label="Подтверждённые результаты" aria-valuemin="0" aria-valuemax="${block.total}" aria-valuenow="${block.done}"><span style="width:${percent}%"></span></div>
+        <div class="smart-goal-heading"><span class="smart-goal-icon" aria-hidden="true">${icon}</span><strong>Поручение</strong></div>
+        <div class="smart-goal-message">${formattedText(block.message || block.details || '')}</div>
         ${block.attention?'<span class="smart-goal-attention">Нужен ответ</span>':''}
-        ${block.details?`<details class="smart-goal-details"${expanded(block,context)?' open':''}><summary data-action="toggle-goal-result" aria-expanded="${expanded(block,context)}">Подробнее</summary><div>${formattedText(block.details)}</div></details>`:''}
+        <details class="smart-goal-details"${expanded(block,context)?' open':''}><summary data-action="toggle-goal-result" aria-expanded="${expanded(block,context)}">Ход выполнения</summary><div>${esc(labels[block.status])}: <span class="smart-goal-count">${block.done} / ${block.total}</span><div class="smart-goal-meter" role="meter" aria-label="Подтверждённые результаты" aria-valuemin="0" aria-valuemax="${block.total}" aria-valuenow="${block.done}"><span style="width:${percent}%"></span></div></div></details>
       </section>`;
     },
     text(block, context) {
@@ -252,7 +261,7 @@ const IRUSmartUI = (() => {
       const open = expanded(block, context);
       return `<section class="smart-block smart-file${open ? ' expanded' : ''}" data-block-type="file" data-smart-key="${esc(block.key)}">
         <div class="smart-file-heading"><span class="smart-file-kind">${esc(block.extension || 'Файл')}</span><strong title="${esc(block.path)}">${esc(block.name)}</strong></div>
-        ${block.verified?'<div class="smart-file-verified">Подтверждён при выполнении</div>':''}
+        ${block.verified?`<div class="smart-file-verified">${block.contentVerified?'Файл и полнота содержания подтверждены':block.verificationScope==='copy_identity'?'Подтверждена идентичность копии':'Файл подтверждён; полнота содержания не проверена'}</div>`:''}
         <div class="smart-file-meta"><span>${esc(block.device)}</span></div>
         <div class="smart-file-actions">
           <button type="button" data-action="open-message-file" data-device-id="${esc(encodeURIComponent(block.device))}" data-file-path="${esc(encodeURIComponent(block.path))}">Открыть на устройстве</button>

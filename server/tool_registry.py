@@ -977,8 +977,10 @@ DEVICE_TOOL_SCHEMAS = [
     },
     {
         "type": "function",
-        "function": {"name":"answer_text", "description":"Finish with the useful result. Report answer and optional changed/created objects or remaining work. Server derives verification and completion from actual operations; never assign yourself verified/success or copy hashes/step IDs.",
-         "parameters":{"type":"object","additionalProperties":False,"required":["answer"],"properties":{
+        "function": {"name":"answer_text", "description":"Return a compact Worker result for the Orchestrator, not a user-facing reply. Use result for established findings and unresolved only for substantive unfinished requirements of the assigned goal. Optional recommendations belong in remaining and do not block completion. Server links evidence automatically; never claim verified/success or copy hashes/step IDs. Legacy answer remains accepted.",
+         "parameters":{"type":"object","additionalProperties":False,"anyOf":[{"required":["result"]},{"required":["answer"]}],"properties":{
+             "result":{"type":"string","minLength":1,"maxLength":8000},
+             "unresolved":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":1000}},
              "answer":{"type":"string","minLength":1,"maxLength":100000},
              "effects":{"type":"object","additionalProperties":False,"properties":{
                  k:{"type":"array","maxItems":32,"items":{"type":"string"}} for k in ("changed","created")}},

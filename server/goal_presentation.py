@@ -47,7 +47,7 @@ def goal_presentation(goal: dict) -> dict:
             name = file.get("name") or PureWindowsPath(path).name
             artifact = {"path":path, "name":name, "device_id":file.get("device_id"),
                         "task_id":member.get("task_id"),"verified":True,
-                        **{key:file[key] for key in ("size_bytes","source_task_id","sha256","format","artifact_role","structure") if key in file}}
+                        **{key:file[key] for key in ("size_bytes","source_task_id","sha256","format","artifact_role","structure","verification_scope","content_verified") if key in file}}
             artifacts.append(artifact)
             # A helper generator (.py, scripts/helpers) is not the deliverable
             # unless the assignment explicitly identifies that file as output.
@@ -72,29 +72,12 @@ def goal_presentation(goal: dict) -> dict:
                 if len(shown) < 8:
                     shown.append(artifact)
 
-    # Only the owner's frozen WorkerReport is used to describe what actually happened.
-    # The Orchestrator is not re-running a Worker or inventing a new verification.
-    single = members[0] if total == 1 and members else None
-    detail = str((single.get("report") or {}).get("summary") or "").strip() if single else ""
-    if success:
-        message = ("Готово." if total == 1 else f"Готово. Подтверждены все {total} результата.")
-        if detail and detail.casefold().rstrip(".!") not in {"готово", "задача выполнена", "успешно"}:
-            message += " " + detail
-    elif status == "running":
-        message = f"Выполняю цель: подтверждено {done} из {total} результатов."
-        attention = [m for m in members if m.get("status") in {"waiting_confirmation", "waiting_input"}]
-        if attention:
-            message += " Требуется решение в Операциях."
-    elif status == "unknown":
-        message = f"Исход цели не подтверждён. Подтверждено {done} из {total} результатов; автоматически не повторяю."
-    elif status == "partial":
-        message = f"Выполнено частично: подтверждено {done} из {total} результатов. Остальные требуют внимания."
-        if detail and detail.casefold() not in {"частично", "выполнено частично"}:
-            message += " " + detail
-    elif status == "cancelled":
-        message = "Цель отменена."
-    else:
-        message = "Не удалось подтвердить выполнение цели."
+    # Only Orchestrator composes conversation; this module renders its projection.
+    try:
+        from .orchestrator import present_goal_result
+    except ImportError:
+        from orchestrator import present_goal_result
+    message = present_goal_result(goal)
     if terminal and shown:
         message += "\n" + "\n".join("Файл: " + a["path"] for a in shown)
     if terminal and not success:

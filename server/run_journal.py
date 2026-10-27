@@ -717,10 +717,11 @@ def validate_answer_text_payload(payload, journal):
     """Minimal model result; legacy fields are hints, never completion authority."""
     if not isinstance(payload,dict):
         raise ProtocolValidationError('answer_text arguments must be an object')
-    allowed = {'answer','text','answer_type','effects','remaining','basis','self_check','suggested_fact'}
+    allowed = {'result','unresolved','answer','text','answer_type','effects','remaining','basis','self_check','suggested_fact'}
     if set(payload)-allowed:
         raise ProtocolValidationError('Unknown answer fields; report answer/effects/remaining only.')
-    text = payload.get('answer',payload.get('text'))
+    compact = 'result' in payload
+    text = payload.get('result') if compact else payload.get('answer',payload.get('text'))
     if not isinstance(text,str) or not text.strip() or len(text)>100000:
         raise ProtocolValidationError('answer_text text must be a non-empty string (max 100000 characters)')
     effects = payload.get('effects') or {}
@@ -732,13 +733,20 @@ def validate_answer_text_payload(payload, journal):
     remaining = payload.get('remaining',[])
     if not isinstance(remaining,list) or len(remaining)>32 or any(not isinstance(v,str) or len(v)>1000 for v in remaining):
         raise ProtocolValidationError('remaining must be a bounded string array')
+    unresolved = payload.get('unresolved',[])
+    if (not isinstance(unresolved,list) or len(unresolved)>32
+            or any(not isinstance(v,str) or not v.strip() or len(v)>1000 for v in unresolved)):
+        raise ProtocolValidationError('unresolved must contain only substantive unfinished requirements')
+    if compact and (len(text)>8000 or any(k in payload for k in ('answer','text'))):
+        raise ProtocolValidationError('result must be compact and cannot be mixed with answer/text')
     kind = payload.get('answer_type','result')
     if kind not in {'result','pure_text','grounded_report','partial_report','error_report','failure','clarification'}:
         raise ProtocolValidationError('answer_text answer_type is invalid')
     # References are assembled by the server. Never ask the model to repair IDs.
     result = {'text':text,'answer_type':kind,'effects':effects,'remaining':remaining,
               'basis':[e['step_id'] for e in journal if e.get('step_id') and e.get('tool_type') not in {'system','answer'}],
-              '_result_contract':2}
+              '_result_contract':3 if compact else 2}
+    if compact or unresolved:result['unresolved']=unresolved
     if payload.get('suggested_fact') is not None:result['suggested_fact']=payload['suggested_fact']
     suggestion=re.search(r'\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]',text)
     if suggestion:

@@ -31,8 +31,8 @@ _TOOL = {"type": "function", "function": {
     "description": "Write a brief, truthful conversational follow-up from finalized evidence only.",
     "parameters": {"type": "object", "additionalProperties": False,
         "properties": {
-            "answer": {"type": "string", "maxLength": 700},
-            "spoken_response": {"type": "string", "maxLength": 280}},
+            "answer": {"type": "string", "maxLength": 2000},
+            "spoken_response": {"type": "string", "maxLength": 420}},
         "required": ["answer", "spoken_response"]}}}
 _SYSTEM = (
     "Ты ИРУ, Оркестратор, возвращаешься к человеку после работы Worker. "
@@ -44,6 +44,10 @@ _SYSTEM = (
     "answer — короткий письменный итог, spoken_response — ещё более короткая устная версия. "
     "Для успешной цели говори от первого лица в мужском роде. "
     "Если данных для предметного вывода недостаточно, так и скажи."
+    " Технический статус уже установлен WorkerReport и неизменяем. При partial/unknown/failed "
+    "не говори, что поручение выполнено: объясни полученное и существенный пробел. "
+    "Отделяй наблюдения от гипотез; рекомендации не являются невыполненными требованиями. "
+    "Смысл исходного поручения и границы каждого assignment сохраняй."
 )
 
 
@@ -52,12 +56,15 @@ def _fingerprint(goal, projected):
         "goal_id": goal.get("goal_id"),
         "revision": goal.get("revision"),
         "status": projected["status"],
+        "request": goal.get('original_request'),
         "members": [{
             "task_id": item.get("task_id"), "status": item.get("status"),
             "required": item.get("required_for_goal", True),
             "summary": (item.get("report") or {}).get("summary"),
             "evidence_refs": (item.get("report") or {}).get("evidence_refs"),
             "result": (item.get("result") or {}).get("sha256"),
+            "scope": item.get('assignment_scope'),"constraints":item.get('assignment_constraints'),
+            "unresolved":item.get('unresolved'),"coverage":item.get('coverage_observation'),
         } for item in goal.get("tasks") or []],
     }
     return hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
@@ -83,54 +90,111 @@ def _cached(goal, owner, chat, fingerprint, projected):
     if row["fingerprint"] != fingerprint:
         # A contradictory terminal snapshot must not trigger a fresh LLM call
         # on every poll under the same revision. Fail closed to current evidence.
-        return {"message": projected["message"], "spoken_message": projected["spoken_message"]}
-    return {"message": row["answer"], "spoken_message": row["spoken"]}
+        return {"message": projected["message"], "spoken_message": projected["spoken_message"],
+                "reply_source":"template_stale_cache","reply_request_llm_calls":0}
+    reply={"message": row["answer"], "spoken_message": row["spoken"],
+           "reply_source":"cached_existing","reply_request_llm_calls":0}
+    try:
+        with db.get_db() as c:
+            rows=c.execute("""SELECT m.task_metadata FROM orchestrator_turns t JOIN messages m ON m.id=t.message_id
+                WHERE t.owner_user_id=? AND t.chat_id=? ORDER BY t.created_at DESC LIMIT 200""",(owner,chat)).fetchall()
+        for item in rows:
+            metadata=json.loads(item['task_metadata'] or '{}')
+            if (metadata.get('goalId')==goal['goal_id'] and metadata.get('goalCompletionRevision')==goal['revision']
+                    and metadata.get('goalCompletionFingerprint')==fingerprint):
+                reply.update(reply_source=metadata.get('goalCompletionSource','cached_existing'),
+                    reply_metrics=metadata.get('goalCompletionMetrics',{}))
+                break
+    except Exception:
+        pass  # Cached words remain available when optional accounting metadata is absent.
+    return reply
+
+
+def _needs_explanation(goal):
+    members=[m for m in goal.get('tasks') or [] if m.get('required_for_goal',True)]
+    if not members or all(m.get('execution_scope')=='window' for m in members):return False
+    if all(m.get('status')=='success' and (m.get('report') or {}).get('artifacts')
+           and all(a.get('verification_scope')=='copy_identity' for a in m['report']['artifacts']) for m in members):
+        return False
+    return True
 
 
 async def _narrate(goal, projected):
-    """Optional language-only LLM call. No device, browser or worker tools."""
-    verified = [{
-        "status": entry.get("status"),
-        "summary": str((entry.get("report") or {}).get("summary") or "")[:1200],
-        "error_code": (entry.get("report") or {}).get("error_code"),
-        "evidence_count": len((entry.get("report") or {}).get("evidence_refs") or []),
-    } for entry in (goal.get("tasks") or []) if entry.get("required_for_goal", True)]
-    request = {
-        "original_request": str(goal.get("original_request") or "")[:700],
-        "verified_goal_status": projected["status"],
-        "worker_outcomes": verified[:8],
-        "fixed_summary": projected["spoken_message"],
-    }
-    cfg = load_llm_config()
-    messages = [{"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": json.dumps({"untrusted_evidence": request}, ensure_ascii=False)}]
-    async with httpx.AsyncClient(timeout=httpx.Timeout(7, connect=3)) as client:
-        result = await _chat_completion_request(
-            client, cfg, cfg["model"], messages, tools=[_TOOL],
-            tool_choice="required", max_tokens=430,
-            usage_context={"route": "goal_completion", "phase": "goal_completion",
-                "metadata": {"entity": "orchestrator",
-                             "goal_id": str(goal["goal_id"])[:64]}},
-            phase="goal_completion")
-    choice = (result.get("choices") or [])[0]
-    if choice.get("finish_reason") == "length":
-        raise ValueError("goal_completion_truncated")
-    calls = (choice.get("message") or {}).get("tool_calls") or []
-    if len(calls) != 1 or calls[0].get("function", {}).get("name") != "goal_completion_reply":
-        raise ValueError("goal_completion_invalid_tool")
-    args = json.loads(calls[0]["function"].get("arguments") or "{}")
-    answer = args.get("answer")
-    spoken = args.get("spoken_response")
-    if not isinstance(answer, str) or not 5 <= len(answer.strip()) <= 700:
-        raise ValueError("goal_completion_invalid_answer")
-    if not isinstance(spoken, str) or not 5 <= len(spoken.strip()) <= 280:
-        raise ValueError("goal_completion_invalid_speech")
-    speech = conversational_speech(spoken)
-    if not speech:
-        raise ValueError("goal_completion_unusable_speech")
-    # Server retains the authoritative status in front of model-authored prose.
-    return {"message": "Готово. " + answer.strip(),
-            "spoken_message": "Готово. " + speech}
+    """One language-only Orchestrator request, with measured usage and latency."""
+    try:
+        from .context_budget import estimate_tokens
+        from .llm_usage import extract_usage, estimate_deepseek_cost_usd, LLM_ENTITY
+    except ImportError:
+        from context_budget import estimate_tokens
+        from llm_usage import extract_usage, estimate_deepseek_cost_usd, LLM_ENTITY
+    started=time.monotonic()
+    metrics={'llm_calls':0,'usage':None,'estimated_cost_usd':None}
+    reply={'message':projected['message'],'spoken_message':projected['spoken_message'],
+           'reply_source':'template_fallback','reply_request_llm_calls':0,'reply_metrics':metrics}
+    entity_token=None
+    try:
+        outcomes=[{'status':entry.get('status'),'objective':entry.get('objective') or '',
+            'scope':entry.get('assignment_scope') or '',
+            'constraints':entry.get('assignment_constraints') or [],
+            'unresolved':entry.get('unresolved') or [],
+            'optional_recommendations':entry.get('recommendations') or [],
+            'coverage_observation':{key:(entry.get('coverage_observation') or {}).get(key)
+                for key in ('coverage','reason','evidence_refs')},
+            'summary':(entry.get('report') or {}).get('summary') or '',
+            'error_code':(entry.get('report') or {}).get('error_code'),
+            'evidence_refs':(entry.get('report') or {}).get('evidence_refs') or [],
+            'artifacts':(entry.get('report') or {}).get('artifacts') or []}
+            for entry in goal.get('tasks') or [] if entry.get('required_for_goal',True)]
+        material={'original_request':goal.get('original_request') or '',
+            'verified_goal_status':projected['status'],'worker_outcomes':outcomes}
+        messages=[{'role':'system','content':_SYSTEM},
+            {'role':'user','content':json.dumps({'untrusted_evidence':material},ensure_ascii=False)}]
+        metrics['input_tokens_estimated']=estimate_tokens({'messages':messages,'tools':[_TOOL]})
+        if metrics['input_tokens_estimated']>8000:raise ValueError('goal_completion_input_budget')
+        cfg=load_llm_config();metrics['model']=cfg['model']
+        entity_token=LLM_ENTITY.set('orchestrator')
+        async with httpx.AsyncClient(timeout=httpx.Timeout(7,connect=3)) as client:
+            metrics['llm_calls']=reply['reply_request_llm_calls']=1
+            result=await _chat_completion_request(client,cfg,cfg['model'],messages,tools=[_TOOL],
+                tool_choice='required',max_tokens=800,phase='goal_completion',
+                usage_context={'user_id':goal.get('owner_user_id'),'chat_id':goal.get('chat_id'),
+                    'route':'goal_completion','phase':'goal_completion',
+                    'metadata':{'entity':'orchestrator','goal_id':str(goal['goal_id'])[:64]}})
+        if result.get('usage'):
+            metrics['usage']=extract_usage(result)
+            try:
+                metrics['estimated_cost_usd']=estimate_deepseek_cost_usd(cfg['model'],metrics['usage'],cfg)
+            except Exception as exc:
+                metrics['cost_error_type']=type(exc).__name__
+        choice=(result.get('choices') or [])[0]
+        if choice.get('finish_reason')=='length':raise ValueError('goal_completion_truncated')
+        calls=(choice.get('message') or {}).get('tool_calls') or []
+        if len(calls)!=1 or calls[0].get('function',{}).get('name')!='goal_completion_reply':
+            raise ValueError('goal_completion_invalid_tool')
+        args=json.loads(calls[0]['function'].get('arguments') or '{}')
+        if not isinstance(args,dict) or set(args)!={'answer','spoken_response'}:
+            raise ValueError('goal_completion_invalid_fields')
+        answer,spoken=args['answer'],args['spoken_response']
+        if not isinstance(answer,str) or not 5<=len(answer.strip())<=2000:
+            raise ValueError('goal_completion_invalid_answer')
+        if not isinstance(spoken,str) or not 5<=len(spoken.strip())<=420:
+            raise ValueError('goal_completion_invalid_speech')
+        speech=conversational_speech(spoken)
+        if not speech:raise ValueError('goal_completion_unusable_speech')
+        if projected['status']!='success':
+            import re
+            if any(re.match(r'^\s*(?:\*\*)?(?:готово|всё выполнено|задача выполнена|done)\b',value,re.I)
+                   for value in (answer,spoken)):
+                raise ValueError('goal_completion_incompatible_completion_claim')
+        reply.update(message=answer.strip(),spoken_message=speech,reply_source='orchestrator_llm')
+    except Exception as exc:
+        metrics['error_type']=type(exc).__name__
+        if isinstance(exc,ValueError) and str(exc).startswith('goal_completion_'):
+            metrics['fallback_reason']=str(exc)
+    finally:
+        if entity_token is not None:LLM_ENTITY.reset(entity_token)
+        metrics['latency_ms']=round((time.monotonic()-started)*1000)
+    return reply
 
 
 def _persist_to_dialogue(connection, goal, reply, owner, chat):
@@ -151,6 +215,9 @@ def _persist_to_dialogue(connection, goal, reply, owner, chat):
         if row["content"] and metadata.get("goalCompletionRevision") is None:
             continue
         metadata.update(goalCompletionRevision=goal["revision"],
+                        goalCompletionFingerprint=reply.get('reply_fingerprint'),
+                        goalCompletionSource=reply.get('reply_source','template'),
+                        goalCompletionMetrics=reply.get('reply_metrics',{}),
                         conversationalResponse=reply["message"])
         connection.execute("""UPDATE messages SET content=?,task_metadata=?
             WHERE id=? AND role='assistant'""",
@@ -168,6 +235,12 @@ async def present_completed_goal(goal, projected, owner, chat):
     except Exception:
         return projected  # Speech/presentation never invalidate execution.
     if stored:
+        if stored.get('reply_source')=='template_stale_cache':
+            try:
+                with db.get_db() as c:
+                    _persist_to_dialogue(c,goal,{**stored,'reply_fingerprint':fingerprint},owner,chat)
+            except Exception:
+                pass
         return {**projected, **stored}
     key = (goal["goal_id"], goal["revision"], owner, chat)
     lock = _LOCKS.get(key)
@@ -181,15 +254,20 @@ async def present_completed_goal(goal, projected, owner, chat):
             return projected
         if stored:
             return {**projected, **stored}
-        # Only full success is paraphrased by a model. Partial/unknown/failed
-        # outcomes remain deterministic, so a stylistic model cannot erase a warning.
         reply = {"message": projected["message"],
-                 "spoken_message": projected["spoken_message"]}
-        if projected["status"] == "success":
+                 "spoken_message": projected["spoken_message"],"reply_source":"template",
+                 "reply_request_llm_calls":0,"reply_metrics":{'llm_calls':0,'estimated_cost_usd':0}}
+        if projected['status'] in {'success','partial','unknown','failed'} and _needs_explanation(goal):
+            started=time.monotonic()
             try:
                 reply = await asyncio.wait_for(_narrate(goal, projected), timeout=9)
-            except Exception:
-                pass  # A language-model failure never changes a Worker outcome.
+                reply.setdefault('reply_source','orchestrator_llm')
+                reply.setdefault('reply_request_llm_calls',1)
+            except Exception as exc:
+                reply.update(reply_source='template_fallback',reply_request_llm_calls=1,
+                    reply_metrics={'llm_calls':1,'latency_ms':round((time.monotonic()-started)*1000),
+                        'usage':None,'estimated_cost_usd':None,'error_type':type(exc).__name__})
+        reply['reply_fingerprint']=fingerprint
         try:
             with db.get_db() as c:
                 _prepare_storage(c)
@@ -200,6 +278,6 @@ async def present_completed_goal(goal, projected, owner, chat):
                      reply["message"], reply["spoken_message"], time.time()))
                 _persist_to_dialogue(c, goal, reply, owner, chat)
             stored = _cached(goal, owner, chat, fingerprint, projected)
-            return {**projected, **(stored or reply)}
+            return {**projected,**reply,**(stored or {}),'reply_request_llm_calls':reply.get('reply_request_llm_calls',0)}
         except Exception:
             return projected

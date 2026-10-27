@@ -225,3 +225,30 @@ test('canonical artifacts suppress stale write cards and keep server outcome vis
  assert.equal(task(m).status,'unknown');assert.equal(blocks(m).filter(b=>b.type==='file').length,0);
  assert.equal(task(canonical({},'partial')).status,'partial');
 });
+
+test('partial WorkerReport overrides stale Done and scopes file verification to actual checks',()=>{
+ const report={schema_version:1,status:'partial',goal_completed:false,summary:'Содержание не подтверждено.',
+   target_device_ids:['pc'],artifacts:[{path:'C:/report.docx',device_id:'pc',verified:true,
+     verification_scope:'file_identity_and_format',content_verified:false}]};
+ const view=ui.adapt({role:'assistant',content:'Готово. Всё проверено.',workerReport:report});
+ assert.equal(view.blocks.find(b=>b.type==='text').text,report.summary);
+ const html=ui.render(view);
+ assert.ok(!html.includes('Готово'));
+ assert.ok(html.includes('полнота содержания не проверена'));
+ const checked=ui.render(ui.adapt({role:'assistant',workerReport:{...report,status:'success',goal_completed:true,
+   artifacts:[{...report.artifacts[0],content_verified:true}]}}));
+ assert.ok(checked.includes('Файл и полнота содержания подтверждены'));
+});
+
+test('Orchestrator reply is visible while technical Goal counters stay inside collapsed details',()=>{
+ const goal={goal_id:'g',status:'partial',completed_count:0,total_count:1,
+   requires_user_action:false,message:'Окно остаётся открытым.',task_ids:['t'],artifacts:[]};
+ const html=ui.render(ui.adapt({role:'assistant',goalId:'g',taskKind:'goal',content:goal.message,goalPresentation:goal}));
+ assert.ok(html.includes('Окно остаётся открытым.'));
+ const details=html.indexOf('<details');
+ assert.ok(details>0 && html.indexOf('0 / 1')>details);
+ assert.ok(!html.slice(0,details).includes('Частично выполнено'));
+ goal.result_artifacts=[{path:'C:/report.docx',device_id:'pc',task_id:'t',verified:true,content_verified:true}];
+ const checked=ui.render(ui.adapt({role:'assistant',goalId:'g',taskKind:'goal',content:goal.message,goalPresentation:goal}));
+ assert.ok(checked.includes('Файл и полнота содержания подтверждены'));
+});
