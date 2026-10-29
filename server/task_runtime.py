@@ -1264,6 +1264,11 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 poll_task_id=task_id,
                 device_tool_fn=device_tool_fn,
             )
+            # Provenance is stamped where the effect is registered, not derived
+            # later from whichever Worker happens to build a report.
+            for entry in result.get("commands") or []:
+                if isinstance(entry, dict):
+                    entry.setdefault("task_id", task_id)
             if is_task_cancel_requested(task_id):
                 return cancellation_payload(result.get("commands", []))
             task_receipt = result.get("task_receipt")

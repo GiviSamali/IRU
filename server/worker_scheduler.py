@@ -402,6 +402,30 @@ def _retain_journal(saved, current):
     return commands
 
 
+def _entry_owner(entry):
+    owner = entry.get("task_id") if isinstance(entry, dict) else None
+    return owner if isinstance(owner, str) and owner else None
+
+
+def _owned_journal(entries, task_id):
+    """Keep only entries this Task produced; stamp unowned (legacy) entries.
+
+    A journal entry is evidence of an effect. Evidence produced by another
+    Task must never be re-attributed to the current one, so entries carrying a
+    foreign producer are dropped instead of merged.
+    """
+    owned = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        owner = _entry_owner(entry)
+        if owner is not None and owner != task_id:
+            continue
+        entry.setdefault("task_id", task_id)
+        owned.append(entry)
+    return owned
+
+
 def persist_worker_journal(task_id, journal):
     """Checkpoint received results without finalizing the Worker or its Goal."""
     task = tasks.get(task_id)
@@ -409,8 +433,9 @@ def persist_worker_journal(task_id, journal):
         return
     # Broadcast devices run sequentially; retain completed devices as well as
     # the current controller's journal. Step IDs keep their existing scope.
-    commands = [entry for result in (task.get("results") or {}).values()
-                for entry in result.get("commands") or []] + list(journal)
+    completed = [entry for result in (task.get("results") or {}).values()
+                 for entry in (result or {}).get("commands") or []]
+    commands = _owned_journal(completed, task_id) + _owned_journal(journal, task_id)
     task["commands"] = commands
     try:
         with db.get_db() as c:
@@ -770,7 +795,11 @@ class WorkerScheduler:
                     db.reserve_daily_worker_command(c, owner)
                 key = assignment["key"]
                 state = "waiting_dependency" if graph[key] or external[key] else "queued"
+                # Mutable containers must not be shared between assignments:
+                # a shallow template copy would let one Worker's per-device
+                # results (and its journal) become another Worker's evidence.
                 task = {**template, "task_id": ids[key], "goal_id": goal_id,
+                        "results": {}, "tasks": [], "diagnostic_trace": [],
                         "original_request": original, "message": original,
                         "proposed_objective": assignment["objective"], "status": state,
                         "assignment_scope": assignment.get("scope") or "",

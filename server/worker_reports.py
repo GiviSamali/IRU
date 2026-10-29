@@ -149,7 +149,12 @@ def saved_worker_report(task, report=None):
 
 
 def build_worker_report(task):
-    commands = [c for c in task.get('commands') or [] if isinstance(c,dict)]
+    task_id = task["task_id"]
+    # Only this Task's own effects are evidence. A journal entry produced by
+    # another Worker must never be re-attributed here; legacy entries without
+    # provenance stay readable.
+    commands = [c for c in task.get('commands') or []
+                if isinstance(c,dict) and c.get('task_id') in (None, task_id)]
     receipt = task.get('task_receipt') if isinstance(task.get('task_receipt'),dict) else {}
     raw = task.get('status','unknown')
     refs = [c['step_id'] for c in commands if isinstance(c.get('step_id'),str)]
@@ -211,7 +216,8 @@ def build_worker_report(task):
             device = result.get("target_device") if tool == "transfer_file" else _short_did(entry.get("target_device_id") or entry.get("device_id") or "")
             if isinstance(path,str) and path and device in allowed_devices:
                 artifact = {"type":"file", "name":PureWindowsPath(path).name, "path":path, "device_id":device,
-                    "verified":True,"source_task_id":task["task_id"],"worker_id":task.get("worker_id") or "worker-1"}
+                    "verified":True,"source_task_id":entry.get("task_id") or task["task_id"],
+                    "worker_id":task.get("worker_id") or "worker-1"}
                 if tool in {"office_docx","office_xlsx","office_pptx"}:
                     native = next((r for r in result.get("artifact_receipts") or [] if isinstance(r,dict)
                         and r.get("path") == path and r.get("source_task_id") == task["task_id"]
@@ -232,32 +238,34 @@ def build_worker_report(task):
                 if isinstance(item, str) and item.strip()]
     user_files = [a for a in final_receipts if "/scripts/helpers/" not in a["path"].replace("\\","/").casefold()
                   or any(e.replace("\\","/").split("/")[-1].casefold()==a["name"].casefold() for e in expected)]
-    # An output receipt can satisfy only one assignment. Explicit filenames are
-    # exact; descriptive output labels may use a verified file of that format.
-    formats = {".docx": ("docx", "word"), ".xlsx": ("xlsx", "excel"),
-               ".pptx": ("pptx", "powerpoint"), ".pdf": ("pdf",)}
-    def specificity(label):
-        name = label.replace("\\", "/").casefold()
-        suffix = PureWindowsPath(name).suffix
-        if suffix and len(suffix) <= 12 and suffix[1:2].isalpha() and name[-len(suffix)-1:-len(suffix)].isalnum():
-            return 2
-        return int(any(token in name for tokens in formats.values() for token in tokens))
+    # A receipt satisfies exactly one assignment. Binding is deterministic:
+    # exact name/path equality, then a single remaining candidate for a single
+    # remaining requirement. Anything else stays unmatched with a reason; a
+    # descriptive label is never guessed into a file by substring search.
+    def _key(value):
+        return PureWindowsPath(str(value or "").replace("\\", "/")).as_posix().casefold()
 
     remaining = list(user_files)
-    matched = []
-    for label in sorted(expected, key=specificity, reverse=True):
-        target = label.replace("\\", "/").casefold()
-        exact = specificity(label) == 2
-        hinted = {suffix for suffix, tokens in formats.items() if any(token in target for token in tokens)}
-        match = next((a for a in remaining if (
-            (PureWindowsPath(a["path"]).as_posix().casefold() == PureWindowsPath(target).as_posix().casefold() if "/" in target
-             else a["name"].casefold() == target) if exact else
-            (PureWindowsPath(a["path"]).suffix.casefold() in hinted if hinted else False)
-        )), None)
-        if match is not None:
-            matched.append(match)
-            remaining.remove(match)
-    artifact_incomplete = len(matched) < len(expected)
+    matched, unmatched, pending = [], [], []
+    for label in expected:
+        target = _key(label)
+        hit = next((a for a in remaining
+                    if _key(a.get("path")) == target or _key(a.get("name")) == target), None)
+        if hit is None:
+            pending.append(label)
+            continue
+        matched.append(hit)
+        remaining.remove(hit)
+    if len(pending) == 1 and len(remaining) == 1:
+        # One requirement, one verified candidate: the binding is unambiguous.
+        matched.append(remaining.pop())
+        pending = []
+    for label in pending:
+        unmatched.append({"label": label,
+                          "reason": ("ambiguous_artifact" if len(remaining) > 1 else
+                                     "artifact_missing" if not user_files else
+                                     "no_matching_artifact")})
+    artifact_incomplete = bool(unmatched)
     operations = [c for c in commands if c.get('tool_type') not in {'system','answer'}
                   and not str(c.get('tool_name','')).startswith('answer')]
     useful = bool(artifacts) or any(isinstance(c.get('result'),dict) and bool(c['result'].get('stdout')) for c in operations)
@@ -427,7 +435,9 @@ def build_worker_report(task):
         "waiting_input":"Задача ожидает выбора окна.", "running":"Задача выполняется.", "waiting_confirmation":"Задача ожидает решения пользователя."}
     error_code=(task.get("worker_error_code") or receipt.get("terminal_reason")) if status!="success" else None
     if artifact_incomplete:
-        error_code = "artifact_receipt_missing"
+        error_code = ("artifact_match_ambiguous"
+                      if any(item.get("reason") == "ambiguous_artifact" for item in unmatched)
+                      else "artifact_receipt_missing")
     if not isinstance(error_code, str):error_code=None
     if status=='partial' and not error_code and useful and any(operation_facts(c)=='failed' for c in operations):
         error_code='mixed_diagnostic_evidence'
@@ -449,9 +459,8 @@ def build_worker_report(task):
             from run_journal import unfinished_execution_result
         text=unfinished_execution_result(commands,error_code or 'multi_device_incomplete')['answer']
     if artifact_incomplete and status in {'partial','unknown','failed'}:
-        missing=[label for label in expected if not any(
-            PureWindowsPath(a['path']).name.casefold()==PureWindowsPath(label).name.casefold() for a in matched)]
-        text='Обязательные файловые результаты не подтверждены: '+', '.join(missing or expected)+'.\n\n' + (
+        missing=[item["label"] for item in unmatched] or list(expected)
+        text='Обязательные файловые результаты не подтверждены: '+', '.join(missing)+'.\n\n' + (
             'Сохранённый текст результата — неподтверждённый исходный материал:\n'+text if text else '')
 
     if status in {'partial','failed','unknown'} and not error_code:
