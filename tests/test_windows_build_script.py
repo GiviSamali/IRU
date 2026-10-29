@@ -125,11 +125,25 @@ def test_windows_desktop_build_packages_webview2_and_excludes_qt_browser():
         assert module in imports and module not in excluded
     for module in ("PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"):
         assert module not in imports and module in excluded
-    assert '"pywebview==6.2.1"' in source and '"pythonnet==3.2.0"' in source
+    # Dependencies moved to the shared Agent requirements in the Office build fix.
+    requirements = (ROOT / 'requirements-agent.txt').read_text(encoding='utf-8-sig')
+    assert '-r (Join-Path $repoRoot "requirements-agent.txt")' in source
+    assert 'pywebview==6.2.1; platform_system == "Windows"' in requirements
+    assert 'pythonnet==3.2.0; platform_system == "Windows"' in requirements
     for requirement in ('"--hidden-import", "clr"', '"--hidden-import", "webview"',
                         '"--collect-data", "webview"', '"--collect-binaries", "webview"',
                         '"--collect-all", "pythonnet"', '"--collect-all", "clr_loader"'):
         assert requirement in source
+
+
+def test_build_keeps_native_core_and_office_runtime_dependencies():
+    source = _source()
+    requirements = (ROOT / 'requirements-agent.txt').read_text(encoding='utf-8-sig')
+    assert '"--collect-submodules", "core"' in source
+    for module, distribution in [('docx','python-docx'), ('openpyxl','openpyxl'),
+                                  ('pptx','python-pptx'), ('pypdf','pypdf')]:
+        assert f'"--collect-all", "{module}"' in source
+        assert any(line.startswith(distribution + '>=') for line in requirements.splitlines())
 
 
 def test_desktop_build_excludes_other_installed_qt_bindings_from_pyinstaller_args(tmp_path):
