@@ -25,9 +25,7 @@ def replace(step="step_2"):
     return {"task_id": "task-1", "step_id": step, "tool_name": "write_content", "status": "success",
             "device_id": "givi", "target_device_id": "givi",
             "result": {"status": "ok", "path": f"{ROOT}/project.txt", "verified": True,
-                       "committed": True, "file_sha256": NEW, "total_size": 45,
-                       "replacement": {"mode": "replace", "matches": 1,
-                                       "previous_sha256": OLD}}}
+                       "committed": True, "file_sha256": NEW, "total_size": 45}}
 
 
 def answer(step="step_4"):
@@ -84,3 +82,28 @@ def test_analysis_scope_still_needs_semantic_coverage():
     report = build_worker_report(task([read("step_1", OLD), replace(), read("step_3", NEW), answer()],
                                       scope="analysis", artifacts=[]))
     assert report["status"] != "success"
+
+
+def _answer_with_unresolved(items):
+    step = answer()
+    step["result"]["unresolved"] = items
+    return step
+
+
+def test_unassigned_extra_failure_does_not_downgrade_verified_result():
+    """The 01:48 LIVE case: an extra lite.txt attempt failed, project.txt was done."""
+    report = build_worker_report(task(
+        [read("step_1", OLD), replace(), read("step_3", NEW),
+         _answer_with_unresolved(["Не удалось создать lite.txt: файл не найден"])],
+        artifacts=["project.txt в папке IRU-EC01-LIVE с новым названием"]))
+    assert report["status"] == "success"
+    assert report["goal_completed"] is True
+
+
+def test_unresolved_about_the_assigned_file_still_downgrades():
+    report = build_worker_report(task(
+        [read("step_1", OLD), replace(), read("step_3", NEW),
+         _answer_with_unresolved(["Не удалось изменить project.txt: файл занят"])],
+        artifacts=["project.txt в папке IRU-EC01-LIVE с новым названием"]))
+    assert report["status"] == "partial"
+    assert report["goal_completed"] is False

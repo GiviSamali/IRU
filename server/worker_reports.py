@@ -446,7 +446,14 @@ def build_worker_report(task):
     elif operations and all(operation_facts(c) in {'failed','not_executed'} for c in operations): status='failed'
     elif useful or any(operation_facts(c) in {'success','partial'} for c in operations): status='partial'
     else: status='unknown'
-    if (payload.get('unresolved') or (not compact and payload.get('remaining')) or unconfirmed_claims) and status=='success': status='partial'
+    unresolved_items=[str(v) for v in (payload.get('unresolved') or [])]
+    if unresolved_items:
+        # An extra attempt the assignment never asked for must not downgrade a
+        # verified result. Only unresolved items about the assigned files count.
+        names={PureWindowsPath(a['path']).name.casefold() for a in matched}
+        names|={PureWindowsPath(e).name.casefold() for e in expected if e}
+        unresolved_items=[v for v in unresolved_items if any(name and name in v.casefold() for name in names)]
+    if (unresolved_items or (not compact and payload.get('remaining')) or unconfirmed_claims) and status=='success': status='partial'
     if task.get('_legacy_read') and status=='success' and raw in {'partial','failed','error','blocked','cancelled'}:
         status='failed' if raw=='error' else raw
     required_rollback = any(file_key(a) in rolled_back for a in matched)
