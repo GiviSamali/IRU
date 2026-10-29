@@ -498,7 +498,13 @@ def persist_report(task, *, include_report_column=True):
         try:
             chat=c.execute("SELECT 1 FROM chats WHERE id=? AND user_id=?",(task["chat_id"],task["user_id"])).fetchone()
             if chat is None:raise ValueError("chat_not_owned_or_deleted")
-            if message_id:
+            # Goal members do not own a chat message: the Orchestrator publishes
+            # the one result of the Goal. A pending question for the user is the
+            # exception -- it must reach the chat.
+            publish = (not task.get("goal_id")) or bool(task.get("input_required"))
+            if not publish:
+                message_id=None
+            elif message_id:
                 updated=c.execute("UPDATE messages SET content=?,commands=?,task_metadata=? WHERE id=? AND chat_id=? AND role='assistant'",
                     (task["conversational_response"],json.dumps(task.get("commands") or [],ensure_ascii=False),json.dumps(metadata,ensure_ascii=False),message_id,task["chat_id"]))
                 if updated.rowcount!=1:
@@ -506,7 +512,7 @@ def persist_report(task, *, include_report_column=True):
                     if c.execute("SELECT 1 FROM messages WHERE id=?",(message_id,)).fetchone():
                         raise ValueError("message_identity_mismatch")
                     message_id=None
-            if not message_id:
+            if not message_id and not task.get("goal_id"):
                 saved=c.execute("INSERT INTO messages(chat_id,role,content,commands,task_metadata,created_at) VALUES(?,?,?,?,?,?)",
                     (task["chat_id"],"assistant",task["conversational_response"],json.dumps(task.get("commands") or [],ensure_ascii=False),json.dumps(metadata,ensure_ascii=False),time.time()))
                 message_id=saved.lastrowid
@@ -820,13 +826,13 @@ class WorkerScheduler:
                 task["preserve_file_bytes"] = assignment_preservation[key]
                 if assignment.get("target_device_ids") is not None:
                     task["broadcast"] = False
-                metadata = db.message_task_metadata(task, task_id=task["task_id"])
-                cursor = c.execute("INSERT INTO messages(chat_id,role,content,task_metadata,created_at) VALUES(?,?,?,?,?)",
-                                   (chat, "assistant", "", json.dumps(metadata, ensure_ascii=False), now))
-                task["history_message_id"] = cursor.lastrowid
+                # A Goal member never publishes its own chat bubble: the single
+                # user-visible result is the Orchestrator message of that Goal.
+                # The Worker's journal and report stay durable evidence.
+                task["history_message_id"] = None
                 c.execute("INSERT INTO worker_jobs VALUES(?,?,?,?,?,?,?,?,?,?)",
                           (task["task_id"], owner, chat, state, json.dumps(task, ensure_ascii=False), None,
-                           cursor.lastrowid, now, now, None))
+                           None, now, now, None))
                 c.execute("INSERT INTO worker_goal_tasks VALUES(?,?,?)", (task["task_id"], goal_id, 1))
                 c.execute("INSERT INTO worker_goal_request_tasks VALUES(?,?,?)", (owner, request_key, task["task_id"]))
                 admitted.append(task)

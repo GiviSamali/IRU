@@ -201,9 +201,13 @@ def test_goal_assignment_result_and_followup_use_existing_durable_path(owners,mo
             goal=goal_view(first['goal_id'],owner['id'],owner['chat_id'])
             human=goal_presentation(goal)['message']
             assert '15 переподключений' in human and '1 из 1' not in human
+            # A Goal member owns no chat message: the single user-visible result
+            # is the Orchestrator message of the Goal.
+            assert saved['history_message_id'] is None
             with db.get_db() as c:
-                row=c.execute('select content from messages where id=?',(saved['history_message_id'],)).fetchone()
-            assert row['content']==saved['conversational_response']
+                row=(c.execute('select content from messages where id=?',(saved['history_message_id'],)).fetchone()
+                     if saved['history_message_id'] else None)
+            assert row is None
             monkeypatch.setattr(task_routes,'get_current_user',lambda request:owner)
             root_reply=(await task_routes.api_get_task(first['task_id'],None))['task']
             assert root_reply['goal_presentation']['status']=='success'

@@ -38,7 +38,7 @@ def test_daily_limit_is_atomic_and_idempotent_at_batch_boundary(tmp_path, monkey
     assert db.check_daily_command_limit(owner["id"])["used"]==before+(3 if accepted else 0)
     with db.get_db() as c:
         for table,count in {"worker_goals":1,"worker_goal_tasks":3,"worker_jobs":3,"worker_dependencies":0,
-                            "worker_goal_requests":1,"worker_goal_request_tasks":3,"messages":3}.items():
+                            "worker_goal_requests":1,"worker_goal_request_tasks":3,"messages":0}.items():
             assert c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]==(count if accepted else 0)
     assert len([task for task in tasks.values() if task.get("user_id")==owner["id"]])==(3 if accepted else 0)
     assert scheduled==([owner["id"]] if accepted else [])
