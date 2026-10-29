@@ -84,6 +84,7 @@ def _run_case_unbound(
     chat_id=None,
     mem_user_id=None,
     device_id="device-1",
+    device_info=None,
     poll_task_id=None,
     max_iterations=6,
     device_tool_fn=None,
@@ -96,7 +97,7 @@ def _run_case_unbound(
     return asyncio.run(process_non_pipeline_command(
         user_message=user_message,
         device_id=device_id,
-        device_info={"hostname": "devbox", "os": "Windows"},
+        device_info=device_info if device_info is not None else {"hostname": "devbox", "os": "Windows"},
         send_command_fn=_send,
         get_file_link_fn=lambda device_id, path: "/api/download/mock",
         chat_history=chat_history or [],

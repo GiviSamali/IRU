@@ -157,7 +157,7 @@ def is_recovery_observation(action, params):
         return params.get("action") in {"active", "list", "find", "monitors"}
     if action == "device.refresh_state":
         return params.get("mode", "snapshot") == "snapshot"
-    return action in {"list_dir", "get_file_content", "device.get_cached_passport", "device.get_passport",
+    return action in {"list_dir", "read_file", "get_file_content", "device.get_cached_passport", "device.get_passport",
                       "window.list", "window.find", "window.verify", "app.verify_launch",
                       "web.tabs", "web.read", "web.elements", "web.wait", "memory.get_stats",
                       "memory.list_facts", "system.list_tools", "system.get_last_run_summary"}

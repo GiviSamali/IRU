@@ -255,7 +255,7 @@ def compact_write_content_result(args: dict[str, Any] | None, result: Any = None
                 "replacement_sha256", "verification_scope", "chunks_confirmed", "chunks_total", "chunk_receipts"):
         if key in original:
             compact[key] = original[key]
-    if not append and original.get('mode') not in {'replace','replace_exact'} and isinstance(args.get('content'),str):
+    if not append and args.get('expected_text') is None and original.get('mode') not in {'replace','replace_exact'} and isinstance(args.get('content'),str):
         try:compact['expected_content_sha256']=sha256(content.encode(encoding)).hexdigest()
         except (LookupError,UnicodeError):pass
     if error:
@@ -443,6 +443,13 @@ def wrap_tool_result_for_llm(entry: dict[str, Any]) -> dict[str, Any]:
         "summary": entry.get("summary") or "",
         "result": entry.get("result"),
     }
+    if canonical_tool_name(str(wrapped['tool_name'])) == 'read_file' and isinstance(wrapped['result'],dict):
+        # Detach the projection. Agent completeness describes its read, not the
+        # amount of source text the model receives after representation limits.
+        result = dict(wrapped['result'])
+        result['agent_read_complete'] = result.pop('complete',False) is True
+        result['llm_text_complete'] = result['agent_read_complete'] and isinstance(result.get('text'),str)
+        wrapped['result'] = result
     if canonical_tool_name(str(wrapped["tool_name"])).startswith("web."):
         wrapped = {
             **wrapped,
@@ -498,6 +505,8 @@ def serialize_tool_result_for_llm(entry: dict[str, Any]) -> str:
             parent = parent[key]
         shown = max(64, len(text) // 2)
         parent[path[-1]] = text[:shown]
+        if wrapped['tool_name'] == 'read_file' and path == ('result','text'):
+            compact['result']['llm_text_complete'] = False
         pointer = "/" + "/".join(str(key).replace("~", "~0").replace("/", "~1") for key in path)
         original = fields.get(pointer, {}).get("original_chars", len(text))
         fields[pointer] = {"original_chars": original, "shown_chars": shown, "portion": "prefix"}
@@ -534,6 +543,9 @@ def serialize_tool_result_for_llm(entry: dict[str, Any]) -> str:
                     result[key] = value
             elif key == "error" and value:
                 result[key] = {"present": True, "details_omitted": True}
+        if wrapped['tool_name'] == 'read_file':
+            result['agent_read_complete'] = original_result.get('agent_read_complete') is True
+            result['llm_text_complete'] = False
     minimal["result"] = result
     minimal["truncation"] = {
         "truncated": True, "representation": "minimal_projection", "fields": changes,

@@ -186,7 +186,7 @@ def test_worker_exact_edit_and_answer_without_shell(tmp_path):
         return actions.write_content(**params)
     result=_run_case([_message(tool_calls=[_tool_call('edit','write_content',args)]),
         _message(tool_calls=[_answer_call('end','Radius is now 0.21.',answer_type='grounded_report',basis=['step_1'])])],
-        send_command_fn=send,max_iterations=20)
+        send_command_fn=send,max_iterations=20,device_info={'os':'Windows','file_replace_protocol':2})
     assert sent==['write_content'] and path.read_bytes()==b'const radius=0.21;'
     assert result['answer']=='Radius is now 0.21.'
 
@@ -198,7 +198,7 @@ def test_empty_replacement_is_a_supported_deletion(tmp_path):
         return actions.write_content(**params)
     result=_run_case([_message(tool_calls=[_tool_call('edit','write_content',args)]),
         _message(tool_calls=[_answer_call('end','Fragment removed.',answer_type='grounded_report',basis=['step_1'])])],
-        send_command_fn=send)
+        send_command_fn=send,device_info={'os':'Windows','file_replace_protocol':2})
     assert path.read_bytes()==b'keep; keep;'
     assert result['commands'][0]['result']['verified']
 
@@ -246,7 +246,7 @@ def test_controller_keeps_written_result_when_terminal_repair_is_invalid(tmp_pat
         sent.append(action);return actions.write_content(**params)
     result=_run_case([_message(tool_calls=[_tool_call('edit','write_content',args)]),
                       _message('invalid raw final',finish_reason='stop')],
-                     send_command_fn=send,max_iterations=1)
+                     send_command_fn=send,max_iterations=1,device_info={'os':'Windows','file_replace_protocol':2})
     assert sent==['write_content'] and path.read_bytes()==b'0.21'
     assert result['task_receipt']['task_status']=='partial'
     assert digest(b'0.21') in result['answer']

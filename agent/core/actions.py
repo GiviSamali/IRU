@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import codecs
+from contextlib import contextmanager
 import getpass
 import hashlib
 import json
@@ -178,6 +180,65 @@ _WRITE_TRANSACTIONS = {}
 _WRITE_LOCK = threading.RLock()
 
 
+@contextmanager
+def _windows_write_mutex(path):
+    """Serialize cooperating Agent processes in this Windows session, not external editors."""
+    if os.name != 'nt':
+        yield
+        return
+    import ctypes
+    from ctypes import wintypes
+    api = ctypes.WinDLL('kernel32', use_last_error=True)
+    api.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+    api.CreateMutexW.restype = wintypes.HANDLE
+    api.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    api.WaitForSingleObject.restype = wintypes.DWORD
+    api.ReleaseMutex.argtypes = [wintypes.HANDLE]
+    api.CloseHandle.argtypes = [wintypes.HANDLE]
+    name = hashlib.sha256(os.path.normcase(str(Path(path).resolve())).encode('utf-8')).hexdigest()
+    handle = api.CreateMutexW(None, False, 'Local\\IRU-file-write-' + name)
+    if not handle:
+        raise OSError('write_lock_unavailable')
+    acquired = False
+    try:
+        result = api.WaitForSingleObject(handle, 0)
+        acquired = result in (0, 0x80)
+        if result != 0:
+            raise OSError('write_lock_abandoned' if result == 0x80 else 'write_target_busy')
+        yield
+    finally:
+        if acquired:
+            api.ReleaseMutex(handle)
+        api.CloseHandle(handle)
+
+
+def _text_file_parts(data, encoding):
+    """Only stateless, strictly round-trippable encodings have byte-span edits."""
+    codec = codecs.lookup(encoding).name
+    bom = b''
+    marks = ((codecs.BOM_UTF32_LE, 'utf-32-le'), (codecs.BOM_UTF32_BE, 'utf-32-be'),
+             (codecs.BOM_UTF8, 'utf-8'), (codecs.BOM_UTF16_LE, 'utf-16-le'),
+             (codecs.BOM_UTF16_BE, 'utf-16-be'))
+    found = next(((mark, name) for mark, name in marks if data.startswith(mark)), None)
+    if codec == 'utf-8-sig':
+        codec = 'utf-8'
+    if codec in {'utf-16', 'utf-32'}:
+        if not found or not found[1].startswith(codec + '-'):
+            raise ValueError('replacement_encoding_requires_bom')
+        codec = found[1]
+    if found:
+        if found[1] != codec:
+            raise ValueError('replacement_encoding_bom_mismatch')
+        bom, data = found[0], data[len(found[0]):]
+    if codec not in {'utf-8', 'utf-16-le', 'utf-16-be', 'utf-32-le', 'utf-32-be',
+                     'ascii', 'iso8859-1', 'cp1251', 'cp1252'}:
+        raise ValueError('replacement_encoding_unsupported')
+    text = data.decode(codec, errors='strict')
+    if text.encode(codec, errors='strict') != data:
+        raise ValueError('replacement_encoding_not_roundtrippable')
+    return bom, data, text, codec
+
+
 def _file_fingerprint(path):
     if not path.exists():
         return None
@@ -191,25 +252,35 @@ def _file_fingerprint(path):
 
 def write_content(path: str, content: str, append: bool = False, encoding: str = "utf-8",
                   _write_transaction: dict | None = None, expected_text: str | None = None,
-                  expected_sha256: str | None = None) -> dict:
-    # Serialize commit against other IRU writes; external changes are detected
-    # against the initial fingerprint before replacing the destination.
-    with _WRITE_LOCK:
-        if expected_sha256 is not None and expected_text is None:
-            return {"status":"error", "error":"expected_sha256_requires_expected_text", "committed":False}
-        if expected_text is not None:
-            return _replace_content(path, expected_text, content, encoding, expected_sha256,
-                                    append, _write_transaction)
-        return _write_content(path, content, append, encoding, _write_transaction)
+                  expected_sha256: str | None = None, expected_matches: int | None = None) -> dict:
+    # Serialize cooperating IRU writes. The precommit fingerprint detects earlier
+    # external changes; check + os.replace is NOT atomic CAS against external writers.
+    try:
+        with _WRITE_LOCK, _windows_write_mutex(path):
+            if (expected_sha256 is not None or expected_matches is not None) and expected_text is None:
+                return {"status":"error", "error":"expected_sha256_requires_expected_text", "committed":False}
+            if expected_text is not None:
+                return _replace_content(path, expected_text, content, encoding, expected_sha256,
+                                        append, _write_transaction, expected_matches)
+            return _write_content(path, content, append, encoding, _write_transaction)
+    except Exception as exc:
+        return {"status":"error", "error":str(exc), "committed":False}
 
 
-def _replace_content(path, expected, replacement, encoding, expected_sha256, append, transaction):
-    """Exact, single replacement using the existing atomic writer and write lock."""
+def _replace_content(path, expected, replacement, encoding, expected_sha256, append, transaction,
+                     expected_matches=None):
+    """Splice confirmed byte spans; never regenerate untouched file text."""
     try:
         if append or transaction or not isinstance(expected, str) or not expected:
             raise ValueError("invalid_exact_replacement")
         if not isinstance(expected_sha256, str) or not re.fullmatch('[a-fA-F0-9]{64}', expected_sha256):
             raise ValueError("replacement_requires_observed_sha256")
+        count = 1 if expected_matches is None else expected_matches
+        if type(count) is not int or not 1 <= count <= 100000:
+            raise ValueError('invalid_expected_matches')
+        # This negotiated mode edits text values, not file line structure.
+        if re.findall(r'\r\n|\r|\n', expected) != re.findall(r'\r\n|\r|\n', replacement):
+            raise ValueError('replacement_line_structure_change_unsupported')
         target = Path(path)
         if not target.is_absolute() or target.is_symlink() or not target.is_file():
             raise ValueError("replacement_target_not_regular_file")
@@ -219,25 +290,40 @@ def _replace_content(path, expected, replacement, encoding, expected_sha256, app
             raise ValueError("write_target_changed_before_read")
         if expected_sha256 is not None and expected_sha256.lower() != original[2]:
             raise ValueError("replacement_precondition_hash_mismatch")
-        # Preserve BOM and newline bytes; decoding is strict, never lossy.
-        codec = encoding
-        bom = b""
-        if encoding.lower().replace('_', '-') in {'utf-8', 'utf-8-sig'}:
-            codec = 'utf-8'
-            if raw.startswith(b'\xef\xbb\xbf'):
-                bom, raw = raw[:3], raw[3:]
-        text = raw.decode(codec)
-        if text.encode(codec) != raw:
-            raise ValueError("replacement_encoding_not_roundtrippable")
-        first = text.find(expected)
-        if first < 0 or text.find(expected, first + 1) >= 0:
-            raise ValueError("replacement_source_missing" if first < 0 else "replacement_source_ambiguous")
-        updated = text.replace(expected, replacement, 1)
-        # Preserve existing bytes outside the exact span, including line endings.
-        encoded = bom + updated.encode(codec)
+        bom, raw, text, codec = _text_file_parts(raw, encoding)
+        positions = []
+        cursor = 0
+        while True:
+            pos = text.find(expected, cursor)
+            if pos < 0:
+                break
+            if positions and pos < positions[-1] + len(expected):
+                raise ValueError('replacement_source_ambiguous')
+            positions.append(pos)
+            cursor = pos + 1
+        if not positions:
+            raise ValueError('replacement_source_missing')
+        if len(positions) != count:
+            raise ValueError('replacement_source_ambiguous' if expected_matches is None
+                             else 'replacement_match_count_mismatch')
+        new = replacement.encode(codec, errors='strict')
+        old = expected.encode(codec, errors='strict')
+        chunks, end, char_end = [bom], 0, 0
+        for pos in positions:
+            start = end + len(text[char_end:pos].encode(codec))
+            if raw[start:start + len(old)] != old:
+                raise ValueError('replacement_span_not_roundtrippable')
+            chunks.extend((raw[end:start], new))
+            end = start + len(old)
+            char_end = pos + len(expected)
+        chunks.append(raw[end:])
+        encoded = b''.join(chunks)
+        if hashlib.sha256(encoded).hexdigest() == original[2]:
+            raise ValueError('replacement_no_change')
+        updated = encoded[len(bom):].decode(codec)
         return _write_content(path, updated, False, codec, None,
                               expected_original=original, exact_bytes=encoded,
-                              replacement_info={"mode": "replace", "matches": 1,
+                              replacement_info={"mode": "replace", "matches": count,
                                   "previous_sha256": original[2],
                                   "replacement_sha256": hashlib.sha256(replacement.encode('utf-8')).hexdigest(),
                                   "verification_scope": "file_bytes_only"})
@@ -350,7 +436,8 @@ def _write_content(path, content, append, encoding, transaction, *, expected_ori
                 pass
 
 
-def get_file_content(path: str, max_size: int = WS_FILE_DOWNLOAD_MAX_BYTES) -> dict:
+def get_file_content(path: str, max_size: int = WS_FILE_DOWNLOAD_MAX_BYTES,
+                     text_only: bool = False, encoding: str = 'utf-8') -> dict:
     try:
         file_path = Path(path)
         if not file_path.exists():
@@ -367,7 +454,21 @@ def get_file_content(path: str, max_size: int = WS_FILE_DOWNLOAD_MAX_BYTES) -> d
                 )
             }
 
-        data = file_path.read_bytes()
+        # Bound the actual read, not just a stat that can become stale.
+        limit = min(max_size, 256000) if text_only else max_size
+        before = _file_fingerprint(file_path) if text_only else None
+        with file_path.open('rb') as stream:
+            data = stream.read(limit + 1)
+        if len(data) > limit:
+            return {'status':'error', 'error':'file_read_limit_exceeded'}
+        if text_only:
+            after = _file_fingerprint(file_path)
+            if before != after or after is None or hashlib.sha256(data).hexdigest() != after[2]:
+                return {'status':'error', 'error':'file_changed_during_read'}
+            bom, _, text, codec = _text_file_parts(data, encoding)
+            return {'status':'ok', 'path':str(file_path.absolute()), 'size':len(data),
+                    'file_sha256':hashlib.sha256(data).hexdigest(), 'text':text,
+                    'encoding':codec, 'bom':bom.hex(), 'complete':True}
         return {
             "filename": file_path.name,
             "size": len(data),
@@ -385,7 +486,7 @@ def collect_system_info(device_id: str = "") -> dict:
     info = {
         "office_tools_version": 1,
         "file_write_protocol": 2,
-        "file_replace_protocol": 1,
+        "file_replace_protocol": 2,
         "artifact_receipt_protocol": 1,
         "office_content_preservation_version": 1,
         "device_id": device_id,

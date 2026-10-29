@@ -30,7 +30,8 @@ WRITE_CONTENT_DESCRIPTION = (
     "and atomically commits only after integrity verification. Do not manually split a valid complete write. "
     "Path is literal: resolve environment/home variables on the target device first; never pass $env:, %VAR% or ~. "
     "Canonical tool for creating text content or performing an explicitly requested full replacement. Prefer it for long, multiline, or generated new content. "
-    "For a limited edit of text set expected_text to the exact unique original fragment and content to its replacement; "
+    "For a limited edit read_file first, then set expected_text to the exact original fragment and content to its replacement; "
+    "expected_matches is the confirmed number of occurrences (default 1); every occurrence must match that count. "
     "bind expected_sha256 to the observed file hash. The agent preserves other bytes and verifies the committed file. "
     "Overwrite replaces the entire file; neither overwrite nor append guarantees preservation. Verify the requested change and preservation against the original before claiming success. "
     "Suitable for scripts, HTML, JSON, TXT, CSV, Markdown, "
@@ -43,8 +44,40 @@ WRITE_CONTENT_DESCRIPTION = (
 )
 
 
+def file_tools_for_device(tools, device_info, *, preserve=False):
+    """Advertise only negotiated native file modes; dispatch rechecks the target."""
+    from copy import deepcopy
+    protocol = (device_info or {}).get('file_replace_protocol')
+    result = []
+    for source in tools:
+        tool = deepcopy(source)
+        fn = tool['function']
+        name = fn['name']
+        if preserve and name not in {'list_dir','read_file','write_content','answer_text',
+                'answer_ask_clarification','answer_report_failure',
+                'system_get_last_run_summary','device_get_passport'}:
+            continue
+        if name == 'read_file' and protocol != 2:
+            continue
+        if name == 'write_content':
+            props = fn['parameters']['properties']
+            if protocol != 2:
+                if preserve:
+                    continue
+                for field in ('expected_text','expected_sha256','expected_matches'):
+                    props.pop(field,None)
+                fn['description'] = ('Create text or perform an explicitly requested full overwrite. '
+                    'The native read/hash + exact replacement workflow is unavailable on this device. '
+                    'Do not use overwrite for a limited edit.')
+            if preserve:
+                fn['parameters']['required'] = ['path','content','expected_text','expected_sha256']
+                props.pop('append',None)
+        result.append(tool)
+    return result
+
+
 RECOVERY_LIST_DIR = {"type": "function", "function": {
-    "name": "list_dir", "description": "Observe directory entries after an unknown action outcome; never repeat the action.",
+    "name": "list_dir", "description": "Read directory entries to discover a file within the assigned scope. Also usable after an unknown outcome; never repeat the mutation.",
     "parameters": {"type": "object", "properties": {"path": {"type": "string"},
                    "device_id": {"type": "string"}}, "required": ["path"]}}}
 
@@ -74,6 +107,12 @@ def recovery_observation_tools(tools):
 
 TOOLS = [
     *DEVICE_TOOL_SCHEMAS,
+    RECOVERY_LIST_DIR,
+    {"type":"function", "function": {
+        "name":"read_file", "description":"Read complete bounded text and byte SHA-256 without newline conversion; never returns a partial file. Requires file_replace_protocol=2.",
+        "parameters":{"type":"object", "properties":{
+            "path":{"type":"string"}, "encoding":{"type":"string", "default":"utf-8"},
+            "device_id":{"type":"string"}}, "required":["path"]}}},
     {
         "type": "function",
         "function": {
@@ -91,9 +130,11 @@ TOOLS = [
                         "description": "Содержимое для записи"
                     },
                     "expected_text": {"type": "string", "minLength": 1, "maxLength": 64000,
-                        "description": "Exact unique fragment to replace; omit for a complete write. Newlines must match. Missing or ambiguous fragments leave the file unchanged."},
+                        "description": "Exact fragment to replace; omit for a complete write. Newlines must match. Missing, overlapping or unexpected match counts leave the file unchanged."},
                     "expected_sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$",
                         "description": "Required with expected_text: SHA-256 of the observed original file. Prevents stale edits and repeated mutations."},
+                    "expected_matches": {"type":"integer", "minimum":1, "maximum":100000,
+                        "description":"Confirmed exact occurrence count; default 1. Requires file_replace_protocol=2."},
                     "append": {
                         "type": "boolean",
                         "description": "true = дописать в конец; false = перезаписать. По умолчанию false.",

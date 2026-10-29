@@ -177,6 +177,7 @@ def _command_log_entry(action: str, command: str, target_device: str, device_inf
 
 APP_WINDOW_ACTIONS = {
     "list_dir": "list_dir",
+    "read_file": "get_file_content",
     "web_focus": "web.focus",
     "web_tabs": "web.tabs",
     "web_read": "web.read",
@@ -280,6 +281,13 @@ async def process_non_pipeline_command(
     recovery_only = bool(runtime_tasks.get(poll_task_id, {}).get("_action_outcome_unknown"))
     if recovery_only:
         non_pipeline_tools = recovery_observation_tools(non_pipeline_tools or DEFAULT_CONTROLLER_TOOLS)
+    try:
+        from .controller_tools import file_tools_for_device
+    except ImportError:
+        from controller_tools import file_tools_for_device
+    file_preservation_task = runtime_tasks.get(poll_task_id, {})
+    non_pipeline_tools = file_tools_for_device(non_pipeline_tools or DEFAULT_CONTROLLER_TOOLS,
+        device_info, preserve=file_preservation_task.get("preserve_file_bytes",False))
     tool_schemas = {
         tool.get("function", {}).get("name"): tool
         for tool in [*DEFAULT_CONTROLLER_TOOLS, *(non_pipeline_tools or [])]
@@ -625,6 +633,21 @@ async def process_non_pipeline_command(
                         add_correction("Browser arguments must match the fixed schema; no script/selector or coercion is allowed.")
                         continue
 
+                file_edit_error = None
+                if file_preservation_task.get('preserve_file_bytes') and fn_name == 'write_content':
+                    try:
+                        from .controller_shared import file_edit_dispatch_error
+                    except ImportError:
+                        from controller_shared import file_edit_dispatch_error
+                    file_edit_error = file_edit_dispatch_error(file_preservation_task, fn_name, fn_args)
+                if file_preservation_task.get('preserve_file_bytes') and (file_edit_error or fn_name not in {
+                        'answer_text','answer_ask_clarification','answer_report_failure',
+                        'list_dir','read_file','write_content','system_get_last_run_summary','device_get_passport'}):
+                    append_tool_message(tool_call['id'], append_entry(tool_log_entry(fn_name,
+                        {'status':'blocked','error':file_edit_error or 'file_preservation_requires_native_replacement',
+                         'dispatched':False,'committed':False}, command='[blocked file edit]',
+                        target_device_id=device_id, hostname=device_id, iteration=iteration+1)))
+                    continue
                 if window_only and fn_name not in allowed_window_tools:
                     append_tool_message(tool_call["id"], append_entry(tool_log_entry(
                         fn_name, {"error": "window_capability_required"},
@@ -831,6 +854,15 @@ async def process_non_pipeline_command(
 
                 if fn_name == "system_list_tools":
                     tool_result = list_tools(fn_args.get("category", "all"))
+                    available_files = {tool['function']['name']:tool['function']
+                        for tool in file_tools_for_device(DEFAULT_CONTROLLER_TOOLS, device_info)}
+                    if 'files' in tool_result:
+                        tool_result['files'] = [item for item in tool_result['files']
+                            if item['name'] != 'read_file' or 'read_file' in available_files]
+                        for item in tool_result['files']:
+                            if item['name'] == 'write_content':
+                                item['purpose'] = available_files['write_content']['description']
+                                item['when_to_use'] = ['Only modes negotiated for this device']
                     append_entry(tool_log_entry(
                         fn_name,
                         tool_result,
@@ -914,6 +946,8 @@ async def process_non_pipeline_command(
 
                 elif fn_name in APP_WINDOW_ACTIONS:
                     agent_action = APP_WINDOW_ACTIONS[fn_name]
+                    if fn_name == 'read_file':
+                        fn_args = {**fn_args, 'text_only':True, 'max_size':256000}
                     try:
                         tool_result = await send_command_fn(target_device, agent_action, fn_args)
                     except Exception as exc:

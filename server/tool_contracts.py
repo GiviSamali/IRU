@@ -175,6 +175,8 @@ def _permissions_for(meta: dict[str, Any], canonical_name: str, risk_level: str)
         if canonical_name == "web.activate":
             return ["browser.observe", "browser.explicit_external_action"]
         return ["browser.observe"]
+    if canonical_name == "read_file":
+        return ["file.read"]
     danger = (meta.get("danger") or "").lower()
     category = meta.get("category") or ""
     permissions: set[str] = set()

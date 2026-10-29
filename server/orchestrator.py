@@ -48,11 +48,13 @@ class Assignment(BaseModel):
     target_device_ids: list[str] | None = Field(default=None, max_length=8)
     execution_scope: Literal["general","window","analysis"] | None = None
     window_effects: list[WindowEffect] | None = Field(default=None, max_length=16)
+    preserve_file_bytes: bool = False
 
 
 class Decision(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     intent: Literal["conversation","delegate","task_status","cancel","amend","clarify"]
+    preserve_file_bytes: bool = False
     answer: str = Field(default="", max_length=MAX_ANSWER_CHARS)
     spoken_response: str = Field(default="", max_length=420)
     _spoken_candidate: object = PrivateAttr(default=None)
@@ -116,6 +118,12 @@ class Decision(BaseModel):
 
 TOOL = {"type":"function", "function":{"name":"orchestrator_decision", "description":"One bounded dialogue or routing decision; never executes a device action.", "parameters":Decision.model_json_schema()}}
 SYSTEM = """Ты ИРУ: единственный пользовательский Оркестратор. Думай глубоко, отвечай кратко, раскрывай подробности по необходимости.
+Для ограниченного изменения существующего текстового файла обязательно задавай preserve_file_bytes=true
+в соответствующем Assignment: это обязательное ограничение исполнения, не разрешение.
+В смешанной цели ставь флаг только заданиям ограниченного редактирования; независимое создание документов
+и анализ не наследуют его. Флаг Decision используй лишь для одиночного поручения без разбиения.
+Worker читает исходный файл штатно и заменяет только подтверждённые фрагменты с SHA-256 и числом совпадений.
+Не используй этот режим для создания нового файла или явно запрошенной полной перезаписи.
 В answer и spoken_response говори о себе в мужском роде: «сделал», «проверил», «готов». Сохраняй род других объектов и исходные цитаты.
 Сохраняй требования человека буквально по смыслу: «быстро» включает скорость, а не только уместность.
 После отклонённого предложения не повторяй тот же сценарий другими словами. Учитывай, что именно
@@ -591,7 +599,8 @@ async def run_turn(cmd, user, chat_id, delegate):
                 result = scheduler.amend_pending(choice.task_id, owner, chat_id,
                     expected_revision=choice.task_revision, human_request=cmd.message, objective=choice.objective,
                     memory_authorizations=[proof.model_dump() for proof in choice.memory_authorizations],
-                    execution_scope=choice.execution_scope,window_effects=choice.window_effects)
+                    execution_scope=choice.execution_scope,window_effects=choice.window_effects,
+                    preserve_file_bytes=choice.preserve_file_bytes)
                 answer = "Уточнение сохранено для ожидающего поручения. Версия " + str(result["revision"]) + "."
             elif choice.intent=="cancel":
                 if job["state"] not in {"queued","waiting_dependency","running","waiting_confirmation","waiting_input"}:

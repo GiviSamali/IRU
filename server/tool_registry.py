@@ -48,11 +48,15 @@ CANONICAL_TOOL_NAMES = {
     "answer_report_failure": "answer.report_failure",
     "answer_request_confirmation": "answer.request_confirmation",
     "write_content": "write_content",
+    "read_file": "read_file",
     "execute_cmd": "execute_cmd",
 }
 
 
 TOOL_METADATA = {
+    "read_file": {"category":"files", "tool_type":"typed", "tool_label":"Прочитать текстовый файл",
+                  "purpose":"Read complete bounded text and its byte SHA-256 without newline conversion",
+                  "returns":"text, encoding, BOM, file_sha256 or explicit error", "danger":"read_only"},
     "web.focus": {"category":"web","tool_type":"typed","tool_label":"Выбрать вкладку","purpose":"Focus an observed tab on the exact device","when_to_use":["explicit switch tab request"],"returns":"verified active tab and focused browser window","danger":"browser_write"},
     'web.tabs': {'category': 'web',
      'tool_type': 'typed',
@@ -316,12 +320,12 @@ TOOL_METADATA = {
         "category": "files",
         "tool_type": "typed",
         "tool_label": "Запись файла",
-        "purpose": "Write text or replace one exact fragment with an observed SHA-256 precondition, without shell escaping",
+        "purpose": "Write text; exact replacement is available only after negotiating the device file_replace_protocol",
         "when_to_use": [
             "write scripts, HTML, JSON, TXT, CSV, Markdown, or source code",
             "long or multiline generated content would be unsafe/noisy in execute_cmd",
             "create or overwrite a text file",
-            "replace a unique fragment using expected_text, content and expected_sha256",
+            "replace confirmed occurrences using expected_text, content, expected_sha256 and negotiated expected_matches",
         ],
         "returns": "compact write evidence: path, append, encoding, chars_written, bytes_written, content_sha256, preview and OK/NO/ERROR summary",
         "danger": "write",
