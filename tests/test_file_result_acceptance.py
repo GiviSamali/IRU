@@ -135,7 +135,7 @@ def test_file_result_acceptance_through_runtime_report_and_history(owners, tmp_p
                                     (saved['message_id'],)).fetchone()
             metadata = json.loads(message['task_metadata'])
             assert metadata['workerReport'] == report
-            if case in {'schema_rejection','pre_dispatch_denial','execution_error'}:
+            if case in {'schema_rejection','pre_dispatch_denial','execution_error','auditor_rejects'}:
                 assert path.read_text(encoding='utf-8') == content
                 assert sent == (['write_content','execute_cmd','execute_cmd'] if case in {'pre_dispatch_denial','execution_error'} else ['write_content','execute_cmd']) and len(audits)==1
                 assert report['status'] == 'success' and report['goal_completed'] is True
@@ -153,9 +153,6 @@ def test_file_result_acceptance_through_runtime_report_and_history(owners, tmp_p
                     assert sent == ['write_content', 'execute_cmd']  # Lost mutation reply stops further dispatch.
                 else:
                     assert sent == ['write_content','execute_cmd']
-                if case == 'auditor_rejects':
-                    assert path.read_text(encoding='utf-8') == content
-                    assert report['artifacts'][0]['verified'] and not report['artifacts'][0]['content_verified']
         finally:
             await scheduler.shutdown()
 

@@ -1,6 +1,7 @@
 """A bounded dialogue/routing call. No device-execution tools are exposed here."""
 import json
 import logging
+import os
 import traceback
 import re
 import time
@@ -796,7 +797,11 @@ def present_goal_result(goal):
         if text:texts.append(text)
     if not goal.get('terminal',goal.get('status') in {'success','partial','failed','unknown','cancelled','blocked'}):
         return 'Выполняю поручение.'
-    prefix={'unknown':'Исход части действий не подтверждён; автоматически их не повторяю.',
+    # Free-form mode adds no verdict preamble: the Goal status is a machine fact
+    # shown as a badge, while the words come from the members themselves.
+    free = os.getenv('IRU_FREE_FORM_REPORT', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    prefix = '' if free else {
+        'unknown':'Исход части действий не подтверждён; автоматически их не повторяю.',
         'partial':'Часть поручения выполнить не удалось.','failed':'Поручение выполнить не удалось.',
         'blocked':'Для продолжения требуется уточнение или разрешение.','cancelled':'Поручение отменено.'}.get(goal.get('status'),'')
     return '\n\n'.join(([prefix] if prefix else [])+texts) or 'Результат сохранён в подробностях поручения.'

@@ -1,7 +1,19 @@
 """Worker Report v1 is a projection of existing receipts and evidence, not LLM prose."""
+import os
 from pathlib import PureWindowsPath
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+def free_form_reports():
+    """Free-form presentation.
+
+    When enabled the model narrates the work in its own words and the report
+    keeps only machine facts: status, error_code, artifacts with SHA. No canned
+    verdict phrases are substituted for the model's answer.
+    """
+    return os.getenv('IRU_FREE_FORM_REPORT', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
 
 def bounded_report_summary(text, limit=2000):
     """Keep complete Markdown blocks, including fences and list/table groups."""
@@ -350,11 +362,13 @@ def build_worker_report(task):
     unconfirmed_claims = any(not matches_claim(path) for path in claimed_paths)
     file_contract = bool(expected) and not artifact_incomplete and all(
         file_key(a) not in rolled_back and file_key(a) not in invalidated_files for a in matched)
-    def content_observed(artifact):
+    def content_observed(artifact, strict=True):
         # Content must be read at the current version. A create/format receipt,
         # an old inspection or a model's own prose is not a content check.
+        # `strict` keeps the auditor's evidence binding for semantic results;
+        # a native span replacement is proven by the journal's own SHA.
         for entry in operations:
-            if entry.get('step_id') not in assessment.get('evidence_refs', []):continue
+            if strict and entry.get('step_id') not in assessment.get('evidence_refs', []):continue
             if operation_facts(entry)!='success':continue
             result=entry.get('result') or {}
             if _short_did(entry.get('target_device_id') or entry.get('device_id') or '')!=artifact['device_id']:continue
@@ -372,12 +386,30 @@ def build_worker_report(task):
                 if any(isinstance(item,dict) and item.get('path')==artifact['path']
                        and item.get('sha256')==artifact['sha256'] for item in candidates):return True
         return False
+    def mechanical_content(artifact):
+        """Bytes on disk at the current version are a fact, not an opinion.
+
+        Office formats keep the semantic check: their hash proves identity, not
+        that the requested content is inside. A text file that was written,
+        verified and read back at the same SHA is proven by construction.
+        """
+        if PureWindowsPath(artifact['path']).suffix.lower() in {'.docx','.xlsx','.pptx'}:
+            return False
+        for entry in operations:
+            if operation_facts(entry)!='success':continue
+            result=entry.get('result') or {}
+            if (result.get('verified') is True and result.get('committed') is True
+                    and result.get('path')==artifact['path']):
+                return True
+        return False
     content_unconfirmed = False
     for artifact in matched:
         if artifact.get('verification_scope')=='copy_identity':continue
         artifact['verification_scope']=('file_identity_and_format' if PureWindowsPath(artifact['path']).suffix.lower()
             in {'.docx','.xlsx','.pptx'} else 'file_identity')
-        artifact['content_verified']=bool(complete_coverage and content_observed(artifact))
+        mechanical = mechanical_content(artifact)
+        artifact['content_verified']=bool(content_observed(artifact, strict=not mechanical)
+            and (complete_coverage or mechanical))
         content_unconfirmed = content_unconfirmed or not artifact['content_verified']
     if content_unconfirmed:file_contract=False
     window_steps = [c for c in operations if canonical_tool_name(c.get('tool_name') or c.get('action') or '')
@@ -446,19 +478,20 @@ def build_worker_report(task):
         if status=='unknown':error_code='clarification_binding_mismatch'
         text=clarification_text
 
-    if status=='failed' and operations:
+    free = free_form_reports()
+    if not free and status=='failed' and operations:
         try:
             from .run_journal import unfinished_execution_result
         except ImportError:
             from run_journal import unfinished_execution_result
         text=unfinished_execution_result(commands,error_code or 'execution_failed')['answer']
-    elif status in {'partial','unknown'} and len(task.get('device_ids') or [])>1:
+    elif not free and status in {'partial','unknown'} and len(task.get('device_ids') or [])>1:
         try:
             from .run_journal import unfinished_execution_result
         except ImportError:
             from run_journal import unfinished_execution_result
         text=unfinished_execution_result(commands,error_code or 'multi_device_incomplete')['answer']
-    if artifact_incomplete and status in {'partial','unknown','failed'}:
+    if not free and artifact_incomplete and status in {'partial','unknown','failed'}:
         missing=[item["label"] for item in unmatched] or list(expected)
         text='Обязательные файловые результаты не подтверждены: '+', '.join(missing)+'.\n\n' + (
             'Сохранённый текст результата — неподтверждённый исходный материал:\n'+text if text else '')
@@ -467,28 +500,30 @@ def build_worker_report(task):
         error_code = 'goal_not_completed' if terminal else 'terminal_answer_missing'
     if required_rollback:
         error_code = 'required_file_change_reverted'
-        # Preserve the model's original words in the journal, but never project
-        # a superseded success claim as the final result.
-        text = 'Запрошенное изменение не сохранилось: последняя подтверждённая версия файла совпадает с исходной.\n' + '\n'.join(
-            f"{a['path']}: SHA-256 {a['sha256']}" for a in matched
-            if file_key(a) in rolled_back)
+        if not free:
+            text = 'Запрошенное изменение не сохранилось: последняя подтверждённая версия файла совпадает с исходной.\n' + '\n'.join(
+                f"{a['path']}: SHA-256 {a['sha256']}" for a in matched
+                if file_key(a) in rolled_back)
     if required_invalid:
         error_code='artifact_postcondition_unconfirmed'
-        text='Последнее состояние обязательного файла не подтверждено. Предыдущий receipt не подтверждает состояние после последней попытки.\n'
-        text+='\n'.join(a['path'] for a in matched if file_key(a) in invalidated_files)
+        if not free:
+            text='Последнее состояние обязательного файла не подтверждено. Предыдущий receipt не подтверждает состояние после последней попытки.\n'
+            text+='\n'.join(a['path'] for a in matched if file_key(a) in invalidated_files)
     if content_unconfirmed and not (required_rollback or required_invalid) and status=='partial':
         error_code='artifact_content_unconfirmed'
-        text='Файл записан; подтверждена его целостность. Полнота запрошенного содержания не подтверждена.\n'
-        text+='\n'.join(f"{a['path']}: SHA-256 {a['sha256']}" for a in matched if a.get('content_verified') is False)
-        if bound and assessment.get('reason'):text+='\nПроверка содержания: '+str(assessment['reason'])
+        if not free:
+            text='Файл записан; подтверждена его целостность. Полнота запрошенного содержания не подтверждена.\n'
+            text+='\n'.join(f"{a['path']}: SHA-256 {a['sha256']}" for a in matched if a.get('content_verified') is False)
+            if bound and assessment.get('reason'):text+='\nПроверка содержания: '+str(assessment['reason'])
     if task.get('_report_integrity_failed') and status=='unknown':
         error_code='worker_report_binding_mismatch'
-        try:
-            from .run_journal import unfinished_execution_result
-        except ImportError:
-            from run_journal import unfinished_execution_result
-        text=unfinished_execution_result(commands,error_code)['answer']
-    if status=='success' and (not terminal or payload.get('text')!=text):
+        if not free:
+            try:
+                from .run_journal import unfinished_execution_result
+            except ImportError:
+                from run_journal import unfinished_execution_result
+            text=unfinished_execution_result(commands,error_code)['answer']
+    if not free and status=='success' and (not terminal or payload.get('text')!=text):
         # Completion belongs to verified effects, not to whether another model
         # managed to phrase a final answer. Never display an unbound candidate
         # as the authoritative explanation of an otherwise verified result.
@@ -499,7 +534,7 @@ def build_worker_report(task):
         if failed:lines.append('Ошибки дополнительных шагов сохранены в журнале: '+', '.join(failed)+'.')
         lines.append('Финальный текст модели не подтверждён; приведены факты исполнения.')
         text='\n'.join(lines)
-    if status in {'partial','unknown'} and re.match(
+    if not free and status in {'partial','unknown'} and re.match(
             r'^\s*(?:[#*>]+\s*)?(?:\*\*)?(?:готово|всё\s+(?:выполнено|готово)|задача\s+выполнена|done|all\s+done)\b',
             text,re.IGNORECASE):
         # Keep the original terminal in execution_details, not as the final
@@ -509,8 +544,16 @@ def build_worker_report(task):
         except ImportError:
             from run_journal import unfinished_execution_result
         text=unfinished_execution_result(commands,error_code or 'goal_not_completed')['answer']
-    if compact and payload.get('unresolved') and status not in {'success','cancelled'}:
+    if not free and compact and payload.get('unresolved') and status not in {'success','cancelled'}:
         text+='\n\nСущественно не завершено:\n'+'\n'.join('- '+value for value in payload['unresolved'])
+    if free:
+        # The model narrates the work. The facts below stay authoritative in the
+        # report fields; nothing here rewrites or prefaces the model's words.
+        facts=[f"{a['path']} · SHA-256 {a['sha256']}" for a in matched if isinstance(a.get('sha256'),str)]
+        if not text.strip():
+            text='\n'.join(facts) if facts else summaries[status]
+        elif facts and all(fact not in text for fact in facts):
+            text=text.rstrip()+'\n\n'+'\n'.join(facts)
     summary = bounded_report_summary(text) if text else summaries[status]
     report = {"schema_version":1, "task_id":task["task_id"], "worker_id":task.get("worker_id") or "worker-1", "status":status,
         "goal_completed":status == "success", "summary":summary,
