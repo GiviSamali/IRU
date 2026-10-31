@@ -209,6 +209,7 @@
     error: error => showToast(error.message, true),
     state: phase => {
       voicePhase = phase; renderVoiceStatus();
+      window.IRUWorkspace?.voiceChanged(phase);
       stopButton.hidden = !['speaking', 'synthesizing'].includes(phase);
       button.classList.toggle('recording', phase !== 'off');
       button.setAttribute('aria-pressed', String(phase !== 'off'));

@@ -248,6 +248,7 @@ window.IRUOperations = (() => {
     for(const id of goalSnapshots.keys())if(!ids.includes(id)){goalSnapshots.delete(id);goalSnapshotErrors.delete(id);}
   }
   function render() {
+    window.IRUWorkspace?.refresh();
     const scoped=scopedItems();
     const active=scoped.filter(i=>!replaced(i) && !terminal(i.status));
     const negative=scoped.filter(i=>!replaced(i) && ['partial','failed','blocked','unknown'].includes(i.status));
@@ -431,6 +432,10 @@ window.IRUOperations = (() => {
   window.addEventListener('pagehide',()=>{clearInterval(timer);timer=null;});
   window.addEventListener('pageshow',()=>{if(!timer)timer=setInterval(()=>{if(!document.hidden)refresh();},2500);refresh();});
   return Object.freeze({refresh,show,contextChanged,syncSurfaceCommand,
+    presentationSnapshot(){
+      if(owner!==state.user?.id || chat!==state.currentChatId)return {items:[],snapshots:new Map(),stale:true};
+      return {items:scopedItems().map(item=>({...item})),snapshots:new Map(goalSnapshots),stale};
+    },
     syncSurfaceActions(){if(surface())renderMirror();},
     messageSubmitted(){
       if(surface()) {

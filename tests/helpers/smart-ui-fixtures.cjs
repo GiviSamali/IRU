@@ -28,7 +28,7 @@ function apiData(url,method,decisions) {
  if(match){if(method==='POST'){decisions.set(match[1],match[2]==='cancel'?'cancelled':'blocked');return {status:'ok'};}return {status:'ok',task:taskReply(match[1],decisions.get(match[1])||'running')};}
  return {status:'ok',facts:[],devices:{},passport:{},memory_stats:{facts:0,commands:0,facts_list:[]}};
 }
-function createServer({demo=false}={}) {
+function createServer({demo=false,view='conversation'}={}) {
  const requests=[],decisions=new Map();
  const server=http.createServer((req,res)=>{
   const url=new URL(req.url,'http://localhost');
@@ -40,6 +40,7 @@ function createServer({demo=false}={}) {
   const file=path.resolve(dir,'.'+(pathname==='/'?'/index.html':pathname));
   if(!file.startsWith(dir+path.sep)||!fs.existsSync(file)||!fs.statSync(file).isFile()){res.writeHead(404);res.end();return;}
   let content=fs.readFileSync(file);
+  if(file.endsWith('index.html'))content=content.toString().replace('<script src="js/core.js"',`<script>if(!sessionStorage.getItem('iru-view:2'))sessionStorage.setItem('iru-view:2',${JSON.stringify(view)});</script>\n<script src="js/core.js"`);
   if(demo&&file.endsWith('index.html'))content=content.toString().replace('<script src="js/core.js"','<script>localStorage.setItem("iru_token","smart-ui-fixture");</script>\n<script src="js/core.js"');
   const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.ico':'image/x-icon','.png':'image/png'};
   res.setHeader('Content-Type',types[path.extname(file)]||'application/octet-stream');res.end(content);

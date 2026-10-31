@@ -41,15 +41,19 @@ async function openChat(chatId) {
 
   const chat = state.chats.find(c => c.id === chatId);
   document.getElementById('headerTitle').textContent = chat ? chat.title : 'Чат';
+  state.messages = [];
+  renderMessages();
 
   // Загрузить сообщения
   try {
     const r = await apiFetch(`${API}/api/chats/${chatId}/messages`, { headers: authHeaders() });
     const data = await r.json();
+    if (state.currentChatId !== chatId) return;
     state.messages = data.messages || [];
     renderMessages();
     restoreActiveChatTasks(chatId);
   } catch (e) {
+    if (state.currentChatId !== chatId) return;
     state.messages = [];
     renderMessages();
     restoreActiveChatTasks(chatId);
@@ -598,8 +602,11 @@ function setAdaptiveSurface(enabled) {
     const body=document.createElement('div');body.id='adaptiveBody';
     const queue=document.createElement('div');queue.id='adaptiveQueue';queue.hidden=true;queue.setAttribute('role','status');
     const conversation=document.createElement('div');conversation.id='adaptiveConversation';
-    messages.replaceChildren(body);body.append(queue,mirror,conversation);
+    messages.replaceChildren(body);
+    const status=document.getElementById('uxMiniStatus');if(status)body.append(status);
+    body.append(queue,mirror,conversation);
   } else {
+    const status=document.getElementById('uxMiniStatus');if(status)messages.before(status);
     document.getElementById('operationsDock').before(mirror);
     messages.replaceChildren();
   }
@@ -630,6 +637,7 @@ function adaptiveMessageIndexes() {
 }
 
 function renderMessages() {
+  window.IRUWorkspace?.refresh();
   window.IRUOperations?.contextChanged();
   const compact=document.documentElement.classList.contains('iru-mini');
   // Compact messages render inside a wrapper, but the shared chat viewport scrolls.

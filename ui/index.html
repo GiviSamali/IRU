@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="css/ux01.css">
 </head>
 <body>
 
@@ -129,6 +130,29 @@
 
     <div class="content">
       <div class="chat-view">
+        <nav class="ux-navigation" aria-label="Пространство ИРУ">
+          <div class="ux-brand"><span class="ux-brand-dot" aria-hidden="true"></span> ИРУ <small>Ваш интеллектуальный ассистент</small></div>
+          <div role="tablist" aria-label="Представление">
+            <button id="ux-tab-overview" role="tab" aria-controls="uxOverview" aria-selected="true" data-ux-view="overview">Обзор</button>
+            <button id="ux-tab-conversation" role="tab" aria-controls="chatMessages" aria-selected="false" data-ux-view="conversation">Разговор</button>
+            <button id="ux-tab-components" role="tab" aria-controls="uxGallery" aria-selected="false" data-ux-view="components">Компоненты</button>
+          </div>
+          <span id="uxCompactStatus" role="status"></span>
+        </nav>
+        <section id="uxOverview" class="ux-overview" role="tabpanel" aria-labelledby="ux-tab-overview">
+          <div class="ux-primary">
+            <section id="uxHero" class="ux-hero" aria-label="Состояние ИРУ" aria-live="polite"></section>
+            <section aria-labelledby="uxActiveTitle"><div class="ux-section-heading"><h2 id="uxActiveTitle">Сейчас в работе</h2><span id="uxActiveCount"></span></div><div id="uxActive" class="ux-card-grid"></div></section>
+            <section aria-labelledby="uxResultsTitle"><div class="ux-section-heading"><h2 id="uxResultsTitle">Результаты</h2><button data-ux-open-conversation type="button">Весь разговор ↗</button></div><div id="uxResults" class="ux-card-grid"></div></section>
+          </div>
+          <aside class="ux-secondary" aria-label="Решения, устройства и история">
+            <section aria-labelledby="uxDecisionsTitle"><div class="ux-section-heading"><h2 id="uxDecisionsTitle">Нужно ваше решение</h2><span id="uxDecisionCount"></span></div><div id="uxDecisions"></div></section>
+            <section aria-labelledby="uxDevicesTitle"><div class="ux-section-heading"><h2 id="uxDevicesTitle">Устройства</h2></div><div id="uxDevices"></div></section>
+            <section aria-labelledby="uxHistoryTitle"><div class="ux-section-heading"><h2 id="uxHistoryTitle">История взаимодействия</h2></div><div id="uxHistory"></div></section>
+          </aside>
+        </section>
+        <section id="uxGallery" class="ux-gallery" role="tabpanel" aria-labelledby="ux-tab-components" hidden></section>
+        <div id="uxMiniStatus" class="ux-mini-status" role="status" hidden></div>
         <div class="conversation-toolbar">
           <span>Чат</span>
           <button type="button" id="mirrorToggle" aria-expanded="false" aria-controls="operationMirror" hidden>Подробности</button>
@@ -191,7 +215,7 @@
                 <line x1="8" y1="23" x2="16" y2="23"/>
               </svg>
             </button>
-            <textarea class="chat-input" id="chatInput" placeholder="Опиши задачу..." rows="1" maxlength="4000"
+            <textarea class="chat-input" id="chatInput" placeholder="Что поручить ИРУ?" aria-label="Поручение ИРУ" rows="1" maxlength="4000"
              ></textarea>
             <span class="char-count" id="charCount">0/4000</span>
             <button class="btn-stop-task" id="btnStopTask" type="button" title="Стоп" hidden>Стоп</button>
@@ -413,7 +437,7 @@
   </div>
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 
 <script src="js/core.js" defer></script>
@@ -433,6 +457,8 @@
 <script src="js/attachments.js" defer></script>
 <script src="js/extras.js" defer></script>
 <script src="js/mobile-header.js" defer></script>
+<script src="js/ux01-model.js" defer></script>
+<script src="js/ux01.js" defer></script>
 <script src="app.js" defer></script>
 </body>
 </html>

@@ -46,7 +46,7 @@ function bindStaticEvents() {
   bindOnce('inputModeBtn', 'click', toggleInputModeDropdown);
   bindOnce('modeAutonomous', 'change', (event) => setMode('autonomous', event.target.checked));
   bindOnce('btnSend', 'click', sendMessage);
-  bindOnce('btnStopTask', 'click', cancelActiveTask);
+  bindOnce('btnStopTask', 'click', () => cancelActiveTask());
 
   const chatInput = document.getElementById('chatInput');
   if (chatInput) {

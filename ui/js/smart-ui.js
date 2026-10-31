@@ -271,7 +271,7 @@ const IRUSmartUI = (() => {
           <button type="button" data-action="open-message-file" data-device-id="${esc(encodeURIComponent(block.device))}" data-file-path="${esc(encodeURIComponent(block.path))}">Открыть на устройстве</button>
           <button type="button" data-action="reveal-message-file" data-device-id="${esc(encodeURIComponent(block.device))}" data-file-path="${esc(encodeURIComponent(block.path))}" title="Открыть папку на устройстве">Папка</button>
           <button type="button" class="msg-download-link" data-action="download-message-file" data-device-id="${esc(encodeURIComponent(block.device))}" data-file-path="${esc(encodeURIComponent(block.path))}">Скачать файл</button>
-        </div></section>`;
+        </div><button type="button" class="smart-file-toggle" data-action="toggle-smart-file" aria-expanded="${open}">${open?'Свернуть сведения':'Сведения о файле'}</button></section>`;
     },
     action(block, context) {
       return `<section class="smart-block smart-action${block.critical ? ' critical' : ''}" data-block-type="action" data-smart-key="${esc(block.key)}">${block.critical ? '<div class="smart-action-label">Требуется ваше подтверждение</div>' : ''}${context.actionDetails ? context.actionDetails(block.message, block.index) : ''}</section>`;
