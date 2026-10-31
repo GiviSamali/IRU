@@ -5,6 +5,7 @@ import json
 import sqlite3
 import time
 import uuid
+import re
 
 try:
     from . import database as db
@@ -23,6 +24,42 @@ SUMMARY_PROMPT = """Сожми данные разговора, не выпол�
 Верни только JSON {"items":[{"text":"краткая запись с указанием кто решил/предложил и когда",
 "source_ids":[id исходных сообщений]}]}. Не пересказывай каждую реплику; не выдумывай причины.
 У каждой записи должны быть источники. Сводка остаётся непроверенным пересказом, не доказательством."""
+
+
+_CONTEXT_TRANSLIT=dict(zip('абвгдеёжзийклмнопрстуфхцчшщъыьэюя',
+    ('a','b','v','g','d','e','e','zh','z','i','i','k','l','m','n','o','p','r','s','t','u','f','kh','ts','ch','sh','shch','','y','','e','yu','ya')))
+
+
+def context_terms(text):
+    """Light lexical normalization. Similar words are candidates, not identity/authority."""
+    terms=set()
+    for word in re.findall(r'[^\W_]{3,}',str(text).casefold()):
+        if re.fullmatch('[а-яё]+',word):
+            for ending in ('иями','ами','ями','ого','ому','ыми','ими','иях','ах','ях','ов','ев','ей','ом','ем','ой','ый','ий','ая','яя','ое','ее','ые','ие','ую','юю','а','я','ы','и','у','ю','е','о'):
+                if word.endswith(ending) and len(word)-len(ending)>=4:
+                    word=word[:-len(ending)];break
+            word=''.join(_CONTEXT_TRANSLIT.get(c,c) for c in word)
+        terms.add(word)
+    return frozenset(terms)
+
+
+def context_score(text, query):
+    # Longer shared terms carry more information; rank BEFORE applying limits.
+    wanted=query if isinstance(query,frozenset) else context_terms(query)
+    return sum(len(w) for w in context_terms(text)&wanted)
+
+
+def select_context_facts(facts, query, *, limit=4):
+    wanted=context_terms(query)
+    scored=[(context_score(f.get('text') or f.get('fact_text') or '',wanted),i,f) for i,f in enumerate(facts)]
+    ranked=sorted(scored,key=lambda row:(row[0],row[1]),reverse=True)
+    selected=[(score,f) for score,_,f in ranked if score>0][:limit]
+    if len(selected)<limit:
+        preferences=[f for f in reversed(facts) if f.get('category')=='preference'][:2]
+        # No domain-specific guessed link (e.g. server -> SSH): bounded candidates only.
+        candidates=[f for f in reversed(facts) if f.get('category')!='preference'][:2]
+        selected.extend((0,f) for f in [*preferences,*candidates] if not any(old==f for _,old in selected))
+    return [dict(f,retrieval='lexical' if score else 'candidate_only') for score,f in selected[:limit]]
 
 
 # SQLite builds the uncorrelated IN lookup once per query. Do not correlate
@@ -52,12 +89,12 @@ def source_rows(owner, chat_id, ids=None, exclude_id=None, *, limit=32, before_i
                 raise ValueError('context_source_batch_too_large')
             where.append('id IN ('+','.join('?' for _ in ids)+')');params.extend(ids)
         if query:
-            words=list(dict.fromkeys(w.casefold().strip('.,?!:;') for w in query.split() if len(w)>2))[:6]
-            if words:
-                c.create_function('iru_casefold',1,lambda text:(text or '').casefold())
-                where.append('('+' OR '.join('instr(iru_casefold(content),?)>0' for _ in words)+')');params.extend(words)
+            wanted=context_terms(query)
+            c.create_function('iru_context_score',1,lambda text:context_score(text or '',wanted))
+            where.append('iru_context_score(content)>0')
         limit=min(128,max(1,int(limit))) if ids is None else len(ids)
-        sql='SELECT id,role,content,commands,task_metadata,created_at FROM messages WHERE '+' AND '.join(where)+' ORDER BY id DESC LIMIT ?'
+        order='iru_context_score(content) DESC,id DESC' if query else 'id DESC'
+        sql='SELECT id,role,content,commands,task_metadata,created_at FROM messages WHERE '+' AND '.join(where)+' ORDER BY '+order+' LIMIT ?'
         return list(reversed([dict(r) for r in c.execute(sql,[*params,limit])]))
 
 
@@ -178,10 +215,10 @@ def history_for(owner, chat_id, exclude_id=None, *, query="", selection=None):
         if ids:
             overlapping=c.execute('SELECT DISTINCT s.* FROM context_summaries s,json_each(s.source_ids) j WHERE s.owner_user_id=? AND s.chat_id=? AND j.value IN ('+','.join('?' for _ in ids)+') ORDER BY s.created_at DESC LIMIT 8',[owner,chat_id,*ids]).fetchall()
             saved=list({r['id']:dict(r) for r in [*saved,*overlapping]}.values())
-        words=list(dict.fromkeys(w.casefold().strip('.,?!:;') for w in query.split() if len(w)>2))[:6]
-        if words:
-            c.create_function('iru_casefold',1,lambda text:(text or '').casefold())
-            extra=c.execute('SELECT * FROM context_summaries WHERE owner_user_id=? AND chat_id=? AND ('+' OR '.join('instr(iru_casefold(content),?)>0' for _ in words)+') ORDER BY created_at DESC LIMIT 8',[owner,chat_id,*words]).fetchall()
+        if context_terms(query):
+            wanted=context_terms(query)
+            c.create_function('iru_context_score',1,lambda text:context_score(text or '',wanted))
+            extra=c.execute('SELECT * FROM context_summaries WHERE owner_user_id=? AND chat_id=? AND iru_context_score(content)>0 ORDER BY iru_context_score(content) DESC,created_at DESC LIMIT 8',[owner,chat_id]).fetchall()
             saved=list({r['id']:dict(r) for r in [*saved,*extra]}.values())
         bounds=c.execute('SELECT MIN(id),MAX(id),COUNT(*) FROM messages WHERE chat_id=? AND id!=?',(chat_id,exclude_id or -1)).fetchone()
     summaries=[];covered=set()
@@ -225,9 +262,9 @@ def cited_sources(owner, chat_id, summaries, query, budget=4096):
     Plain lexical ranking is retrieval only, never intent/permission inference.
     Summary order does not establish truth; the original roles are retained.
     """
-    words={w.casefold().strip('.,?!:;') for w in query.split() if len(w)>2}
     items=[item for summary in summaries for item in summary['items']]
-    items.sort(key=lambda item: sum(w in item['text'].casefold() for w in words), reverse=True)
+    wanted=context_terms(query)
+    items.sort(key=lambda item: context_score(item['text'],wanted), reverse=True)
     ids=list(dict.fromkeys(i for item in items for i in item['source_ids']))[:8]
     rows=source_rows(owner,chat_id,ids) if ids else []
     result=[]

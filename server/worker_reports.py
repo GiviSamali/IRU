@@ -121,7 +121,7 @@ def coverage_request(task, fallback=''):
 
 def needs_semantic_assessment(task):
     # A file receipt proves bytes/format, not coverage of requested content.
-    # Reuse the existing bound observation; it never replaces native effect proof.
+    # Object/range selection may still require meaning; native bytes alone do not replace it.
     return bool(task.get('assigned_artifacts')) or (
         task.get('execution_scope')=='analysis' and not task.get('window_effects'))
 
@@ -362,20 +362,33 @@ def build_worker_report(task):
     unconfirmed_claims = any(not matches_claim(path) for path in claimed_paths)
     file_contract = bool(expected) and not artifact_incomplete and all(
         file_key(a) not in rolled_back and file_key(a) not in invalidated_files for a in matched)
+    def artifact_assessment(artifact):
+        items=assessment.get('artifacts')
+        if not isinstance(items,list):return None
+        candidates=[a for a in items if isinstance(a,dict)
+            and a.get('device_id')==artifact['device_id'] and a.get('path')==artifact['path']
+            and a.get('sha256')==artifact['sha256']]
+        return candidates[0] if len(candidates)==1 else None
     def content_observed(artifact, strict=True):
         # Content must be read at the current version. A create/format receipt,
         # an old inspection or a model's own prose is not a content check.
         # `strict` keeps the auditor's evidence binding for semantic results;
         # a native span replacement is proven by the journal's own SHA.
+        pages=[]
+        content_refs=(artifact_assessment(artifact) or assessment).get('evidence_refs',[])
         for entry in operations:
-            if strict and entry.get('step_id') not in assessment.get('evidence_refs', []):continue
+            if strict and entry.get('step_id') not in content_refs:continue
             if operation_facts(entry)!='success':continue
             result=entry.get('result') or {}
             if _short_did(entry.get('target_device_id') or entry.get('device_id') or '')!=artifact['device_id']:continue
             tool=entry.get('tool_name') or entry.get('action')
             if tool in {'office_docx','office_xlsx','office_pptx'}:
                 if (result.get('action')=='inspect' and result.get('items')
-                        and result.get('path')==artifact['path'] and result.get('sha256')==artifact['sha256']):return True
+                        and result.get('path')==artifact['path'] and result.get('sha256')==artifact['sha256']):
+                    if 'total_items' not in result:
+                        # Compatibility with older inspectors: no pagination claim.
+                        return True
+                    pages.append(result)
             if tool in {'execute_cmd','read_file','get_file_content'}:
                 if not (result.get('stdout') or result.get('content') or result.get('text')):continue
                 candidates=[item for item in result.get('artifact_receipts') or [] if isinstance(item,dict)
@@ -385,6 +398,19 @@ def build_worker_report(task):
                     'sha256':result.get('file_sha256') or result.get('sha256')})
                 if any(isinstance(item,dict) and item.get('path')==artifact['path']
                        and item.get('sha256')==artifact['sha256'] for item in candidates):return True
+        if pages:
+            total=pages[0].get('total_items')
+            if type(total) is not int or total<1:return False
+            cursor=0
+            # Re-reading the same page does not add coverage or invalidate it.
+            if any(type(page.get('offset')) is not int or page['offset']<0 for page in pages):return False
+            offsets={page['offset']:page for page in pages}
+            for page in sorted(offsets.values(),key=lambda p:p['offset']):
+                end=page['offset']+len(page['items'])
+                if (page.get('total_items')!=total or page['offset']!=cursor or end>total
+                        or page.get('next_offset')!=(end if end<total else None)):return False
+                cursor=end
+            return cursor==total
         return False
     def mechanical_content(artifact):
         """Bytes on disk at the current version are a fact, not an opinion.
@@ -408,8 +434,14 @@ def build_worker_report(task):
         artifact['verification_scope']=('file_identity_and_format' if PureWindowsPath(artifact['path']).suffix.lower()
             in {'.docx','.xlsx','.pptx'} else 'file_identity')
         mechanical = mechanical_content(artifact)
+        content_assessment=artifact_assessment(artifact)
+        content_covered=(bound and content_assessment.get('coverage')=='complete'
+            and set(content_assessment.get('evidence_refs') or []).issubset(set(refs))) if content_assessment else (
+                complete_coverage if 'artifacts' not in assessment else False)
+        # Observation is a native fact, independent of overall semantic coverage.
+        artifact['content_observed']=content_observed(artifact,strict=False)
         artifact['content_verified']=bool(content_observed(artifact, strict=not mechanical)
-            and (complete_coverage or mechanical))
+            and (content_covered or mechanical))
         content_unconfirmed = content_unconfirmed or not artifact['content_verified']
     if content_unconfirmed:file_contract=False
     expected_effects=task.get('window_effects') or []
@@ -446,7 +478,9 @@ def build_worker_report(task):
     elif task.get('_report_integrity_failed'): status='unknown'
     elif substantial_unknown or required_invalid or task.get('_action_outcome_unknown') or raw in {'unknown','interrupted'}: status='unknown'
     elif clarification or raw=='blocked': status='blocked'
-    elif typed_contract or (complete_analysis and not artifact_incomplete): status='success'
+    elif (typed_contract and (not expected or all(mechanical_content(a) for a in matched) or complete_coverage)) or (complete_analysis and not artifact_incomplete
+                           and (not expected or file_contract)
+                           and (not expected_effects or window_contract)): status='success'
     elif operations and all(operation_facts(c) in {'failed','not_executed'} for c in operations): status='failed'
     elif useful or any(operation_facts(c) in {'success','partial'} for c in operations): status='partial'
     else: status='unknown'

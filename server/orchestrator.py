@@ -119,6 +119,9 @@ class Decision(BaseModel):
 
 TOOL = {"type":"function", "function":{"name":"orchestrator_decision", "description":"One bounded dialogue or routing decision; never executes a device action.", "parameters":Decision.model_json_schema()}}
 SYSTEM = """Ты ИРУ: единственный пользовательский Оркестратор. Думай глубоко, отвечай кратко, раскрывай подробности по необходимости.
+Факты retrieval=candidate_only — расширенные кандидаты, не установленная связь объектов и не полномочия.
+Новое прямое поручение проверить актуальное состояние не подменяй task_status старой задачи; историю используй для разрешения ссылок.
+Список устройств показывает подключения к ИРУ, не сканирование сети. Не выдавай отсутствие подключений за результат сетевого поиска.
 Для ограниченного изменения существующего текстового файла обязательно задавай preserve_file_bytes=true
 в соответствующем Assignment: это обязательное ограничение исполнения, не разрешение.
 В смешанной цели ставь флаг только заданиям ограниченного редактирования; независимое создание документов
@@ -300,17 +303,11 @@ def init_turn_storage():
 
 
 def relevant_facts(user_id, message):
-    # Generic lexical retrieval, never an intent/router keyword dictionary.
-    words=list(dict.fromkeys(w.casefold() for w in re.findall(r"[^\W_]{3,}",message,flags=re.UNICODE)))[:8]
-    if not words:return []
+    try:from .context_history import select_context_facts
+    except ImportError:from context_history import select_context_facts
     with db.get_db() as c:
-        c.create_function("iru_casefold",1,lambda value:(value or "").casefold(),deterministic=True)
-        query=" OR ".join("instr(iru_casefold(fact_text),?)>0" for _ in words)
-        rows=c.execute("SELECT fact_text,category FROM user_memory WHERE user_id=? AND ("+query+") LIMIT 4",[str(user_id),*words]).fetchall()
-        preferences=c.execute("SELECT fact_text,category FROM user_memory WHERE user_id=? AND category='preference' ORDER BY created_at DESC LIMIT 2",(str(user_id),)).fetchall()
-        selected=list(rows)
-        selected.extend(r for r in preferences if not any(old['fact_text']==r['fact_text'] for old in selected))
-        return [{"text":r["fact_text"],"category":r["category"]} for r in selected[:4]]
+        rows=[dict(r) for r in c.execute('SELECT fact_text AS text,category FROM user_memory WHERE user_id=? ORDER BY created_at,id',(str(user_id),))]
+    return select_context_facts(rows,message)
 
 
 def context_for(user_id, chat_id, message, selected, *, exclude_message_id=None):
@@ -731,90 +728,17 @@ async def run_turn(cmd, user, chat_id, delegate):
 
 
 def present_worker_result(task, report=None):
-    """The Orchestrator speaks from one report; no model call or new verdict."""
-    try:
-        from .response_presentation import normalized_worker_report, render_worker_report
-        from .worker_reports import operation_facts
-    except ImportError:
-        from response_presentation import normalized_worker_report, render_worker_report
-        from worker_reports import operation_facts
-    report=normalized_worker_report(task,report)
-    view=render_worker_report(task,report)
-    status=report['status']
-    if status in {'running','queued','waiting_dependency','waiting_input','waiting_confirmation','blocked','cancelled'}:
-        return view
-    operations=[c for c in task.get('commands') or [] if isinstance(c,dict)
-        and c.get('tool_name') not in {'answer.text','answer_text'} and isinstance(c.get('result'),dict)]
-    effects=task.get('window_effects') or []
-    opened=None
-    if effects and not task.get('assigned_artifacts') and status!='success':
-        latest=next((c for c in reversed(operations) if c.get('tool_name') in
-            {'window_control','window.control','app.launch','app_launch','app.open_url','app_open_url'}),None)
-        human=('Достигнутое состояние окна не подтверждено; автоматически повторять действие не буду.'
-               if status=='unknown' else 'Требуемое действие с окном не завершено.')
-        if status!='unknown' and latest and isinstance(latest['result'].get('summary'),str):human+=' '+latest['result']['summary']
-        view['conversational_response']=human
-    elif status in {'success','partial'} and not task.get('assigned_artifacts'):
-        opened=next((c for c in reversed(operations) if c.get('tool_name') in
-            {'app.launch','app_launch','app.open_url','app_open_url'} and operation_facts(c)=='success'
-            and c['result'].get('completion_state')=='success'),None)
-        if opened and task.get('execution_scope')!='analysis':
-            result=opened['result'];window=result.get('window') or {}
-            human='Открытие подтверждено.'
-            title=result.get('window_title') or window.get('title')
-            if isinstance(title,str) and title:human+=' Окно: '+title+'.'
-            if isinstance(result.get('url'),str):human+=' Адрес: '+result['url']+'.'
-            view['conversational_response']=human
-    if effects and status=='success' and not opened and not task.get('assigned_artifacts'):
-        native=[c['result'].get('summary') for c in operations if c.get('tool_name') in {'window.control','window_control'}
-                and operation_facts(c)=='success' and c['result'].get('completion_state')=='success']
-        view['conversational_response']='\n'.join(value for value in native if isinstance(value,str) and value) or 'Запрошенное состояние окна подтверждено.'
-    terminal=next((c for c in reversed(task.get('commands') or []) if c.get('tool_name') in {'answer.text','answer_text'}
-        and c.get('status')=='terminal'),{})
-    if (terminal.get('result') or {}).get('_result_contract')==3:
-        if not effects and not opened:
-            view['conversational_response']=report['summary']
-            if (status in {'partial','unknown'} and task.get('execution_scope')!='analysis'
-                    and not task.get('assigned_artifacts')):
-                try:
-                    from .run_journal import unfinished_execution_result
-                except ImportError:
-                    from run_journal import unfinished_execution_result
-                view['conversational_response']=unfinished_execution_result(task.get('commands') or [],
-                    report.get('error_code') or 'goal_not_completed')['answer']
-        view['execution_details']=(f"Технический статус: {status}.\n"
-            f"Источники: {', '.join(report['evidence_refs']) or 'нет'}.\n\n"+(view.get('execution_details') or task.get('answer') or report['summary']))
-    return view
+    """Compatibility entry point; presentation owns projection, never status."""
+    try:from .response_presentation import worker_presentation
+    except ImportError:from response_presentation import worker_presentation
+    return worker_presentation(task,report)
 
 
 def present_goal_result(goal):
-    """Conservative conversation fallback; reports remain in Operations.
-
-    This renders the already established outcome, never interprets Worker prose
-    as proof or concatenates it into the owner's conversation.
-    """
-    members=[m for m in goal.get('tasks') or [] if m.get('required_for_goal',True)]
-    if not goal.get('terminal',goal.get('status') in {'success','partial','failed','unknown','cancelled','blocked'}):
-        return 'Выполняю поручение.'
-    status=goal.get('status')
-    if not members:
-        return 'Результат сохранён в подробностях поручения.'
-    prefix = {
-        'success':'Готово. Результаты сохранены в Операциях.',
-        'unknown':'Исход части действий не подтверждён; автоматически их не повторяю.',
-        'partial':'Часть поручения выполнить не удалось.','failed':'Поручение выполнить не удалось.',
-        'blocked':'Для продолжения требуется уточнение или разрешение.','cancelled':'Поручение отменено.'}.get(goal.get('status'),'')
-    if status=='success' and members and all(m.get('execution_scope')=='window' for m in members):
-        request=(goal.get('original_request') or '').strip()
-        folder=re.fullmatch(r'откр(?:ой|ыть)\s+папку\s+([\w .-]+)[.!]?',request,re.I)
-        if folder:
-            return 'Открыл папку '+folder[1].rstrip('.!')+' в Проводнике.'
-    if status in {'partial','failed','unknown'}:
-        # Objectives identify the missing result without leaking diagnostic prose.
-        missing=[str(m.get('objective') or '').strip() for m in members if m.get('status')!='success']
-        missing=[s for s in missing if s and len(s)<=160 and '\\' not in s and '\n' not in s]
-        if missing:prefix+=' Не завершено: '+'; '.join(missing[:3])+'.'
-    return prefix or 'Результат сохранён в подробностях поручения.'
+    """Compatibility entry point for the canonical Goal projection."""
+    try:from .goal_presentation import goal_result_message
+    except ImportError:from goal_presentation import goal_result_message
+    return goal_result_message(goal)
 
 
 def recover_turns():

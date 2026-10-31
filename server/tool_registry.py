@@ -929,7 +929,7 @@ DEVICE_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "app_launch",
-            "description": "Launch an app in the background and attempt window verification. Do not wait for GUI process exit.",
+            "description": "Launch an application or an available native opener command with the requested file/folder as an argument, then attempt window verification. This starts an executable; do not pass a document path as the executable or assume automatic file association. Use the requested device and object. Process launch alone does not prove the requested document is open. Do not wait for GUI process exit.",
             "parameters": {
                 "type": "object",
                 "properties": {

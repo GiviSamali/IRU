@@ -5,6 +5,7 @@ Only the scheduler's frozen task outcomes and evidence-bearing artifacts can
 authorize a success claim. No LLM call, new permission or filesystem mutation.
 """
 from __future__ import annotations
+import re
 
 from pathlib import PureWindowsPath
 
@@ -46,7 +47,7 @@ def goal_presentation(goal: dict) -> dict:
             name = file.get("name") or PureWindowsPath(path).name
             artifact = {"path":path, "name":name, "device_id":file.get("device_id"),
                         "task_id":member.get("task_id"),"verified":True,
-                        **{key:file[key] for key in ("size_bytes","source_task_id","sha256","format","artifact_role","structure","verification_scope","content_verified") if key in file}}
+                        **{key:file[key] for key in ("size_bytes","source_task_id","sha256","format","artifact_role","structure","verification_scope","content_verified","content_observed") if key in file}}
             artifacts.append(artifact)
             # A helper generator (.py, scripts/helpers) is not the deliverable
             # unless the assignment explicitly identifies that file as output.
@@ -69,12 +70,7 @@ def goal_presentation(goal: dict) -> dict:
             if user_output:
                 result_artifacts.append(artifact)
 
-    # Only Orchestrator composes conversation; this module renders its projection.
-    try:
-        from .orchestrator import present_goal_result
-    except ImportError:
-        from orchestrator import present_goal_result
-    message = present_goal_result(goal)
+    message = goal_result_message(goal)
     if terminal and result_artifacts:
         names = [a['name'] for a in result_artifacts]
         message += " Доступные файлы: " + ", ".join(names[:8]) + (" и другие." if len(names)>8 else ".")
@@ -99,3 +95,33 @@ def goal_presentation(goal: dict) -> dict:
             "requires_user_action": any(m.get("status") in {"waiting_confirmation", "waiting_input"}
                                        for m in members),
             "task_ids": [m.get("task_id") for m in members]}
+
+
+def goal_result_message(goal):
+    """Conservative conversation fallback; reports remain in Operations.
+
+    This renders the already established outcome, never interprets Worker prose
+    as proof or concatenates it into the owner's conversation.
+    """
+    members=[m for m in goal.get('tasks') or [] if m.get('required_for_goal',True)]
+    if not goal.get('terminal',goal.get('status') in {'success','partial','failed','unknown','cancelled','blocked'}):
+        return 'Выполняю поручение.'
+    status=goal.get('status')
+    if not members:
+        return 'Результат сохранён в подробностях поручения.'
+    prefix = {
+        'success':'Готово. Результаты сохранены в Операциях.',
+        'unknown':'Исход части действий не подтверждён; автоматически их не повторяю.',
+        'partial':'Часть поручения выполнить не удалось.','failed':'Поручение выполнить не удалось.',
+        'blocked':'Для продолжения требуется уточнение или разрешение.','cancelled':'Поручение отменено.'}.get(goal.get('status'),'')
+    if status=='success' and members and all(m.get('execution_scope')=='window' for m in members):
+        request=(goal.get('original_request') or '').strip()
+        folder=re.fullmatch(r'откр(?:ой|ыть)\s+папку\s+([\w .-]+)[.!]?',request,re.I)
+        if folder:
+            return 'Открыл папку '+folder[1].rstrip('.!')+' в Проводнике.'
+    if status in {'partial','failed','unknown'}:
+        # Objectives identify the missing result without leaking diagnostic prose.
+        missing=[str(m.get('objective') or '').strip() for m in members if m.get('status')!='success']
+        missing=[s for s in missing if s and len(s)<=160 and '\\' not in s and '\n' not in s]
+        if missing:prefix+=' Не завершено: '+'; '.join(missing[:3])+'.'
+    return prefix or 'Результат сохранён в подробностях поручения.'

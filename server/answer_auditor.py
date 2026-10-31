@@ -42,12 +42,17 @@ async def assess_result_coverage(*, client, cfg, chat_completion_request_fn,
         'report unknown/partial even if the file is structurally valid. '
         'Optional recommendations are not unfinished requirements and must not lower coverage. '
         'Report coverage complete/partial/unknown, evidence_refs of actual current step IDs, and reason. '
+        'For each inspected output also return artifacts: [{device_id,path,sha256,coverage,evidence_refs}]. '
+        'Artifact coverage assesses current CONTENT against the accepted content requirements only; '
+        'overall coverage includes all mandatory effects and constraints. An independent unmet condition '
+        'must not erase established content coverage. Hash/full pagination alone do not prove meaning. '
+        'Do not require visual inspection unless the accepted request requires it. '
         'Do not return verified, success or goal_completed. Return one JSON object. Missing required results means partial/unknown.'},
         {'role':'user','content':json.dumps(material,ensure_ascii=False)}]
     try:
         data=await asyncio.wait_for(chat_completion_request_fn(client=client,cfg=cfg,
             model=cfg.get('answer_auditor_model') or cfg.get('model'),messages=messages,tools=None,
-            max_tokens=500,usage_context=usage_context,phase='result_coverage'),timeout=20)
+            max_tokens=1200,usage_context=usage_context,phase='result_coverage'),timeout=20)
         choice=data['choices'][0]
         if choice.get('finish_reason')=='length':return unavailable
         parsed=json.loads(choice['message'].get('content') or '{}')
@@ -56,7 +61,16 @@ async def assess_result_coverage(*, client, cfg, chat_completion_request_fn,
         if (parsed.get('coverage') not in {'complete','partial','unknown'} or not isinstance(refs,list)
                 or len(refs)>64 or any(not isinstance(r,str) or r not in allowed for r in refs)
                 or current_run_journal and parsed['coverage']=='complete' and not refs):return unavailable
+        artifacts=[]
+        candidates=parsed.get('artifacts')
+        for item in candidates[:16] if isinstance(candidates,list) else []:
+            if (isinstance(item,dict) and item.get('coverage') in {'complete','partial','unknown'}
+                    and all(isinstance(item.get(k),str) and item[k] for k in ('device_id','path','sha256'))
+                    and isinstance(item.get('evidence_refs'),list) and 0<len(item['evidence_refs'])<=64
+                    and all(isinstance(r,str) and r in allowed for r in item['evidence_refs'])):
+                artifacts.append({k:item[k] for k in ('device_id','path','sha256','coverage','evidence_refs')})
         return {'coverage':parsed['coverage'],'evidence_refs':refs,
+                **({'artifacts':artifacts} if 'artifacts' in parsed else {}),
                 'reason':str(parsed.get('reason',''))[:2000],'binding':unavailable['binding']}
     except (Exception,asyncio.TimeoutError):
         return unavailable

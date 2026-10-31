@@ -489,11 +489,11 @@ def build_memory_block(machine_guid: str | None, user_id: str | None = None,
         return ""
     stats = db.get_memory_stats(machine_guid, user_id, device_id)
     facts = filter_memory_facts_for_device(stats.get("facts_list", []))
+    available_fact_count=len(facts)
     if WORKER_MEMORY_QUERY.get() is not None:
-        words=set(re.findall(r"[^\W_]{3,}",WORKER_MEMORY_QUERY.get().casefold()))
-        relevant=[fact for fact in facts if any(word in str(fact.get("text") or fact.get("fact_text") or "").casefold() for word in words)]
-        preferences=[fact for fact in facts if fact.get('category')=='preference'][:2]
-        facts=(relevant+[fact for fact in preferences if fact not in relevant])[:6]
+        try:from .context_history import select_context_facts
+        except ImportError:from context_history import select_context_facts
+        facts=select_context_facts(facts,WORKER_MEMORY_QUERY.get(),limit=6)
     commands = db.get_recent_commands(machine_guid, user_id, 20, device_id) if machine_guid else []
     if not facts and not commands:
         return ""
@@ -503,7 +503,7 @@ def build_memory_block(machine_guid: str | None, user_id: str | None = None,
     selected_facts, selected_commands = [], []
 
     def assemble():
-        omitted_facts = len(facts) - len(selected_facts)
+        omitted_facts = available_fact_count - len(selected_facts)
         omitted_commands = len(commands) - len(selected_commands)
         return json.dumps({
             "trust_level": "untrusted_context_data", "authority": "data_only", "source": "memory",

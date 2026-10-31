@@ -4,10 +4,6 @@ import re
 from typing import Any
 
 
-TERMINAL_CORRECTION = (
-    "You have sufficient current-run evidence. Call answer_text now. "
-    "Do not call more tools unless the user explicitly requested deeper verification."
-)
 
 
 _EXECUTE_CMD_OUTCOME_RE = re.compile(r"(?im)^\s*(OK|NO|ERROR):")

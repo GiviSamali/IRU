@@ -1,30 +1,15 @@
 """Human presentation of an existing Worker Report; no execution or model calls."""
-import ntpath
-import posixpath
-import logging
-from pydantic import ValidationError
 
 try:
-    from . import database as db
-    from .worker_reports import build_worker_report, operation_facts, saved_worker_report, WorkerReport
+    from .worker_reports import operation_facts, saved_worker_report
     from .controller_trust import accepted_result_text
     from .tool_registry import CANONICAL_TOOL_NAMES
 except ImportError:
-    import database as db
-    from worker_reports import build_worker_report, operation_facts, saved_worker_report, WorkerReport
+    from worker_reports import operation_facts, saved_worker_report
     from controller_trust import accepted_result_text
     from tool_registry import CANONICAL_TOOL_NAMES
 
 # These are tool contracts, not a classifier of the user's words.
-OBSERVATION_TOOLS = {
-    "web_search", "web.tabs", "web.read", "web.elements", "web.wait",
-    "read_file", "list_dir", "get_file_content", "get_file_link",
-    "window.list", "window.find", "window.verify", "app.verify_launch",
-    "device.get_passport", "device.refresh_state", "device.check_runtime",
-    "memory.list_facts", "memory.get_stats", "system.list_tools", "system.get_last_run_summary",
-}
-FILE_TYPES = {".pptx":"Презентация", ".ppt":"Презентация", ".docx":"Документ", ".doc":"Документ",
-              ".xlsx":"Таблица", ".xls":"Таблица", ".html":"Страница сайта", ".pdf":"PDF-документ"}
 ERRORS = {
     "mixed_diagnostic_evidence":"Часть диагностических проверок завершилась с ошибками; данные этих шагов нельзя считать полностью подтверждёнными.",
     "model_output_truncated":"Модель исчерпала выходной бюджет; ответ был обрезан и не исполнялся.",
@@ -52,33 +37,8 @@ def _artifacts(task, report):
             and a.get("device_id") in allowed and isinstance(a.get("path"),str) and a["path"]]
 
 
-def _desktop_location(task, artifacts):
-    if not artifacts or not task.get("user_id"):return ""
-    nested=False
-    for artifact in artifacts:
-        try:
-            profile=db.get_device_profile(artifact["device_id"],user_id=task["user_id"]) or {}
-        except Exception as exc:
-            logging.getLogger("iru.presentation").warning("desktop_location_unavailable type=%s",type(exc).__name__)
-            return ""
-        desktop=profile.get("desktop_path")
-        if not isinstance(desktop,str) or not desktop:return ""
-        path=artifact["path"]
-        paths=ntpath if ntpath.splitdrive(path)[0] or "\\" in path else posixpath
-        folder=paths.normcase(paths.normpath(paths.dirname(path)))
-        base=paths.normcase(paths.normpath(desktop))
-        try:
-            if paths.commonpath([folder,base]) != base:return ""
-        except ValueError:return ""
-        nested=nested or folder!=base
-    return "Файлы в папке на рабочем столе." if nested and len(artifacts)>1 else "Файл в папке на рабочем столе." if nested else "Файлы на рабочем столе." if len(artifacts)>1 else "Файл на рабочем столе."
 
 
-def _artifact_result(artifacts):
-    kinds=list(dict.fromkeys(FILE_TYPES.get(ntpath.splitext(a["path"])[1].lower(),"Файл") for a in artifacts))
-    if len(kinds)==1 and len(artifacts)==1:return kinds[0]+" готова." if kinds[0] in {"Презентация","Таблица","Страница сайта"} else kinds[0]+" готов."
-    if len(artifacts)>1:return "Файлы готовы."
-    return ""
 
 
 def _reason(task, report):
@@ -171,7 +131,55 @@ def running_progress(task):
 
 
 def worker_presentation(task, report=None):
-    return render_worker_report(task, normalized_worker_report(task, report))
+    """One Worker presentation entry point, including restored/voice paths."""
+    report=normalized_worker_report(task,report)
+    view=render_worker_report(task,report)
+    status=report['status']
+    if status in {'running','queued','waiting_dependency','waiting_input','waiting_confirmation','blocked','cancelled'}:
+        return view
+    operations=[c for c in task.get('commands') or [] if isinstance(c,dict)
+        and c.get('tool_name') not in {'answer.text','answer_text'} and isinstance(c.get('result'),dict)]
+    effects=task.get('window_effects') or []
+    opened=None
+    if effects and not task.get('assigned_artifacts') and status!='success':
+        latest=next((c for c in reversed(operations) if c.get('tool_name') in
+            {'window_control','window.control','app.launch','app_launch','app.open_url','app_open_url'}),None)
+        human=('Достигнутое состояние окна не подтверждено; автоматически повторять действие не буду.'
+               if status=='unknown' else 'Требуемое действие с окном не завершено.')
+        if status!='unknown' and latest and isinstance(latest['result'].get('summary'),str):human+=' '+latest['result']['summary']
+        view['conversational_response']=human
+    elif status in {'success','partial'} and not task.get('assigned_artifacts'):
+        opened=next((c for c in reversed(operations) if c.get('tool_name') in
+            {'app.launch','app_launch','app.open_url','app_open_url'} and operation_facts(c)=='success'
+            and c['result'].get('completion_state')=='success'),None)
+        if opened and task.get('execution_scope')!='analysis':
+            result=opened['result'];window=result.get('window') or {}
+            human='Открытие подтверждено.'
+            title=result.get('window_title') or window.get('title')
+            if isinstance(title,str) and title:human+=' Окно: '+title+'.'
+            if isinstance(result.get('url'),str):human+=' Адрес: '+result['url']+'.'
+            view['conversational_response']=human
+    if effects and status=='success' and not opened and not task.get('assigned_artifacts'):
+        native=[c['result'].get('summary') for c in operations if c.get('tool_name') in {'window.control','window_control'}
+                and operation_facts(c)=='success' and c['result'].get('completion_state')=='success']
+        view['conversational_response']='\n'.join(value for value in native if isinstance(value,str) and value) or 'Запрошенное состояние окна подтверждено.'
+    terminal=next((c for c in reversed(task.get('commands') or []) if c.get('tool_name') in {'answer.text','answer_text'}
+        and c.get('status')=='terminal'),{})
+    if (terminal.get('result') or {}).get('_result_contract')==3:
+        if not effects and not opened:
+            view['conversational_response']=report['summary']
+            if (status in {'partial','unknown'} and task.get('execution_scope')!='analysis'
+                    and not task.get('assigned_artifacts')):
+                try:
+                    from .run_journal import unfinished_execution_result
+                except ImportError:
+                    from run_journal import unfinished_execution_result
+                view['conversational_response']=unfinished_execution_result(task.get('commands') or [],
+                    report.get('error_code') or 'goal_not_completed')['answer']
+        view['execution_details']=(f"Технический статус: {status}.\n"
+            f"Источники: {', '.join(report['evidence_refs']) or 'нет'}.\n\n"+(view.get('execution_details') or task.get('answer') or report['summary']))
+    return view
+
 
 
 def render_worker_report(task, report):
@@ -212,8 +220,4 @@ def render_worker_report(task, report):
 
 
 def worker_spoken_response(task, report=None):
-    try:
-        from .orchestrator import present_worker_result
-    except ImportError:
-        from orchestrator import present_worker_result
-    return present_worker_result(task, report)['conversational_response']
+    return worker_presentation(task, report)['conversational_response']

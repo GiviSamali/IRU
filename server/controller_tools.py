@@ -27,7 +27,7 @@ EXECUTE_CMD_DESCRIPTION = (
 WRITE_CONTENT_DESCRIPTION = (
     "Do not use write_content for binary or Office documents; use native Office tools or execute_cmd with verified artifact_paths. "
     "Submit the complete text in one logical call: the system automatically transports large writes in ordered chunks "
-    "and atomically commits only after integrity verification. Do not manually split a valid complete write. "
+    "and commits only after integrity verification. Do not manually split a valid complete write. "
     "Path is literal: resolve environment/home variables on the target device first; never pass $env:, %VAR% or ~. "
     "Canonical tool for creating text content or performing an explicitly requested full replacement. Prefer it for long, multiline, or generated new content. "
     "For a limited edit read_file first, then set expected_text to the exact original fragment and content to its replacement; "

@@ -503,7 +503,10 @@ def _build_route_kwargs(
     window_only, effects = worker_window_scope(poll_task_id)
     if window_only:
         inventory = [{"device_id":did,"hostname":(dev.get("info") or {}).get("hostname",did)} for did,dev in all_devices.items()]
-        system_msg = DYNAMIC_CONTEXT_RULES + ("\nThis task is limited to existing windows. Use window_control, never shell, "
+        system_msg = DYNAMIC_CONTEXT_RULES + (("\nUse app_launch for requested files, folders or applications and app_open_url for URLs. "
+            "Use window_control for discovery/verification and existing-window management. A failed find does not prove that opening is impossible. "
+            "Confirm the requested objects, not merely a launched process. " if 'open' in effects else
+            "\nThis task is limited to existing windows. Use window_control, ") + "never shell, "
             "synthetic input or legacy window tools. Resolve relative references from observed opaque window IDs; "
             "do not substitute another device or window. Virtual desktops are not physical monitors and are unsupported; "
             "report the limitation without a shell workaround. Unsaved content and dangerous operations retain runtime confirmation.\n"

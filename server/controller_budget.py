@@ -337,19 +337,7 @@ def classify_cmd(command: str) -> CmdCategory:
 # Per-category config
 # ---------------------------------------------------------------------------
 
-_CATEGORY_SIMILAR_LIMIT: dict[CmdCategory, int] = {
-    CmdCategory.ENVIRONMENT_DISCOVERY: MAX_SIMILAR_ENVIRONMENT_DISCOVERY,
-    CmdCategory.READ_ONLY_INSPECTION:  MAX_SIMILAR_READ_ONLY,
-    CmdCategory.PACKAGE_INSTALL:       MAX_SIMILAR_SETUP,
-    CmdCategory.PROCESS_LAUNCH:        MAX_SIMILAR_PROCESS_LAUNCH,
-    CmdCategory.DESTRUCTIVE:           MAX_SIMILAR_DESTRUCTIVE,
-    CmdCategory.UNKNOWN:               MAX_SIMILAR_UNKNOWN,
-}
 
-_NON_MUTATING_CATEGORIES: frozenset[CmdCategory] = frozenset({
-    CmdCategory.ENVIRONMENT_DISCOVERY,
-    CmdCategory.READ_ONLY_INSPECTION,
-})
 
 _NO_BUDGET_CATEGORIES: frozenset[CmdCategory] = frozenset({
     CmdCategory.ENVIRONMENT_DISCOVERY,
@@ -366,18 +354,8 @@ def _is_readonly_cmd(command_key: str) -> bool:
     return verb in _READ_ONLY_VERBS
 
 
-def _is_install_check_cmd(command_key: str) -> bool:
-    verb = command_key.split(" ")[0] if command_key else ""
-    return verb in _INSTALL_VERBS
 
 
-def budget_guard_entry(error: str) -> dict:
-    return {
-        "action": "budget_guard",
-        "command": "[budget_guard]",
-        "device_id": None,
-        "result": {"error": error},
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +462,7 @@ class CommandBudget:
     Tracks tool / command usage and returns an error string when a budget
     is exceeded, signalling that the agent should stop.
 
-    Includes an EnvDiscoveryGuard to stop Python-environment spiral.
+    Retains environment diagnostics and legacy constructor arguments; never rejects execution.
     Enable IRU_DEBUG_BUDGET=1 to see per-call budget state in logs.
     """
 
@@ -512,12 +490,6 @@ class CommandBudget:
         )
         self.max_environment_discovery_calls = max_environment_discovery_calls
         self.max_read_only_cmd_calls = max_read_only_cmd_calls
-
-        self._similar_limits: dict[CmdCategory, int] = dict(_CATEGORY_SIMILAR_LIMIT)
-        self._similar_limits[CmdCategory.READ_ONLY_INSPECTION] = max_similar_readonly_calls
-        self._similar_limits[CmdCategory.PACKAGE_INSTALL] = max_similar_install_calls
-        self._similar_limits[CmdCategory.UNKNOWN] = max_similar_execute_cmd_calls
-        self._similar_limits[CmdCategory.ENVIRONMENT_DISCOVERY] = max_similar_environment_discovery
 
         # Counters
         self.tool_calls_count = 0

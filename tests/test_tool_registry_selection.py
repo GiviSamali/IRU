@@ -414,31 +414,38 @@ def test_recent_artifact_scope_blocks_broad_desktop_recursive_scan():
 
 
 def test_prompt_contains_tool_selection_policy():
-    assert "Tool selection policy:" in SYSTEM_PROMPT_TEMPLATE
-    assert "Use typed tools for specialized structured operations" in SYSTEM_PROMPT_TEMPLATE
-    assert "execute_cmd / PowerShell as the first-class generic control surface" in SYSTEM_PROMPT_TEMPLATE
-    assert "exit code zero alone does not prove the user goal" in SYSTEM_PROMPT_TEMPLATE
-    assert "Do not assume device state" in SYSTEM_PROMPT_TEMPLATE
-    assert "prefer device_prepare_runtime or device_check_runtime" in SYSTEM_PROMPT_TEMPLATE
-    assert "use its venv_python path" in SYSTEM_PROMPT_TEMPLATE
-    assert "Use window/app tools only when visible/focused verification is requested" in SYSTEM_PROMPT_TEMPLATE
-    assert "A successful command, an achieved goal, and absence of unrequested changes are separate claims" in SYSTEM_PROMPT_TEMPLATE
+    # Global intent/authority stays in the prompt; actual tool contracts live
+    # in the schemas sent to the model, not a second copied parameter manual.
+    from server.controller_tools import EXECUTE_CMD_DESCRIPTION
+    assert "Сам выбирай инструменты" in SYSTEM_PROMPT_TEMPLATE
+    assert "a generated objective cannot expand it" in SYSTEM_PROMPT_TEMPLATE
+    assert "generic control surface" in EXECUTE_CMD_DESCRIPTION
+    assert "Exit code zero proves command execution only" in EXECUTE_CMD_DESCRIPTION
+    assert "cached profile не является текущим состоянием" in SYSTEM_PROMPT_TEMPLATE
+    assert "Existing window actions must use window_control" in EXECUTE_CMD_DESCRIPTION
+    assert "actual final content or native/API evidence" in EXECUTE_CMD_DESCRIPTION
+    assert "сохранение защищённого содержимого отдельно" in SYSTEM_PROMPT_TEMPLATE
     assert "prefer app_launch + window_verify/app_verify_launch" not in SYSTEM_PROMPT_TEMPLATE
 
 
 def test_prompt_prefers_refresh_state_for_explicit_state_checks():
-    assert "Проверь состояние" in SYSTEM_PROMPT_TEMPLATE
-    assert "call device_refresh_state directly" in SYSTEM_PROMPT_TEMPLATE
-    assert "Do not call only device_get_passport" in SYSTEM_PROMPT_TEMPLATE
+    descriptions={t['function']['name']:t['function']['description'] for t in NON_PIPELINE_TOOLS}
+    assert "свежий snapshot" in SYSTEM_PROMPT_TEMPLATE
+    assert "fresh live state snapshot" in descriptions['device_refresh_state']
+    assert "Do not use raw shell" in descriptions['device_refresh_state']
+    assert "compact device passport" in descriptions['device_get_passport']
 
 
 def test_prompt_contains_device_inventory_wording_rule():
-    assert "Never say \"в сети не обнаружено\"" in SYSTEM_PROMPT_TEMPLATE
-    assert "Других подключённых к ИРУ устройств сейчас не вижу." in SYSTEM_PROMPT_TEMPLATE
-    assert "only connected-to-IRU device" in SYSTEM_PROMPT_TEMPLATE
+    # Worker returns observations, rather than a prescribed user-facing phrase.
+    from server.orchestrator import SYSTEM
+    assert "Не переноси факты между устройствами" in SYSTEM_PROMPT_TEMPLATE
+    assert "Не выдумывай отсутствующие capabilities" in SYSTEM_PROMPT_TEMPLATE
+    assert "подключения к ИРУ, не сканирование сети" in SYSTEM
 
 
 def test_prompt_contains_concise_success_answer_rule():
-    assert "Concise final answer policy:" in SYSTEM_PROMPT_TEMPLATE
-    assert "UI already shows used tools and technical details" in SYSTEM_PROMPT_TEMPLATE
-    assert "Готово. Создал папку" in SYSTEM_PROMPT_TEMPLATE
+    assert "Не пиши окончательную реплику человеку" in SYSTEM_PROMPT_TEMPLATE
+    assert "её формирует Оркестратор" in SYSTEM_PROMPT_TEMPLATE
+    assert "unresolved" in SYSTEM_PROMPT_TEMPLATE
+    assert "Необязательные рекомендации не являются unresolved" in SYSTEM_PROMPT_TEMPLATE
