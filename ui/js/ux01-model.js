@@ -1,7 +1,7 @@
 /* UX-01: a read-only projection of existing chat/Goal/Operations data. */
 const IRUWorkspaceModel = (() => {
   const terminal=s=>['success','partial','failed','blocked','unknown','cancelled'].includes(s);
-  const labels={idle:'Готов к разговору',listening:'Слушаю вас',thinking:'Разбираю поручение',working:'ИРУ работает',awaiting:'Нужно ваше решение',success:'Готово',partial:'Выполнено частично',error:'Возникла проблема',unknown:'Исход не подтверждён'};
+  const labels={idle:'Готов к разговору',listening:'Слушаю вас',thinking:'Разбираю поручение',working:'Выполняю поручение',awaiting:'Нужно ваше решение',success:'Готово',partial:'Выполнено частично',error:'Возникла проблема',unknown:'Исход не подтверждён'};
   const hints={idle:'Поручите задачу или просто начните разговор.',listening:'Говорите — я слушаю.',thinking:'Уточняю смысл запроса и готовлю ответ.',working:'Текущая работа и её результаты — здесь.',awaiting:'Проверьте предложенное действие. Решение остаётся за вами.',success:'Результат поручения подтверждён.',partial:'Полученную часть результата можно использовать. Ограничения указаны ниже.',error:'Завершить поручение не удалось. Причина — в результате.',unknown:'Результат действия установить не удалось. Это не подтверждение успеха.'};
   const canonical=p=>p?.status==='success' && p.goal_completed!==true ? 'unknown' : p?.status||'unknown';
   function derive({messages=[],items=[],snapshots=new Map(),chatId=null,userId=null,voicePhase='off',stale=false}={}) {
@@ -37,9 +37,7 @@ const IRUWorkspaceModel = (() => {
     }
     const active=[...goals.values()].filter(g=>!terminal(g.status));
     const loading=messages.some(m=>m.role!=='user' && m.loading && m.taskKind!=='worker');
-    const latest=[...goals.values()].filter(g=>terminal(g.status)).sort((a,b)=>(b.index??-1)-(a.index??-1))[0] || [...results].reverse().find(r=>r.status!=='answer');
-    let core=decisions.length?'awaiting':active.length?'working':loading?'thinking':voicePhase==='listening'?'listening':
-      latest?({success:'success',partial:'partial',failed:'error',blocked:'error',unknown:'unknown'}[latest.status]||'idle'):'idle';
+    const core=decisions.length?'awaiting':active.length?'working':loading?'thinking':voicePhase==='listening'?'listening':'idle';
     const resultGoals=new Set();
     const uniqueResults=results.reverse().filter(result=>{
       const id=result.message.goalId||result.message.goal_id;

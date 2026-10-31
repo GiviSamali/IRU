@@ -4,7 +4,7 @@ const assert=require('node:assert/strict'),path=require('node:path'),fs=require(
 const {chromium}=require('playwright');
 const {createServer}=require('./helpers/smart-ui-fixtures.cjs');
 let browser,server,origin;
-const shots=path.resolve(__dirname,'../../notes/ux01-20261031/screenshots');
+const shots=path.resolve(__dirname,'../../notes/ux011-20261031/after');
 before(async()=>{fs.mkdirSync(shots,{recursive:true});({server}=createServer({view:'overview'}));await new Promise(r=>server.listen(0,'127.0.0.1',r));origin=`http://127.0.0.1:${server.address().port}`;browser=await chromium.launch({channel:'msedge',headless:true});});
 after(async()=>{await browser?.close();if(server)await new Promise(r=>server.close(r));});
 function result(status='success',files=1){
@@ -31,14 +31,22 @@ async function noOverflow(page){assert.ok(await page.evaluate(()=>document.docum
 test('Desktop overview is a workspace, core follows running to confirmed files, one Goal for two Workers',async()=>{
  const f=await setup(),p=f.page;try{
   await f.seed([]);assert.equal(await p.locator('#uxHero h1').innerText(),'Готов к разговору');
+  for(const section of ['uxActiveSection','uxResultsSection','uxDecisionsSection'])assert.equal(await p.locator('#'+section).isVisible(),false);
+  assert.equal(await p.locator('.ux-brand,#uxCompactStatus,#uxHistory,.ux-facts').count(),0);
+  assert.ok((await p.locator('#uxHero').innerText()).includes('В ЭТОМ РАЗГОВОРЕ'));
   await p.screenshot({animations:'disabled',path:path.join(shots,'desktop-idle.png')});
   const items=['a','b'].map(task_id=>({task_id,goal_id:'g',goal_title:'Подготовить документы для встречи',title:'Документ',chat_id:1,status:'running',device_ids:['Second']}));
   await f.seed(result('running',0),items);
   assert.equal(await p.locator('#uxActive [data-goal-id=g]').count(),1);
   assert.equal(await p.locator('#uxHero .ux-core').getAttribute('data-state'),'working');
+  assert.equal(await p.locator('#uxActiveSection').isVisible(),true);
+  assert.equal(await p.locator('#uxResultsSection').isVisible(),false);
   await p.screenshot({animations:'disabled',path:path.join(shots,'desktop-working.png')});
   await f.seed(result('success',2));
-  assert.equal(await p.locator('#uxHero .ux-core').getAttribute('data-state'),'success');
+  assert.equal(await p.locator('#uxHero .ux-core').getAttribute('data-state'),'idle');
+  assert.equal(await p.locator('#uxActiveSection').isVisible(),false);
+  assert.equal(await p.locator('#uxDecisionsSection').isVisible(),false);
+  assert.equal(await p.locator('#uxResultsSection').isVisible(),true);
   assert.equal(await p.locator('#uxResults [data-block-type=file]').count(),2);
   await p.locator('#uxResults [data-action=open-message-file]').first().click();
   assert.equal(f.writes.at(-1).body.device_id,'Second');assert.ok(f.writes.at(-1).body.params.command.includes('Get-Item -LiteralPath'));
@@ -49,7 +57,8 @@ test('Desktop overview is a workspace, core follows running to confirmed files, 
 for(const status of ['partial','unknown','failed'])test('Desktop '+status+' is visible and never green success',async()=>{
  const f=await setup(),p=f.page;try{
   await f.seed(result(status,status==='partial'?1:0));
-  assert.equal(await p.locator('#uxHero .ux-core').getAttribute('data-state'),status==='failed'?'error':status);
+  assert.equal(await p.locator('#uxHero .ux-core').getAttribute('data-state'),'idle');
+  assert.equal(await p.locator('#uxResults [data-result-status='+status+']').count(),1);
   assert.ok((await p.locator('#uxResults').innerText()).includes(status==='unknown'?'подтвердить':status==='partial'?'Второй':'доступ'));
   await p.screenshot({animations:'disabled',path:path.join(shots,`desktop-${status}.png`)});
  }finally{await p.close();}
@@ -88,17 +97,17 @@ test('F5, view persistence, conversation switch and HTML escaping',async()=>{
   await noOverflow(p);assert.deepEqual(f.errors,[]);
  }finally{await p.close();}
 });
-test('Component catalogue is isolated, interactive and has no diagnostic application',async()=>{
+test('gallery is absent and old saved component view migrates safely',async()=>{
  const f=await setup(),p=f.page;try{
-  await p.locator('#ux-tab-components').click();
-  assert.ok((await p.locator('#uxGallery').innerText()).includes('Демонстрация'));
-  await p.locator('[data-ux-demo-state=unknown]').click();assert.equal(await p.locator('#uxGallery .ux-core').getAttribute('data-state'),'unknown');
-  await p.locator('[data-ux-variant=compact]').click();assert.equal(await p.locator('#uxGallery .ux-core').getAttribute('class'),'ux-core small');
-  await p.locator('[data-ux-entry=approval]').click();await p.locator('[data-ux-demo]').first().click();
-  assert.equal(f.writes.length,0);assert.ok((await p.locator('#uxDemoNotice').innerText()).includes('ничего не отправлено'));
-  await p.screenshot({animations:'disabled',path:path.join(shots,'desktop-components.png')});
-  const nav=await p.locator('.ux-navigation').innerText();assert.ok(!/Диагностика|Topology|EvidenceStream|Dashboard/.test(nav));
-  assert.equal(await p.locator('script[src*="agent-os"]').count(),0);
+  assert.equal(await p.locator('#ux-tab-components,#uxGallery,[data-ux-demo]').count(),0);
+  await p.evaluate(()=>{sessionStorage.setItem('iru-view:2','components');sessionStorage.setItem('iru-view','components');localStorage.setItem('iru-view','components');});
+  await p.reload({waitUntil:'networkidle'});await p.evaluate(()=>openChat(1));
+  assert.equal(await p.locator('#uxOverview').isVisible(),true);
+  assert.equal(await p.evaluate(()=>sessionStorage.getItem('iru-view:2')),'overview');
+  assert.equal(await p.evaluate(()=>localStorage.getItem('iru-view')),null);
+  for(const state of ['idle','listening','thinking','working','awaiting','success','partial','error','unknown'])
+    assert.ok(await p.evaluate(state=>IRUWorkspace.core(state).includes('data-state="'+state+'"'),state));
+  assert.equal(await p.locator('#chatInput').isVisible(),true);assert.deepEqual(f.errors,[]);
  }finally{await p.close();}
 });
 test('text submission, attachment, voice toggle and Stop retain existing routes',async()=>{
@@ -134,7 +143,7 @@ test('long analysis stays complete and Mini remains scrollable without changing 
 });
 test('device reconnect and open/closed sections preserve real data and current conversation',async()=>{
  const f=await setup(),p=f.page;let connected=false;try{
-  await f.seed([]);
+  await f.seed([]);await p.locator('.ux-devices-section summary').click();
   await p.route('**/api/devices',r=>r.fulfill({json:{status:'ok',devices:{Second:{connected,info:{hostname:'Рабочий компьютер',os:'Windows'}}}}}));
   await p.evaluate(()=>fetchDevices());assert.ok((await p.locator('#uxDevices').innerText()).includes('Нет связи'));
   connected=true;await p.evaluate(()=>fetchDevices());assert.ok((await p.locator('#uxDevices').innerText()).includes('На связи'));
@@ -174,7 +183,7 @@ test('Mobile navigation, results, composer, attachments and voice controls stay 
   await p.locator('#mobilePlusBtn').click();await p.screenshot({animations:'disabled',path:path.join(shots,'mobile-conversation.png')});
   await p.locator('#ux-tab-overview').click();assert.equal(await p.locator('#uxOverview').isVisible(),true);
   assert.equal(await p.locator('#ux-tab-overview').getAttribute('aria-selected'),'true');
-  assert.equal(await p.locator('#ux-tab-components').isVisible(),false);
+  assert.equal(await p.locator('#ux-tab-components').count(),0);
   await p.screenshot({animations:'disabled',path:path.join(shots,'mobile-overview.png')});await noOverflow(p);
   await p.emulateMedia({reducedMotion:'reduce'});assert.ok(await p.locator('.ux-core-ring').first().evaluate(el=>parseFloat(getComputedStyle(el).animationDuration)<.01));
  }finally{await p.close();}

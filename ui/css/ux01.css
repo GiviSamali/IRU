@@ -138,25 +138,6 @@ button:disabled {cursor:not-allowed;opacity:.5;}
 .app .conversation-toolbar {background:transparent;border-bottom:1px solid var(--border);}
 html[data-ux-view=overview] .conversation-toolbar,html[data-ux-view=components] .conversation-toolbar,html[data-ux-view=components] .chat-input-area {display:none!important;}
 .toast {border:1px solid var(--border);border-radius:12px;background:#1a2332;color:var(--text-primary);box-shadow:0 12px 36px #0005;}
-.ux-gallery {padding:28px;overflow:auto;flex:1;min-height:0;}
-.ux-gallery header {margin-bottom:26px;}
-.ux-gallery h1 {font-size:30px;letter-spacing:-.03em;margin:10px 0;}
-.ux-gallery header>p:last-child {color:var(--text-muted);font-size:13px;max-width:600px;line-height:1.8;}
-.ux-gallery-layout {display:grid;grid-template-columns:210px 1fr;gap:28px;}
-.ux-gallery-layout>nav {display:flex;flex-direction:column;gap:5px;}
-.ux-gallery-layout>nav button {text-align:left;background:none;border-color:transparent;padding:10px;}
-.ux-gallery-layout>nav button[aria-current=page] {background:#1b2535;border-color:var(--border);}
-.ux-demo-controls {display:flex;flex-wrap:wrap;gap:6px;}
-.ux-variants {margin-top:14px;}
-.ux-demo-compact {display:flex;align-items:center;gap:14px;max-width:360px;width:100%;padding:12px!important;}
-.ux-gallery-preview[data-variant=compact]>article {max-width:330px;padding:12px;}
-.ux-demo-controls button[aria-pressed=true] {color:var(--accent);border-color:var(--accent);}
-.ux-gallery-preview {display:flex;align-items:center;justify-content:center;min-height:330px;border:1px dashed #344259;border-radius:16px;margin:20px 0;background:#0e131d;padding:32px;}
-.ux-gallery-preview>article,.ux-gallery-preview>ul,.ux-gallery-preview>.ux-demo-input {width:100%;max-width:440px;}
-#uxDemoNotice {color:var(--text-muted);font-size:12px;}
-.ux-demo-input input {display:block;width:100%;padding:15px;margin:12px 0;background:#141b28;border:1px solid var(--border);border-radius:12px;color:var(--text-primary);}
-.ux-demo-primitives {display:flex;gap:8px;flex-wrap:wrap;}
-.ux-demo-primitives .ux-activity {width:100%;}
 .ux-mini-status {display:flex;align-items:center;gap:10px;padding:10px 14px;flex:none;}
 .ux-mini-status>div:last-child {min-width:0;display:flex;flex-direction:column;}
 .ux-mini-status strong {font-size:12px;font-weight:550;}
@@ -195,3 +176,12 @@ html.iru-mini .app .chat-welcome {display:none!important;}
  .ux-navigation {display:none;}
  .app .chat-input-area {padding:7px 9px;}
 }
+
+/* UX-01.1: one identity, one live state; empty sections remain absent. */
+.ux-navigation {justify-content:flex-end;padding-block:10px;}
+.ux-hero {min-height:190px;}
+.ux-devices-section {border:1px solid var(--border);border-radius:12px;padding:14px;font-size:12px;color:var(--text-muted);}
+.ux-devices-section summary {cursor:pointer;color:var(--text-secondary);}
+.ux-devices-section>p {margin:12px 0;font-size:11px;line-height:1.6;}
+.ux-secondary:has(>#uxDecisionsSection[hidden]) {align-self:start;}
+.ux-overview .ux-result-card .smart-status {display:none;}
