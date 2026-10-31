@@ -788,23 +788,33 @@ def present_worker_result(task, report=None):
 
 
 def present_goal_result(goal):
-    """Compose the existing Goal projection from canonical member reports."""
+    """Conservative conversation fallback; reports remain in Operations.
+
+    This renders the already established outcome, never interprets Worker prose
+    as proof or concatenates it into the owner's conversation.
+    """
     members=[m for m in goal.get('tasks') or [] if m.get('required_for_goal',True)]
-    texts=[]
-    for member in members:
-        report=member.get('report') or {}
-        text=member.get('conversational_response') or report.get('summary') or ''
-        if text:texts.append(text)
     if not goal.get('terminal',goal.get('status') in {'success','partial','failed','unknown','cancelled','blocked'}):
         return 'Выполняю поручение.'
-    # Free-form mode adds no verdict preamble: the Goal status is a machine fact
-    # shown as a badge, while the words come from the members themselves.
-    free = os.getenv('IRU_FREE_FORM_REPORT', '').strip().lower() in {'1', 'true', 'yes', 'on'}
-    prefix = '' if free else {
+    status=goal.get('status')
+    if not members:
+        return 'Результат сохранён в подробностях поручения.'
+    prefix = {
+        'success':'Готово. Результаты сохранены в Операциях.',
         'unknown':'Исход части действий не подтверждён; автоматически их не повторяю.',
         'partial':'Часть поручения выполнить не удалось.','failed':'Поручение выполнить не удалось.',
         'blocked':'Для продолжения требуется уточнение или разрешение.','cancelled':'Поручение отменено.'}.get(goal.get('status'),'')
-    return '\n\n'.join(([prefix] if prefix else [])+texts) or 'Результат сохранён в подробностях поручения.'
+    if status=='success' and members and all(m.get('execution_scope')=='window' for m in members):
+        request=(goal.get('original_request') or '').strip()
+        folder=re.fullmatch(r'откр(?:ой|ыть)\s+папку\s+([\w .-]+)[.!]?',request,re.I)
+        if folder:
+            return 'Открыл папку '+folder[1].rstrip('.!')+' в Проводнике.'
+    if status in {'partial','failed','unknown'}:
+        # Objectives identify the missing result without leaking diagnostic prose.
+        missing=[str(m.get('objective') or '').strip() for m in members if m.get('status')!='success']
+        missing=[s for s in missing if s and len(s)<=160 and '\\' not in s and '\n' not in s]
+        if missing:prefix+=' Не завершено: '+'; '.join(missing[:3])+'.'
+    return prefix or 'Результат сохранён в подробностях поручения.'
 
 
 def recover_turns():

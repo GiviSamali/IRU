@@ -27,7 +27,6 @@ def goal_presentation(goal: dict) -> dict:
 
     artifacts = []
     result_artifacts = []
-    shown = []
     seen = set()
     # Verified files from partially completed Tasks remain visible as partial results.
     for member in members:
@@ -69,8 +68,6 @@ def goal_presentation(goal: dict) -> dict:
                                and not canonical_name.endswith((".py", ".ps1", ".sh", ".tmp")))
             if user_output:
                 result_artifacts.append(artifact)
-                if len(shown) < 8:
-                    shown.append(artifact)
 
     # Only Orchestrator composes conversation; this module renders its projection.
     try:
@@ -78,13 +75,12 @@ def goal_presentation(goal: dict) -> dict:
     except ImportError:
         from orchestrator import present_goal_result
     message = present_goal_result(goal)
-    if terminal and shown:
-        message += "\n" + "\n".join("Файл: " + a["path"] for a in shown)
-    if terminal and not success:
-        message += " Подробности по отдельным поручениям — в Операциях."
+    if terminal and result_artifacts:
+        names = [a['name'] for a in result_artifacts]
+        message += " Доступные файлы: " + ", ".join(names[:8]) + (" и другие." if len(names)>8 else ".")
 
     # Short, evidence-aligned voice notification: never read arbitrary paths or
-    # a long technical report aloud. Full detail stays in the conversation.
+    # a long technical report aloud. Full detail stays in Operations.
     spoken = message.split("\n", 1)[0].strip()
     if len(spoken) > 380 or "://" in spoken or "\\" in spoken or "\n" in spoken:
         spoken = {

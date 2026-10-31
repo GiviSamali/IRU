@@ -133,24 +133,24 @@ const IRUSmartUI = (() => {
       for(const file of goalFiles) {
         const prefix='Файл: '+file.path;
         if(value===prefix)return null;
+        const artifact=list(goal.result_artifacts).find(a=>a.path===file.path && a.device_id===file.device);
+        if(artifact?.sha256 && value===file.path+' · SHA-256 '+artifact.sha256)return null;
         // The server appends this footer to the last file line for partial goals.
         // Remove only the known file prefix; preserve the warning itself.
         if(value===prefix+' Подробности по отдельным поручениям — в Операциях.')return 'Подробности по отдельным поручениям — в Операциях.';
       }
       return line;
     }).filter(line=>line!==null).join('\n').trim();
-    const goalSummary=m.role!=='user' && goal && ['running','success','partial','failed','blocked','unknown','cancelled'].includes(goal.status)
+    const goalSummary=m.role!=='user' && goal && ['running','queued','waiting_confirmation','waiting_input','success','partial','failed','blocked','unknown','cancelled'].includes(goal.status)
       && Number.isInteger(goal.completed_count) && Number.isInteger(goal.total_count)
       && goal.total_count>0 && goal.completed_count>=0 && goal.completed_count<=goal.total_count;
     if(goalSummary) {
-      const source=text(m.conversationalResponse)||text(m.conversational_response)||text(m.content)||text(m.text);
-      const canonical=source===text(goal.message);
+      const terminal=goal.terminal ?? ['success','partial','failed','blocked','unknown','cancelled'].includes(goal.status);
       blocks.push({type:'goal',key:id+'-goal',goalId:goal.goal_id,status:goal.status,
         done:goal.completed_count,total:goal.total_count,attention:goal.requires_user_action===true,
-        message:text(goal.message),
-        details:canonical?content:text(goal.message)});
-      // Replace only the server Goal summary; preserve independent answer text.
-      if(canonical)content='';
+        terminal,message:content || text(goal.message)});
+      // Conversation is the primary result. Never render a second report copy.
+      content='';
     }
     const executionDetails = text(m.executionDetails) || text(m.execution_details);
     if (content) blocks.push({ type:'text', text:content, key:id+'-text', long:content.length > 200 || content.split('\n').length > 4 });
@@ -192,7 +192,7 @@ const IRUSmartUI = (() => {
         file.verificationScope=artifact.verification_scope || 'file_identity';
       }
     }
-    blocks.push(...files.map((file,i)=>({...file,key:id+'-file-'+i})));
+    blocks.push(...files.map((file,i)=>({...file,goalResult:Boolean(goal),key:id+'-file-'+i})));
     if (m.confirmTaskId || (m.suggestedFact?.text && !m.suggestedFactDeclined) || m.cancelAvailable) {
       blocks.push({ type:'action', key:id+'-action', index, critical:Boolean(m.confirmTaskId), message:m });
     }
@@ -227,9 +227,13 @@ const IRUSmartUI = (() => {
   const expanded = (block, context) => Boolean(context.expanded?.has(block.key));
   const REGISTRY = Object.freeze({
     goal(block,context) {
-      const labels={running:'Выполняется',success:'Готово',partial:'Частично выполнено',failed:'Не выполнено',blocked:'Заблокировано',unknown:'Не подтверждено',cancelled:'Отменено'};
+      const labels={running:'Выполняется',queued:'В очереди',waiting_confirmation:'Нужно подтверждение',waiting_input:'Нужен ответ',success:'Готово',partial:'Частично выполнено',failed:'Не выполнено',blocked:'Заблокировано',unknown:'Не подтверждено',cancelled:'Отменено'};
       const icon=block.status==='success'?'✓':block.status==='running'?'':block.status==='partial'?'◐':block.status==='cancelled'?'—':'!';
       const percent=100*block.done/block.total;
+      if(block.terminal)return `<section class="smart-block smart-goal" data-block-type="goal" data-status="${esc(block.status)}" data-smart-key="${esc(block.key)}" aria-label="Итог цели">
+        ${block.status==='success'?'':`<span class="smart-status">${esc(labels[block.status])}</span>`}
+        <div class="smart-goal-message">${formattedText(block.message || '')}</div>
+        ${block.attention?'<span class="smart-goal-attention">Нужен ответ</span>':''}</section>`;
       return `<section class="smart-block smart-goal" data-block-type="goal" data-status="${esc(block.status)}" data-single-operation="${block.total===1}" data-goal-id="${esc(block.goalId||'')}" data-smart-key="${esc(block.key)}" aria-label="Итог цели">
         <div class="smart-goal-heading"><span class="smart-goal-icon" aria-hidden="true">${icon}</span><strong>Поручение</strong></div>
         <div class="smart-goal-message">${formattedText(block.message || block.details || '')}</div>
@@ -262,7 +266,7 @@ const IRUSmartUI = (() => {
       return `<section class="smart-block smart-file${open ? ' expanded' : ''}" data-block-type="file" data-smart-key="${esc(block.key)}">
         <div class="smart-file-heading"><span class="smart-file-kind">${esc(block.extension || 'Файл')}</span><strong title="${esc(block.path)}">${esc(block.name)}</strong></div>
         ${block.verified?`<div class="smart-file-verified">${block.contentVerified?'Файл и полнота содержания подтверждены':block.verificationScope==='copy_identity'?'Подтверждена идентичность копии':'Файл подтверждён; полнота содержания не проверена'}</div>`:''}
-        <div class="smart-file-meta"><span>${esc(block.device)}</span></div>
+        ${block.goalResult?'':`<div class="smart-file-meta"><span>${esc(block.device)}</span></div>`}
         <div class="smart-file-actions">
           <button type="button" data-action="open-message-file" data-device-id="${esc(encodeURIComponent(block.device))}" data-file-path="${esc(encodeURIComponent(block.path))}">Открыть на устройстве</button>
           <button type="button" data-action="reveal-message-file" data-device-id="${esc(encodeURIComponent(block.device))}" data-file-path="${esc(encodeURIComponent(block.path))}" title="Открыть папку на устройстве">Папка</button>

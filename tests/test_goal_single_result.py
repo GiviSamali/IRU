@@ -76,7 +76,9 @@ def test_goal_projection_is_one_text_for_all_members():
     text = orch.present_goal_result(goal)
     assert isinstance(text, str)
     assert text.count("Часть поручения выполнить не удалось.") == 1
-    assert "project.txt" in text and "summary.txt" in text
+    # Worker prose is retained in Operations, not echoed by conversation fallback.
+    assert "project.txt" not in text and "summary.txt" not in text
+    assert goal['tasks'][0]['report']['summary'] == 'Файл project.txt изменён.'
 
 
 def test_goal_projection_without_members_keeps_single_fallback():

@@ -165,6 +165,12 @@ def test_open_controller_uses_unchanged_agent_api_and_no_narration_call(monkeypa
 
 def test_goal_assignment_result_and_followup_use_existing_durable_path(owners,monkeypatch):
     owner,_=owners;received=[];dialogue=[]
+    from server import goal_completion
+    async def narrate(goal, projected):
+        assert '15 переподключений' in goal['tasks'][0]['report']['summary']
+        return {'message':'Сервер работает; нашлось 15 переподключений.',
+                'spoken_message':'Сервер работает; нашлось 15 переподключений.'}
+    monkeypatch.setattr(goal_completion,'_narrate',narrate)
     async def execute(t):
         received.append(t)
         result=finish([entry('execute_cmd',{'returncode':0,'stdout':'server active; reconnects=15','stderr':''})],
@@ -200,7 +206,8 @@ def test_goal_assignment_result_and_followup_use_existing_durable_path(owners,mo
             assert saved['worker_report']['goal_completed']
             goal=goal_view(first['goal_id'],owner['id'],owner['chat_id'])
             human=goal_presentation(goal)['message']
-            assert '15 переподключений' in human and '1 из 1' not in human
+            assert '15 переподключений' in goal['tasks'][0]['report']['summary']
+            assert '15 переподключений' not in human and '1 из 1' not in human
             # A Goal member owns no chat message: the single user-visible result
             # is the Orchestrator message of the Goal.
             assert saved['history_message_id'] is None

@@ -47,9 +47,11 @@ async def api_get_messages(chat_id: int, request: Request):
     try:
         from ..worker_scheduler import goal_view
         from ..goal_presentation import goal_presentation
+        from ..goal_completion import present_completed_goal
     except ImportError:
         from worker_scheduler import goal_view
         from goal_presentation import goal_presentation
+        from goal_completion import present_completed_goal
     cache = {}
     for message in messages:
         if (message.get("taskKind") != "orchestrator"
@@ -58,7 +60,11 @@ async def api_get_messages(chat_id: int, request: Request):
         gid = message["goalId"]
         if gid not in cache:
             try:
-                cache[gid] = goal_presentation(goal_view(gid, user["id"], chat_id))
+                goal = goal_view(gid, user["id"], chat_id)
+                presentation = goal_presentation(goal)
+                if presentation['terminal']:
+                    presentation = await present_completed_goal(goal, presentation, user['id'], chat_id)
+                cache[gid] = presentation
             except ValueError:
                 cache[gid] = None
         presentation = cache[gid]
@@ -66,6 +72,7 @@ async def api_get_messages(chat_id: int, request: Request):
             message.update(content="Результат цели недоступен.",taskStatus="unknown",taskKind="goal")
         else:
             message.update(content=presentation["message"],taskStatus=presentation["status"],
+                           conversationalResponse=presentation['message'],
                            taskKind="goal",goalPresentation=presentation)
     return {"status": "ok", "messages": messages}
 

@@ -68,13 +68,13 @@ def test_free_form_keeps_words_when_artifact_is_missing(monkeypatch):
     assert "Обязательные файловые результаты не подтверждены" not in report["summary"]
 
 
-def test_free_form_does_not_preface_the_goal_reply(monkeypatch):
+def test_free_form_worker_words_do_not_replace_goal_conversation_fallback(monkeypatch):
     monkeypatch.setenv("IRU_FREE_FORM_REPORT", "1")
     goal = {"goal_id": "g1", "status": "partial", "terminal": True, "tasks": [
         {"required_for_goal": True, "conversational_response": MODEL_TEXT, "report": {}}]}
     text = orch.present_goal_result(goal)
-    assert text == MODEL_TEXT
-    assert "Часть поручения выполнить не удалось" not in text
+    assert text == 'Часть поручения выполнить не удалось.'
+    assert goal['tasks'][0]['conversational_response'] == MODEL_TEXT
 
 
 def test_default_mode_keeps_the_existing_wording(monkeypatch):

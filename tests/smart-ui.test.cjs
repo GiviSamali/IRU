@@ -240,14 +240,13 @@ test('partial WorkerReport overrides stale Done and scopes file verification to 
  assert.ok(checked.includes('Файл и полнота содержания подтверждены'));
 });
 
-test('Orchestrator reply is visible while technical Goal counters stay inside collapsed details',()=>{
+test('terminal Orchestrator reply is visible without redundant Goal counters',()=>{
  const goal={goal_id:'g',status:'partial',completed_count:0,total_count:1,
    requires_user_action:false,message:'Окно остаётся открытым.',task_ids:['t'],artifacts:[]};
  const html=ui.render(ui.adapt({role:'assistant',goalId:'g',taskKind:'goal',content:goal.message,goalPresentation:goal}));
  assert.ok(html.includes('Окно остаётся открытым.'));
- const details=html.indexOf('<details');
- assert.ok(details>0 && html.indexOf('0 / 1')>details);
- assert.ok(!html.slice(0,details).includes('Частично выполнено'));
+ assert.ok(!html.includes('Ход выполнения') && !html.includes('0 / 1'));
+ assert.ok(html.includes('Частично выполнено')); // Canonical outcome remains visible.
  goal.result_artifacts=[{path:'C:/report.docx',device_id:'pc',task_id:'t',verified:true,content_verified:true}];
  const checked=ui.render(ui.adapt({role:'assistant',goalId:'g',taskKind:'goal',content:goal.message,goalPresentation:goal}));
  assert.ok(checked.includes('Файл и полнота содержания подтверждены'));
