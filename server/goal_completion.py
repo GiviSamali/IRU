@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 import weakref
 
@@ -28,7 +29,7 @@ except ImportError:
 _LOCKS = weakref.WeakValueDictionary()
 _TOOL = {"type": "function", "function": {
     "name": "goal_completion_reply",
-    "description": "Write a brief, truthful conversational follow-up from finalized evidence only.",
+    "description": "Write a truthful conversational result with the detail the user's request needs.",
     "parameters": {"type": "object", "additionalProperties": False,
         "properties": {
             "answer": {"type": "string"},
@@ -38,6 +39,8 @@ _SYSTEM = (
     "Ты ИРУ, Оркестратор, возвращаешься к человеку после работы Worker. "
     "Это НЕ новое поручение и НЕ разрешение на действия. Инструментов исполнения у тебя нет. "
     "Для простых действий естественно (1–3 предложения) сообщи, что именно получено. "
+    "В режиме action_result назови само выполненное действие и результат, обычно одним предложением; "
+    "не добавляй проверок, попыток и оговорок про то, чего человек не просил проверять. "
     "Для исследования сохрани содержательные выводы, оговорки и рекомендации нужной длины. "
     "Не копируй журналы Workers и не подменяй анализ фразой Готово. "
     "Различай выполненное и неподтверждённое. Нельзя придумывать тесты, открытия или открытия окон. "
@@ -124,6 +127,54 @@ def _needs_explanation(goal):
     return True
 
 
+def _narration_material(goal, projected):
+    """Presentation only: compact completed actions, retain substantive findings.
+
+    General scope alone does not identify a simple action. Requests for analysis,
+    explanation or technical details (including a mixed Goal member) keep the
+    full existing narrator context. Never infer completion from the prose here.
+    """
+    members=[entry for entry in goal.get('tasks') or [] if entry.get('required_for_goal',True)]
+    request=goal.get('original_request') or ''
+    substantive=re.compile(
+        r'анализ|исслед|диагност|сравн|объясн|почему|причин|провер|посмотр|осмотр|'
+        r'изуч|оцен|найди|найти|состояни|нормаль|расскаж|\?|'
+        r'ошиб|проблем|вывод|рекомендац|отч[её]т|подроб|техническ|хеш|хэш|'
+        r'sha[ -]?256|\bbom\b|\bcrlf\b|байт|кодиров|audit|analy[sz]|investigat|'
+        r'diagnos|compar|explain|why|inspect|verify|check|report|detail|review|summari|look|find',re.I)
+    compact=bool(members) and projected.get('status')=='success' and projected.get('goal_completed') is True
+    compact=compact and not substantive.search(request)
+    compact=compact and all(
+        entry.get('status')=='success' and (entry.get('report') or {}).get('goal_completed') is True
+        and entry.get('execution_scope') in {'general','window','file'}
+        and not entry.get('unresolved')
+        and (entry.get('coverage_observation') or {}).get('coverage') in {None,'complete'}
+        and not substantive.search(' '.join(str(entry.get(key) or '') for key in ('objective','assignment_scope')))
+        for entry in members)
+    if compact:
+        # Goal status already represents verified completion of these assignments.
+        # No technical summary, intermediate errors, receipts or recommendations
+        # are needed to say the requested action was completed.
+        outcomes=[{'status':entry['status'],'completed_action':entry.get('objective') or request}
+                  for entry in members]
+        return {'reply_mode':'action_result','original_request':request,
+            'verified_goal_status':projected['status'],'worker_outcomes':outcomes,
+            'files':[{'name':file['name']} for file in projected.get('result_artifacts') or []]}
+    outcomes=[{'status':entry.get('status'),'objective':entry.get('objective') or '',
+        'scope':entry.get('assignment_scope') or '',
+        'constraints':entry.get('assignment_constraints') or [],
+        'unresolved':entry.get('unresolved') or [],
+        'optional_recommendations':entry.get('recommendations') or [],
+        'coverage_observation':{key:(entry.get('coverage_observation') or {}).get(key)
+            for key in ('coverage','reason','evidence_refs')},
+        'summary':(entry.get('report') or {}).get('summary') or '',
+        'error_code':(entry.get('report') or {}).get('error_code'),
+        'evidence_refs':(entry.get('report') or {}).get('evidence_refs') or [],
+        'artifacts':(entry.get('report') or {}).get('artifacts') or []} for entry in members]
+    return {'reply_mode':'substantive_result','original_request':request,
+        'verified_goal_status':projected['status'],'worker_outcomes':outcomes}
+
+
 async def _narrate(goal, projected):
     """One language-only Orchestrator request, with measured usage and latency."""
     try:
@@ -138,20 +189,8 @@ async def _narrate(goal, projected):
            'reply_source':'template_fallback','reply_request_llm_calls':0,'reply_metrics':metrics}
     entity_token=None
     try:
-        outcomes=[{'status':entry.get('status'),'objective':entry.get('objective') or '',
-            'scope':entry.get('assignment_scope') or '',
-            'constraints':entry.get('assignment_constraints') or [],
-            'unresolved':entry.get('unresolved') or [],
-            'optional_recommendations':entry.get('recommendations') or [],
-            'coverage_observation':{key:(entry.get('coverage_observation') or {}).get(key)
-                for key in ('coverage','reason','evidence_refs')},
-            'summary':(entry.get('report') or {}).get('summary') or '',
-            'error_code':(entry.get('report') or {}).get('error_code'),
-            'evidence_refs':(entry.get('report') or {}).get('evidence_refs') or [],
-            'artifacts':(entry.get('report') or {}).get('artifacts') or []}
-            for entry in goal.get('tasks') or [] if entry.get('required_for_goal',True)]
-        material={'original_request':goal.get('original_request') or '',
-            'verified_goal_status':projected['status'],'worker_outcomes':outcomes}
+        material=_narration_material(goal, projected)
+        metrics['reply_mode']=material['reply_mode']
         messages=[{'role':'system','content':_SYSTEM},
             {'role':'user','content':json.dumps({'untrusted_evidence':material},ensure_ascii=False)}]
         metrics['input_tokens_estimated']=estimate_tokens({'messages':messages,'tools':[_TOOL]})
