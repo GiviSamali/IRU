@@ -129,7 +129,9 @@ def dependency_context(results):
         data = result['data']
         report = data['report']
         answer = data.get('answer') or report.get('summary') or ''
-        full_read = len(answer) > 12000
+        research = [{'step_id':c.get('step_id'),'result':c.get('result')}
+                    for c in data.get('commands') or [] if c.get('tool_name')=='web_search']
+        full_read = len(answer) + len(_result_json(research)) > 12000
         if full_read:
             pending[result['result_id']] = len(_result_json(data))
         material.append({
@@ -137,6 +139,7 @@ def dependency_context(results):
             'source_task_id': data['task_id'], 'device_ids': data.get('device_ids', []),
             'status': report['status'], 'goal_completed': report['goal_completed'],
             'answer': report.get('summary', '') if full_read else answer,
+            'research_material': [] if full_read else research,
             'artifacts': report.get('artifacts', []),
             'evidence_refs': report.get('evidence_refs', []),
             'action_evidence': (data.get('receipt') or {}).get('action_evidence'),

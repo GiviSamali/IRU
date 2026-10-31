@@ -250,7 +250,7 @@ def test_semantic_scope_has_one_worker_call_per_native_mutation_and_no_shell(mon
     async def completion(**kw):
         requests.append(kw)
         names={t['function']['name'] for t in kw['tools']}
-        assert 'window_control' in names and 'execute_cmd' not in names and 'create_plan' not in names
+        assert 'window_control' in names and 'execute_cmd' in names and 'create_plan' not in names
         assert len(requests) <= len(actions)
         return tool_call('window_control',{'action':actions[len(requests)-1], 'target':'Word'},str(len(requests)))
     async def send(device,action,args):
@@ -260,18 +260,19 @@ def test_semantic_scope_has_one_worker_call_per_native_mutation_and_no_shell(mon
     assert result['commands'][-1]['tool_name']=='answer.text' and result['tasks']==[]
 
 
-def test_window_only_rejects_shell_before_agent(monkeypatch):
+def test_window_scope_allows_cli_with_existing_dispatch_policy(monkeypatch):
     from server import database
     from server.controller_non_pipeline import process_non_pipeline_command
     monkeypatch.setattr(database,'get_device_profile',lambda *a,**kw: None)
-    responses=iter([tool_call('execute_cmd',{'command':'forbidden'},'shell'),tool_call('window_control',{'action':'minimize','target':'Word'})])
+    responses=iter([tool_call('execute_cmd',{'command':'hostname','artifact_paths':[]},'shell'),tool_call('window_control',{'action':'minimize','target':'Word'})])
     sent=[]
     async def completion(**kw): return next(responses)
     async def send(device,action,args):
-        sent.append(action); return wc.WindowControl(FakeAdapter()).run(**args)
+        sent.append(action)
+        return {'returncode':0,'stdout':'host','stderr':''} if action=='execute_cmd' else wc.WindowControl(FakeAdapter()).run(**args)
     result=run_actual_window_request(monkeypatch,'Сверни Word',send,completion,effects=['minimize'])
-    assert sent == ['window.control']
-    assert result['commands'][0]['result']['error'] == 'window_capability_required'
+    assert sent == ['execute_cmd','window.control']
+    assert result['commands'][0]['status']=='success'
 
 
 @pytest.mark.parametrize('pending',[False,True])
@@ -310,10 +311,23 @@ def run_actual_window_request(monkeypatch,message,send,completion=None,history=N
         calls.append(kw)
         assert len(calls)==1 and tool_args is not None, 'Explicit semantic fixture is required'
         return tool_call('window_control',tool_args)
+    observations=[]
+    async def observed_send(device,action,args):
+        result=await send(device,action,args)
+        if action=='window.control':observations.append(result)
+        return result
+    async def worker_decision(**kwargs):
+        verified=[r for r in observations if r.get('completion_state')=='success']
+        if effects and [r.get('action') for r in verified]==list(effects):
+            return tool_call('answer_text',{'result':'\n'.join(r.get('summary','Verified') for r in verified),'unresolved':[]},'terminal')
+        if observations and observations[-1].get('error')=='window_not_found':
+            return tool_call('answer_report_failure',{'message':'Нужное окно не найдено.','reason':'window_not_found',
+                'recoverable':False,'suggested_next_action':''},'terminal')
+        return await (completion or selected_tool)(**kwargs)
     return asyncio.run(process_non_pipeline_command(user_message=message,device_id='device-1',device_info={'os':'Windows'},
-        send_command_fn=send,get_file_link_fn=lambda *a:'',chat_history=history or [],user_id=None,chat_id=None,modes=modes or {},poll_task_id=task_id,
+        send_command_fn=observed_send,get_file_link_fn=lambda *a:'',chat_history=history or [],user_id=None,chat_id=None,modes=modes or {},poll_task_id=task_id,
         cfg={'model':'flash','model_reasoner':'pro'},system_msg='system',machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=12,
-        pick_model_fn=lambda cfg,modes:'pro' if modes.get('autonomous') else 'flash',chat_completion_request_fn=completion or selected_tool))
+        pick_model_fn=lambda cfg,modes:'pro' if modes.get('autonomous') else 'flash',chat_completion_request_fn=worker_decision))
 
 
 def test_semantic_minimize_only_changes_current_window(monkeypatch):
@@ -356,7 +370,7 @@ def test_ambiguous_semantic_window_task_can_ask_without_dispatch(monkeypatch):
 def test_unsupported_virtual_desktop_can_report_limitation_without_shell(monkeypatch):
     async def send(*args):pytest.fail('Unsupported virtual desktop must not dispatch')
     async def completion(**kw):
-        assert 'execute_cmd' not in {item['function']['name'] for item in kw['tools']}
+        assert 'execute_cmd' in {item['function']['name'] for item in kw['tools']}
         return tool_call('answer_report_failure',{'message':'Перенос на виртуальный рабочий стол не реализован; окна не изменены.',
             'reason':'unsupported_capability','recoverable':False,'suggested_next_action':'','basis':[]})
     result=run_actual_window_request(monkeypatch,'проводник на второй виртуальный рабочий стол',send,completion)
@@ -371,8 +385,8 @@ def test_gpt_alias_restores_existing_app_without_legacy_window_find(monkeypatch)
     async def send(device,action,args): sent.append(action); return control.run(**args)
     async def completion(**kw):
         prompts.append(kw); assert len(prompts)==1
-        assert kw['model']=='flash' and kw['phase'].startswith('window_control.')
-        assert {t['function']['name'] for t in kw['tools']} == {'window_control','answer_text','answer_ask_clarification','answer_report_failure'}
+        assert kw['model']=='pro' and kw['phase'].startswith('non_pipeline.')
+        assert {'window_control','execute_cmd','app_launch','answer_text'}.issubset({t['function']['name'] for t in kw['tools']})
         assert all('OLD HWND' not in m['content'] and 'irrelevant research' not in m['content'] for m in kw['messages'])
         return tool_call('window_control',{'action':'activate','target':'gpt'})
     history=[{'role':'assistant','content':'irrelevant research'*1000,'commands':[{'tool_name':'window.find','result':{'match':{'handle':123,'title':'OLD HWND'}}}]}, {'role':'user','content':'открой gpt'}]
@@ -401,14 +415,16 @@ def test_compact_controller_prompt_preserves_device_inventory_without_full_profi
     from server.runtime_state import tasks
     monkeypatch.setitem(tasks,'compact-window',{'execution_scope':'window','window_effects':['activate']})
     result=_build_route_kwargs(route=SimpleNamespace(name='non_pipeline',toolset_name='non_pipeline'),
-        runtime=SimpleNamespace(cfg={},machine_guid=None,mem_user_id=None),
+        runtime=SimpleNamespace(cfg={},machine_guid=None,mem_user_id=None,devices_block='givi first; Second second',
+            hostname='first',os_info='Windows',os_version='',profile_block='',memory_block='',target_device_block='',
+            os_rules='',current_datetime_msk='',python_toolchain_block='',device_context_block='',recent_artifact_context_block=''),
         user_message='открой gpt',device_id='givi',device_info={},
         all_devices={'givi':{'info':{'hostname':'first'}},'Second':{'info':{'hostname':'second'}}},
         send_command_fn=None,get_file_link_fn=None,chat_history=[],user_id=1,chat_id=1,device_profile=None,
         modes={},poll_task_id='compact-window')
     prompt=result['system_msg']
-    assert len(prompt)<1800 and 'givi' in prompt and 'Second' in prompt and 'first' in prompt
-    assert 'window_control' in prompt and 'never shell' in prompt
+    assert len(prompt)<15000 and 'givi' in prompt and 'Second' in prompt and 'first' in prompt
+    assert 'never shell' not in prompt and 'Сам выбирай инструменты' in prompt
 
 
 

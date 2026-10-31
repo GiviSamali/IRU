@@ -125,11 +125,39 @@ def coverage_request(task, fallback=''):
         ensure_ascii=False,sort_keys=True)
 
 
-def needs_semantic_assessment(task):
+def needs_semantic_assessment(task, journal=None, answer_payload=None):
     # A file receipt proves bytes/format, not coverage of requested content.
     # Object/range selection may still require meaning; native bytes alone do not replace it.
-    return bool(task.get('assigned_artifacts')) or (
-        task.get('execution_scope')=='analysis' and not task.get('window_effects'))
+    if task.get('execution_scope')=='analysis' and not task.get('window_effects'):
+        return True
+    if not task.get('assigned_artifacts'):
+        if not task.get('window_effects') and task.get('proposed_objective') and journal:
+            # Opaque command output may require interpreting CONTENT against
+            # the goal. A closed literal listing is not such an assessment.
+            # Do not confuse this with proof of an external postcondition.
+            try:
+                from .api_support import read_only_execute_command
+            except ImportError:
+                from api_support import read_only_execute_command
+            return any(c.get('tool_name')=='execute_cmd' and operation_facts(c)=='success'
+                and isinstance((c.get('result') or {}).get('stdout'),str)
+                and c['result']['stdout'].strip()
+                and not read_only_execute_command({'command':c.get('command')}) for c in journal)
+        return False
+    if task.get('preserve_file_bytes') and task.get('task_id') and journal and answer_payload:
+        writes=[c for c in journal if c.get('tool_name')=='write_content'
+                and (c.get('result') or {}).get('committed') is not False]
+        if not writes or any((c.get('result') or {}).get('mode') not in {'replace','replace_exact'}
+                             or operation_facts(c)!='success' for c in writes):
+            return True
+        # Reuse the existing projection: an exact native edit with all required
+        # postconditions does not need a second model to confirm the same bytes.
+        preview=build_worker_report({**task,'status':'done','answer':answer_payload['text'],
+            'commands':[*journal,{'tool_name':'answer.text','tool_type':'answer',
+                                 'status':'terminal','result':answer_payload}]})
+        if preview['goal_completed']:
+            return False
+    return True
 
 
 def receipt_from_report(report, previous=None):
@@ -177,13 +205,18 @@ def build_worker_report(task):
     raw = task.get('status','unknown')
     refs = [c['step_id'] for c in commands if isinstance(c.get('step_id'),str)]
     evidence = [c for c in commands if c.get('tool_type') not in {'system','answer'} and operation_facts(c) in {'success','partial'}]
-    terminal = next((c for c in reversed(commands) if c.get('tool_name') in {'answer.text','answer_text'} and c.get('status')=='terminal'),{})
+    # A deliberate failure report is a terminal answer too: it must not be
+    # reported as "terminal answer missing".
+    terminal = next((c for c in reversed(commands)
+                     if c.get('tool_name') in {'answer.text','answer_text',
+                                               'answer.report_failure','answer_report_failure'}
+                     and c.get('status')=='terminal'),{})
     payload = terminal.get('result') if isinstance(terminal.get('result'),dict) else {}
     compact = payload.get('_result_contract')==3
     if compact:
         refs=[c['step_id'] for c in commands if isinstance(c.get('step_id'),str)
             and c.get('tool_type') not in {'system','answer'} and not str(c.get('tool_name','')).startswith('answer')]
-    text = task.get('answer') or payload.get('text') or payload.get('answer') or ''
+    text = task.get('answer') or payload.get('text') or payload.get('answer') or payload.get('message') or ''
     clarification = next((c for c in reversed(commands) if c.get('tool_name')=='answer.ask_clarification'),None)
     artifacts = []
     final_receipts = []
@@ -305,7 +338,7 @@ def build_worker_report(task):
         'window.find','window.verify','app.verify_launch','device.get_passport',
         'device.refresh_state','device.check_runtime','memory.list_facts',
         'memory.get_stats','system.list_tools','system.get_last_run_summary'}
-    analysis_only = task.get('execution_scope')=='analysis' and all(operation_facts(c)=='success' for c in operations)
+    analysis_only = all(operation_facts(c)=='success' for c in operations)
     observations = [c for c in operations if canonical_tool_name(c.get('tool_name') or c.get('action') or '') in analysis_tools
                     or (c.get('tool_name')=='execute_cmd' and isinstance(c.get('result',{}).get('stdout'),str)
                         and c['result']['stdout'].strip())]
@@ -315,7 +348,7 @@ def build_worker_report(task):
                       if c.get('step_id') in assessment.get('evidence_refs',[])}
     complete_analysis = (complete_analysis and analysis_only and referenced_observation and targets.issubset(observed_targets)
                          and not expected and not task.get('window_effects'))
-    if compact and task.get('execution_scope')=='analysis' and not expected and not task.get('window_effects'):
+    if compact and not expected and not task.get('window_effects'):
         current_observations=[c for c in observations if operation_facts(c)=='success']
         current_targets={_short_did(c.get('target_device_id') or c.get('device_id') or '') for c in current_observations}
         complete_analysis=(complete_coverage and bool(current_observations)
@@ -388,14 +421,28 @@ def build_worker_report(task):
             result=entry.get('result') or {}
             if _short_did(entry.get('target_device_id') or entry.get('device_id') or '')!=artifact['device_id']:continue
             tool=entry.get('tool_name') or entry.get('action')
+            if (result.get('verified') is True and result.get('committed') is True
+                    and result.get('path')==artifact['path'] and result.get('file_sha256')==artifact['sha256']):
+                return True
+            for observation in result.get('artifact_observations') or []:
+                if (isinstance(observation,dict) and observation.get('status')=='success'
+                        and observation.get('path')==artifact['path'] and observation.get('sha256')==artifact['sha256']
+                        and observation.get('items')):
+                    pages.append(observation)
             if tool in {'office_docx','office_xlsx','office_pptx'}:
-                if (result.get('action')=='inspect' and result.get('items')
+                if ((result.get('action')=='inspect' or result.get('operation_verified') is True) and result.get('items')
                         and result.get('path')==artifact['path'] and result.get('sha256')==artifact['sha256']):
                     if 'total_items' not in result:
                         # Compatibility with older inspectors: no pagination claim.
                         return True
                     pages.append(result)
             if tool in {'execute_cmd','read_file','get_file_content'}:
+                if (tool=='execute_cmd' and PureWindowsPath(artifact['path']).suffix.lower()
+                        in {'.docx','.xlsx','.pptx'}):
+                    # A verified format/hash plus arbitrary stdout is not a
+                    # content read. Only the Agent's actual observations above
+                    # can contribute Office coverage, with full pagination.
+                    continue
                 if not (result.get('stdout') or result.get('content') or result.get('text')):continue
                 candidates=[item for item in result.get('artifact_receipts') or [] if isinstance(item,dict)
                     and item.get('verified') is True and item.get('source_task_id')==task['task_id']
@@ -432,7 +479,8 @@ def build_worker_report(task):
             if operation_facts(entry)!='success':continue
             result=entry.get('result') or {}
             if (result.get('verified') is True and result.get('committed') is True
-                    and result.get('path')==artifact['path']):
+                    and result.get('path')==artifact['path'] and result.get('file_sha256')==artifact['sha256']
+                    and _short_did(entry.get('target_device_id') or entry.get('device_id') or '')==artifact['device_id']):
                 return True
             # A byte-for-byte copy is proven by the digest it was verified against.
             if ((entry.get('tool_name') or entry.get('action'))=='transfer_file'
@@ -449,6 +497,8 @@ def build_worker_report(task):
             in {'.docx','.xlsx','.pptx'} else 'file_identity')
         mechanical = mechanical_content(artifact)
         content_assessment=artifact_assessment(artifact)
+        if bound and (content_assessment or assessment).get('coverage')=='partial':
+            mechanical=False
         content_covered=(bound and content_assessment.get('coverage')=='complete'
             and set(content_assessment.get('evidence_refs') or []).issubset(set(refs))) if content_assessment else (
                 complete_coverage if 'artifacts' not in assessment else False)
@@ -462,15 +512,15 @@ def build_worker_report(task):
     def requested_window_step(entry):
         tool=canonical_tool_name(entry.get('tool_name') or entry.get('action') or '')
         action=(entry.get('result') or {}).get('action') or (entry.get('window_request') or {}).get('action')
-        return (tool in {'app.launch','app.open_url'} or tool=='window.control'
+        return (confirmed_window_effect(entry) is not None or tool in {'app.launch','app.open_url'} or tool=='window.control'
             and (action not in {'list','find','active','monitors'} or action in expected_effects))
     window_steps = [c for c in operations if requested_window_step(c)]
     def window_effect(entry):
         tool=canonical_tool_name(entry.get('tool_name') or entry.get('action') or '')
-        return 'open' if tool in {'app.launch','app.open_url'} else entry.get('result',{}).get('action')
+        return confirmed_window_effect(entry) or ('open' if tool in {'app.launch','app.open_url'} else entry.get('result',{}).get('action'))
     final_window_steps=[c for target in targets for c in [s for s in window_steps
         if _short_did(s.get('target_device_id') or s.get('device_id') or '')==target][-len(expected_effects):]] if expected_effects else []
-    window_contract = (task.get('execution_scope')=='window' and bool(task.get('window_effects'))
+    window_contract = (bool(task.get('window_effects'))
         and bool(targets) and all([window_effect(c) for c in final_window_steps
             if _short_did(c.get('target_device_id') or c.get('device_id') or '')==target] == task.get('window_effects') for target in targets)
         and all(operation_facts(c)=='success' and confirmed_window_effect(c)==window_effect(c) for c in final_window_steps))
@@ -520,6 +570,9 @@ def build_worker_report(task):
     elif task.get('_report_integrity_failed'): status='unknown'
     elif substantial_unknown or required_invalid or task.get('_action_outcome_unknown') or raw in {'unknown','interrupted'}: status='unknown'
     elif clarification or raw=='blocked': status='blocked'
+    elif operations and all((c.get('result') or {}).get('status')=='blocked' for c in operations): status='blocked'
+    elif terminal.get('tool_name') in {'answer.report_failure','answer_report_failure'}: status='partial' if evidence else 'failed'
+    elif bound and assessment.get('coverage')=='partial': status='partial' if evidence else 'failed'
     elif (typed_contract and (not expected or all(mechanical_content(a) for a in matched) or complete_coverage)) or (complete_analysis and not artifact_incomplete
                            and (not expected or file_contract)
                            and (not expected_effects or window_contract)): status='success'
@@ -527,12 +580,8 @@ def build_worker_report(task):
     elif useful or any(operation_facts(c) in {'success','partial'} for c in operations): status='partial'
     else: status='unknown'
     unresolved_items=[str(v) for v in (payload.get('unresolved') or [])]
-    if unresolved_items:
-        # An extra attempt the assignment never asked for must not downgrade a
-        # verified result. Only unresolved items about the assigned files count.
-        names={PureWindowsPath(a['path']).name.casefold() for a in matched}
-        names|={PureWindowsPath(e).name.casefold() for e in expected if e}
-        unresolved_items=[v for v in unresolved_items if any(name and name in v.casefold() for name in names)]
+    # v3 unresolved is substantive unfinished Assignment work; optional advice
+    # belongs in remaining. Do not silently discard it by filename heuristics.
     if (unresolved_items or (not compact and payload.get('remaining')) or unconfirmed_claims) and status=='success': status='partial'
     if task.get('_legacy_read') and status=='success' and raw in {'partial','failed','error','blocked','cancelled'}:
         status='failed' if raw=='error' else raw

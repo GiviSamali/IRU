@@ -32,8 +32,8 @@ def route_prompt(monkeypatch):
 
 def test_actual_open_route_does_not_override_native_opener(monkeypatch):
     prompt=route_prompt(monkeypatch)
-    assert 'app_launch' in prompt and 'limited to existing windows' not in prompt
-    assert 'never shell' in prompt and 'requested' in prompt.lower()
+    assert 'limited to existing windows' not in prompt and 'never shell' not in prompt
+    assert 'Сам выбирай инструменты' in prompt
 
 
 def test_entry_points_share_one_worker_presentation():

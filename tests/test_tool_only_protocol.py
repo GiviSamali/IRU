@@ -138,6 +138,7 @@ def test_raw_conceptual_answer_is_rejected_then_answer_text_succeeds():
 
     assert result["answer"] == "Tool Registry нужен для выбора инструментов."
     assert len(captured)==1  # No mandatory formatting repair for a useful conceptual answer.
+    assert captured[0]['tool_choice']=='auto'  # Zero-call responses are allowed by the provider contract too.
     assert result["commands"][0]["tool_name"] == "answer.text"
 
 
@@ -439,7 +440,7 @@ def test_answer_report_failure_and_clarification_are_terminal():
     assert clarification["commands"][0]["tool_name"] == "answer.ask_clarification"
 
 
-def test_multi_tool_batch_rejected_and_executes_none():
+def test_multi_tool_batch_executes_action_and_terminal_in_order():
     sent = []
 
     async def _send(device_id, action, params):
@@ -454,8 +455,8 @@ def test_multi_tool_batch_rejected_and_executes_none():
         _message(tool_calls=[_answer_call("call-final", "Нужно вызвать один инструмент за итерацию.")]),
     ], send_command_fn=_send)
 
-    assert sent == []
-    assert result["answer"] == "Нужно вызвать один инструмент за итерацию."
+    assert sent == ["window.find"]
+    assert result["answer"] == "Блокнот не открыт."
 
 
 def test_tool_result_message_contains_step_wrapper():

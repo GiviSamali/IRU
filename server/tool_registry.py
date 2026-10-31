@@ -680,6 +680,7 @@ DEVICE_TOOL_SCHEMAS = [
                 "properties": {
                     "chat_id": {"type": "integer", "description": "Optional current chat id."},
                     "include_success": {"type": "boolean", "default": True},
+                    "step_id": {"type":"string","description":"Read the full current Worker journal entry in report_offset pages without re-executing its tool."},
                     "source_task_id": {"type": "string", "description": "Owned source task in the current chat; use the referenced task id from worker handoff."},
                     "expected_source_sha256": {"type":"string","description":"For original-message pages after report_offset=0, pass sha256 from the first page; source changes abort the read."},
                     "summary_archive_offset": {"type":"integer","minimum":0,"description":"Browse the owned chat summary directory in bounded pages. Follow next_arguments, including for vague references without lexical matches."},
@@ -929,7 +930,7 @@ DEVICE_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "app_launch",
-            "description": "Launch an application or an available native opener command with the requested file/folder as an argument, then attempt window verification. This starts an executable; do not pass a document path as the executable or assume automatic file association. Use the requested device and object. Process launch alone does not prove the requested document is open. Do not wait for GUI process exit.",
+            "description": "Launch an application command, or open a supported absolute document/folder through its association. Attempt independent object/window observation. Use the requested device and object. Process launch alone does not prove the requested document is open. Do not wait for GUI process exit.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -955,6 +956,7 @@ DEVICE_TOOL_SCHEMAS = [
                 "properties": {
                     "device_id": {"type": "string", "description": "Optional device ID. Defaults to current device."},
                     "pid": {"type": "integer"},
+                    "object_path": {"type":"string","description":"Optional exact document/folder path to observe independently of how it was opened. Requires object_observation_protocol=1; this never launches it."},
                     "expected_title": {"type": "string"},
                     "expected_process": {"type": "string"},
                     "timeout_sec": {"type": "number", "default": 5},

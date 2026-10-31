@@ -275,6 +275,12 @@ async def send_command_to_agent(
     if not dev or (user_id is not None and dev.get("user_id") != user_id):
         raise RuntimeError(f"target_device_not_found: {device_id}")
     user_id = dev.get("user_id")
+    if action=='app.launch':
+        assessment=(confirmation.consume(device_id,action,params) if isinstance(confirmation,ConfirmedAction)
+                    else assess_action(action,params))
+        if assessment['decision']=='DENY':raise RuntimeError('BLOCKED: command_forbidden')
+        if assessment['decision']=='CONFIRM' and not isinstance(confirmation,ConfirmedAction):
+            raise ActionConfirmationRequired(assessment)
     if action == "execute_cmd":
         cmd_text = params.get("command", "")
         profile = get_device_profile(_short_did(device_id), user_id=user_id)
@@ -290,18 +296,9 @@ async def send_command_to_agent(
                 "Используй write_content для создания текстовых файлов, "
                 "а не PowerShell-строки."
             )
-        low = cmd_text.lower()
-        # Word COM is allowed when the normal action/path/confirmation policy allows it.
-        if "invoke-webrequest" in low or "iwr " in low or "curl " in low or "wget " in low:
-            search_hosts = ("duckduckgo.com", "google.com/search", "bing.com/search", "yandex.ru/search")
-            if any(host in low for host in search_hosts):
-                raise RuntimeError(
-                    "Поиск в интернете через Invoke-WebRequest/curl/wget запрещён. "
-                    "Используй инструмент web_search."
-                )
         # skip_confirm is retained for old callers, but is never authority.
         assessment = (confirmation.consume(device_id, action, params) if isinstance(confirmation, ConfirmedAction)
-                      else assess_action(action, params))
+                      else assess_action(action, params, inspection={'os':(dev.get('info') or {}).get('os')}))
         if assessment["decision"] == "DENY":
             raise RuntimeError("BLOCKED: Команда запрещена на этапе бета-тестирования.")
         if assessment["decision"] == "CONFIRM" and not isinstance(confirmation, ConfirmedAction):
@@ -354,6 +351,10 @@ async def send_command_to_agent(
                     and ((dev or {}).get('info') or {}).get('file_replace_protocol') != 2):
                 return {'status':'error', 'error':'agent_update_required_for_exact_replacement',
                         'dispatched':False, 'committed':False}
+
+    if action=='app.verify_launch' and params.get('object_path') is not None:
+        if ((dev or {}).get('info') or {}).get('object_observation_protocol')!=1:
+            return {'status':'blocked','error':'agent_update_required_for_object_observation','dispatched':False}
 
     if action == 'get_file_content' and params.get('text_only'):
         if ((dev or {}).get('info') or {}).get('file_replace_protocol') != 2:
@@ -956,10 +957,13 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             try:
                 return await send_command_to_agent(target, action, params, **kwargs)
             except AgentOutcomeUnknown:
-                task["_action_outcome_unknown"] = True
+                if not is_recovery_observation(action,params,
+                        device_os=((devices.get(target) or {}).get('info') or {}).get('os','unknown')):
+                    task["_action_outcome_unknown"] = True
                 raise
 
         async def wait_for_confirmation(target, action, params, assessment, command):
+            task["_confirmation_epoch"] = task.get("_confirmation_epoch",0)+1
             snapshot = deepcopy(params)
             fingerprint = action_fingerprint(action, snapshot)
             decision = asyncio.get_running_loop().create_future()
@@ -992,13 +996,18 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 task.pop("confirm_data", None)
 
         async def send_fn(target_device_id, action, params):
+            observation_device = devices.get(target_device_id if ':' in target_device_id else _dk(user_id,target_device_id)) if isinstance(target_device_id,str) else None
+            target_os = ((observation_device or {}).get('info') or {}).get('os','unknown')
+            if (task.get('window_effects') and action=='window.control'
+                    and params.get('action') not in {'active','list','find','monitors',*task['window_effects']}):
+                return {'status':'blocked','error':'unrequested_window_action','dispatched':False}
             try:
                 from .controller_shared import pinned_material_pending
             except ImportError:
                 from controller_shared import pinned_material_pending
-            if pinned_material_pending(task) and not is_recovery_observation(action, params):
+            if pinned_material_pending(task) and not is_recovery_observation(action, params,device_os=target_os):
                 return {"status":"blocked", "error":"dependency_material_not_fully_read"}
-            if task.get("_action_outcome_unknown") and not is_recovery_observation(action, params):
+            if task.get("_action_outcome_unknown") and not is_recovery_observation(action, params,device_os=target_os):
                 return {"status":"blocked", "error":"mutation_blocked_after_unknown"}
             if task.get("worker_id"):
                 target_key=_dk(user_id,target_device_id) if isinstance(target_device_id,str) and ":" not in target_device_id else target_device_id
@@ -1099,7 +1108,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 return result
             except RuntimeError as exc:
                 if isinstance(exc, AgentOutcomeUnknown):
-                    task["_action_outcome_unknown"] = True
+                    if not is_recovery_observation(action,params,device_os=target_os):
+                        task["_action_outcome_unknown"] = True
                     return {"status":"unknown","error":"confirmed_transport_outcome_unknown"}
                 if "CONFIRM_REQUIRED" not in str(exc):
                     raise
@@ -1119,7 +1129,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     result = await send_owned_command(target_dk, action, params, user_id=user_id,
                                                          confirmation=pending)
                 except AgentOutcomeUnknown:
-                    task["_action_outcome_unknown"] = True
+                    if not is_recovery_observation(action,params,device_os=target_os):
+                        task["_action_outcome_unknown"] = True
                     return {"status":"unknown","completion_state":"unknown","error":"confirmed_transport_outcome_unknown"}
                 except (RuntimeError, ValueError) as exc:
                     # Local revalidation failed before delivery; no action was sent.

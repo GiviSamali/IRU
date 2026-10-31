@@ -504,6 +504,32 @@ def verify_preservation(document, reopened):
         require(all(shapes.get(key)==xml for key,xml in guard["pptx"].items()),"unsupported_preservation_pptx")
 
 
+
+def verify_saved_operation(tool, intended, reopened):
+    """Compare supported editable elements after serialization, before commit.
+
+    This proves the tool applied its parameters, never that the parameters
+    expressed the user's complete intent.
+    """
+    if tool=='office_docx':
+        same=(intended._element.xml==reopened._element.xml
+              and intended.styles.element.xml==reopened.styles.element.xml)
+    elif tool=='office_pptx':
+        def state(deck):
+            return (deck.slide_width,deck.slide_height,
+                [(slide.slide_id,slide._element.xml,
+                  slide.notes_slide._element.xml if slide.has_notes_slide else None) for slide in deck.slides])
+        same=state(intended)==state(reopened)
+    else:
+        def state(book):
+            return [(sheet.title,sheet.freeze_panes,str(sheet.merged_cells),sheet.auto_filter.ref,
+                [(key,cell.value,cell.data_type,tuple(cell._style) if cell.has_style else None)
+                 for key,cell in sorted(sheet._cells.items()) if cell.value is not None or cell.has_style],
+                [(key,dim.width,dim.hidden) for key,dim in sorted(sheet.column_dimensions.items())],
+                [(key,dim.height,dim.hidden) for key,dim in sorted(sheet.row_dimensions.items())]) for sheet in book]
+        same=state(intended)==state(reopened)
+    require(same,'saved_operation_mismatch')
+
 def office(tool, action, path, data=None, changes=None, selector=None, expected_sha256=None, _source_task_id=None, preserve_content=False):
     """The same local executor is shared by all three registered agent actions."""
     tmp=None
@@ -549,7 +575,8 @@ def office(tool, action, path, data=None, changes=None, selector=None, expected_
             document.save(tmp)
             with open(tmp,"r+b") as stream: os.fsync(stream.fileno())
             # Reopen with the actual format library before publishing any bytes.
-            reopened,_,_=handler(Path(tmp),"inspect",{},[],{})
+            reopened,_,saved_inspection=handler(Path(tmp),"inspect",{},[],{})
+            verify_saved_operation(tool,document,reopened)
             verify_preservation(document,reopened)
             if preserve_content:
                 require(content_snapshot(Path(tmp))==original_content,"content_preservation_failed")
@@ -573,6 +600,8 @@ def office(tool, action, path, data=None, changes=None, selector=None, expected_
                     "verified":True,"artifact_role":"final","size_bytes":receipt["size_bytes"],
                     "sha256":digest,"source_task_id":_source_task_id,"summary":summary,
                     "content_preserved":True if preserve_content else None,
+                    "operation_verified":True,"verification_scope":"supported_elements_roundtrip",
+                    **saved_inspection,
                     "files_verified":[str(target)],"artifact_receipts":[receipt]}
     except ImportError:
         return {"status":"error","error":"office_dependencies_missing","required_packages":["python-docx","openpyxl","python-pptx"],

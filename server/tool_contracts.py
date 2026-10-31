@@ -318,12 +318,12 @@ def _when_not_to_use(canonical_name: str, meta: dict[str, Any]) -> list[str]:
     if canonical_name == "execute_cmd":
         return [
             "long or multiline generated file content should use write_content",
-            "visual/window verification is required and window/app tools are available",
+            "a command exit code alone cannot establish a window or document effect",
         ]
     if canonical_name == "write_content":
         return ["binary files", "Office documents", "when shell execution is specifically needed"]
     if canonical_name == "answer.text":
-        return ["before required tool evidence is collected", "together with another action tool in the same iteration"]
+        return ["before required tool evidence is collected", "before the results of dependent actions are known"]
     if canonical_name == "get_file_link":
         return ["file path is unknown", "file was not created or verified in current context"]
     if canonical_name == "web_search":

@@ -495,26 +495,11 @@ def _build_route_kwargs(
     device_tool_fn=None,
 ) -> dict:
     try:
-        from .controller_shared import worker_window_scope
         from .controller_prompts import BROWSER_BRIDGE_RULES
     except ImportError:
-        from controller_shared import worker_window_scope
         from controller_prompts import BROWSER_BRIDGE_RULES
-    window_only, effects = worker_window_scope(poll_task_id)
-    if window_only:
-        inventory = [{"device_id":did,"hostname":(dev.get("info") or {}).get("hostname",did)} for did,dev in all_devices.items()]
-        system_msg = DYNAMIC_CONTEXT_RULES + (("\nUse app_launch for requested files, folders or applications and app_open_url for URLs. "
-            "Use window_control for discovery/verification and existing-window management. A failed find does not prove that opening is impossible. "
-            "Confirm the requested objects, not merely a launched process. " if 'open' in effects else
-            "\nThis task is limited to existing windows. Use window_control, ") + "never shell, "
-            "synthetic input or legacy window tools. Resolve relative references from observed opaque window IDs; "
-            "do not substitute another device or window. Virtual desktops are not physical monitors and are unsupported; "
-            "report the limitation without a shell workaround. Unsaved content and dangerous operations retain runtime confirmation.\n"
-            + data_only_context("requested_window_effects", effects)
-            + data_only_context("window_device_inventory", {"current_device":device_id,"devices":inventory}))
-    else:
-        system_msg = _build_non_pipeline_system_prompt(runtime=runtime, device_id=device_id) + "\n" + BROWSER_BRIDGE_RULES
-    if modes.get("autonomous") and not window_only:
+    system_msg = _build_non_pipeline_system_prompt(runtime=runtime, device_id=device_id) + "\n" + BROWSER_BRIDGE_RULES
+    if modes.get("autonomous"):
         system_msg = system_msg + "\n\n## Активные режимы\n" + (
             "АВТОНОМНЫЙ РЕЖИМ: Выполняй обычную работу самостоятельно без лишних "
             "подтверждений. Распознанные опасные действия подтверждаются runtime отдельно. "

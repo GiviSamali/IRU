@@ -119,16 +119,115 @@ def action_fingerprint(action, params):
                                     separators=(",", ":")).encode()).hexdigest()
 
 
-def assess_action(action, params, inspection=None):
-    """Classify the existing command patterns; opaque code remains allowed.
+def read_only_execute_command(params, *, device_os=None):
+    """Recognize a closed literal observation grammar, not arbitrary shell code.
 
-    inspection is reserved for trusted observations, never Worker-provided risk.
-    Script analysis and specialised-tool effect expansion are deliberately excluded.
+    No expressions, substitutions, redirection, statements, script blocks,
+    aliases or executable paths. Unknown syntax stays behind confirmation.
     """
-    command = str(params.get("command") or "") if action == "execute_cmd" else ""
-    denied = any(pattern.search(command) for pattern in _dangerous_re)
-    deletion = any(pattern.search(command) for pattern in _delete_re)
-    confirm = deletion or any(pattern.search(command) for pattern in _confirm_re)
+    if params.get('artifact_paths') or params.get('preserve_content_paths'):
+        return False
+    command=str(params.get('command') or '').strip()
+    if command.casefold() in {'whoami','hostname','pwd'}:
+        return True
+    if device_os is not None and 'windows' not in device_os.casefold():
+        return False
+    if params.get('shell','auto') not in {'auto','powershell'}:
+        return False
+    if any(c in command for c in '$`;;&<>\r\n\x00(){}@#[]'):
+        return False
+    if any((c.isspace() and c not in ' \t') or (ord(c)<32 and c!='\t') for c in command):
+        return False
+    # PowerShell literal tokens: quotes must enclose a whole token. Backslash
+    # is a path separator, never a quote escape. Unsupported quoting fails shut.
+    stages=[[]]; i=0
+    while i<len(command):
+        if command[i].isspace(): i+=1; continue
+        if command[i]=='|': stages.append([]); i+=1; continue
+        if command[i] in {'"',"'"}:
+            quote=command[i]; end=command.find(quote,i+1)
+            if end<0 or end+1<len(command) and not command[end+1].isspace() and command[end+1]!='|':return False
+            stages[-1].append(command[i+1:end]);i=end+1
+        else:
+            end=i
+            while end<len(command) and not command[end].isspace() and command[end]!='|':end+=1
+            token=command[i:end]
+            if any(c in token for c in "\"'"):return False
+            stages[-1].append(token);i=end
+    specs={
+        'get-childitem':({'file','directory','force','recurse','name'}, {'literalpath','path','filter','depth'}),
+        'get-item':({'force'}, {'literalpath','path'}),
+        'get-content':({'raw'}, {'literalpath','path','tail','totalcount','encoding'}),
+        'get-filehash':(set(), {'literalpath','path','algorithm'}),
+        'test-path':(set(), {'literalpath','path','pathtype'}),
+        'get-location':(set(),set()),
+        'select-object':(set(),{'property','first','last'}),
+        'convertto-json':({'compress'}, {'depth'}),
+    }
+    properties={'name','fullname','extension','length','lastwritetime','attributes','psiscontainer','hash','algorithm','path'}
+    seen_stages=set()
+    for index,stage in enumerate(stages):
+        if not stage:return False
+        name=stage[0].casefold()
+        if name not in specs or name in seen_stages:return False
+        if index==0 and name in {'select-object','convertto-json'}:return False
+        if index>0 and name not in {'select-object','convertto-json'}:return False
+        if 'convertto-json' in seen_stages:return False
+        seen_stages.add(name);flags,values=specs[name];seen=set();j=1
+        while j<len(stage):
+            token=stage[j];j+=1
+            if token.startswith('-'):
+                key=token[1:].casefold()
+                if key in seen:return False
+                seen.add(key)
+                if key in flags:continue
+                if key not in values or j==len(stage):return False
+                value=stage[j];j+=1
+            else:
+                key='property' if name=='select-object' else 'path'
+                if key not in values or key in seen:return False
+                seen.add(key);value=token
+            if not value or value.startswith('-'):return False
+            if key in {'depth','tail','totalcount','first','last'}:
+                if not value.isascii() or not value.isdecimal() or int(value)>10000:return False
+            elif key=='property':
+                if not all(p.casefold() in properties for p in value.split(',')):return False
+            elif key in {'path','literalpath'}:
+                # File system paths only: never PS providers/alternate streams.
+                for path in value.split(','):
+                    if ':' in path and not (len(path)>2 and path[0].isascii() and path[0].isalpha()
+                            and path[1]==':' and path[2] in '/\\' and ':' not in path[2:]):return False
+            elif key=='algorithm' and value.casefold() not in {'sha256','sha384','sha512'}:return False
+            elif key=='encoding' and value.casefold() not in {'utf8','utf-8','unicode','ascii','default'}:return False
+            elif key=='pathtype' and value.casefold() not in {'leaf','container','any'}:return False
+    return bool(stages[0])
+
+
+def assess_action(action, params, inspection=None):
+    """Patterns can deny known commands; they cannot certify arbitrary code.
+
+    Unclassified shell/interpreter code requires exact-action confirmation.
+    This is deliberately conservative, not a semantic code sandbox. Worker risk
+    labels, output markers and declared artifact paths cannot waive it.
+    """
+    command = str(params.get("command") or "") if action in {"execute_cmd","app.launch"} else ""
+    read_only = action=='execute_cmd' and read_only_execute_command(params,
+        device_os=(inspection.get('os') or 'unknown') if inspection is not None else None)
+    denied = not read_only and any(pattern.search(command) for pattern in _dangerous_re)
+    deletion = not read_only and any(pattern.search(command) for pattern in _delete_re)
+    confirm = not read_only and (deletion or any(pattern.search(command) for pattern in _confirm_re))
+    # Only the closed observation grammar can waive code confirmation.
+    # It never classifies arbitrary PowerShell/Python as safe.
+    opaque = action == 'execute_cmd' and not read_only
+    if action=='app.launch':
+        from pathlib import PureWindowsPath, PurePosixPath
+        candidate=command.strip().strip('"').strip("'")
+        # Only a literal absolute document target can use association opening
+        # without consenting to opaque executable/interpreter code.
+        document=(PureWindowsPath(candidate).is_absolute() or PurePosixPath(candidate).is_absolute()) and (
+            PureWindowsPath(candidate).suffix.casefold() in {'.docx','.xlsx','.pptx','.pdf','.txt','.md','.csv','.rtf','.png','.jpg','.jpeg'})
+        opaque=not document or bool(params.get('executable') or params.get('args') or params.get('env'))
+    confirm = confirm or opaque
     decision = "DENY" if denied else "CONFIRM" if confirm else "ALLOW"
     kind = "deletion" if deletion else "dangerous" if denied or confirm else "command"
     return {"decision": decision, "reason_code": "command_forbidden" if denied else
@@ -144,13 +243,15 @@ class ActionConfirmationRequired(RuntimeError):
         self.assessment = assessment
 
 
-def is_recovery_observation(action, params):
+def is_recovery_observation(action, params, *, device_os=None):
     """Known observations only; shell/launch and Worker risk labels prove nothing."""
     try:
         from .tool_registry import canonical_tool_name
     except ImportError:
         from tool_registry import canonical_tool_name
     action = canonical_tool_name(action)
+    if action=='execute_cmd':
+        return read_only_execute_command(params,device_os=device_os)
     if action in {"office_docx", "office_xlsx", "office_pptx"}:
         return params.get("action") == "inspect"
     if action == "window.control":
@@ -159,7 +260,7 @@ def is_recovery_observation(action, params):
         return params.get("mode", "snapshot") == "snapshot"
     return action in {"list_dir", "read_file", "get_file_content", "device.get_cached_passport", "device.get_passport",
                       "window.list", "window.find", "window.verify", "app.verify_launch",
-                      "web.tabs", "web.read", "web.elements", "web.wait", "memory.get_stats",
+                      "web_search", "web.tabs", "web.read", "web.elements", "web.wait", "memory.get_stats",
                       "memory.list_facts", "system.list_tools", "system.get_last_run_summary"}
 
 

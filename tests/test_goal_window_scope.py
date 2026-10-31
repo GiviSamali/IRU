@@ -20,6 +20,8 @@ def test_semantic_window_scope_has_no_keyword_shortcut(monkeypatch, user_message
     llm, dispatched = [], []
     async def completion(**kwargs):
         llm.append(kwargs)
+        if len(llm)>1:
+            return {'choices':[{'message':{'tool_calls':[{'id':'final','function':{'name':'answer_text','arguments':json.dumps({'result':'Window minimized','unresolved':[]})}}]}}]}
         return {"choices":[{"message":{"tool_calls":[{"id":"window", "function":{
             "name":"window_control", "arguments":json.dumps({"action":"minimize","target":"current"})}}]}}]}
     async def send(device, action, arguments):
@@ -32,7 +34,7 @@ def test_semantic_window_scope_has_no_keyword_shortcut(monkeypatch, user_message
             poll_task_id="semantic-window",cfg={"model":"mock-model"},system_msg="system",machine_guid=None,mem_user_id=None,
             non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=4,pick_model_fn=lambda *a:"mock-model",
             chat_completion_request_fn=completion))
-        assert len(llm) == 1  # A real Worker decision still chooses the native tool.
+        assert len(llm) == 2  # Worker chooses the operation and then the terminal result.
         assert dispatched == [("pc","window.control",{"action":"minimize","target":"current"})]
         assert result["commands"][-1]["status"] == "terminal"
         assert not ordinary_window_request(user_message)

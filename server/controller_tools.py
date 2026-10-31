@@ -6,22 +6,11 @@ except ImportError:
     from tool_registry import DEVICE_TOOL_SCHEMAS
 
 EXECUTE_CMD_DESCRIPTION = (
-    "For standard DOCX/XLSX/PPTX create, inspect and edit operations prefer the office_* tools over generated helper scripts. "
-    "When executing a command that creates OR MODIFIES final user files, include their absolute paths in artifact_paths ON THAT "
-    "MUTATING COMMAND (including each subsequent edit). The agent compares before/after file hashes and verifies actual formats, returning bound "
-    "artifact receipts. A later read of a pre-existing file cannot register it as newly created. "
-    "First-class generic control surface for normal system actions through PowerShell/cmd/bash. "
-    "Existing window actions must use window_control, never shell code or synthetic keyboard/mouse input. "
-    "Use it to perform the requested action and include the cheapest sufficient verification in the same short command when possible. "
-    "Return the actual observation; no success marker is required. Exit code zero proves command execution only. "
-    "Confirm the original goal from actual final content or native/API evidence, using evidence already available when sufficient. "
-    "Visual/window verification is only needed when the user asks for visible/focused verification, the next step requires window interaction, the command result is ambiguous/noisy, or the task is about window state. "
-    "For search/analysis, prefer local search or extraction and return only relevant facts; reuse current-run observations instead of overlapping rereads without a new need. "
-    "For formatting-only Office edits, use preserve_content=true on office_* or preserve_content_paths on execute_cmd; "
-    "these paths must also be in artifact_paths. Content verification failure does not authorize repeating a mutation. "
-    "For an exact text edit prefer write_content with expected_text and expected_sha256; it preserves untouched bytes and verifies the write. "
-    "Do not reconstruct untouched content from LLM memory or infer duplicates from historical claims. Existing permissions, device scope, and confirmations still apply. "
-    "Keep commands short. Use write_content for new generated content or a requested full replacement; content length alone does not justify rewriting an existing file."
+    "Execute PowerShell/CMD/Bash commands and available programs on the selected device. "
+    "The command must check its own necessary postconditions and propagate failures. "
+    "Returncode zero confirms execution, not the whole user goal; echo OK is not evidence. "
+    "Use artifact_paths for final changed files and preserve_content_paths for formatting-only Office edits. "
+    "Ownership, path restrictions, exact-action confirmations, preservation and unknown-outcome guards apply."
 )
 
 WRITE_CONTENT_DESCRIPTION = (
@@ -35,7 +24,7 @@ WRITE_CONTENT_DESCRIPTION = (
     "bind expected_sha256 to the observed file hash. The agent preserves other bytes and verifies the committed file. "
     "Overwrite replaces the entire file; neither overwrite nor append guarantees preservation. Verify the requested change and preservation against the original before claiming success. "
     "Suitable for scripts, HTML, JSON, TXT, CSV, Markdown, "
-    "and source code. For standard Office documents prefer office_docx, office_xlsx or office_pptx. "
+    "and source code. Office documents can be produced by Office tools or verified command artifacts. "
     "For unsupported binary documents, use existing execute_cmd/Python capabilities "
     "after checking the actual runtime/library APIs; never write binary document bytes through this text tool. "
     "Do not require Microsoft Office when verified available libraries can create the requested format. "
@@ -73,6 +62,29 @@ def file_tools_for_device(tools, device_info, *, preserve=False):
                 fn['parameters']['required'] = ['path','content','expected_text','expected_sha256']
                 props.pop('append',None)
         result.append(tool)
+    return result
+
+
+def worker_tool_inventory(tools, device_info, *, preserve=False):
+    """Full contracts; availability is metadata, dispatch remains authoritative."""
+    from copy import deepcopy
+    result=deepcopy(tools)
+    info=device_info or {}
+    for tool in result:
+        fn=tool['function']; name=fn['name']; reason=None
+        if name=='read_file' and info.get('file_replace_protocol')!=2:
+            reason='requires file_replace_protocol=2 on the selected device'
+        elif name.startswith('office_') and info.get('office_tools_version')!=1:
+            reason='requires office_tools_version=1 on the selected device'
+        if info.get('connected') is False and name not in {'web_search','system_list_tools','system_get_last_run_summary','answer_text','answer_ask_clarification','answer_report_failure','remember_fact','forget_fact','memory_get_stats','memory_list_facts'}:
+            reason='no connected target device in this Assignment'
+        if name=='app_verify_launch' and info.get('object_observation_protocol')!=1:
+            prop=fn['parameters']['properties']['object_path']
+            prop['description']='UNAVAILABLE on current device: requires object_observation_protocol=1. '+prop['description']
+        if reason:fn['description']='UNAVAILABLE on current device: '+reason+'. '+fn['description']
+        if preserve and name not in {'list_dir','read_file','write_content','answer_text',
+                'answer_ask_clarification','answer_report_failure','system_get_last_run_summary','device_get_passport'}:
+            fn['description']='BLOCKED for this Assignment by accepted byte-preservation constraint. '+fn['description']
     return result
 
 
@@ -228,7 +240,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Поиск актуальной информации в интернете через Yandex Search API. Используй ВСЕГДА, когда нужны свежие факты, новости, документация, сведения о продуктах, о людях, о событиях. Единственный допустимый способ искать в интернете. НИКОГДА не выполняй Invoke-WebRequest/curl/wget для поиска — только web_search.",
+            "description": "Поиск актуальных фактов, новостей и документации через настроенный Yandex Search API. ",
             "parameters": {
                 "type": "object",
                 "properties": {

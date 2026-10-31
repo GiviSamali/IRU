@@ -111,7 +111,7 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto",
     result = platform_mod.execute_cmd(command, timeout=timeout, shell=shell)
     if not paths or result.get("returncode") != 0 or result.get("error"):
         return result
-    receipts, errors = [], []
+    receipts, errors, observations = [], [], []
     for path in paths:
         try:
             receipt = _verify_artifact(path)
@@ -126,11 +126,18 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto",
                 raise ValueError("artifact_unchanged_from_before_command")
             if not _artifact_task_id:
                 raise ValueError("artifact_task_binding_missing")
+            if Path(path).suffix.lower() in {'.docx','.xlsx','.pptx'}:
+                from .office_tools import office
+                observed=office('office_'+Path(path).suffix.lower()[1:],'inspect',path)
+                if observed.get('status')!='success' or observed.get('sha256')!=receipt['sha256']:
+                    raise ValueError('artifact_content_observation_failed')
+                observations.append(observed)
             receipts.append({**receipt, "verified":True, "source_task_id":_artifact_task_id,
                              "created_or_changed":True, "previous_sha256":before[path][2] if before[path] else None})
         except Exception as exc:
             errors.append({"path":path, "error":str(exc)})
     return {**result, "artifact_receipts":receipts, "artifact_errors":errors,
+            "artifact_observations":observations,
             **({"status":"partial","error":"artifact_verification_failed"} if errors else {})}
 
 
@@ -485,6 +492,7 @@ def get_desktop_path() -> str:
 def collect_system_info(device_id: str = "") -> dict:
     info = {
         "office_tools_version": 1,
+        "object_observation_protocol": 1 if os.name == "nt" else 0,
         "file_write_protocol": 2,
         "file_replace_protocol": 2,
         "artifact_receipt_protocol": 1,
@@ -1860,7 +1868,16 @@ def app_open_url(url: str, browser: str = "default", focus: bool = True, timeout
     return result
 
 
-def app_verify_launch(pid: int, expected_title: str | None = None, expected_process: str | None = None, timeout_sec: float = 5) -> dict:
+def app_verify_launch(pid: int, expected_title: str | None = None, expected_process: str | None = None, timeout_sec: float = 5,
+                      object_path: str | None = None) -> dict:
+    if object_path is not None:
+        kind=_open_object_kind(object_path)
+        if kind not in {'file','folder'}:
+            return {'status':'failed','error':'unsupported_object_observation'}
+        observed=_observe_opened_object(kind,object_path,timeout_sec)
+        return {'status':'success' if observed else 'unknown','pid':pid,
+            'requested_object':{'type':kind,'path':object_path},'observed_object':observed,
+            'object_open_verified':bool(observed),'completion_state':'success' if observed else 'unknown'}
     result = window_verify(pid=pid, title_contains=expected_title, process_name=expected_process, timeout_sec=timeout_sec)
     return {
         "status": "verified" if result.get("verified") else result.get("status", "failed"),

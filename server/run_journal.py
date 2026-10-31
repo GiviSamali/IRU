@@ -176,10 +176,10 @@ ANSWER_FAILURE_NAMES = {"answer_report_failure", "answer.report_failure"}
 ANSWER_CONFIRMATION_NAMES = {"answer_request_confirmation", "answer.request_confirmation"}
 
 RAW_CONTENT_CORRECTION = "Raw assistant content is not allowed. Use answer_text for any user-facing response."
-ONE_TOOL_CORRECTION = "Call exactly one tool per iteration. Wait for its result, then choose the next tool."
+TOOL_CALL_CORRECTION = "Use registered tool names and valid JSON object arguments. Independent calls may share one response; dependent decisions wait for results."
 GROUNDED_CORRECTION = (
     "Your answer was not grounded in current-run evidence. Ask yourself what tool is needed, "
-    "call exactly one tool, wait for result, then answer through answer_text."
+    "use the necessary registered tools, then answer through answer_text."
 )
 INSUFFICIENT_EVIDENCE_CORRECTION = (
     "Your answer_text says evidence is insufficient. Call the needed tool first or use clarification/failure."
@@ -596,16 +596,21 @@ def confirmed_unknown_answer(journal, target_device_id, reason="confirmed_transp
 
 
 
-def validate_tool_call_batch(tool_calls: list[dict[str, Any]] | None) -> dict[str, Any]:
-    if not tool_calls:
-        raise ProtocolValidationError("missing tool call", RAW_CONTENT_CORRECTION)
-    if len(tool_calls) != 1:
-        raise ProtocolValidationError("exactly one tool call is required", ONE_TOOL_CORRECTION)
-    tool_call = tool_calls[0]
-    fn_name = ((tool_call.get("function") or {}).get("name") or "").strip()
-    if not fn_name:
-        raise ProtocolValidationError("tool call is missing function name", ONE_TOOL_CORRECTION)
-    return tool_call
+def validate_tool_call_batch(tool_calls: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Validate the envelope once, before dispatch; individual schemas are per call."""
+    if not isinstance(tool_calls, list) or not tool_calls:
+        raise ProtocolValidationError('missing tool calls', RAW_CONTENT_CORRECTION)
+    seen = set()
+    for call in tool_calls:
+        if not isinstance(call,dict) or not isinstance(call.get('function'),dict):
+            raise ProtocolValidationError('invalid tool call', TOOL_CALL_CORRECTION)
+        ident = call.get('id')
+        name = call['function'].get('name')
+        if not isinstance(ident,str) or not ident or ident in seen or not isinstance(name,str) or not name.strip():
+            raise ProtocolValidationError('missing/duplicate tool call identity or name', TOOL_CALL_CORRECTION)
+        seen.add(ident)
+    return tool_calls
+
 
 
 def _current_non_answer_step_ids(journal: list[dict[str, Any]]) -> set[str]:

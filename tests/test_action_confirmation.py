@@ -13,8 +13,8 @@ from test_browser_runtime_guards import setup_runtime
 
 
 @pytest.mark.parametrize("command,expected", [
-    ('python -c "print(42)"', 'ALLOW'), ('whoami', 'ALLOW'),
-    ('python opaque_user_program.py', 'ALLOW'), ('New-Item report.txt', 'ALLOW'),
+    ('python -c "print(42)"', 'CONFIRM'), ('whoami', 'ALLOW'),
+    ('python opaque_user_program.py', 'CONFIRM'), ('New-Item report.txt', 'CONFIRM'),
     ('Remove-Item report.txt', 'CONFIRM'), ('shutdown /s /t 0', 'CONFIRM'),
     ('diskpart', 'DENY'),
 ])
@@ -171,7 +171,7 @@ def test_simple_model_loop_keeps_journal_without_extra_model_calls(client, monke
                 'message': 'Confirm?', 'action': 'execute_cmd', 'command_preview': command, 'risk': 'high', 'basis': []})}}
         elif lost and len(calls) == 2:
             assert 'list_dir' in {tool['function']['name'] for tool in kwargs['tools']}
-            assert 'execute_cmd' not in {tool['function']['name'] for tool in kwargs['tools']}
+            assert 'execute_cmd' in {tool['function']['name'] for tool in kwargs['tools']}
             call = {'id': 'observe', 'function': {'name': 'list_dir', 'arguments': json.dumps({'path': 'C:/Temp'})}}
         else:
             call = (_execute_call('action', command) if len(calls) == 1 + int(preview) else
@@ -216,5 +216,5 @@ def test_simple_model_loop_keeps_journal_without_extra_model_calls(client, monke
     assert len(sent) == (2 if lost else 1) and len(calls) == (3 if lost else 2) + int(preview)
     assert task['commands'][0]['tool_name'] == 'execute_cmd'
     if lost:
-        assert task['task_receipt']['task_status'] != 'completed'
+        assert task['task_receipt'].get('task_status') != 'completed'
         assert task['commands'][0]['result']['status'] == 'unknown'

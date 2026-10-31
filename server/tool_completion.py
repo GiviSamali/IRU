@@ -71,6 +71,8 @@ def normalize_operation_result(tool_name: str, result: Any) -> str:
 def operation_step_status(tool_name: str, result: Any, *, terminal=False) -> str:
     if terminal:
         return 'terminal'
+    if isinstance(result,dict) and result.get('status')=='blocked':
+        return 'blocked'
     if isinstance(result,dict) and result.get('status') == 'skipped':
         return 'skipped'
     outcome = normalize_operation_result(tool_name, result)
@@ -153,13 +155,13 @@ def confirmed_window_effect(entry):
     if (not isinstance(result,dict) or entry.get('status') == 'unknown'
             or normalize_operation_result(tool,result) != 'success'):
         return None
+    requested = result.get('requested_object')
+    if isinstance(requested,dict):
+        return 'open' if object_open_proven(requested,result.get('observed_object'),result) else None
     if tool == 'window.control':
         return result.get('action') if result.get('completion_state') == 'success' else None
     if tool not in {'app.launch','app.open_url'} or result.get('status') == 'ambiguous':
         return None
-    requested = result.get('requested_object')
-    if isinstance(requested, dict):
-        return 'open' if object_open_proven(requested, result.get('observed_object'), result) else None
     if tool == 'app.launch':
         # A legacy receipt carries no object identity: the launch is a request,
         # never proof that a particular document was opened.

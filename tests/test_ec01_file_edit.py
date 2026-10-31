@@ -432,7 +432,8 @@ def test_discovery_and_explicit_read_route_keep_device_out_of_native_parameters(
     assert sent[1][2] == {'path':str(path),'text_only':True,'max_size':256000}
     first_tools = {tool['function']['name'] for tool in captured[0]['tools']}
     assert {'list_dir','read_file','write_content'}.issubset(first_tools)
-    assert 'execute_cmd' not in first_tools
+    assert 'execute_cmd' in first_tools
+    assert 'BLOCKED' in next(t['function']['description'] for t in captured[0]['tools'] if t['function']['name']=='execute_cmd')
     assert path.read_bytes() == raw
 
 
