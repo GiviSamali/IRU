@@ -13,8 +13,8 @@ from test_browser_runtime_guards import setup_runtime
 
 
 @pytest.mark.parametrize("command,expected", [
-    ('python -c "print(42)"', 'CONFIRM'), ('whoami', 'ALLOW'),
-    ('python opaque_user_program.py', 'CONFIRM'), ('New-Item report.txt', 'CONFIRM'),
+    ('python -c "print(42)"', 'ALLOW'), ('whoami', 'ALLOW'),
+    ('python opaque_user_program.py', 'ALLOW'), ('New-Item report.txt', 'ALLOW'),
     ('Remove-Item report.txt', 'CONFIRM'), ('shutdown /s /t 0', 'CONFIRM'),
     ('diskpart', 'DENY'),
 ])
@@ -218,3 +218,17 @@ def test_simple_model_loop_keeps_journal_without_extra_model_calls(client, monke
     if lost:
         assert task['task_receipt'].get('task_status') != 'completed'
         assert task['commands'][0]['result']['status'] == 'unknown'
+
+
+@pytest.mark.parametrize("action,params,decision", [
+    ('app.launch', {'command':'notepad.exe'}, 'ALLOW'),
+    ('execute_cmd', {'command':'Set-Content report.txt hello'}, 'ALLOW'),
+    ('execute_cmd', {'command':'Copy-Item a.txt b.txt'}, 'ALLOW'),
+    ('execute_cmd', {'command':'Stop-Process -Name WINWORD -Force'}, 'CONFIRM'),
+    ('execute_cmd', {'command':'Restart-Computer'}, 'CONFIRM'),
+    ('execute_cmd', {'command':'python -c "import os; os.remove(\'x\')"'}, 'CONFIRM'),
+    ('app.launch', {'command':'shutdown /s /t 0'}, 'CONFIRM'),
+    ('execute_cmd', {'command':'netsh advfirewall set allprofiles state off'}, 'DENY'),
+])
+def test_only_recognized_dangerous_effects_require_confirmation(action, params, decision):
+    assert api_support.assess_action(action, params)['decision'] == decision

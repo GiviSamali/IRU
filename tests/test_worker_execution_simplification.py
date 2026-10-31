@@ -161,10 +161,11 @@ def test_file_preservation_visible_cli_cannot_bypass(monkeypatch):
 
 @pytest.mark.parametrize('command',['python helper.py','powershell -EncodedCommand Zm9v',
     "python -c \"import os;os.remove('x')\"",'echo OK','curl https://example.invalid'])
-def test_opaque_code_requires_exact_action_confirmation(command):
+def test_execution_permission_preserves_exact_action_identity(command):
     a=assess_action('execute_cmd',{'command':command,'artifact_paths':[]})
     b=assess_action('execute_cmd',{'command':command+' changed','artifact_paths':[]})
-    assert a['decision']=='CONFIRM' and a['fingerprint']!=b['fingerprint']
+    assert a['decision']==('CONFIRM' if 'os.remove' in command else 'ALLOW')
+    assert a['fingerprint']!=b['fingerprint']
 
 
 def test_unavailable_capabilities_do_not_disappear():
@@ -304,9 +305,9 @@ def test_old_agent_object_observation_is_rejected_before_delivery(monkeypatch):
     assert result['status']=='blocked' and result['dispatched'] is False
 
 
-def test_launch_cannot_bypass_opaque_command_policy():
+def test_launch_confirms_known_destructive_commands():
     for command in ('python -c "dangerous()"','powershell -File helper.ps1','cmd /c del x'):
-        assert assess_action('app.launch',{'command':command})['decision']!='ALLOW'
+        assert assess_action('app.launch',{'command':command})['decision']==('CONFIRM' if 'del x' in command else 'ALLOW')
 
 
 def test_research_large_material_has_access_checked_paged_reference():

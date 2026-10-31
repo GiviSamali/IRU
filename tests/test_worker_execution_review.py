@@ -48,14 +48,15 @@ def test_closed_literal_read_does_not_ask_confirmation(command):
 ])
 def test_unknown_grammar_never_becomes_read_only(command):
     params={'command':command,'artifact_paths':[]}
-    assert assess_action('execute_cmd',params)['decision']!='ALLOW'
+    # Automatic execution permission never makes opaque code a read-only observation.
     assert not is_recovery_observation('execute_cmd',params)
 
 
 @pytest.mark.parametrize('extra',[{'shell':'cmd'},{'shell':'bash'},
     {'artifact_paths':['C:/output.txt']},{'preserve_content_paths':['C:/report.pptx']}])
 def test_shell_or_artifact_declaration_cannot_extend_read_grammar(extra):
-    assert assess_action('execute_cmd',{'command':PPTX_COMMAND,**extra})['decision']=='CONFIRM'
+    assert assess_action('execute_cmd',{'command':PPTX_COMMAND,**extra})['decision']=='ALLOW'
+    assert not is_recovery_observation('execute_cmd',{'command':PPTX_COMMAND,**extra})
 
 
 def test_general_objective_is_not_a_reason_to_call_assessor():
@@ -66,7 +67,7 @@ def test_general_objective_is_not_a_reason_to_call_assessor():
 
 def test_powershell_names_are_not_safe_native_programs_on_other_os():
     params={'command':PPTX_COMMAND,'artifact_paths':[]}
-    assert assess_action('execute_cmd',params,inspection={'os':'Linux'})['decision']=='CONFIRM'
+    assert assess_action('execute_cmd',params,inspection={'os':'Linux'})['decision']=='ALLOW'
     assert not is_recovery_observation('execute_cmd',params,device_os='Linux')
 
 
@@ -84,10 +85,10 @@ def test_native_literal_read_skips_confirmation_but_not_ownership(local_db,monke
         assert result['returncode']==0
         with pytest.raises(RuntimeError,match='target_device_not_found'):
             await runtime.send_command_to_agent('1:pc','execute_cmd',{'command':PPTX_COMMAND},user_id=2)
-        with pytest.raises(runtime.ActionConfirmationRequired):
-            await runtime.send_command_to_agent('1:pc','execute_cmd',{'command':'Get-ChildItem | Set-Content C:/x.txt'},user_id=1)
+        result=await runtime.send_command_to_agent('1:pc','execute_cmd',{'command':'Get-ChildItem | Set-Content C:/x.txt'},user_id=1)
+        assert result['returncode']==0
     asyncio.run(scenario())
-    assert len(sent)==1
+    assert len(sent)==2
 
 
 def test_general_opaque_report_still_requires_content_assessment():

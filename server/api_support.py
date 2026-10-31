@@ -204,11 +204,11 @@ def read_only_execute_command(params, *, device_os=None):
 
 
 def assess_action(action, params, inspection=None):
-    """Patterns can deny known commands; they cannot certify arbitrary code.
+    """Confirm recognized destructive effects, not ordinary execution syntax.
 
-    Unclassified shell/interpreter code requires exact-action confirmation.
-    This is deliberately conservative, not a semantic code sandbox. Worker risk
-    labels, output markers and declared artifact paths cannot waive it.
+    This policy is not a sandbox or proof that arbitrary code is harmless.
+    Ownership, accepted scope, preservation and unknown-outcome guards remain
+    independent dispatch requirements.
     """
     command = str(params.get("command") or "") if action in {"execute_cmd","app.launch"} else ""
     read_only = action=='execute_cmd' and read_only_execute_command(params,
@@ -216,18 +216,6 @@ def assess_action(action, params, inspection=None):
     denied = not read_only and any(pattern.search(command) for pattern in _dangerous_re)
     deletion = not read_only and any(pattern.search(command) for pattern in _delete_re)
     confirm = not read_only and (deletion or any(pattern.search(command) for pattern in _confirm_re))
-    # Only the closed observation grammar can waive code confirmation.
-    # It never classifies arbitrary PowerShell/Python as safe.
-    opaque = action == 'execute_cmd' and not read_only
-    if action=='app.launch':
-        from pathlib import PureWindowsPath, PurePosixPath
-        candidate=command.strip().strip('"').strip("'")
-        # Only a literal absolute document target can use association opening
-        # without consenting to opaque executable/interpreter code.
-        document=(PureWindowsPath(candidate).is_absolute() or PurePosixPath(candidate).is_absolute()) and (
-            PureWindowsPath(candidate).suffix.casefold() in {'.docx','.xlsx','.pptx','.pdf','.txt','.md','.csv','.rtf','.png','.jpg','.jpeg'})
-        opaque=not document or bool(params.get('executable') or params.get('args') or params.get('env'))
-    confirm = confirm or opaque
     decision = "DENY" if denied else "CONFIRM" if confirm else "ALLOW"
     kind = "deletion" if deletion else "dangerous" if denied or confirm else "command"
     return {"decision": decision, "reason_code": "command_forbidden" if denied else
