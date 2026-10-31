@@ -306,12 +306,15 @@ def test_p003a_intent_survives_admission_queue_rebuild_and_payload_restore(owner
         admitted = worker['worker_context']
         gate.set()
         await scheduler.runners[a['id']]
-        for context in (admitted, received[0]):
+        for context, dispatched in ((admitted,False), (received[0],True)):
             data = json.loads(context[0]['content'].split('\n', 1)[1].rsplit('\nEnd', 1)[0])
             assert data['orchestrator_interpretation']['objective'] == objective
             assert data['orchestrator_interpretation']['context_summary'] == summary
             assert data['current_run_evidence'] is False and data['allowed_device_ids'] == ['pc']
-            assert context[-1] == {'role': 'user', 'content': original}
+            assert context[-1] == {'role': 'user', 'content': objective if dispatched else original}
+            if dispatched:
+                assert data['human_authority_request']['text'] == original
+                assert 'not a competing task list' in data['human_authority_request']['purpose']
             assert [v['role'] for v in context].count('user') == 1
         await scheduler.shutdown()
     asyncio.run(scenario())

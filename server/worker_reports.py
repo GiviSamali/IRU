@@ -70,9 +70,9 @@ try:
 except ImportError:
     from runtime_state import _short_did
 try:
-    from .tool_completion import normalize_operation_result
+    from .tool_completion import normalize_operation_result, confirmed_window_effect
 except ImportError:
-    from tool_completion import normalize_operation_result
+    from tool_completion import normalize_operation_result, confirmed_window_effect
 
 TERMINAL = {"done", "completed", "completed_with_recovery", "failed", "error", "cancelled", "blocked", "partial", "unknown", "interrupted", "success"}
 
@@ -412,18 +412,22 @@ def build_worker_report(task):
             and (complete_coverage or mechanical))
         content_unconfirmed = content_unconfirmed or not artifact['content_verified']
     if content_unconfirmed:file_contract=False
-    window_steps = [c for c in operations if canonical_tool_name(c.get('tool_name') or c.get('action') or '')
-                    in {'window.control','app.launch','app.open_url'}]
+    expected_effects=task.get('window_effects') or []
+    def requested_window_step(entry):
+        tool=canonical_tool_name(entry.get('tool_name') or entry.get('action') or '')
+        action=(entry.get('result') or {}).get('action') or (entry.get('window_request') or {}).get('action')
+        return (tool in {'app.launch','app.open_url'} or tool=='window.control'
+            and (action not in {'list','find','active','monitors'} or action in expected_effects))
+    window_steps = [c for c in operations if requested_window_step(c)]
     def window_effect(entry):
         tool=canonical_tool_name(entry.get('tool_name') or entry.get('action') or '')
         return 'open' if tool in {'app.launch','app.open_url'} else entry.get('result',{}).get('action')
-    expected_effects=task.get('window_effects') or []
     final_window_steps=[c for target in targets for c in [s for s in window_steps
         if _short_did(s.get('target_device_id') or s.get('device_id') or '')==target][-len(expected_effects):]] if expected_effects else []
     window_contract = (task.get('execution_scope')=='window' and bool(task.get('window_effects'))
         and bool(targets) and all([window_effect(c) for c in final_window_steps
             if _short_did(c.get('target_device_id') or c.get('device_id') or '')==target] == task.get('window_effects') for target in targets)
-        and all(operation_facts(c)=='success' and c.get('result',{}).get('completion_state')=='success' for c in final_window_steps))
+        and all(operation_facts(c)=='success' and confirmed_window_effect(c)==window_effect(c) for c in final_window_steps))
     covered_targets={a['device_id'] for a in matched}
     for c in operations:
         result=c.get('result') or {}

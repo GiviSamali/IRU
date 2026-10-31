@@ -81,6 +81,30 @@ def operation_step_status(tool_name: str, result: Any, *, terminal=False) -> str
     return 'failed' if outcome == 'not_executed' else outcome
 
 
+def confirmed_window_effect(entry):
+    """Read the existing native receipt; process launch alone is not an open window."""
+    try:
+        from .tool_registry import canonical_tool_name
+    except ImportError:
+        from tool_registry import canonical_tool_name
+    tool = canonical_tool_name(entry.get('tool_name') or entry.get('action') or '')
+    result = entry.get('result') or {}
+    if (not isinstance(result,dict) or entry.get('status') == 'unknown'
+            or normalize_operation_result(tool,result) != 'success'):
+        return None
+    if tool == 'window.control':
+        return result.get('action') if result.get('completion_state') == 'success' else None
+    if tool not in {'app.launch','app.open_url'} or result.get('status') == 'ambiguous':
+        return None
+    window = result.get('window')
+    verified = result.get('status') in {'launched_verified','opened_verified'} or result.get('completion_state') == 'success'
+    observed_window = (isinstance(window,dict) and bool(window) and window.get('visible') is not False
+        or 'window' not in result and result.get('window_found') is True)
+    if verified and observed_window and result.get('window_found') is not False:
+        return 'open'
+    return None
+
+
 def execute_cmd_result_is_complete(result: dict[str, Any] | None) -> bool:
     return normalize_operation_result('execute_cmd', result) == 'success'
 

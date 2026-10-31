@@ -851,8 +851,11 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
     Multiple devices => independent sequential execution in each device context.
     """
     task = tasks[task_id]
-    if task.get("worker_id") and task.get("original_request"):
-        message = task["original_request"]
+    try:
+        from .worker_context import worker_execution_message
+    except ImportError:
+        from worker_context import worker_execution_message
+    message = worker_execution_message(task,message)
     task["current_step"] = "ИРУ думает..."
     is_broadcast = bool(task.get("broadcast")) if task.get("orchestrated") else len(device_ids)>1
     task_modes = task.get("modes") or {}
@@ -1499,8 +1502,11 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
 async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id: int):
     """Background task for onboarding mode when no devices are connected."""
     task = tasks[task_id]
-    if task.get("worker_id") and task.get("original_request"):
-        message = task["original_request"]
+    try:
+        from .worker_context import worker_execution_message
+    except ImportError:
+        from worker_context import worker_execution_message
+    message = worker_execution_message(task,message)
     task["current_step"] = "ИРУ думает..."
     try:
         chat_history = task.get("worker_context") or get_messages(chat_id, limit=50)

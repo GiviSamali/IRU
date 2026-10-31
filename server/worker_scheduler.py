@@ -1040,7 +1040,8 @@ class WorkerScheduler:
                         task['worker_context']=build_worker_context(task['user_id'],task['chat_id'],task['message'] if task.get('goal_id') else task.get('original_request') or task['message'],
                             task['device_ids'],task['context_history'],task.get('source_task_ids') or [],
                             objective=task.get('proposed_objective') or '',context_summary=task.get('proposed_context_summary') or '',
-                            scope=task.get('assignment_scope') or '',constraints=task.get('assignment_constraints') or [])
+                            scope=task.get('assignment_scope') or '',constraints=task.get('assignment_constraints') or [],
+                            assignment=bool(task.get('goal_id')))
                     if task.get("goal_id"):
                         # The original request remains the permission ceiling;
                         # only the assigned deliverable is this Worker's objective.
@@ -1076,7 +1077,11 @@ class WorkerScheduler:
                         payload["worker_id"] = task["worker_id"]
                         c.execute("UPDATE worker_jobs SET payload=? WHERE task_id=?", (json.dumps(payload, ensure_ascii=False), task_id))
                     role_token=LLM_ENTITY.set("worker")
-                    memory_token=WORKER_MEMORY_QUERY.set(task["message"])
+                    try:
+                        from .worker_context import worker_execution_message
+                    except ImportError:
+                        from worker_context import worker_execution_message
+                    memory_token=WORKER_MEMORY_QUERY.set(worker_execution_message(task,task['message']))
                     human_token=ORIGINAL_WORKER_REQUEST.set(task.get("original_request") or task["message"])
                     authorization_token=MEMORY_AUTHORIZATION.set(authorization)
                     try:

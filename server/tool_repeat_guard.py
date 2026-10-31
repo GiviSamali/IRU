@@ -141,6 +141,40 @@ def command_observation_key(args):
     return hashlib.sha256(json.dumps(actual,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
 
+def replacement_attempt_key(args):
+    """Bind a safe rejected replacement to its actual arguments, not model prose."""
+    return hashlib.sha256(json.dumps({key:value for key,value in args.items() if key!='device_id'},
+        sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+
+
+def unchanged_replacement_rejection(journal, args, device_id):
+    """Reuse a known no-write failure until a new observation of this file."""
+    from pathlib import PureWindowsPath
+    def path_key(path):
+        path=str(path or '')
+        return PureWindowsPath(path).as_posix().casefold() if PureWindowsPath(path).drive else path
+    key=replacement_attempt_key(args)
+    path=path_key(args.get('path'))
+    for entry in reversed(journal):
+        if (entry.get('target_device_id') or entry.get('device_id')) != device_id:
+            continue
+        tool=canonical_tool_name(entry.get('tool_name') or entry.get('action') or '')
+        result=entry.get('result') or {}
+        if not isinstance(result,dict):continue
+        if (tool in {'read_file','get_file_content'} and not result.get('error')
+                and result.get('status') in {'ok','success'} and result.get('complete') is True
+                and path_key(result.get('path'))==path):
+            return None
+        if tool != 'write_content':continue
+        if path_key(result.get('path'))!=path:continue
+        if (result.get('error')=='replacement_source_missing' and result.get('committed') is False
+                and result.get('status') != 'unknown' and entry.get('status') != 'unknown'
+                and entry.get('replacement_key')==key):
+            return entry
+        return None  # A different write basis/outcome can change this file.
+    return None
+
+
 def unchanged_command_evidence(journal, args, device_id, human_request):
     """Budget guard, not shell classification or permission. Never fabricate a new observation."""
     # A repeated parser failure is evidence about a failed attempt, not proof

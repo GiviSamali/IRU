@@ -40,12 +40,15 @@ try:
     from .task_summary import get_last_run_summary  # type: ignore
     from .tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from .tool_completion import (  # type: ignore
+        confirmed_window_effect,
         TERMINAL_CORRECTION,
         render_operation_answer,
     )
     from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from .tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
     from .tool_repeat_guard import (  # type: ignore
+        replacement_attempt_key,
+        unchanged_replacement_rejection,
         duplicate_read_only_tool_message,
         find_prior_successful_read_only_tool_step,
         mark_read_only_tool_step,
@@ -109,12 +112,15 @@ except ImportError:
     from task_summary import get_last_run_summary  # type: ignore
     from tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from tool_completion import (  # type: ignore
+        confirmed_window_effect,
         TERMINAL_CORRECTION,
         render_operation_answer,
     )
     from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
     from tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
     from tool_repeat_guard import (  # type: ignore
+        replacement_attempt_key,
+        unchanged_replacement_rejection,
         duplicate_read_only_tool_message,
         find_prior_successful_read_only_tool_step,
         mark_read_only_tool_step,
@@ -232,6 +238,9 @@ async def process_non_pipeline_command(
     except ImportError:
         from controller_shared import worker_assignment_scope, pinned_material_pending, worker_window_scope
     assigned_objective, assignment_block = worker_assignment_scope(poll_task_id)
+    human_request = (runtime_tasks.get(poll_task_id) or {}).get('original_request') or user_message
+    if assigned_objective:
+        user_message = assigned_objective
     system_msg += assignment_block
     try:
         from .window_policy import recent_window_context
@@ -294,7 +303,7 @@ async def process_non_pipeline_command(
         if tool.get("function", {}).get("name")
     }
     stalled_calls = {}
-    memory_permissions = memory_permissions_from_human_request(user_message)
+    memory_permissions = memory_permissions_from_human_request(human_request)
     truncation_metrics = []
     truncation_pending = False
     deterministic_rejections = {}
@@ -660,7 +669,7 @@ async def process_non_pipeline_command(
                     completed_count = sum(1 for entry in commands_log
                         if (entry.get("tool_name") or entry.get("action")) in {"window_control", "window.control", "app.launch", "app.open_url"}
                         and entry.get("status") == "success"
-                        and (entry.get("result") or {}).get("completion_state") == "success")
+                        and confirmed_window_effect(entry) is not None)
                     expected = expected_window_actions[completed_count] if completed_count < len(expected_window_actions) else None
                     if fn_args.get("action") not in ("active", "list", "find", "monitors", expected):
                         append_tool_message(tool_call["id"], append_entry(tool_log_entry("window_control",
@@ -745,7 +754,8 @@ async def process_non_pipeline_command(
                     fn_args.update(rewritten_launch)
 
                 prior_static = (unchanged_command_evidence(commands_log, fn_args, target_device,
-                    user_message) if fn_name == 'execute_cmd' else None)
+                    human_request) if fn_name == 'execute_cmd' else
+                    unchanged_replacement_rejection(commands_log,repeat_guard_args,target_device) if fn_name == 'write_content' else None)
                 if prior_static:
                     source_id = prior_static['step_id']
                     stalled_calls[source_id] = stalled_calls.get(source_id, 0) + 1
@@ -756,6 +766,13 @@ async def process_non_pipeline_command(
                         'trust_level':'untrusted_tool_data',
                         'evidence':json.loads(serialize_tool_result_for_llm(prior_static))},ensure_ascii=False)})
                     record_lifecycle_event('recovery',source='protocol_recovery',terminal_reason='no_progress',iteration=iteration+1,tool_name=fn_name,step_index=prior_static.get('idx'))
+                    if fn_name == 'write_content':
+                        add_correction('The Agent was NOT called again. The unchanged replacement already failed with '
+                            'replacement_source_missing and committed=false in '+source_id+'. This is not transport unknown. '
+                            'Read the current file with read_file, then choose corrected arguments from its text and SHA-256, '
+                            'or explain that the requested value is absent or already in the desired state. '
+                            'Reading inside the accepted task needs no new permission. Do not invent another write.')
+                        continue
                     if stalled_calls[source_id] >= 2:
                         return {'answer':'Остановил повтор одной и той же проверки без новых результатов. '
                             'Полученные доказательства сохранены. Исходная задача выполнена не полностью: '
@@ -1121,7 +1138,7 @@ async def process_non_pipeline_command(
                                 fn_args.get("text", ""),
                                 python_receipt,
                                 category=fn_args.get("category"),
-                                human_request=user_message,
+                                human_request=human_request,
                             )
                             if not allowed:
                                 raise ValueError("Toolchain memory fact requires a verified PythonToolchainReceipt")
@@ -1198,13 +1215,21 @@ async def process_non_pipeline_command(
                     commands_log[-1]["window_request"] = dict(fn_args)
                 if fn_name == 'execute_cmd':
                     commands_log[-1]['execution_key'] = command_observation_key({**repeat_guard_args,'command':fn_args.get('command')})
+                elif fn_name == 'write_content':
+                    commands_log[-1]['replacement_key'] = replacement_attempt_key(repeat_guard_args)
                 mark_read_only_tool_step(commands_log[-1], fn_name, repeat_guard_args)
                 append_tool_message(tool_call["id"], commands_log[-1])
                 if tool_result.get('error') == 'confirmed_transport_outcome_unknown':
                     # Close the assistant/tool exchange before adding a user correction.
                     # Providers reject a user message between tool_calls and its result.
                     add_correction("Action outcome is unknown. Do not repeat it or use another mutating tool. Observe with recovery tools, or report partial.")
-                if (tool_result.get("error") and (tool_result.get("dispatched") is False
+                if (fn_name=='write_content' and tool_result.get('error')=='replacement_source_missing'
+                        and tool_result.get('committed') is False and tool_result.get('status')!='unknown'):
+                    add_correction('The expected fragment is absent; the file was not changed. Read the current file '
+                        'with read_file and choose the exact replacement from observed text and SHA-256. '
+                        'If it already has the requested value, report that observation without pretending a new write. '
+                        'Do not ask for permission to perform this already-authorized read.')
+                elif (tool_result.get("error") and (tool_result.get("dispatched") is False
                         or tool_result.get("committed") is False) and tool_result.get("status") != "unknown"):
                     key = (fn_name, json.dumps(repeat_guard_args, sort_keys=True, ensure_ascii=False), str(tool_result["error"]))
                     deterministic_rejections[key] = deterministic_rejections.get(key, 0) + 1
@@ -1302,12 +1327,10 @@ async def process_non_pipeline_command(
                     return {"answer": answer, "commands": commands_log, "tasks": [], "training_context": _training_context(device_info)}
                 if window_only and expected_window_actions and fn_name == "window_control":
                     verified_actions = [entry for entry in commands_log
-                        if (entry.get("tool_name") or entry.get("action")) in {"window_control", "window.control"}
-                        and (entry.get("result") or {}).get("completion_state") == "success"
-                        and (entry.get("result") or {}).get("status") == "success"]
-                    if [entry["result"].get("action") for entry in verified_actions] == expected_window_actions:
+                        if confirmed_window_effect(entry) is not None]
+                    if [confirmed_window_effect(entry) for entry in verified_actions] == expected_window_actions:
                         payload = render_operation_answer(verified_actions[-1])
-                        payload["text"] = "\n".join(entry["result"]["summary"] for entry in verified_actions)
+                        payload["text"] = "\n".join(str(entry["result"].get('summary') or entry.get('summary') or confirmed_window_effect(entry)) for entry in verified_actions)
                         payload["basis"] = [entry["step_id"] for entry in verified_actions]
                         payload = validate_answer_text_payload(payload, commands_log)
                         append_answer_step(commands_log, "answer_text", payload, target_device_id=target_device,
