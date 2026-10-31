@@ -72,7 +72,7 @@ def owner(tmp_path,monkeypatch):
     return user
 
 
-async def controller(responses,send,*,task_id='ff-controller',request='Прочитай сам и измени project.txt.',captured=None):
+async def controller(responses,send,*,task_id='ff-controller',request='РџСЂРѕС‡РёС‚Р°Р№ СЃР°Рј Рё РёР·РјРµРЅРё project.txt.',captured=None):
     queue = list(responses)
     async def completion(**kwargs):
         if captured is not None:captured.append({**kwargs,'messages':copy.deepcopy(kwargs['messages'])})
@@ -96,8 +96,8 @@ def test_mixed_goal_actual_runtime_projects_only_assignment_preserves_authority_
     agent = FileAgent()
     key = f"{owner['id']}:pc"
     devices[key] = {'user_id':owner['id'],'info':{'os':'Windows','file_replace_protocol':2},'ws':object(),'pending':{}}
-    human = 'Прочитай сам и измени project.txt; отдельно создай lite.txt. Запомни: тестовый цвет зелёный.'
-    objectives = ['В project.txt замени draft на ready.','Создай lite.txt с текстом lite.']
+    human = 'РџСЂРѕС‡РёС‚Р°Р№ СЃР°Рј Рё РёР·РјРµРЅРё project.txt; РѕС‚РґРµР»СЊРЅРѕ СЃРѕР·РґР°Р№ lite.txt. Р—Р°РїРѕРјРЅРё: С‚РµСЃС‚РѕРІС‹Р№ С†РІРµС‚ Р·РµР»С‘РЅС‹Р№.'
+    objectives = ['Р’ project.txt Р·Р°РјРµРЅРё draft РЅР° ready.','РЎРѕР·РґР°Р№ lite.txt СЃ С‚РµРєСЃС‚РѕРј lite.']
     seen = []
     monkeypatch.setattr(runtime,'send_command_to_agent',agent.send)
 
@@ -118,10 +118,10 @@ def test_mixed_goal_actual_runtime_projects_only_assignment_preserves_authority_
         assert 'follow the original request;' not in handoff
         if objective == objectives[0]:
             responses = [call('read_file',{'path':PROJECT}),call('write_content',replacement()),
-                call('read_file',{'path':PROJECT}),answer('project.txt изменён.')]
+                call('read_file',{'path':PROJECT}),answer('project.txt РёР·РјРµРЅС‘РЅ.')]
         else:
             responses = [call('write_content',{'path':LITE,'content':'lite'}),
-                call('read_file',{'path':LITE}),answer('lite.txt создан.')]
+                call('read_file',{'path':LITE}),answer('lite.txt СЃРѕР·РґР°РЅ.')]
         captured = []
         queue = list(responses)
         async def completion(**request):
@@ -146,7 +146,7 @@ def test_mixed_goal_actual_runtime_projects_only_assignment_preserves_authority_
             admitted = await scheduler.submit_goal({'user_id':owner['id'],'chat_id':owner['chat_id'],
                 'message':human,'original_request':human,'context_history':[{'role':'user','content':human}],
                 'device_ids':[key],'modes':{},'memory_authorizations':[{'operation':'remember_fact',
-                    'human_quote':'Запомни: тестовый цвет зелёный.'}]},[
+                    'human_quote':'Р—Р°РїРѕРјРЅРё: С‚РµСЃС‚РѕРІС‹Р№ С†РІРµС‚ Р·РµР»С‘РЅС‹Р№.'}]},[
                     {'key':'project','objective':objectives[0],'preserve_file_bytes':True,'artifacts':[PROJECT]},
                     {'key':'lite','objective':objectives[1],'artifacts':[LITE]}],request_key='mixed-ff')
             await asyncio.wait_for(scheduler.runners[owner['id']],timeout=10)
@@ -167,7 +167,12 @@ def test_mixed_goal_actual_runtime_projects_only_assignment_preserves_authority_
 
 
 @pytest.mark.parametrize('tool,result', [
-    ('app.launch',{'status':'launched_verified','pid':12,'window':{'handle':123,'pid':12,'title':'Folder'}}),
+    ('app.launch',{'status':'opened_verified','pid':12,'window':{'handle':123,'pid':12,'title':'Folder'},
+                   'requested_object':{'type':'folder','path':'C:/SyntheticFF01'},
+                   'object_open_verified':True,
+                   'observed_object':{'observed_path':'C:/SyntheticFF01','kind':'folder',
+                                      'title':'Folder','process':'explorer.exe',
+                                      'class_name':'CabinetWClass','hwnd':'66052','matched_name':'SyntheticFF01'}}),
     ('app.open_url',{'status':'opened_verified','launched':True,'window_found':True,'window':{'pid':12,'title':'Browser'}}),
     ('app.open_url',{'status':'opened_verified','launched':True,'window_found':True,'window_title':'Browser'})])
 @pytest.mark.parametrize('followup', ['none','window.find','window.control'])
@@ -178,7 +183,9 @@ def test_verified_open_without_completion_state_survives_followup_observation(to
             'result':{'status':'success','window':{'window_id':'a'*32,'title':'Folder'}},
             'window_request':{'action':'find'}})
     task = {'task_id':'open-ff','status':'done','device_ids':['pc'],'execution_scope':'window',
-        'window_effects':['open'],'commands':steps,'answer':'Открытие подтверждено.'}
+        'window_effects':['open'],'commands':steps,'answer':'РћС‚РєСЂС‹С‚РёРµ РїРѕРґС‚РІРµСЂР¶РґРµРЅРѕ.',
+        'open_objects':[{'type':'folder','path':'C:/SyntheticFF01','device_id':'pc'} if tool=='app.launch'
+                        else {'type':'url','path':'https://ya.ru','device_id':'pc'}]}
     report = build_worker_report(task)
     assert report['status'] == 'success' and report['goal_completed'] is True
 
@@ -209,20 +216,26 @@ def test_verified_open_then_close_does_not_claim_the_window_remains_open():
     assert not report['goal_completed']
 
 
-def test_open_then_minimize_sequence_accepts_legacy_launch_receipt(owner,monkeypatch):
+def test_open_then_minimize_sequence_accepts_object_verified_launch(owner,monkeypatch):
     monkeypatch.setitem(tasks,'ff-controller',{'task_id':'ff-controller','execution_scope':'window',
         'window_effects':['open','minimize']})
     sent = []
     async def send(device,action,params):
         sent.append(action)
-        if action == 'app.launch':return {'status':'launched_verified','window':{'handle':12,'pid':3,'title':'Folder'}}
+        if action == 'app.launch':return {'status':'opened_verified','window':{'handle':12,'pid':3,'title':'Folder'},
+            'requested_object':{'type':'folder','path':'C:/SyntheticFF01'},
+            'object_open_verified':True,
+            'observed_object':{'observed_path':'C:/SyntheticFF01','kind':'folder','title':'Folder',
+                               'process':'explorer.exe','class_name':'CabinetWClass',
+                               'hwnd':'66052','matched_name':'SyntheticFF01'}}
         assert action == 'window.control' and params['action'] == 'minimize'
         return {'status':'success','action':'minimize','completion_state':'success','summary':'Свёрнуто'}
     result = asyncio.run(controller([call('app_launch',{'command':'explorer.exe C:/SyntheticFF01'}),
         call('window_control',{'action':'minimize','target':'current'})],send))
     assert sent == ['app.launch','window.control']
     report = build_worker_report({'task_id':'ff-controller','status':'done','device_ids':['pc'],
-        'execution_scope':'window','window_effects':['open','minimize'],**result})
+        'execution_scope':'window','window_effects':['open','minimize'],
+        'open_objects':[{'type':'folder','path':'C:/SyntheticFF01','device_id':'pc'}],**result})
     assert report['goal_completed']
 
 
@@ -232,21 +245,21 @@ def test_source_missing_repeated_requests_still_allow_read_and_corrected_replace
     wrong = replacement(old='draft-v0')
     result = asyncio.run(controller([call('write_content',wrong,'bad1'),call('write_content',wrong,'bad2'),
         call('write_content',wrong,'bad3'),call('read_file',{'path':PROJECT}),
-        call('write_content',replacement()),answer('Исправлено по прочитанному файлу.')],agent.send))
+        call('write_content',replacement()),answer('РСЃРїСЂР°РІР»РµРЅРѕ РїРѕ РїСЂРѕС‡РёС‚Р°РЅРЅРѕРјСѓ С„Р°Р№Р»Сѓ.')],agent.send))
     assert [action for _,action,_ in agent.sent] == ['write_content','get_file_content','write_content']
     assert agent.files[PROJECT] == b'status=ready\r\n'
     assert not any(step.get('tool_name')=='answer.ask_clarification' for step in result['commands'])
-    assert result['answer'] == 'Исправлено по прочитанному файлу.'
+    assert result['answer'] == 'РСЃРїСЂР°РІР»РµРЅРѕ РїРѕ РїСЂРѕС‡РёС‚Р°РЅРЅРѕРјСѓ С„Р°Р№Р»Сѓ.'
 
 
 def test_missing_value_may_already_be_desired_without_another_write(owner):
     agent = FileAgent(b'status=ready\r\n')
     wrong = replacement(raw=agent.files[PROJECT])
     result = asyncio.run(controller([call('write_content',wrong),call('read_file',{'path':PROJECT}),
-        answer('В файле уже ready; новую запись не выполнял.')],agent.send))
+        answer('Р’ С„Р°Р№Р»Рµ СѓР¶Рµ ready; РЅРѕРІСѓСЋ Р·Р°РїРёСЃСЊ РЅРµ РІС‹РїРѕР»РЅСЏР».')],agent.send))
     assert [action for _,action,_ in agent.sent] == ['write_content','get_file_content']
     assert agent.files[PROJECT] == b'status=ready\r\n'
-    assert 'новую запись не выполнял' in result['answer']
+    assert 'РЅРѕРІСѓСЋ Р·Р°РїРёСЃСЊ РЅРµ РІС‹РїРѕР»РЅСЏР»' in result['answer']
 
 
 def test_real_unknown_blocks_replacement_retry_but_allows_observation(owner):
@@ -256,17 +269,17 @@ def test_real_unknown_blocks_replacement_retry_but_allows_observation(owner):
         if action=='write_content':return {'status':'unknown','error':'confirmed_transport_outcome_unknown'}
         return {'status':'ok','path':PROJECT,'complete':True,'text':'status=ready\r\n','file_sha256':sha(b'status=ready\r\n')}
     result = asyncio.run(controller([call('write_content',replacement()),call('read_file',{'path':PROJECT}),
-        call('write_content',replacement()),answer('Исход записи неизвестен; повтор не выполнен.')],send))
+        call('write_content',replacement()),answer('РСЃС…РѕРґ Р·Р°РїРёСЃРё РЅРµРёР·РІРµСЃС‚РµРЅ; РїРѕРІС‚РѕСЂ РЅРµ РІС‹РїРѕР»РЅРµРЅ.')],send))
     assert sent == ['write_content','get_file_content']
     assert any(step['result'].get('error')=='mutation_blocked_after_unknown' for step in result['commands'])
 
 
 def test_assignment_cannot_grant_memory_permission_absent_from_human_request(owner,monkeypatch):
-    monkeypatch.setitem(tasks,'ff-controller',{'goal_id':'goal','proposed_objective':'Запомни факт о цвете.',
-        'original_request':'Прочитай project.txt.','execution_scope':'general'})
+    monkeypatch.setitem(tasks,'ff-controller',{'goal_id':'goal','proposed_objective':'Р—Р°РїРѕРјРЅРё С„Р°РєС‚ Рѕ С†РІРµС‚Рµ.',
+        'original_request':'РџСЂРѕС‡РёС‚Р°Р№ project.txt.','execution_scope':'general'})
     async def no_device(*args):pytest.fail('Memory rejection needs no device call')
-    result = asyncio.run(controller([call('remember_fact',{'text':'цвет зелёный','category':'other'}),
-        answer('Разрешение на сохранение факта отсутствует.')],no_device))
+    result = asyncio.run(controller([call('remember_fact',{'text':'С†РІРµС‚ Р·РµР»С‘РЅС‹Р№','category':'other'}),
+        answer('Р Р°Р·СЂРµС€РµРЅРёРµ РЅР° СЃРѕС…СЂР°РЅРµРЅРёРµ С„Р°РєС‚Р° РѕС‚СЃСѓС‚СЃС‚РІСѓРµС‚.')],no_device))
     assert result['commands'][0]['result']['error'] == 'memory_write_requires_explicit_user_intent'
 
 
@@ -277,17 +290,17 @@ def test_only_new_observation_of_the_same_file_releases_known_missing_rejection(
     result = asyncio.run(controller([call('write_content',wrong,'first'),
         call('read_file',{'path':LITE}),call('write_content',wrong,'still-same'),
         call('read_file',{'path':PROJECT}),call('write_content',wrong,'fresh-basis'),
-        answer('В project.txt нужный исходный фрагмент отсутствует.')],agent.send,
-        request='Прочитай project.txt и lite.txt; исправь project.txt.'))
+        answer('Р’ project.txt РЅСѓР¶РЅС‹Р№ РёСЃС…РѕРґРЅС‹Р№ С„СЂР°РіРјРµРЅС‚ РѕС‚СЃСѓС‚СЃС‚РІСѓРµС‚.')],agent.send,
+        request='РџСЂРѕС‡РёС‚Р°Р№ project.txt Рё lite.txt; РёСЃРїСЂР°РІСЊ project.txt.'))
     assert [action for _,action,_ in agent.sent] == ['write_content','get_file_content','get_file_content','write_content']
     assert agent.files[PROJECT] == b'status=draft\r\n'
-    assert result['answer'] == 'В project.txt нужный исходный фрагмент отсутствует.'
+    assert result['answer'] == 'Р’ project.txt РЅСѓР¶РЅС‹Р№ РёСЃС…РѕРґРЅС‹Р№ С„СЂР°РіРјРµРЅС‚ РѕС‚СЃСѓС‚СЃС‚РІСѓРµС‚.'
 
 
 def test_server_only_runtime_projects_assignment_without_rewriting_original(owner,monkeypatch):
     from server import task_runtime as runtime
-    human = 'Проанализируй сведения; другой Worker создаст lite.txt.'
-    objective = 'Проанализируй только сведения.'
+    human = 'РџСЂРѕР°РЅР°Р»РёР·РёСЂСѓР№ СЃРІРµРґРµРЅРёСЏ; РґСЂСѓРіРѕР№ Worker СЃРѕР·РґР°СЃС‚ lite.txt.'
+    objective = 'РџСЂРѕР°РЅР°Р»РёР·РёСЂСѓР№ С‚РѕР»СЊРєРѕ СЃРІРµРґРµРЅРёСЏ.'
     context = [{'role':'assistant','content':json.dumps({'human_authority_request':human},ensure_ascii=False)},
         {'role':'user','content':objective}]
     monkeypatch.setitem(tasks,'ff-onboarding',{'task_id':'ff-onboarding','worker_id':'worker-1','goal_id':'goal',
@@ -298,7 +311,7 @@ def test_server_only_runtime_projects_assignment_without_rewriting_original(owne
         seen.append(kwargs['user_message'])
         assert kwargs['chat_history'][-1] == {'role':'user','content':objective}
         assert human in kwargs['chat_history'][0]['content']
-        return {'answer':'Получены сведения.','commands':[]}
+        return {'answer':'РџРѕР»СѓС‡РµРЅС‹ СЃРІРµРґРµРЅРёСЏ.','commands':[]}
     monkeypatch.setattr(runtime,'process_onboarding_message',process)
     asyncio.run(runtime.run_onboarding_task('ff-onboarding',owner['id'],human,owner['chat_id']))
     assert seen == [objective]
@@ -306,13 +319,13 @@ def test_server_only_runtime_projects_assignment_without_rewriting_original(owne
 
 
 def test_restored_goal_without_handoff_keeps_human_scope_as_context_not_user_instruction(owner,monkeypatch):
-    human = 'Измени project.txt и отдельно создай lite.txt.'
-    objective = 'Измени только project.txt.'
+    human = 'РР·РјРµРЅРё project.txt Рё РѕС‚РґРµР»СЊРЅРѕ СЃРѕР·РґР°Р№ lite.txt.'
+    objective = 'РР·РјРµРЅРё С‚РѕР»СЊРєРѕ project.txt.'
     monkeypatch.setitem(tasks,'ff-controller',{'goal_id':'goal','worker_id':'worker-1',
         'message':human,'original_request':human,'proposed_objective':objective})
     captured = []
     async def no_device(*args):pytest.fail('This projection test needs no device action')
-    asyncio.run(controller([answer('Контекст принят.')],no_device,request=human,captured=captured))
+    asyncio.run(controller([answer('РљРѕРЅС‚РµРєСЃС‚ РїСЂРёРЅСЏС‚.')],no_device,request=human,captured=captured))
     messages = captured[0]['messages']
     assert messages[-1] == {'role':'user','content':objective}
     assert human in messages[0]['content']

@@ -21,16 +21,31 @@ def entry(tool, result, number=1):
     return {'step_id': f'step_{number}', 'tool_name': tool, 'target_device_id': 'pc', 'result': result}
 
 
-def finish(steps, result='Получен результат.', *, scope='analysis', effects=(), unresolved=(), recommendations=()):
+def finish(steps, result='Получен результат.', *, scope='analysis', effects=(), unresolved=(), recommendations=(), open_objects=()):
     payload=validate_answer_text_payload({'result':result,'unresolved':list(unresolved),'remaining':list(recommendations)},steps)
     append_answer_step(steps,'answer_text',payload,target_device_id='pc')
     return {'task_id':'synthetic','status':'done','device_ids':['pc'],'execution_scope':scope,
-        'window_effects':list(effects),'commands':steps,'answer':payload['text']}
+        'window_effects':list(effects),'commands':steps,'answer':payload['text'],
+        'open_objects':list(open_objects)}
+
+
+OPEN_PATH = 'C:/Users/russa/OneDrive/Desktop/agent_errors.xlsx'
 
 
 def opened():
+    path = OPEN_PATH
     return {'status':'opened_verified','completion_state':'success','window_found':True,
-        'window_title':'Яндекс — Comet','url':'https://ya.ru','window':{'pid':123,'title':'Яндекс — Comet'}}
+        'window_title':'Яндекс — Comet','url':'https://ya.ru','window':{'pid':123,'title':'Яндекс — Comet'},
+        # An opened document is proven by the observed object path, not a title.
+        'requested_object':{'type':'file','path':path},
+        'object_open_verified':True,
+        'observed_object':{'observed_path':path,'kind':'file','title':'agent_errors.xlsx — WPS',
+                           'process':'wps.exe','class_name':'Excel7Frame',
+                           'matched_name':'agent_errors.xlsx'}}
+
+
+def opened_requirement():
+    return [{'type':'file','path':OPEN_PATH,'device_id':'pc'}]
 
 
 def complete_coverage_fixture(t):
@@ -42,7 +57,8 @@ def complete_coverage_fixture(t):
 
 
 def test_bcf16d6e_verified_open_is_spoken_by_orchestrator():
-    t=finish([entry('app.open_url',opened())],scope='window',effects=['open'],result='worker material')
+    t=finish([entry('app.open_url',opened())],scope='window',effects=['open'],result='worker material',
+             open_objects=opened_requirement())
     report=build_worker_report(t)
     assert report['goal_completed'] and report['status']=='success'
     human=orch.present_worker_result(t,report)
@@ -77,7 +93,7 @@ def test_3801d76f_initial_failure_does_not_erase_verified_open():
     steps=[entry('execute_cmd',{'returncode':1,'stdout':'','stderr':'first attempt failed'}),
         entry('app.launch',{**opened(),'window_title':'agent_errors.xlsx — WPS'},2),
         entry('window.list',{'status':'success','windows':[{'title':'agent_errors.xlsx — WPS'}]},3)]
-    t=finish(steps,scope='window',effects=['open'])
+    t=finish(steps,scope='window',effects=['open'],open_objects=opened_requirement())
     report=build_worker_report(t)
     assert report['goal_completed'] and report['error_code'] is None
     assert 'agent_errors.xlsx' in orch.present_worker_result(t,report)['conversational_response']
@@ -145,7 +161,8 @@ def test_compact_controller_uses_existing_goal_coverage_once_without_repair(monk
 
 def test_open_controller_uses_unchanged_agent_api_and_no_narration_call(monkeypatch):
     monkeypatch.setattr(db,'get_device_profile',lambda *a,**k:None)
-    tasks['open-contract']={'task_id':'open-contract','execution_scope':'window','window_effects':['open']}
+    tasks['open-contract']={'task_id':'open-contract','execution_scope':'window','window_effects':['open'],
+        'open_objects':[{'type':'url','path':'https://ya.ru','device_id':'device-1'}]}
     calls=[];sent=[]
     async def send(device,action,params):
         sent.append((action,params))
@@ -230,7 +247,8 @@ def test_goal_assignment_result_and_followup_use_existing_durable_path(owners,mo
 def test_legacy_api_answer_is_orchestrator_reply_not_internal_worker_material(owners,monkeypatch):
     owner,_=owners
     t=task(owner);tid=t['task_id']
-    t.update(finish([entry('app.open_url',opened())],scope='window',effects=['open'],result='internal Worker material'))
+    t.update(finish([entry('app.open_url',opened())],scope='window',effects=['open'],result='internal Worker material',
+                    open_objects=opened_requirement()))
     t.update(task_id=tid,worker_id='worker-1')
     tasks[tid]=t
     monkeypatch.setattr(task_routes,'get_current_user',lambda request:owner)

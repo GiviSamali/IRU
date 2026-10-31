@@ -1,4 +1,4 @@
-"""Core simplification: contracts and real projections, no external services."""
+﻿"""Core simplification: contracts and real projections, no external services."""
 from types import SimpleNamespace
 import json
 import pytest
@@ -12,9 +12,9 @@ from test_tool_only_protocol import _run_case, _message, _tool_call
 
 
 def test_worker_prompt_has_no_competing_user_speech_or_chunk_write_protocol():
-    assert 'мужском роде' not in SYSTEM_PROMPT_TEMPLATE
-    assert 'ФОРМАТИРОВАНИЕ ПИСЬМЕННОГО ОТВЕТА' not in SYSTEM_PROMPT_TEMPLATE
-    assert 'дальше append=true' not in SYSTEM_PROMPT_TEMPLATE
+    assert 'РјСѓР¶СЃРєРѕРј СЂРѕРґРµ' not in SYSTEM_PROMPT_TEMPLATE
+    assert 'Р¤РћР РњРђРўРР РћР’РђРќРР• РџРРЎР¬РњР•РќРќРћР“Рћ РћРўР’Р•РўРђ' not in SYSTEM_PROMPT_TEMPLATE
+    assert 'РґР°Р»СЊС€Рµ append=true' not in SYSTEM_PROMPT_TEMPLATE
     assert '### 2. write_content' not in SYSTEM_PROMPT_TEMPLATE
     assert 'wmctrl' not in WINDOWS_RULES
 
@@ -46,11 +46,11 @@ def test_entry_points_share_one_worker_presentation():
 def test_owned_memory_ranks_normalized_matches_before_limit(owners):
     a,b=owners
     with db.get_db() as c:
-        for owner,text in [(a,f'ИРУ предпочтение {i}') for i in range(20)]+[
-            (a,'Журнал сервиса IRU на узле alpha'),(b,'Журнал сервиса ИРУ SECRET')]:
+        for owner,text in [(a,f'РР РЈ РїСЂРµРґРїРѕС‡С‚РµРЅРёРµ {i}') for i in range(20)]+[
+            (a,'Р–СѓСЂРЅР°Р» СЃРµСЂРІРёСЃР° IRU РЅР° СѓР·Р»Рµ alpha'),(b,'Р–СѓСЂРЅР°Р» СЃРµСЂРІРёСЃР° РР РЈ SECRET')]:
             c.execute('INSERT INTO user_memory(user_id,fact_text,category,created_at) VALUES(?,?,?,?)',
                       (str(owner['id']),text,'general',0))
-    for query in ('Журнале ИРУ','журнала IRU','журналом ИРУ'):
+    for query in ('Р–СѓСЂРЅР°Р»Рµ РР РЈ','Р¶СѓСЂРЅР°Р»Р° IRU','Р¶СѓСЂРЅР°Р»РѕРј РР РЈ'):
         selected=orch.relevant_facts(a['id'],query)
         assert 'alpha' in selected[0]['text']
         assert not any('SECRET' in f['text'] for f in selected)
@@ -59,10 +59,10 @@ def test_owned_memory_ranks_normalized_matches_before_limit(owners):
 def test_memory_expansion_is_candidate_data_and_never_foreign_authority(owners):
     a,b=owners
     with db.get_db() as c:
-        for owner,text in [(a,'Для журнала сервиса IRU: ssh host journalctl -u iru'),(b,'SECRET сервер')]:
+        for owner,text in [(a,'Р”Р»СЏ Р¶СѓСЂРЅР°Р»Р° СЃРµСЂРІРёСЃР° IRU: ssh host journalctl -u iru'),(b,'SECRET СЃРµСЂРІРµСЂ')]:
             c.execute('INSERT INTO user_memory(user_id,fact_text,category,created_at) VALUES(?,?,?,0)',
                       (str(owner['id']),text,'general'))
-    for query in ('сервер','сервером','сервере','Помнишь команды на сервере?'):
+    for query in ('СЃРµСЂРІРµСЂ','СЃРµСЂРІРµСЂРѕРј','СЃРµСЂРІРµСЂРµ','РџРѕРјРЅРёС€СЊ РєРѕРјР°РЅРґС‹ РЅР° СЃРµСЂРІРµСЂРµ?'):
         facts=orch.relevant_facts(a['id'],query)
         assert any('journalctl' in f['text'] and f['retrieval']=='candidate_only' for f in facts)
         assert not any('SECRET' in f['text'] for f in facts)
@@ -190,7 +190,6 @@ def test_failed_discovery_does_not_prevent_native_open(monkeypatch):
     assert any(c.get('tool_name')=='app.launch' for c in result['commands'])
 
 
-@pytest.mark.xfail(strict=True,reason='CS-01 remaining: Assignment and native open receipts lack mandatory object binding; requires a separately reviewed protocol contract')
 @pytest.mark.parametrize('case',['two_objects_one_open','wrong_object','same_object_twice'])
 def test_remaining_open_identity_must_not_be_inferred_from_effect_count(case):
     effects=['open','open'] if case=='same_object_twice' else ['open']

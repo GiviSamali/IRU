@@ -5,6 +5,12 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+def _report_path(value):
+    """Normalized path for object matching; a window title is never a path."""
+    text = str(value or "").strip().strip('"')
+    return PureWindowsPath(text.replace('/', '\\')).as_posix().casefold() if text else ''
+
+
 def free_form_reports():
     """Free-form presentation.
 
@@ -419,13 +425,21 @@ def build_worker_report(task):
         that the requested content is inside. A text file that was written,
         verified and read back at the same SHA is proven by construction.
         """
-        if PureWindowsPath(artifact['path']).suffix.lower() in {'.docx','.xlsx','.pptx'}:
+        if (PureWindowsPath(artifact['path']).suffix.lower() in {'.docx','.xlsx','.pptx'}
+                and artifact.get('verification_scope')!='copy_identity'):
             return False
         for entry in operations:
             if operation_facts(entry)!='success':continue
             result=entry.get('result') or {}
             if (result.get('verified') is True and result.get('committed') is True
                     and result.get('path')==artifact['path']):
+                return True
+            # A byte-for-byte copy is proven by the digest it was verified against.
+            if ((entry.get('tool_name') or entry.get('action'))=='transfer_file'
+                    and result.get('sha256_verified') is True
+                    and result.get('target_path')==artifact['path']
+                    and isinstance(result.get('sha256'),str)
+                    and result.get('sha256')==artifact.get('sha256')):
                 return True
         return False
     content_unconfirmed = False
@@ -460,6 +474,34 @@ def build_worker_report(task):
         and bool(targets) and all([window_effect(c) for c in final_window_steps
             if _short_did(c.get('target_device_id') or c.get('device_id') or '')==target] == task.get('window_effects') for target in targets)
         and all(operation_facts(c)=='success' and confirmed_window_effect(c)==window_effect(c) for c in final_window_steps))
+    if window_contract and expected_effects.count('open'):
+        # An effect name says nothing about which object was opened. The
+        # requirement comes from the accepted Assignment; the proof comes from
+        # the agent's own observation of that object's real path.
+        required_objects=[item for item in (task.get('open_objects') or [])
+                          if isinstance(item,dict) and item.get('path')]
+        if not required_objects:
+            window_contract=False
+        elif {str(item.get('type')) for item in required_objects} & {'file','folder'}:
+            proven=[]
+            for step in final_window_steps:
+                if confirmed_window_effect(step)!='open':
+                    continue
+                observed=(step.get('result') or {}).get('observed_object') or {}
+                proven.append((_report_path(observed.get('observed_path')),
+                               _short_did(step.get('target_device_id') or step.get('device_id') or '')))
+            remaining=list(proven)
+            for required in required_objects:
+                wanted=_report_path(required.get('path'))
+                device=required.get('device_id')
+                index=next((position for position,(path,step_device) in enumerate(remaining)
+                            if path==wanted and (not device or device==step_device)), None)
+                if index is None:
+                    window_contract=False
+                    break
+                # One observation satisfies one requirement: the same window
+                # cannot stand for two demanded objects.
+                remaining.pop(index)
     covered_targets={a['device_id'] for a in matched}
     for c in operations:
         result=c.get('result') or {}

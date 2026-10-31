@@ -811,6 +811,7 @@ class WorkerScheduler:
                         "assignment_scope": assignment.get("scope") or "",
                         "assignment_constraints": assignment.get("constraints") or [],
                         "assigned_artifacts": assignment.get("artifacts") or [],
+                        "open_objects": assignment.get("open_objects") or [],
                         "result_first": True,
                         "created_at": now, "worker_id": "worker-1", "orchestrated": True,
                         "orchestrator_execution_mode": "simple", "modes": dict(template.get("modes") or {})}

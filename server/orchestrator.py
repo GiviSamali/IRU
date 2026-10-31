@@ -36,6 +36,14 @@ class MemoryAuthorization(BaseModel):
 WindowEffect = Literal["list","find","active","monitors","activate","minimize","maximize","restore","left","right","move_monitor","close","open"]
 
 
+class OpenObject(BaseModel):
+    """A mandatory object an Assignment must open, with its device."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    type: Literal["file","folder","url","app"]
+    path: str = Field(min_length=1, max_length=1024)
+    device_id: str | None = Field(default=None, max_length=80)
+
+
 class Assignment(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     key: str = Field(min_length=1, max_length=80)
@@ -49,6 +57,9 @@ class Assignment(BaseModel):
     target_device_ids: list[str] | None = Field(default=None, max_length=8)
     execution_scope: Literal["general","window","analysis"] | None = None
     window_effects: list[WindowEffect] | None = Field(default=None, max_length=16)
+    # Mandatory objects this Assignment must open. An effect name alone never
+    # says which object, so the requirement is stated here explicitly.
+    open_objects: list["OpenObject"] = Field(default_factory=list, max_length=8)
     preserve_file_bytes: bool = False
 
 
@@ -225,6 +236,7 @@ objective — цель человека; scope — разумные смысло
 Для поручения, результат которого только анализ, исследование или ответ без требуемого изменения внешнего состояния, укажи execution_scope=analysis. Не используй analysis для создания/изменения/передачи файла или управления приложением. Для файлов перечисли обязательные artifacts в assignments; для отсутствующего контракта эффект не считается подтверждённым. Семантическая оценка не может изменить выбранную здесь область поручения.
 Для результата, состоящего только в управлении существующими окнами, укажи execution_scope=window
 Открытие приложения, документа или сайта также относится к window с window_effects=["open"]; Worker использует штатный инструмент открытия, не window_control(action="open").
+Если открыть нужно конкретный объект, перечисли его в assignment.open_objects: {"type":"file|folder|url|app","path":"<точный путь или URL>","device_id":"<устройство>"}. window_effects=["open"] без open_objects не подтверждает открытие: Worker обязан доказать именно этот объект, иначе исход неподтверждён.
 и window_effects: запрошенные эффекты (например activate, minimize, maximize, restore, left, right,
 move_monitor, close). Это ограничения результата, не технические шаги Worker. Смешанная работа — general.
 Список можно уточнить в каждом assignment. Не выводи намерение из фиксированных фраз.

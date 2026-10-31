@@ -1395,6 +1395,226 @@ def _format_process_command(argv: list[str]) -> str:
     return shlex.join(argv)
 
 
+SHELL_PROCESSES = {"explorer.exe", "explorer", "searchapp.exe", "shellexperiencehost.exe",
+                   "startmenuexperiencehost.exe", "applicationframehost.exe"}
+SHELL_WINDOW_TITLES = {"thumbnaildevicehelperwnd", "program manager", "msctfime ui", "default ime"}
+SHELL_WINDOW_CLASSES = {"thumbnaildevicehelperwnd", "progman", "workerw", "shell_traywnd",
+                        "applicationframewindow", "windows.ui.core.corewindow", "sysshadow",
+                        "multitaskingviewframe", "xamlexplorerhostislandwindow"}
+EXECUTABLE_SUFFIXES = {".exe", ".com", ".bat", ".cmd", ".ps1", ".msi"}
+# Shell associations for these execute code (scripts, shortcuts, installers).
+UNSAFE_OPEN_SUFFIXES = {".lnk", ".url", ".hta", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh",
+                        ".bat", ".cmd", ".ps1", ".msi", ".reg", ".scr", ".pif", ".exe", ".com",
+                        ".cpl", ".jar", ".application", ".gadget", ".cer", ".ins", ".py", ".pyw",
+                        ".pyc", ".pyo", ".pyz", ".pth", ".sh", ".bash", ".rb", ".pl", ".php"}
+# Only these may be opened as documents through their association.
+DOCUMENT_SUFFIXES = {".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".pdf", ".txt", ".md",
+                     ".csv", ".rtf", ".odt", ".ods", ".odp", ".png", ".jpg", ".jpeg", ".gif",
+                     ".bmp", ".svg", ".webp"}
+OFFICE_PROGIDS = {".pptx": ("PowerPoint.Application", "Presentations"),
+                  ".docx": ("Word.Application", "Documents"),
+                  ".xlsx": ("Excel.Application", "Workbooks")}
+
+
+def _open_object_kind(value: str) -> str | None:
+    """What the caller asked to open; executables and command lines keep Popen."""
+    raw = str(value or "").strip()
+    quoted = len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {'"', "'"}
+    text = raw.strip('"').strip("'")
+    if not text:
+        return None
+    lowered = text.casefold()
+    if lowered.startswith(("http://", "https://")):
+        return "url"
+    drive_path = bool(re.match(r"^[A-Za-z]:[\\/]", text))
+    # "python app.py" is a command line, not a document named app.py.
+    if not quoted and not drive_path and " " in text:
+        return None
+    path = Path(text)
+    suffix = path.suffix.casefold()
+    if suffix in EXECUTABLE_SUFFIXES:
+        # Executables keep the existing Popen path and its authority checks.
+        return None
+    if path.is_dir():
+        return "folder"
+    if suffix in UNSAFE_OPEN_SUFFIXES or suffix not in DOCUMENT_SUFFIXES:
+        # Unknown or code-bearing associations are not documents: refuse rather
+        # than let ShellExecute run them. An allowlist, not a denylist.
+        return "unsafe"
+    if path.is_file():
+        return "file"
+    return "file"
+
+
+def _shell_open_object(path_text: str) -> None:
+    """Open through the OS file association, never by executing the document."""
+    if os.name == "nt":
+        os.startfile(path_text)  # type: ignore[attr-defined]
+        return
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    subprocess.Popen([opener, path_text], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _windows_command_line(pid) -> str:
+    """The process table's view of what a window's process was asked to open."""
+    if os.name != "nt" or not pid:
+        return ""
+    try:
+        script = f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                             capture_output=True, text=True, timeout=8)
+        return (out.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def _explorer_folder_paths() -> list[str]:
+    """Real folder paths of open Explorer windows, from the shell API."""
+    if os.name != "nt":
+        return []
+    try:
+        script = ("$s=New-Object -ComObject Shell.Application; "
+                  "$s.Windows() | ForEach-Object { $_.Document.Folder.Self.Path }")
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                             capture_output=True, text=True, timeout=8)
+        return [line.strip() for line in (out.stdout or "").splitlines() if line.strip()]
+    except Exception:
+        return []
+
+
+def _same_path(left, right) -> bool:
+    def norm(value):
+        text = str(value or "").strip().strip('"')
+        return ntpath.normcase(ntpath.normpath(text)) if text else ""
+    a, b = norm(left), norm(right)
+    return bool(a) and a == b
+
+
+def _observed_path_in_command_line(command_line: str, path_text: str) -> str:
+    """The OS-reported spelling of the path, taken from the process command line."""
+    haystack = str(command_line or "")
+    needle = str(path_text or "")
+    if not haystack or not needle:
+        return ""
+    index = haystack.casefold().find(needle.casefold())
+    return haystack[index:index + len(needle)] if index >= 0 else ""
+
+
+def _office_open_paths(suffix: str) -> list[str]:
+    """Full paths of documents an already running Office app has loaded.
+
+    Attaching to the running instance is read-only: when no instance exists the
+    call fails and nothing is created.
+    """
+    progid, collection = OFFICE_PROGIDS.get(str(suffix or '').casefold(), ('', ''))
+    if not progid or os.name != "nt":
+        return []
+    try:
+        script = ("try { $a=[Runtime.InteropServices.Marshal]::GetActiveObject('" + progid + "'); "
+                  "$a." + collection + " | ForEach-Object { $_.FullName } } catch { }")
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                             capture_output=True, text=True, timeout=8)
+        return [line.strip() for line in (out.stdout or "").splitlines() if line.strip()]
+    except Exception:
+        return []
+
+
+def _explorer_windows() -> list[dict]:
+    """Folder path bound to its own Explorer window handle."""
+    if os.name != "nt":
+        return []
+    try:
+        script = ("$s=New-Object -ComObject Shell.Application; "
+                  "$s.Windows() | ForEach-Object { "
+                  "try { \"$($_.HWND)`t$($_.Document.Folder.Self.Path)\" } catch { } }")
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                             capture_output=True, text=True, timeout=8)
+    except Exception:
+        return []
+    found = []
+    for line in (out.stdout or "").splitlines():
+        handle, _, path = line.partition('\t')
+        if handle.strip() and path.strip():
+            found.append({"hwnd": handle.strip(), "path": path.strip()})
+    return found
+
+
+def _observe_opened_object(kind: str, path_text: str, timeout_sec: float) -> dict | None:
+    """Independent observation of the opened object, never the argument itself."""
+    if os.name != "nt":
+        return None
+    name = Path(path_text).name
+    suffix = Path(path_text).suffix.casefold()
+    needle = (name if kind == "folder" else Path(path_text).stem).casefold()
+    if not needle:
+        return None
+    deadline = time.monotonic() + max(0.0, min(float(timeout_sec or 0), 30.0))
+    while True:
+        windows = window_list(include_invisible=False).get("windows") or []
+        handles = {str(window.get("handle") or window.get("hwnd") or "") for window in windows}
+        if kind == "folder":
+            # The path must belong to a window that really exists.
+            folder = next((item for item in _explorer_windows()
+                           if _same_path(item["path"], path_text) and item["hwnd"] in handles), None)
+            if folder:
+                window = next((w for w in windows
+                               if str(w.get("handle") or w.get("hwnd") or "") == folder["hwnd"]), {})
+                return {"observed_path": folder["path"], "kind": "folder",
+                        "title": str(window.get("title") or ""),
+                        "process": str(window.get("process_name") or ""),
+                        "class_name": str(window.get("class_name") or ""),
+                        "hwnd": folder["hwnd"], "matched_name": name}
+        elif suffix in OFFICE_PROGIDS:
+            # Only the application's own document list proves which file is open.
+            loaded = next((value for value in _office_open_paths(suffix)
+                           if _same_path(value, path_text)), "")
+            if loaded:
+                window = next((w for w in windows
+                               if needle in str(w.get("title") or "").casefold()
+                               and str(w.get("class_name") or "").casefold() not in SHELL_WINDOW_CLASSES), {})
+                return {"observed_path": loaded, "kind": kind,
+                        "title": str(window.get("title") or ""),
+                        "process": str(window.get("process_name") or ""),
+                        "class_name": str(window.get("class_name") or ""),
+                        "hwnd": str(window.get("handle") or window.get("hwnd") or ""),
+                        "matched_name": name}
+        # A command line only proves the argument it was given, not that the
+        # document loaded, so nothing else can confirm the object.
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(0.25)
+
+
+def _app_open_object(kind: str, path_text: str, timeout_sec: float) -> dict:
+    requested = {"type": kind, "path": path_text}
+    try:
+        _shell_open_object(path_text)
+    except OSError as exc:
+        return {"status": "failed", "error": str(exc), "error_code": "shell_open_failed",
+                "pid": None, "command": path_text, "requested_object": requested,
+                "launch_state": "failed", "object_open_verified": False,
+                "observed_object": None, "window": None, "next_actions": []}
+    observed = _observe_opened_object(kind, path_text, timeout_sec)
+    window = ({"title": observed["title"], "pid": observed.get("pid"), "visible": True,
+               "process_name": observed.get("process")} if observed else None)
+    return {
+        "status": "opened_verified" if observed else "launched",
+        "pid": (observed or {}).get("pid"),
+        "command": path_text,
+        "executable": path_text,
+        "args": [],
+        "cwd": "",
+        "process_alive": bool(observed),
+        "window": window,
+        "requested_object": requested,
+        "launch_state": "observed" if observed else "requested",
+        "object_open_verified": bool(observed),
+        "observed_object": observed,
+        "next_actions": [] if observed else ["window.verify"],
+    }
+
+
 def app_launch(
     command: str | None = None,
     executable: str | None = None,
@@ -1405,6 +1625,19 @@ def app_launch(
     timeout_sec: float = 5,
     env: dict | None = None,
 ) -> dict:
+    if not executable and command:
+        candidate = _strip_arg_quotes(str(command).strip())
+        kind = _open_object_kind(candidate)
+        if kind == "unsafe":
+            # A shell association for scripts/shortcuts executes code; it is not
+            # a document open and must not bypass the command policy.
+            return {"status": "failed", "error": "unsafe_open_association",
+                    "error_code": "unsafe_open_association", "pid": None,
+                    "command": candidate, "requested_object": {"type": "file", "path": candidate},
+                    "launch_state": "failed", "object_open_verified": False,
+                    "observed_object": None, "window": None, "next_actions": []}
+        if kind:
+            return _app_open_object(kind, candidate, timeout_sec)
     if executable:
         argv = [str(executable), *[str(arg) for arg in (args or [])]]
     elif command:
@@ -1443,6 +1676,13 @@ def app_launch(
     window = found.get("match")
     process_alive = _process_alive(proc.pid)
     status = "launched_verified" if window else ("launched" if process_alive is not False else "failed")
+    requested_object = {"type": "app", "path": argv[0]}
+    observed_object = None
+    if isinstance(window, dict) and window:
+        # An application is proven by its own window, not by the fact of a spawn.
+        observed_object = {"path": argv[0], "kind": "app", "title": window.get("title"),
+                           "process": window.get("process_name") or window.get("process") or "",
+                           "matched_name": Path(argv[0]).name, "pid": window.get("pid")}
     return {
         "status": status,
         "pid": proc.pid,
@@ -1452,6 +1692,10 @@ def app_launch(
         "cwd": cwd or "",
         "process_alive": process_alive,
         "window": window,
+        "requested_object": requested_object,
+        "launch_state": "observed" if observed_object else "requested",
+        "object_open_verified": bool(observed_object),
+        "observed_object": observed_object,
         "next_actions": [] if window else ["window.verify"],
     }
 
