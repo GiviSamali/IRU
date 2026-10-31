@@ -690,7 +690,7 @@ async def run_turn(cmd, user, chat_id, delegate):
                     from voice import conversational_speech
                 candidate=choice._spoken_candidate
                 diagnostic={"candidate":candidate}
-                speech=conversational_speech(candidate, diagnostic=diagnostic)
+                speech=conversational_speech(candidate, diagnostic=diagnostic, request=cmd.message)
                 if diagnostic.get("reason")=="invalid_encoding":
                     diagnostic["candidate"]=None
                     diagnostic["candidate_json"]=json.dumps(candidate,ensure_ascii=True)

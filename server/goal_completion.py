@@ -49,6 +49,11 @@ _SYSTEM = (
     "пути, ID, BOM, CRLF и инструменты. Файлы представлены отдельно. Если человек запросил "
     "технические подробности, сохрани нужные ему данные в answer. "
     "answer — письменный итог по смыслу поручения, spoken_response — короткая устная версия. "
+    "В spoken_response по умолчанию называй объект по смыслу: файл, документ, папка, копия. "
+    "Не зачитывай пути и имена файлов с расширениями; если тип важен, достаточно назвать формат. "
+    "Техническое имя в поручении само по себе не означает просьбу его произнести. "
+    "Если человек прямо спрашивает путь, имя, расширение или просит их озвучить, ответь на этот "
+    "вопрос и в spoken_response, сохрани нужные точные обозначения. Это выбор по смыслу запроса. "
     "Для успешной цели говори от первого лица в мужском роде. "
     "Если данных для предметного вывода недостаточно, так и скажи."
     " Технический статус уже установлен WorkerReport и неизменяем. При partial/unknown/failed "
@@ -226,7 +231,7 @@ async def _narrate(goal, projected):
             raise ValueError('goal_completion_invalid_answer')
         if not isinstance(spoken,str) or not 5<=len(spoken.strip())<=420:
             raise ValueError('goal_completion_invalid_speech')
-        speech=conversational_speech(spoken)
+        speech=conversational_speech(spoken,request=goal.get('original_request') or '')
         if not speech:raise ValueError('goal_completion_unusable_speech')
         if projected['status']!='success':
             import re

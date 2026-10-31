@@ -99,6 +99,7 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
             raise HTTPException(409, "Задача ещё не завершена")
         spoken = goal_result["spoken_message"]
         goal_speech_task = {**task, "answer": spoken, "status": "done",
+            "message": goal.get('original_request') or task.get('message') or '',
             "dialogue_intent": "conversation", "dialogue_spoken_response": spoken,
             "dialogue_speech_answer": spoken, "worker_report": None, "task_receipt": None}
     normalized = None

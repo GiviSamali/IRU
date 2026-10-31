@@ -61,7 +61,7 @@ BRIEF_PROMPT = """Сформируй естественную устную ре�
 Верни только реплику для произнесения, без пояснений редактора."""
 
 
-def conversational_speech(value, answer: str = "", *, informational: bool = False, diagnostic: dict | None = None) -> str:
+def conversational_speech(value, answer: str = "", *, informational: bool = False, diagnostic: dict | None = None, request: str = "") -> str:
     """Validate TTS input only; meaning belongs to the generating LLM.
 
     answer and informational remain compatibility arguments, never evidence.
@@ -81,7 +81,8 @@ def conversational_speech(value, answer: str = "", *, informational: bool = Fals
     if not any(ch.isalnum() for ch in value):return reject("empty_speech")
     try:value.encode("utf-8")
     except UnicodeEncodeError:return reject("invalid_encoding")
-    if re.search(r"[\x00-\x1f<>]|```|https?://|[A-Za-z]:[\\/]|(?:^|\s)/[\w.-]+/|(?:^|\s)[-*#>]\s|\*\*",value):return reject("speech_format")
+    if re.search(r"[\x00-\x1f<>]|```|https?://|(?:^|\s)[-*#>]\s|\*\*",value):return reject("speech_format")
+    if re.search(r"[A-Za-z]:[\\/]|(?:^|\s)/[\w.-]+/",value) and not wants_spoken_details(request):return reject("speech_format")
     return spoken_value
 
 
@@ -145,7 +146,7 @@ async def shorten_answer(task: dict) -> str:
     if choice.get("finish_reason") != "stop":
         diagnostic["reason"]="incomplete_editorial"
         raise ValueError("Incomplete voice brief")
-    valid=conversational_speech(text,diagnostic=diagnostic)
+    valid=conversational_speech(text,diagnostic=diagnostic,request=task.get('message') or '')
     if not valid:raise ValueError("Invalid voice brief")
     return valid
 
@@ -174,7 +175,7 @@ async def spoken_parts(task: dict) -> list[str]:
             and task.get("dialogue_speech_answer")==answer):
         if task.get("dialogue_intent") in {"conversation","clarify"}:
             check={}
-            candidate=conversational_speech(task.get("dialogue_spoken_response"),diagnostic=check)
+            candidate=conversational_speech(task.get("dialogue_spoken_response"),diagnostic=check,request=task.get('message') or '')
             if task.get("dialogue_spoken_response") or "primary" not in diagnostics:
                 diagnostics["primary"]={"candidate":task.get("dialogue_spoken_response"),**check}
         elif task.get("dialogue_intent")=="delegate":
@@ -225,7 +226,7 @@ async def spoken_parts(task: dict) -> list[str]:
     else:
         editorial=diagnostics.get("editorial") or {}
         reusable=(editorial.get("answer_sha256")==answer_hash and editorial.get("reason")!="incomplete_editorial")
-        restored=conversational_speech(editorial.get("candidate"),diagnostic=editorial) if reusable else ""
+        restored=conversational_speech(editorial.get("candidate"),diagnostic=editorial,request=source[1]) if reusable else ""
         try:
             if restored:
                 brief=restored
@@ -236,7 +237,7 @@ async def spoken_parts(task: dict) -> list[str]:
             else:
                 selection["editorial_attempted"]=True
                 brief = await asyncio.wait_for(shorten_answer({**task, "answer": answer}), timeout=8)
-            brief=conversational_speech(brief)
+            brief=conversational_speech(brief,request=source[1])
             if not brief:raise ValueError("Invalid voice brief")
             parts = answer_parts(brief,keep_inline=True)
             selection.update(mode="editorial",reason="accepted")
