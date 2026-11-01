@@ -7,6 +7,7 @@ import pytest
 
 from server import database as db
 from server import task_runtime as rt
+from server.api_support import ActionConfirmationRequired, assess_action
 from server import python_toolchain as toolchain
 from server.routers import tasks as routes
 from types import SimpleNamespace
@@ -109,7 +110,7 @@ def setup_broadcast(monkeypatch, failures=(), confirmation=False):
     monkeypatch.setattr(rt, "add_message", lambda *a, **kw: None)
     async def send(target, action, params, **kw):
         if confirmation and not kw.get("confirmation"):
-            raise RuntimeError("CONFIRM_REQUIRED")
+            raise ActionConfirmationRequired(assess_action(action, params))
         sent.append((target, params["command"]))
         return {"returncode": 1 if target[-1] in failures else 0, "stdout": target}
     async def process(**kw):
@@ -122,7 +123,8 @@ def setup_broadcast(monkeypatch, failures=(), confirmation=False):
             await kw["send_command_fn"](other, "execute_cmd", {"command": "wrong"})
         denied = await kw["device_tool_fn"]("device_get_passport", {"device_id": f"2:{did}"})
         assert denied["status"] == "unavailable"
-        command = f"ls {kw['device_info']['desktop_path']}"
+        desktop = kw['device_info']['desktop_path']
+        command = f"rm {desktop}/temporary.txt" if confirmation else f"ls {desktop}"
         result = await kw["send_command_fn"](did, "execute_cmd", {"command": command})
         return {"answer": "finished", "commands": [{"command": command, "device_id": did, "result": result}]}
     monkeypatch.setattr(rt, "send_command_to_agent", send)

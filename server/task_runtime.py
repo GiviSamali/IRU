@@ -276,7 +276,7 @@ async def send_command_to_agent(
     if not dev or (user_id is not None and dev.get("user_id") != user_id):
         raise RuntimeError(f"target_device_not_found: {device_id}")
     user_id = dev.get("user_id")
-    if action=='app.launch':
+    if action in {'app.launch', 'app.close', 'window.close'}:
         assessment=(confirmation.consume(device_id,action,params) if isinstance(confirmation,ConfirmedAction)
                     else assess_action(action,params))
         if assessment['decision']=='DENY':raise RuntimeError('BLOCKED: command_forbidden')
@@ -968,7 +968,13 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     task["_action_outcome_unknown"] = True
                 raise
 
+        refused_confirmations = {}
+
         async def wait_for_confirmation(target, action, params, assessment, command):
+            """Return a known refusal reason, or None for this exact approval."""
+            refusal_key = (target, action_fingerprint(action, params))
+            if refusal_key in refused_confirmations:
+                return refused_confirmations[refusal_key]
             task["_confirmation_epoch"] = task.get("_confirmation_epoch",0)+1
             snapshot = deepcopy(params)
             fingerprint = action_fingerprint(action, snapshot)
@@ -980,21 +986,26 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             task["status"] = "confirm"
             try:
                 accepted = await asyncio.wait_for(decision, timeout=300)
-                if (not accepted or is_task_cancel_requested(task_id)):
+                if is_task_cancel_requested(task_id):
                     raise RuntimeError("Task cancellation requested during confirmation")
+                if not accepted:
+                    refused_confirmations[refusal_key] = 'confirmation_declined'
+                    return 'confirmation_declined'
                 if (tasks.get(task_id) is not task or task.get("user_id") != user_id
                         or task.get("chat_id", chat_id) != chat_id
                         or task.get("confirm_data") is not card
                         or time.time() >= card["expires_at"]
                         or action_fingerprint(action, params) != fingerprint
                         or action_fingerprint(action, card["params"]) != fingerprint):
-                    return False
+                    refused_confirmations[refusal_key] = 'confirmation_expired'
+                    return 'confirmation_expired'
                 target_key = _dk(user_id, target) if ":" not in target else target
                 if task.get("worker_id") and target_key not in task["device_ids"]:
-                    return False
-                return True
+                    return 'device_outside_worker_assignment'
+                return None
             except asyncio.TimeoutError:
-                return False
+                refused_confirmations[refusal_key] = 'confirmation_expired'
+                return 'confirmation_expired'
             finally:
                 if not is_task_cancel_requested(task_id):
                     task["status"] = "running"
@@ -1042,9 +1053,10 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     external_action=action == "web.activate", cancelled=lambda: is_task_cancel_requested(task_id))
                 if action == "web.activate" and result.get("status") == "failed" and result.get("error") == "browser_confirmation_required":
                     assessment = {"findings": [{"kind": "dangerous"}], "confirmation_channel": "button"}
-                    if not await wait_for_confirmation(_short_did(target_device_id), action, params, assessment,
-                            f"Загрузка исполняемого файла из браузера на {target_device_id}"):
-                        return {"status": "failed", "error": "browser_confirmation_declined"}
+                    refusal = await wait_for_confirmation(_short_did(target_device_id), action, params, assessment,
+                            f"Загрузка исполняемого файла из браузера на {target_device_id}")
+                    if refusal:
+                        return {"status": "blocked", "error": refusal, "dispatched": False}
                     # Revalidate ownership, connection and the exact DOM identity after approval.
                     result = await execute_browser_action(user_id, task_id, _short_did(target_device_id), action, params,
                         external_action=True, dangerous_effect_confirmed=True,
@@ -1118,18 +1130,18 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     if not is_recovery_observation(action,params,device_os=target_os):
                         task["_action_outcome_unknown"] = True
                     return {"status":"unknown","error":"confirmed_transport_outcome_unknown"}
-                if "CONFIRM_REQUIRED" not in str(exc):
+                if not isinstance(exc, ActionConfirmationRequired):
                     raise
-                assessment = getattr(exc, "assessment", None)
-                if assessment is None:  # Compatible custom transports; production supplies its decision.
-                    assessment = assess_action(action, params)
+                assessment = exc.assessment
                 pending = ConfirmedAction(target_dk, action, params, assessment)
                 connection = target_dev.get("ws")
-                if not await wait_for_confirmation(target_device_id, action, params, assessment, params.get("command", "")):
-                    return {"status":"blocked", "error":"confirmation_expired"}
+                refusal = await wait_for_confirmation(target_device_id, action, params, assessment,
+                    params.get("command") or f"{action}: pid={params.get('pid')}, force={params.get('force', False)}")
+                if refusal:
+                    return {"status":"blocked", "error":refusal, "dispatched":False}
                 # Repeat mutable boundaries after the human wait, without reclassifying risk.
                 if devices.get(target_dk) is not target_dev or target_dev.get("ws") is not connection:
-                    return {"status":"blocked", "error":"confirmation_expired"}
+                    return {"status":"blocked", "error":"confirmed_action_not_dispatched", "dispatched":False}
                 if task.get("worker_id") and target_dk not in task["device_ids"]:
                     return {"status":"failed", "error":"device_outside_worker_assignment"}
                 try:
@@ -1141,7 +1153,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     return {"status":"unknown","completion_state":"unknown","error":"confirmed_transport_outcome_unknown"}
                 except (RuntimeError, ValueError) as exc:
                     # Local revalidation failed before delivery; no action was sent.
-                    return {"status":"blocked", "error":"confirmed_action_not_dispatched", "reason": str(exc)}
+                    return {"status":"blocked", "error":"confirmed_action_not_dispatched", "reason": str(exc), "dispatched":False}
 
                 return result
 

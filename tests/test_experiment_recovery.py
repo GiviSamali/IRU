@@ -13,6 +13,7 @@ from server.response_presentation import worker_presentation
 from server.worker_context import clip_context_text, capture_history, build_worker_context
 from test_response_presentation import owner, completed
 from test_integrity_lifecycle import world, install, admit, shell, terminal
+from test_tool_only_protocol import _tool_call
 from server.worker_scheduler import WorkerScheduler, owned_job, restore_task
 from server.runtime_state import tasks
 from server.routers import tasks as routes
@@ -178,9 +179,11 @@ def test_internal_memory_proposal_is_normalized_before_audit_and_never_written_a
 
 
 @pytest.mark.parametrize('finish',['timeout','restart'])
-def test_ordinary_confirmation_stops_safely_when_wait_expires_or_server_restarts(world,finish):
+def test_confirmation_returns_known_no_dispatch_or_unknown_server_restart(world,finish):
     client,owner,key,monkeypatch=world
-    device,_=install(world,[shell('Remove-Item C:/Temp/helper.txt','OK: removed')],terminal('Удалено.',action=True),1)
+    final=_tool_call('terminal','answer_text',{'result':'Команда не выполнялась: подтверждение не получено.',
+        'unresolved':['Удаление не выполнено']})
+    device,_=install(world,[shell('Remove-Item C:/Temp/helper.txt','OK: removed')],final,1)
     original_wait_for=asyncio.wait_for
     if finish=='timeout':
         async def wait_for(awaitable,timeout):
@@ -208,6 +211,9 @@ def test_ordinary_confirmation_stops_safely_when_wait_expires_or_server_restarts
             assert not build_worker_report(restored)['goal_completed']
             if finish=='timeout':
                 assert 'Команда не выполнялась' in worker_presentation(restored)['conversational_response']
+                assert restored['commands'][0]['result']['dispatched'] is False
+                assert restored['commands'][0]['result']['error']=='confirmation_expired'
+                assert not restored.get('_action_outcome_unknown')
         finally:await scheduler.shutdown()
     asyncio.run(scenario())
 

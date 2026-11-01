@@ -242,12 +242,12 @@ def test_read_then_raw_content_uses_one_repair_not_twelve_turns(monkeypatch):
     assert all(entry["tool_name"] != "tool_only_protocol" for entry in outcome["commands"])
 
 
-def test_duplicate_read_is_not_dispatched_after_sufficient_evidence(monkeypatch):
+def test_repeated_read_observes_actual_browser_state(monkeypatch):
     sent=[]
     async def send(device,operation,params): sent.append(operation); return result(operation)
     outcome=run_normal(monkeypatch,"Прочитай последнее сообщение во вкладке чат gpt",
         [call("web_read",{"tab_id":7}),call("web_read",{"tab_id":7}),grounded()],send)
-    assert sent == ["web.read"] and outcome["answer"] == "Получен ответ: тест"
+    assert sent == ["web.read", "web.read"] and outcome["answer"] == "Получен ответ: тест"
 
 
 def test_malformed_terminal_response_returns_honest_partial_read(monkeypatch):
@@ -294,7 +294,7 @@ def test_goal_read_terminal_phase_is_bounded(monkeypatch,duplicate,valid_answer)
         phases.append((kw.get("usage_context") or {}).get("phase"));return next(queue)
     async def send(device,operation,params):sent.append(operation);return result(operation)
     outcome=run_normal(monkeypatch,request,[],send,real_completion=completion,assigned_objective=request)
-    assert sent==["web.read"] and len(phases)==3
+    assert sent==["web.read"]*(2 if duplicate else 1) and len(phases)==3
     assert all(entry["tool_name"]!="tool_only_protocol" for entry in outcome["commands"])
     if valid_answer:
         assert outcome["answer"]=="Получен ответ: тест"
@@ -363,13 +363,16 @@ def test_explicit_send_uses_existing_draft_without_refill_or_extra_wait(monkeypa
 
 
 
-def test_repeated_browser_policy_denial_stops_without_dispatch(monkeypatch):
+def test_repeated_browser_policy_denial_returns_to_worker_without_dispatch(monkeypatch):
     from server.browser_policy import BrowserTaskPolicy
     monkeypatch.setattr(BrowserTaskPolicy, "allows", lambda *args: (False, "browser_device_not_authorized_by_user"))
     async def send(*args):
         pytest.fail("Unauthorized device must never dispatch")
     denied=call("web_read",{"tab_id":7,"device_id":"Second"})
-    outcome=run_normal(monkeypatch,"Read the page",[denied,denied,denied],send)
-    assert len(outcome["commands"])==3
-    assert outcome["task_receipt"]["terminal_reason"]=="repeated_policy_rejection"
-    assert outcome["task_receipt"]["goal_completed"] is False
+    outcome=run_normal(monkeypatch,"Read the page",[denied,denied,denied,
+        call('answer_text',{'result':'Page not read','unresolved':['Device not authorized']})],send)
+    assert len(outcome["commands"])==4
+    assert all(entry['result']['error']=='browser_device_not_authorized_by_user'
+               for entry in outcome['commands'][:3])
+    assert outcome['commands'][-1]['tool_name']=='answer.text'
+    assert outcome['commands'][-1]['result']['unresolved']

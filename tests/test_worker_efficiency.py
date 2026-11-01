@@ -88,16 +88,18 @@ def syntax_error():
             'error':None, 'error_type':'shell_syntax_error'}
 
 
-def test_stubborn_parser_error_uses_two_dispatches_not_sixteen():
+def test_stubborn_parser_error_reuses_diagnostic_without_forcing_worker_stop():
     sent, captured = [], []
     async def send(*args):
         sent.append(args); return syntax_error()
-    result = _run_case([call('broken')]*16, send_command_fn=send, captured=captured, max_iterations=20)
-    assert len(sent) == 2 and len(captured) == 4
+    result = _run_case([call('broken')]*16+[_message(tool_calls=[_tool_call('end','answer_text',
+        {'result':'Command not executed successfully','unresolved':['Syntax not corrected']})])],
+        send_command_fn=send, captured=captured, max_iterations=20)
+    assert len(sent) == 2 and len(captured) == 17
     from server.worker_reports import build_worker_report
     report=build_worker_report({**result,'task_id':'stubborn-parser','status':'done'})
     assert report['goal_completed'] is False
-    assert result['task_receipt']['task_status'] == 'failed'
+    assert report['status'] == 'failed'
     assert 'shell_syntax_error' in str(captured[2]['messages'])
 
 

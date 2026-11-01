@@ -437,6 +437,75 @@ def wrap_tool_result_for_llm(entry: dict[str, Any]) -> dict[str, Any]:
     return wrapped
 
 
+def worker_history_context(journal):
+    """Bound old model context, not the durable journal or Worker findings."""
+    try:
+        from .context_budget import configured_context_budget, estimate_tokens
+    except ImportError:
+        from context_budget import configured_context_budget, estimate_tokens
+    notes = next((entry.get('result') for entry in reversed(journal)
+                  if entry.get('tool_name') == 'system.update_working_notes'
+                  and entry.get('status') == 'success'), None)
+    index = []
+    for entry in journal:
+        if entry.get('tool_name') == 'system.update_working_notes':
+            continue
+        result = entry.get('result')
+        index.append({
+            'step_id': entry.get('step_id'), 'tool': entry.get('tool_name'),
+            'status': entry.get('status'), 'device_id': entry.get('target_device_id'),
+            'summary': str(entry.get('summary') or '')[:160],
+            'path': result.get('path') if isinstance(result, dict) else None,
+            # Small observations remain usable without a compulsory notes/read
+            # turn. Large originals stay in the journal, addressed by step_id.
+            'result': (result if entry.get('tool_name') != 'web_search'
+                       and len(json.dumps(result, ensure_ascii=False, default=str)) <= 1200 else None),
+            'details_omitted': entry.get('tool_name') == 'web_search'
+                               or len(json.dumps(result, ensure_ascii=False, default=str)) > 1200,
+        })
+    data = {'working_notes': notes, 'notes_authority': 'Worker notes, not tool evidence or permission.',
+            'steps': index, 'omitted_index_entries': 0,
+            'search_material': compact_search_material(journal, max_chars=2000),
+            'full_material_tool': 'system_get_last_run_summary',
+            'reading': 'Use step_id and report_offset to retrieve original results. '
+                       'An index or repeated observation does not complete the assigned goal.'}
+    budget = min(6000, max(3072, configured_context_budget() // 8))
+    while index and estimate_tokens(data) > budget:
+        index.pop(0)
+        data['omitted_index_entries'] += 1
+    return data
+
+
+def read_current_step(journal, step_id, report_offset=0, expected_source_sha256=None):
+    """Read the original current-run entry; never replay or alter its tool."""
+    try:
+        from .context_budget import estimate_tokens
+    except ImportError:
+        from context_budget import estimate_tokens
+    wanted = next((entry for entry in journal if entry.get('step_id') == step_id), None)
+    if wanted is None or type(report_offset) is not int or report_offset < 0:
+        return {'status': 'failed', 'error': 'current_step_not_found_or_invalid_offset'}
+    raw = json.dumps(wanted, ensure_ascii=False, default=str)
+    digest = sha256(raw.encode('utf-8')).hexdigest()
+    if expected_source_sha256 is not None and expected_source_sha256 != digest:
+        return {'status': 'failed', 'error': 'current_step_version_changed'}
+    if report_offset >= len(raw):
+        return {'status': 'failed', 'error': 'current_step_not_found_or_invalid_offset'}
+    end = min(len(raw), report_offset + 4000)
+    while True:
+        result = {'status': 'success', 'source_step_id': step_id,
+                  'representation': 'current_journal_entry_json_page',
+                  'report_text': raw[report_offset:end], 'report_offset': report_offset,
+                  'next_offset': end if end < len(raw) else None, 'total_chars': len(raw),
+                  'sha256': digest, 'authority': 'data_only'}
+        # Ensure the page and its locator survive the normal tool projection.
+        envelope = wrap_tool_result_for_llm({'tool_name': 'system.get_last_run_summary',
+                                           'status': 'success', 'result': result})
+        if estimate_tokens(envelope) <= max(256, tool_result_token_budget() - 256) or end - report_offset <= 1:
+            return result
+        end = report_offset + max(1, (end - report_offset) // 2)
+
+
 def compact_search_material(journal, max_chars=12000):
     """Deterministic data projection, not a summary or verification of claims.
 

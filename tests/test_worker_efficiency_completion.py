@@ -37,11 +37,11 @@ def search_step(query='AI news', idx=1, result=None):
         'web_search', {'query':query,'max_results':5})
 
 
-def test_search_cache_same_args_across_other_actions_and_within_batch():
+def test_search_arguments_do_not_establish_external_freshness():
     original=search_step()
     journal=[original,{'tool_name':'execute_cmd','status':'success','result':{'returncode':0}}]
-    assert find_prior_successful_read_only_tool_step(journal,'web_search',{'query':'AI news'}) is original
-    assert find_prior_successful_read_only_tool_step([original],'web_search',{'query':'AI news','max_results':5}) is original
+    assert find_prior_successful_read_only_tool_step(journal,'web_search',{'query':'AI news'}) is None
+    assert find_prior_successful_read_only_tool_step([original],'web_search',{'query':'AI news','max_results':5}) is None
     assert find_prior_successful_read_only_tool_step(journal,'web_search',{'query':'AI news research'}) is None
     assert find_prior_successful_read_only_tool_step(journal,'web_search',{'query':'AI news','max_results':10}) is None
     assert find_prior_successful_read_only_tool_step(journal,'web_search',{'query':'AI news','refresh':True}) is None
@@ -76,7 +76,7 @@ def test_fallback_retains_search_material_without_claiming_complete():
     assert result['task_receipt']['task_status']!='success'
 
 
-def test_forty_identical_batch_searches_dispatch_once(monkeypatch):
+def test_explicit_batch_searches_are_not_replaced_by_stale_results(monkeypatch):
     from server import controller_non_pipeline as loop
     calls=[]
     async def search(cfg,query,limit):
@@ -84,9 +84,9 @@ def test_forty_identical_batch_searches_dispatch_once(monkeypatch):
     monkeypatch.setattr(loop,'_run_web_search',search)
     batch=_message(tool_calls=[_tool_call(str(i),'web_search',{'query':'AI news'}) for i in range(40)])
     seen=[]
-    result=_run_case([batch,answer('One reused source')],captured=seen)
-    assert calls==['AI news'] and len(seen)==2
-    assert len([s for s in result['commands'] if s['tool_name']=='web_search'])==1
+    result=_run_case([batch,answer('Observed sources')],captured=seen)
+    assert calls==['AI news']*40 and len(seen)==2
+    assert len([s for s in result['commands'] if s['tool_name']=='web_search'])==40
     assert len([m for m in seen[1]['messages'] if m.get('role')=='tool'])==40
 
 
@@ -106,7 +106,8 @@ def test_twenty_calls_reserve_terminal_without_assessor(monkeypatch):
     assert len(seen)==20 and len(dispatched)==19
     assert all(t['function']['name'].startswith('answer_') for t in seen[19]['tools'])
     assert all(x.get('phase')!='result_coverage' for x in seen)
-    assert 'FINAL TURN' in seen[19]['messages'][0]['content']
+    assert 'FINAL TURN' in seen[19]['messages'][1]['content']
+    assert seen[19]['messages'][0] == seen[0]['messages'][0]
     assert result['commands'][-1]['tool_name']=='answer.text'
 
 
@@ -211,7 +212,8 @@ def test_closed_native_window_is_sufficient_even_when_process_still_alive(monkey
     step={'tool_name':'window.close','result':result,'target_device_id':'pc','step_id':'step_1'}
     assert confirmed_window_effect(step)=='close'
     assert build_worker_report({'task_id':'w','status':'done','device_ids':['pc'],
-        'window_effects':['close'],'commands':[step]})['goal_completed']
+        'window_effects':['close'],'commands':[step,{'tool_name':'answer.text','status':'terminal',
+            'result':{'_result_contract':3,'text':'Closed','unresolved':[]}}]})['goal_completed']
 
 
 def test_linux_required_pipeline_failures_are_not_hidden(monkeypatch):
@@ -264,8 +266,8 @@ def test_confirmed_file_evidence_survives_invalid_last_model_reply(monkeypatch):
                       _message(tool_calls=[_tool_call('bad','answer_text',{'result':''})])],
                      poll_task_id='saved',send_command_fn=send,max_iterations=2)
     report=build_worker_report({**task,'status':'done','commands':result['commands'],'answer':result['answer']})
-    assert report['goal_completed'] and report['artifacts'][0]['sha256']==digest
-    assert 'Финальный текст модели не подтверждён' in report['summary']
+    assert not report['goal_completed'] and report['artifacts'][0]['sha256']==digest
+    assert report['status']=='partial' and 'terminal_answer_missing' in report['summary']
 
 
 def test_valid_office_receipt_without_content_coverage_is_not_assignment_success():
@@ -282,7 +284,8 @@ def test_exact_text_write_needs_no_independent_content_approval():
     step={'step_id':'step_1','tool_name':'write_content','target_device_id':'pc','status':'success',
           'result':{'status':'ok','mode':'replace_exact','path':path,'verified':True,'committed':True,'file_sha256':'a'*64,'total_size':5}}
     report=build_worker_report({'task_id':'text','status':'done','preserve_file_bytes':True,'device_ids':['pc'],
-        'assigned_artifacts':[path],'commands':[step]})
+        'assigned_artifacts':[path],'commands':[step,{'tool_name':'answer.text','status':'terminal',
+            'result':{'_result_contract':3,'text':'Written','unresolved':[]}}]})
     assert report['goal_completed'] and report['artifacts'][0]['verified']
 
 

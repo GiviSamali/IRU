@@ -260,7 +260,7 @@ def test_window_scope_allows_cli_with_existing_dispatch_policy(monkeypatch):
 
 
 @pytest.mark.parametrize('pending',[False,True])
-def test_controller_stops_for_ambiguity_or_save_dialog_without_retry(monkeypatch,pending):
+def test_controller_returns_ambiguity_or_save_dialog_to_worker_without_retry(monkeypatch,pending):
     from server import database
     from test_controller_trust import _run_non_pipeline_case
     monkeypatch.setattr(database,'get_device_profile',lambda *a,**kw: None)
@@ -268,7 +268,9 @@ def test_controller_stops_for_ambiguity_or_save_dialog_without_retry(monkeypatch
     adapter.close_pending=pending
     control=wc.WindowControl(adapter)
     async def send(device,action,args): return control.run(**args)
-    result=_run_non_pipeline_case([tool_call('window_control',{'action':'close' if pending else 'minimize','target':'Word'})],send_command_fn=send)
+    terminal=(tool_call('answer_text',{'result':'Требуется сохранить документ','unresolved':['Закрытие не подтверждено']})
+              if pending else tool_call('answer_ask_clarification',{'question':'Какое выбрать?','reason':'ambiguous_window'}))
+    result=_run_non_pipeline_case([tool_call('window_control',{'action':'close' if pending else 'minimize','target':'Word'}),terminal],send_command_fn=send)
     assert 'сохранить' in result['answer'] if pending else 'Какое выбрать?' in result['answer']
     assert len(adapter.calls)==(1 if pending else 0)
     assert not silent_window_success({'status':'done','commands':result['commands']})

@@ -62,6 +62,7 @@ CONTROLLER_EXECUTABLE_TOOL_NAMES = {
     "window.control",
     "transfer_file",
     "system.list_tools",
+    "system.update_working_notes",
     "system.get_last_run_summary",
     "memory.get_stats",
     "memory.list_facts",

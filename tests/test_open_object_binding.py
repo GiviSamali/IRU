@@ -48,7 +48,9 @@ def objects(*paths, device="pc", kind="file"):
 
 
 def completes(steps, required, **kwargs):
-    return build_worker_report(goal(steps, required, **kwargs))["goal_completed"]
+    terminal={'tool_name':'answer.text','status':'terminal','result':{
+        '_result_contract':3,'text':'Requested objects opened','unresolved':[]}}
+    return build_worker_report(goal([*steps,terminal], required, **kwargs))["goal_completed"]
 
 
 def test_verified_document_open_completes():

@@ -346,6 +346,7 @@ def test_verified_transfer_binds_both_targets_and_actual_digest(tmp_path,valid_h
         'result':{'status':'success','sha256_verified':True,'sha256':digest(b'new') if valid_hash else 'invalid',
             'source_device':'a','target_device':'b','target_path':str(path),'bytes_transferred':3}}
     t=task(path,[step]);t['device_ids']=['a','b']
+    append_answer_step(t['commands'],'answer_text',{'_result_contract':3,'text':t['answer'],'unresolved':[]})
     report=build_worker_report(t)
     assert report['goal_completed'] is valid_hash
 
@@ -381,6 +382,7 @@ def test_office_transfer_attests_copy_identity_without_claiming_format_validatio
         'result':{'status':'success','sha256_verified':True,'sha256':digest(b'source bytes'),
             'source_device':'a','target_device':'b','target_path':str(path),'bytes_transferred':12}}
     t=task(path,[step]);t.update(device_ids=['a','b'],original_request='Copy source byte for byte')
+    append_answer_step(t['commands'],'answer_text',{'_result_contract':3,'text':t['answer'],'unresolved':[]})
     report=build_worker_report(t)
     assert report['goal_completed'] and report['artifacts'][0]['verification_scope']=='copy_identity'
 

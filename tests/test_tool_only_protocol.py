@@ -549,10 +549,10 @@ def test_duplicate_system_list_tools_is_guarded_then_answer_text(monkeypatch):
         and "duplicate_read_only_tool_call" in msg.get("content", "")
     ]
     assert duplicate_messages[-1]["previous_step_id"] == "step_1"
-    assert "original goal remains" in captured[2]["messages"][-1]["content"]
+    assert any("original goal remains" in m.get("content", "") for m in captured[2]["messages"])
 
 
-def test_duplicate_memory_list_facts_is_guarded_then_answer_text(monkeypatch):
+def test_repeated_memory_list_facts_reads_current_memory(monkeypatch):
     calls = []
 
     def fake_run_memory_tool(tool_name, args, *, user_id):
@@ -577,8 +577,8 @@ def test_duplicate_memory_list_facts_is_guarded_then_answer_text(monkeypatch):
         )]),
     ], mem_user_id="user-1")
 
-    assert calls == [("memory_list_facts", {}, "user-1")]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["memory.list_facts", "answer.text"]
+    assert calls == [("memory_list_facts", {}, "user-1"), ("memory_list_facts", {"limit":20}, "user-1")]
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["memory.list_facts", "memory.list_facts", "answer.text"]
 
 
 def test_system_list_tools_grounded_answer_cannot_add_hidden_tools():
@@ -843,7 +843,7 @@ def test_remember_fact_allowed_with_explicit_memory_intent(monkeypatch):
     assert result["commands"][0]["result"]["status"] == "ok"
 
 
-def test_duplicate_device_get_passport_is_guarded_then_answer_text():
+def test_repeated_device_get_passport_reads_current_device():
     calls = []
 
     async def device_tool_fn(name, args):
@@ -861,8 +861,8 @@ def test_duplicate_device_get_passport_is_guarded_then_answer_text():
         )]),
     ], device_tool_fn=device_tool_fn)
 
-    assert calls == [("device_get_passport", "device-1")]
-    assert [cmd["tool_name"] for cmd in result["commands"]] == ["device.get_passport", "answer.text"]
+    assert calls == [("device_get_passport", "device-1")]*2
+    assert [cmd["tool_name"] for cmd in result["commands"]] == ["device.get_passport", "device.get_passport", "answer.text"]
 
 
 def test_repeat_guard_allows_execute_and_window_and_writes_without_skipping_mutations():

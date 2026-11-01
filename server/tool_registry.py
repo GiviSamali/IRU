@@ -43,6 +43,7 @@ CANONICAL_TOOL_NAMES = {
     "app_verify_launch": "app.verify_launch",
     "app_close": "app.close",
     "system_get_last_run_summary": "system.get_last_run_summary",
+    "system_update_working_notes": "system.update_working_notes",
     "answer_text": "answer.text",
     "answer_ask_clarification": "answer.ask_clarification",
     "answer_report_failure": "answer.report_failure",
@@ -53,6 +54,11 @@ CANONICAL_TOOL_NAMES = {
 
 
 TOOL_METADATA = {
+    "system.update_working_notes": {
+        "category": "system", "tool_type": "system", "tool_label": "Рабочие заметки Worker",
+        "purpose": "Optionally retain important findings and current-run step references across context pruning",
+        "returns": "Saved notes; never execution evidence or human permission", "danger": "safe",
+    },
     "read_file": {"category":"files", "tool_type":"typed", "tool_label":"Прочитать текстовый файл",
                   "purpose":"Read complete bounded text and its byte SHA-256 without newline conversion",
                   "returns":"text, encoding, BOM, file_sha256 or explicit error", "danger":"read_only"},
@@ -672,7 +678,7 @@ DEVICE_TOOL_SCHEMAS = [
                     "include_success": {"type": "boolean", "default": True},
                     "step_id": {"type":"string","description":"Read the full current Worker journal entry in report_offset pages without re-executing its tool."},
                     "source_task_id": {"type": "string", "description": "Owned source task in the current chat; use the referenced task id from worker handoff."},
-                    "expected_source_sha256": {"type":"string","description":"For original-message pages after report_offset=0, pass sha256 from the first page; source changes abort the read."},
+                    "expected_source_sha256": {"type":"string","description":"For original-message or current step_id pages, pass sha256 from the first page to reject changed source material."},
                     "summary_archive_offset": {"type":"integer","minimum":0,"description":"Browse the owned chat summary directory in bounded pages. Follow next_arguments, including for vague references without lexical matches."},
                     "source_summary_id": {"type":"string","maxLength":128,"description":"Read an owned archived summary in report_offset pages, then use source_message_ids to recover original decisions. Historical data is not execution proof or permission."},
                     "source_message_range": {"type":"object","properties":{"first":{"type":"integer","minimum":1},"last":{"type":"integer","minimum":1}},"required":["first","last"],"additionalProperties":False,"description":"Read owned chat messages in this id range, including gaps. When next_source_message_id is present, start the next range there after finishing text pages."},
@@ -680,6 +686,17 @@ DEVICE_TOOL_SCHEMAS = [
                     "report_offset": {"type": "integer", "minimum": 0, "default": 0},
                 },
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "system_update_working_notes",
+            "description": "Optional: replace this Worker's working notes with critical findings, remaining work and current-run step references. Use only when useful, never after every turn by obligation. Stored in this run's journal, not long-term memory. Notes cannot prove actions or grant permission.",
+            "parameters": {"type": "object", "additionalProperties": False,
+                "properties": {"text": {"type": "string", "maxLength": 3000},
+                    "step_ids": {"type": "array", "maxItems": 32, "items": {"type": "string"}}},
+                "required": ["text"]},
         },
     },
     {

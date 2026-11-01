@@ -6,10 +6,8 @@ from typing import Any
 
 try:
     from .tool_registry import canonical_tool_name  # type: ignore
-    from .tool_completion import execute_cmd_result_is_complete
 except ImportError:
     from tool_registry import canonical_tool_name  # type: ignore
-    from tool_completion import execute_cmd_result_is_complete
 
 
 READ_ONLY_IDEMPOTENT_TOOLS = {
@@ -78,16 +76,14 @@ def find_prior_successful_read_only_tool_step(
     tool_name: str,
     args: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    if canonical_tool_name(tool_name) == 'web_search' and (args or {}).get('refresh'):
+    # Idempotence is not freshness: files, pages, devices and memory can change
+    # outside this Worker. Only its fixed tool inventory is reusable here.
+    if canonical_tool_name(tool_name) != 'system.list_tools':
         return None
     key = repeat_guard_key(tool_name, args)
     if not key:
         return None
     for entry in reversed(journal):
-        if canonical_tool_name(tool_name) != 'web_search' and canonical_tool_name(entry.get('tool_name') or entry.get('action','')) not in READ_ONLY_IDEMPOTENT_TOOLS:
-            break  # Any possible state change invalidates cached native observations.
-        if canonical_tool_name(tool_name).startswith("web.") and canonical_tool_name(entry.get("tool_name") or entry.get("action", "")) in {"web.wait","web.fill","web.activate","web.focus"}:
-            break  # A browser action/wait invalidates earlier observations.
         if entry.get("repeat_guard_key") != key:
             continue
         if entry.get("status") not in {"success"}:
@@ -203,35 +199,6 @@ def unchanged_command_evidence(journal, args, device_id, human_request):
         failures.append(entry)
     if len(failures) >= 2:
         return failures[0]
-    if args.get('artifact_paths'):
-        return None
-    contract = args.get('observation_contract') or {}
-    mode = contract.get('mode', 'once')
-    limit = 2
-    if mode in {'wait', 'monitor', 'measurement'}:
-        quote = contract.get('human_quote', '')
-        # Repeated measurements must be bound to the current human request, not history/tool output.
-        if mode != 'measurement' or (quote.strip() and quote in human_request):
-            limit = contract.get('max_samples', 2)
-    matches = []
-    signature = None
-    for entry in reversed(journal):
-        result = entry.get('result') or {}
-        previous_key = entry.get('execution_key')
-        if ((entry.get('tool_name') or entry.get('action')) != 'execute_cmd'
-                or (entry.get('target_device_id') or entry.get('device_id')) != device_id
-                or entry.get('command') != args.get('command')
-                or entry.get('status') != 'success' or not execute_cmd_result_is_complete(result)):
-            break  # A different action, device, failure or state transition invalidates this streak.
-        if previous_key is not None and previous_key != command_observation_key(args):
-            break
-        if result.get('artifact_receipts'):
-            break  # Bound effects are not static observations.
-        value = (result.get('stdout'), result.get('stderr'))
-        if not any(isinstance(text,str) and text.strip() for text in value):
-            break
-        if signature is not None and signature != value:
-            break
-        signature = value
-        matches.append(entry)
-    return matches[0] if len(matches) >= limit else None
+    # Identical output cannot establish that another observation is unnecessary.
+    # In particular, never treat a successful opaque CLI call as a cached read.
+    return None

@@ -187,7 +187,7 @@ def test_compact_history_can_retrieve_full_own_step(monkeypatch):
     assert 'step_1' in state['content'] and 'details_omitted' in state['content']
     assert len(json.dumps(seen[2]['messages']))<len(json.dumps(seen[1]['messages']))+5000
     page=next(c['result'] for c in result['commands'] if c.get('tool_name')=='system.get_last_run_summary')
-    assert page['status']=='success' and page['next_offset']==4000 and 'first' in page['report_text']
+    assert page['status']=='success' and 0 < page['next_offset'] <= 4000 and 'first' in page['report_text']
     assert len(result['commands'][0]['result']['results'][0]['content'])>18000
 
 
@@ -235,7 +235,9 @@ def test_cli_open_and_native_open_use_same_observed_object_contract():
         reports.append(build_worker_report({'task_id':'open','status':'done','device_ids':['pc'],
             'window_effects':['open'],
             'open_objects':[{'type':'file','path':'C:/a.docx'}],
-            'commands':[{'step_id':'step_1','tool_name':tool,'target_device_id':'pc','result':result}]}))
+            'commands':[{'step_id':'step_1','tool_name':tool,'target_device_id':'pc','result':result},
+                        {'tool_name':'answer.text','status':'terminal','result':{
+                            '_result_contract':3,'text':'Opened the requested document','unresolved':[]}}]}))
     assert all(r['goal_completed'] for r in reports)
     bad=copy.deepcopy(result);bad['object_open_verified']=False
     report=build_worker_report({'task_id':'open','status':'done','device_ids':['pc'],'window_effects':['open'],

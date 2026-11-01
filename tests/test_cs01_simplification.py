@@ -93,8 +93,9 @@ def test_research_keeps_assignment_and_budget_without_search_cap(monkeypatch,ext
     assert len(observations)==research_turns+1
     for i,messages in enumerate(observations):
         assert objective in messages[0]['content']
-        assert f'Runtime action turns remaining: {research_turns+1-i}/{research_turns+1}' in messages[0]['content']
-        assert messages[0]['content'].count('Runtime action turns remaining:')==1
+        assert f'Worker LLM turns remaining, including this one: {research_turns+1-i}/{research_turns+1}' in messages[1]['content']
+        assert sum(m.get('content','').count('Worker LLM turns remaining, including this one:') for m in messages)==1
+        assert messages[0]==observations[0][0]
     t.update(status='done',commands=result['commands'],answer=result['answer'])
     assert not build_worker_report(t)['goal_completed']
     assert len([c for c in result['commands'] if c.get('tool_name')=='web_search'])==research_turns

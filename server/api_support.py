@@ -215,7 +215,8 @@ def assess_action(action, params, inspection=None):
         device_os=(inspection.get('os') or 'unknown') if inspection is not None else None)
     denied = not read_only and any(pattern.search(command) for pattern in _dangerous_re)
     deletion = not read_only and any(pattern.search(command) for pattern in _delete_re)
-    confirm = not read_only and (deletion or any(pattern.search(command) for pattern in _confirm_re))
+    forced_close = action in {'app.close', 'window.close'} and bool(params.get('force'))
+    confirm = forced_close or not read_only and (deletion or any(pattern.search(command) for pattern in _confirm_re))
     decision = "DENY" if denied else "CONFIRM" if confirm else "ALLOW"
     kind = "deletion" if deletion else "dangerous" if denied or confirm else "command"
     return {"decision": decision, "reason_code": "command_forbidden" if denied else
@@ -238,6 +239,9 @@ def is_recovery_observation(action, params, *, device_os=None):
     except ImportError:
         from tool_registry import canonical_tool_name
     action = canonical_tool_name(action)
+    if action == 'system.update_working_notes':
+        # Run-local annotations cannot change external state or clear unknown.
+        return True
     if action=='execute_cmd':
         return read_only_execute_command(params,device_os=device_os)
     if action in {"office_docx", "office_xlsx", "office_pptx"}:

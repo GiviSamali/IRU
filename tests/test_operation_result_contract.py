@@ -62,6 +62,7 @@ def ordinary_responses():
       'memory.get_stats':{'status':'ok','facts_count':0},
       'memory.list_facts':{'status':'ok','facts':[],'facts_count':0},
       'system.list_tools':{'files':[],'web':[]},
+      'system.update_working_notes':{'status':'success','text':'Finding','step_ids':[]},
       'system.get_last_run_summary':{'status':'success','source_status':'failed','last_task_id':'old','used_tools':[]},
       'device.get_passport':{'device_id':'pc','hostname':'pc','online':False,'context_handles':{},'health_status':'unknown'},
       'device.refresh_state':{'status':'ok','device_id':'pc','health_summary':{'health_status':'unknown'}},
@@ -173,7 +174,7 @@ def test_bad_final_reply_does_not_erase_confirmed_file_receipt():
          'result':{'error':'invalid_terminal_payload'}}
     result=build_worker_report({'task_id':'t','status':'done','device_ids':['pc'],'assigned_artifacts':['C:/a.txt'],
         'commands':[operation,bad]})
-    assert result['goal_completed'] and result['artifacts'][0]['sha256']==native_write()['file_sha256']
+    assert not result['goal_completed'] and result['artifacts'][0]['sha256']==native_write()['file_sha256']
 
 
 def test_lost_mutation_stays_unknown_and_blocks_another_mutation(monkeypatch):

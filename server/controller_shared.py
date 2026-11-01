@@ -451,7 +451,7 @@ def file_edit_dispatch_error(task, action, params):
     if not task.get('preserve_file_bytes'):
         return None
     if action in {'get_file_content', 'read_file', 'list_dir', 'device_get_passport', 'device.get_passport',
-                  'device.get_cached_passport'}:
+                  'device.get_cached_passport', 'system_update_working_notes', 'system.update_working_notes'}:
         return None
     if action != 'write_content':
         return 'file_preservation_requires_native_replacement'

@@ -488,7 +488,9 @@ def build_worker_report(task):
     elif clarification or raw=='blocked': status='blocked'
     elif operations and all((c.get('result') or {}).get('status')=='blocked' for c in operations): status='blocked'
     elif terminal.get('tool_name') in {'answer.report_failure','answer_report_failure'}: status='partial' if useful else 'failed'
-    elif typed_contract or worker_complete: status='success'
+    elif worker_complete: status='success'
+    elif any((entry.get('result') or {}).get('status') == 'pending' for entry in operations):
+        status='partial' if useful else 'blocked'
     elif operations and all(operation_facts(c) in {'failed','not_executed'} for c in operations): status='failed'
     elif useful: status='partial'
     else: status='failed'

@@ -182,6 +182,8 @@ def test_verified_open_without_completion_state_survives_followup_observation(to
         steps.append({'step_id':'s2','tool_name':followup,'target_device_id':'pc',
             'result':{'status':'success','window':{'window_id':'a'*32,'title':'Folder'}},
             'window_request':{'action':'find'}})
+    steps.append({'tool_name':'answer.text','status':'terminal','result':{
+        '_result_contract':3,'text':'Requested object opened','unresolved':[]}})
     task = {'task_id':'open-ff','status':'done','device_ids':['pc'],
         'window_effects':['open'],'commands':steps,'answer':'РћС‚РєСЂС‹С‚РёРµ РїРѕРґС‚РІРµСЂР¶РґРµРЅРѕ.',
         'open_objects':[{'type':'folder','path':'C:/SyntheticFF01','device_id':'pc'} if tool=='app.launch'
@@ -231,7 +233,7 @@ def test_open_then_minimize_sequence_accepts_object_verified_launch(owner,monkey
         assert action == 'window.control' and params['action'] == 'minimize'
         return {'status':'success','action':'minimize','completion_state':'success','summary':'Свёрнуто'}
     result = asyncio.run(controller([call('app_launch',{'command':'explorer.exe C:/SyntheticFF01'}),
-        call('window_control',{'action':'minimize','target':'current'})],send))
+        call('window_control',{'action':'minimize','target':'current'}),answer('Opened and minimized')],send))
     assert sent == ['app.launch','window.control']
     report = build_worker_report({'task_id':'ff-controller','status':'done','device_ids':['pc'],
         'window_effects':['open','minimize'],
