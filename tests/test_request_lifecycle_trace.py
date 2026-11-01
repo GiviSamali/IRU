@@ -12,7 +12,6 @@ def setup(client,monkeypatch,mode=None,kind='SIMPLE'):
     db.upsert_device_profile('givi',user['id'],{'hostname':'GIVI','os':'Windows'})
     key=f"{user['id']}:givi";devices[key]={'user_id':user['id'],'ws':object(),'info':{'hostname':'GIVI','os':'Windows'},'pending':{}}
     tasks['trace-task']={'task_id':'trace-task','user_id':user['id'],'chat_id':chat['id'],'message':'test','device_ids':[key],'status':'running','results':{},'modes':mode or {},'created_at':time.time()}
-    async def classify(*a,**kw):return kind,'suggestion' if kind=='PLAN' else ''
 
     return user,chat,key
 

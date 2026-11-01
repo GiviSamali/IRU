@@ -1,4 +1,4 @@
-﻿"""Core simplification: contracts and real projections, no external services."""
+"""Core simplification: contracts and real projections, no external services."""
 from types import SimpleNamespace
 import json
 import pytest
@@ -7,7 +7,7 @@ from server.controller_prompts import SYSTEM_PROMPT_TEMPLATE, WINDOWS_RULES
 from server.runtime_state import tasks
 from server.response_presentation import worker_presentation
 from test_orchestrator_worker import owners
-from server.worker_reports import build_worker_report, coverage_binding
+from server.worker_reports import build_worker_report
 from test_tool_only_protocol import _run_case, _message, _tool_call
 
 
@@ -23,8 +23,8 @@ def route_prompt(monkeypatch):
     from dataclasses import fields
     runtime=SimpleNamespace(**{f.name:'' for f in fields(controller.LLMRuntimeContext)})
     runtime.cfg={'model':'mock'};runtime.mem_user_id=None
-    monkeypatch.setitem(tasks,'cs-open',{'execution_scope':'window','window_effects':['open']})
-    kw=controller._build_route_kwargs(route=controller.ROUTE_REGISTRY['non_pipeline'],runtime=runtime,
+    monkeypatch.setitem(tasks,'cs-open',{'window_effects':['open']})
+    kw=controller._build_route_kwargs(runtime=runtime,
         user_message='Open a.docx',device_id='pc',device_info={},all_devices={},send_command_fn=None,
         get_file_link_fn=None,chat_history=[],user_id=None,chat_id=None,device_profile=None,modes={},poll_task_id='cs-open')
     return kw['system_msg']
@@ -37,7 +37,7 @@ def test_actual_open_route_does_not_override_native_opener(monkeypatch):
 
 
 def test_entry_points_share_one_worker_presentation():
-    t={'task_id':'t','device_ids':['pc'],'status':'done','execution_scope':'window','window_effects':['open'],
+    t={'task_id':'t','device_ids':['pc'],'status':'done','window_effects':['open'],
        'commands':[{'step_id':'step_1','tool_name':'app.launch','target_device_id':'pc',
                     'result':{'status':'failed','error':'window_not_found','summary':'Window not found'}}]}
     assert worker_presentation(t)==orch.present_worker_result(t)
@@ -100,7 +100,7 @@ def test_research_keeps_assignment_and_budget_without_search_cap(monkeypatch,ext
     assert len([c for c in result['commands'] if c.get('tool_name')=='web_search'])==research_turns
 
 
-def office_projection(missing_page=False, facet=None, coverage='partial', stale=False):
+def office_projection(missing_page=False, stale=False):
     path='C:/report.pptx';sha='a'*64
     receipt=dict(path=path,device_id='pc',source_task_id='t',verified=True,created_or_changed=True,
                  size_bytes=1000,sha256=sha,format='pptx',artifact_role='final')
@@ -112,70 +112,33 @@ def office_projection(missing_page=False, facet=None, coverage='partial', stale=
                         next_offset=1 if offset==0 else None,items=[{'text':str(offset)}])))
     if stale:steps[-1]['result']['sha256']='b'*64
     text='Observed content'
-    assessment={'coverage':coverage,'evidence_refs':[s['step_id'] for s in steps],
-                'binding':coverage_binding('request',steps,text)}
-    if facet is not None:assessment['artifacts']=facet
     steps.append(dict(step_id='answer',tool_name='answer.text',status='terminal',
-                      result=dict(text=text,_coverage=assessment)))
+                      result=dict(text=text)))
     t=dict(task_id='t',status='done',original_request='request',device_ids=['pc'],assigned_artifacts=[path],answer=text,commands=steps)
     return build_worker_report(t)
 
 
 @pytest.mark.parametrize('missing_page',[False,True])
 def test_office_observation_is_independent_and_missing_page_cannot_be_overruled(missing_page):
-    report=office_projection(missing_page,coverage='complete' if missing_page else 'partial')
-    assert not report['goal_completed']
+    report=office_projection(missing_page)
+    assert report['goal_completed']
     assert report['artifacts'][0]['content_observed'] is not missing_page
-    assert not report['artifacts'][0]['content_verified']  # semantics not proven by reads alone
+    assert report['artifacts'][0]['content_verified'] is not missing_page
 
 
-def content_facet(coverage='complete',**overrides):
-    return dict(device_id='pc',path='C:/report.pptx',sha256='a'*64,coverage=coverage,
-                evidence_refs=['step_2','step_3'],**overrides)
 
 
-def test_content_requirement_and_whole_goal_are_separate_in_one_assessment():
-    report=office_projection(facet=[content_facet()])
-    assert report['artifacts'][0]['content_verified']
-    assert report['status']=='partial' and not report['goal_completed']
 
 
-@pytest.mark.parametrize('case',['wrong_meaning','missing_page','stale','wrong_device','wrong_path','duplicate','malformed'])
-def test_content_facet_never_overrides_negative_or_unbound_native_facts(case):
-    item=content_facet('partial' if case=='wrong_meaning' else 'complete')
-    if case=='wrong_device':item['device_id']='other'
-    if case=='wrong_path':item['path']='C:/other.pptx'
-    facets=[] if case=='malformed' else [item,item] if case=='duplicate' else [item]
-    report=office_projection(missing_page=case=='missing_page',stale=case=='stale',facet=facets,coverage='complete')
-    assert not report['goal_completed'] and not report['artifacts'][0]['content_verified']
 
 
-def test_positive_content_and_goal_assessment_still_require_current_native_pages():
-    report=office_projection(facet=[content_facet()],coverage='complete')
-    assert report['goal_completed'] and report['artifacts'][0]['content_verified']
 
 
-def test_existing_assessor_returns_content_facet_in_one_call():
-    import asyncio
-    from server.answer_auditor import assess_result_coverage
-    calls=[]
-    async def provider(**kwargs):
-        calls.append(kwargs)
-        return {'choices':[{'finish_reason':'stop','message':{'content':json.dumps({
-            'coverage':'partial','evidence_refs':['step_2'],'reason':'independent condition',
-            'artifacts':[dict(device_id='pc',path='C:/report.pptx',sha256='a'*64,
-                              coverage='complete',evidence_refs=['step_2'])]})}}]}
-    result=asyncio.run(assess_result_coverage(client=None,cfg={'answer_auditor_enabled':True},
-        chat_completion_request_fn=provider,user_request='request',
-        current_run_journal=[{'step_id':'step_2','tool_name':'office_pptx','tool_type':'typed','result':{'items':[{'text':'content'}]}}],
-        answer_payload={'text':'Observed content'}))
-    assert len(calls)==1 and calls[0]['phase']=='result_coverage'
-    assert result['coverage']=='partial' and result['artifacts'][0]['coverage']=='complete'
 
 
 def test_failed_discovery_does_not_prevent_native_open(monkeypatch):
     monkeypatch.setattr(db,'get_device_profile',lambda *a,**k:None)
-    monkeypatch.setitem(tasks,'open-recovery',dict(task_id='open-recovery',execution_scope='window',window_effects=['open']))
+    monkeypatch.setitem(tasks,'open-recovery',dict(task_id='open-recovery',window_effects=['open']))
     sent=[]
     async def send(device,action,params):
         sent.append(action)
@@ -196,6 +159,6 @@ def test_remaining_open_identity_must_not_be_inferred_from_effect_count(case):
     steps=[dict(step_id=f'step_{i+1}',tool_name='app.launch',target_device_id='pc',status='success',
                 result=dict(status='launched_verified',window={'title':'Other document','visible':True}))
            for i in range(len(effects))]
-    task=dict(task_id='objects',status='done',device_ids=['pc'],execution_scope='window',window_effects=effects,
+    task=dict(task_id='objects',status='done',device_ids=['pc'],window_effects=effects,
               proposed_objective='Open A.docx and B.pptx' if case!='wrong_object' else 'Open A.docx',commands=steps)
     assert not build_worker_report(task)['goal_completed']

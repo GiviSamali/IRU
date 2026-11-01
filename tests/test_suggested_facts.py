@@ -35,7 +35,7 @@ def test_declined_suggested_fact_does_not_reappear_in_same_chat(client, monkeypa
     from server import orchestrator as orch
     async def semantic_decision(message, context, **kwargs):
         assert message == request_text
-        return orch.Decision(intent="delegate",objective=message,scope="device",target_device_ids=["device-1"]),{}
+        return orch.Decision(intent="delegate",objective=message,target_device_ids=["device-1"]),{}
     monkeypatch.setattr(orch,"decide",semantic_decision)
     suggested_text = r"Python lives in D:\Python311"
     suggested_category = "config"
@@ -53,10 +53,6 @@ def test_declined_suggested_fact_does_not_reappear_in_same_chat(client, monkeypa
 
     calls = {"classify": 0, "process": 0}
 
-    async def fake_classify_task_complexity(message):
-        calls["classify"] += 1
-        assert message == request_text
-        return ("SIMPLE", "")
 
     async def fake_process_nl_command(**kwargs):
         calls["process"] += 1

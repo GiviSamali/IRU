@@ -1,7 +1,7 @@
 """
 controller_budget.py
 
-Command budget guard shared by non-pipeline and pipeline controllers.
+Command budget guard for the Worker tool loop.
 
 Commands are classified for debug counters only.
 

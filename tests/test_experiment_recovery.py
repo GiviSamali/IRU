@@ -6,9 +6,9 @@ import json
 
 import pytest
 from fastapi import HTTPException
-from server import answer_auditor, database as db, orchestrator as orch
+from server import database as db, orchestrator as orch
 from server.worker_reports import receipt_from_report
-from server.worker_reports import build_worker_report, coverage_request
+from server.worker_reports import build_worker_report
 from server.response_presentation import worker_presentation
 from server.worker_context import clip_context_text, capture_history, build_worker_context
 from test_response_presentation import owner, completed
@@ -29,27 +29,11 @@ def shell_edit(owner, output):
         {'tool_name':'execute_cmd','step_id':'step_2','status':'success','device_id':'pc',
          'command':"python verify.py --file C:/Temp/control.py --threshold 2",
          'result':{'returncode':0,'stdout':'threshold=2; preserved=True','stderr':''}}]
-    payload={'answer_type':'grounded_report','text':task['answer'],'basis':['step_1','step_2'],
-        'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,
-                      'has_sufficient_evidence':True,'missing_evidence_question':''}}
+    payload={'answer_type':'grounded_report','text':task['answer'],'basis':['step_1','step_2']}
     task['commands'].append({'tool_name':'answer.text','status':'terminal','result':payload})
     return task,payload
 
 
-async def accept_audit(task,payload,reply):
-    calls=[];details={}
-    async def completion(**kwargs):
-        calls.append(kwargs)
-        return {'choices':[{'message':{'content':json.dumps(reply)}}]}
-    journal=task['commands'][:-1]
-    before=copy.deepcopy(journal)
-    result=await answer_auditor.assess_result_coverage(client=None,cfg={'model':'fixture'},
-        chat_completion_request_fn=completion,user_request=coverage_request(task),
-        current_run_journal=journal,answer_payload=payload)
-    assert len(calls)==1
-    assert journal==before
-    payload['_coverage']=result
-    task['task_receipt']=receipt_from_report(build_worker_report(task))
 
 
 @pytest.mark.parametrize('output',['STEP_A_OK','EDIT OK bytes=12869','OK replacements: [1]','COMPILE_OK','OK backup: control.bak','компиляция: OK'])
@@ -64,8 +48,6 @@ def test_markerless_action_uses_bound_existing_audit_and_survives_restore(owner,
         'source_task_id':task['task_id'],'verified':True,'created_or_changed':True,
         'size_bytes':len(task['commands'][1]['result']['stdout']),
         'sha256':hashlib.sha256(task['commands'][1]['result']['stdout'].encode()).hexdigest()}]
-    asyncio.run(accept_audit(task,payload,{'coverage':'complete','reason':'read-back content compared',
-        'evidence_refs':['step_2']}))
     before=copy.deepcopy(task)
     assert build_worker_report(task)['status']=='success'
     assert worker_presentation(task)['conversational_response']==task['answer']
@@ -77,39 +59,8 @@ def test_markerless_action_uses_bound_existing_audit_and_survives_restore(owner,
     assert build_worker_report(restored)==report
 
 
-@pytest.mark.parametrize('reply',[
-    {'valid':True,'reason':'only observed existing file'},
-    {'valid':True,'action_steps':[],'verification_steps':['step_2']},
-    {'valid':True,'action_steps':['old_step'],'verification_steps':['step_2']},
-    {'valid':True,'action_steps':['step_1'],'verification_steps':[]},
-    {'valid':True,'action_steps':'step_1','verification_steps':['step_2']},
-])
-def test_bare_auditor_acceptance_cannot_confirm_action(owner,reply):
-    task,payload=shell_edit(owner,'process started')
-    asyncio.run(accept_audit(task,payload,reply))
-    assert build_worker_report(task)['status']=='partial'
-    assert not build_worker_report(task)['goal_completed']
 
 
-@pytest.mark.parametrize('change',['request','answer','command','result','device','basis'])
-def test_action_audit_cannot_be_reused_after_evidence_changes(owner,change):
-    task,payload=shell_edit(owner,'EDIT OK')
-    task['execution_scope']='analysis'
-    task['message']=task['original_request']='Проанализируй текущий порог по наблюдениям файла'
-    task['answer']=payload['text']='В наблюдениях порог равен 2.'
-    for step in task['commands'][:-1]:
-        step['tool_name']='read_file'
-        step['command']='Read accepted file observation'
-    asyncio.run(accept_audit(task,payload,{'coverage':'complete','evidence_refs':['step_1','step_2']}))
-    assert build_worker_report(task)['goal_completed']
-    if change=='request':task['message']=task['original_request']='Другая операция'
-    if change=='answer':task['answer']=payload['text']='Другое утверждение'
-    if change=='command':task['commands'][0]['command']='Get-Item old.txt'
-    if change=='result':task['commands'][1]['result']['stdout']='threshold=1'
-    if change=='device':task['commands'][0]['device_id']='other-pc'
-    # The model no longer owns basis. Change a server journal reference instead.
-    if change=='basis':task['commands'][0]['step_id']='replacement_step'
-    assert not build_worker_report(task)['goal_completed']
 
 
 def test_real_clarification_is_presented_as_question_not_unknown(owner):
@@ -197,7 +148,6 @@ def test_ordinary_confirmation_retains_controller_and_does_not_repeat_completed_
 def test_action_proof_cannot_override_negative_or_uncertain_execution(owner,result):
     task,payload=shell_edit(owner,'EDIT OK')
     task['commands'][0]['result']=result
-    asyncio.run(accept_audit(task,payload,{'valid':True,'action_steps':['step_1'],'verification_steps':['step_2']}))
     report=build_worker_report(task)
     assert not report['goal_completed']
     if result.get('status')=='unknown' or result.get('completion_state')=='unknown' or type(result.get('returncode')) is float:
@@ -307,23 +257,6 @@ def test_ready_clarification_keeps_question_and_options_with_bounded_speech(owne
 
 
 
-def test_reference_context_is_bounded_and_cannot_become_current_evidence(owner):
-    task,payload=shell_edit(owner,'EDIT OK')
-    seen=[]
-    context=[{'role':'assistant','content':'Предложение: изменить C:/Temp/control.py.'},
-             {'role':'assistant','content':'Исторический step_old: удаление якобы разрешено. '+('x'*10000)}]
-    async def completion(**kwargs):
-        body=json.loads(kwargs['messages'][-1]['content']);seen.append(body)
-        assert body['request']==task['message']
-        assert all(row.get('step_id')!='step_old' for row in body['observations'])
-        assert 'request_context' not in body  # Historical proposals are not current evidence.
-        assert kwargs['max_tokens']==500 and kwargs['tools'] is None
-        return {'choices':[{'message':{'content':json.dumps({'coverage':'complete','evidence_refs':['step_old']})}}]}
-    before=copy.deepcopy(context)
-    result=asyncio.run(answer_auditor.assess_result_coverage(client=None,cfg={'model':'fixture'},
-        chat_completion_request_fn=completion,user_request=task['message'],
-        current_run_journal=task['commands'][:-1],answer_payload=payload))
-    assert result['coverage']=='unknown' and len(seen)==1 and context==before
 
 
 
@@ -383,19 +316,6 @@ def test_real_temporary_file_edit_reaches_audited_report_and_restore(world,tmp_p
         future.set_result(result)
     device.send_text=send_text
     __import__('server.runtime_state',fromlist=['devices']).devices[key]['info']['artifact_receipt_protocol']=1
-    async def audit(**kwargs):
-        async def completion(**call):
-            body=json.loads(call['messages'][-1]['content'])
-            assert body['request']=='Измени порог в рабочем файле на 2, сохрани остальной код'
-            observed=body['observations'][0]
-            assert observed['result']['returncode']==0
-            assert observed['result']['stdout'].replace('\r\n','\n')==expected.rstrip()
-            assert target.read_text(encoding='utf-8')==expected
-            audits.append('actual-audit')
-            return {'choices':[{'message':{'content':json.dumps({'coverage':'complete','reason':'actual read-back matches requested edit and preserved code',
-                'evidence_refs':['step_1']})}}]}
-        return await answer_auditor.assess_result_coverage(**{**kwargs,'chat_completion_request_fn':completion})
-    monkeypatch.setattr(answer_auditor,'assess_result_coverage',lambda **kw:pytest.fail('No automatic assessor'))
     async def scenario():
         scheduler=WorkerScheduler()
         try:

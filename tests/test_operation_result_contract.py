@@ -124,8 +124,6 @@ def test_past_task_failure_is_data_not_failure_to_read_summary(monkeypatch):
 
 
 def test_one_cli_command_can_complete_all_assigned_actions_without_assessor(monkeypatch):
-    from server import answer_auditor
-    monkeypatch.setattr(answer_auditor,'assess_result_coverage',lambda **k:pytest.fail('No automatic second LLM'))
     monkeypatch.setitem(tasks,'t',{'task_id':'t','device_ids':['device-1'],
         'original_request':'Create a folder and rename a file'})
     seen=[];calls=[]
@@ -134,7 +132,7 @@ def test_one_cli_command_can_complete_all_assigned_actions_without_assessor(monk
     result=_run_case([_message(tool_calls=[_tool_call('cli','execute_cmd',{
         'command':'New-Item C:/out -ItemType Directory -ErrorAction Stop; Rename-Item C:/a.txt b.txt -ErrorAction Stop'})]),
         terminal('Folder created and file renamed')],poll_task_id='t',send_command_fn=send,captured=seen,
-        cfg={'model':'mock','answer_auditor_enabled':True})
+        cfg={'model':'mock'})
     assert len(seen)==2 and len(calls)==1 and all(x.get('phase')!='result_coverage' for x in seen)
     assert build_worker_report({**tasks['t'],'status':'done','commands':result['commands'],'answer':result['answer']})['goal_completed']
 
@@ -252,8 +250,6 @@ def test_untyped_cli_can_apply_window_effects_but_not_bypass_missing_file():
 
 def test_remaining_content_quality_is_explicitly_trusted_to_worker(tmp_path,monkeypatch):
     from agent.core.office_tools import office
-    from server import answer_auditor
-    monkeypatch.setattr(answer_auditor,'assess_result_coverage',lambda **k:pytest.fail('No hidden judge'))
     path=tmp_path/'one-slide.pptx'
     native=office('office_pptx','create',str(path),data={'slides':[{'title':'One thin slide'}]},_source_task_id='t')
     assert native['status']=='success'
@@ -307,7 +303,7 @@ def test_real_system_observation_is_not_discarded_as_protocol_event(tool,result)
 def test_analysis_of_supplied_text_can_finish_without_unnecessary_tool():
     end={'step_id':'step_1','tool_name':'answer.text','tool_type':'answer','status':'terminal',
          'result':{'text':'Summary of the supplied text','_result_contract':3,'unresolved':[]}}
-    outcome=build_worker_report({'task_id':'t','status':'done','execution_scope':'analysis','device_ids':[],
+    outcome=build_worker_report({'task_id':'t','status':'done','device_ids':[],
         'original_request':'Summarize this provided text','commands':[end]})
     assert outcome['goal_completed'] and outcome['evidence_refs']==['step_1']
 

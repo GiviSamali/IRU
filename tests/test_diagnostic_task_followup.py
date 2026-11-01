@@ -20,7 +20,7 @@ def diagnostic(owner):
     # c9f3cf49: successful measurements, a compound command with useful stdout
     # but failed exit, a later successful measurement, and an audited report.
     t={'task_id':str(uuid.uuid4()),'user_id':owner['id'],'chat_id':owner['chat_id'],
-       'kind':'worker','worker_id':'worker-1','status':'partial','execution_scope':'analysis','message':'Давай',
+       'kind':'worker','worker_id':'worker-1','status':'partial','message':'Давай',
        'proposed_objective':'Проверь интернет и его характер','device_ids':[f"{owner['id']}:pc"],
        'created_at':time.time(),'answer':'GitHub: 17/20, три таймаута. Загрузка: 15 Мбит/с. Сигнал Wi-Fi не измерен.',
        'commands':[],'tasks':[],
@@ -32,9 +32,7 @@ def diagnostic(owner):
             'command':'Measure HTTP; inspect Wi-Fi' if rc else 'Measure HTTP',
             'result':{'returncode':rc,'stdout':out,'stderr':''}})
     t['commands'].append({'tool_name':'answer.text','step_id':'step_4','status':'terminal',
-        'result':{'answer_type':'grounded_report','text':t['answer'],'basis':['step_1','step_2','step_3'],
-          'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,
-                        'has_sufficient_evidence':True,'missing_evidence_question':'Wi-Fi signal not measured'}}})
+        'result':{'answer_type':'grounded_report','text':t['answer'],'basis':['step_1','step_2','step_3']}})
     t['worker_report']={**build_worker_report(t),'status':'unknown','goal_completed':False,
         'error_code':'action_evidence_unconfirmed','summary':'Исход не подтверждён.'}
     return t
@@ -91,7 +89,6 @@ def test_new_receipt_and_projection_agree_on_mixed_result(owners):
 def test_rc_zero_and_failed_steps_cannot_prove_completed_action(owners):
     t=diagnostic(owners[0]);t['task_receipt']={};t['status']='done'
     assert build_worker_report(t)['status']=='partial'
-    t['commands'][-1]['result']['self_check']['claims_completed_action']=True
     t['task_receipt']={'answer_source':'audited_terminal','task_status':'completed','goal_completed':True,'final_verification_status':'verified'}
     assert build_worker_report(t)['status']!='success'
     assert not build_worker_report(t)['goal_completed']  # rc=0 is not goal proof
@@ -208,7 +205,7 @@ def test_controller_keeps_failed_measurement_and_returns_partial_receipt(owners)
         _message(tool_calls=[_tool_call('report','answer_text',payload)]),
         _message(content=json.dumps({'valid':True,'reason':'Measurements with an explicitly missing Wi-Fi signal'}),finish_reason='stop'),
         ],user_id=a['id'],chat_id=a['chat_id'],device_id=f"{a['id']}:pc",send_command_fn=transport,
-        user_message='Проверь интернет и сообщи измерения',cfg={'model':'mock-model','answer_auditor_enabled':True})
+        user_message='Проверь интернет и сообщи измерения',cfg={'model':'mock-model'})
     assert len(sent)==3,[(e.get('tool_name'),e.get('result')) for e in result.get('commands',[])]
     report=build_worker_report({**result,'task_id':'mixed-controller','status':'done'})
     assert report['status']=='partial' and not report['goal_completed']
@@ -222,10 +219,7 @@ def test_ordinary_named_followup_returns_short_content_from_main_call(owners,mon
     a,b=owners;t=diagnostic(a);t['proposed_objective']='Диагностика интернета'
     if outcome=='success':
         t['commands'][1]['status']='success';t['commands'][1]['result']['returncode']=0
-        from server.worker_reports import coverage_binding, coverage_request
         t['status']='success'
-        t['commands'][-1]['result']['_coverage']={'coverage':'complete','evidence_refs':['step_1','step_2','step_3'],
-            'binding':coverage_binding(coverage_request(t),t['commands'][:-1],t['answer'])}
         t['worker_report']=build_worker_report(t)
     store(t)
     for n in range(other_count):

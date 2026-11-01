@@ -25,28 +25,21 @@ except ImportError:
 _DIAGNOSTIC_CONTEXT = ContextVar("iru_diagnostic_context", default=None)
 _TRACE_LOGGER = logging.getLogger("uvicorn.error.iru.lifecycle")
 TERMINAL_VALIDATION_CONDITIONS = (
-    'answer_text arguments must be an object', 'answer_text missing required fields',
-    'answer_text answer_type is invalid', 'answer_text text must be a non-empty string',
-    'answer_text self_check must be an object', 'answer_text self_check missing fields',
-    'answer_text declares insufficient evidence', 'completed-action answer uses NO/ERROR evidence',
-    'answer_text needs a human answer', 'basis must be an array of step_id strings',
-    'basis is required for grounded answer', 'basis references are not current non-answer steps',
-    *(f'answer_text self_check.{field} must be boolean' for field in (
-        'depends_on_current_external_state','claims_completed_action','has_sufficient_evidence')),
-    'answer_text self_check.missing_evidence_question must be string',
-    'Read all immutable dependency pages before claiming completion', 'terminal_contract_condition',
+    'answer_text arguments must be an object', 'answer_text answer_type is invalid',
+    'answer_text text must be a non-empty string', 'answer_text needs a human answer',
+    'unresolved must contain only substantive unfinished requirements',
+    'caveats must contain substantive result limitations', 'terminal_contract_condition',
 )
-TERMINAL_VALIDATION_FIELDS = frozenset({'answer_type','text','basis','self_check',
-    'depends_on_current_external_state','claims_completed_action','has_sufficient_evidence','missing_evidence_question'})
-_TRACE_LABELS = frozenset({"nl", "onboarding", "pipeline", "non_pipeline", "broadcast", "PLAN", "SIMPLE", "skipped",
+TERMINAL_VALIDATION_FIELDS = frozenset({'answer_type', 'text', 'result', 'unresolved', 'caveats'})
+_TRACE_LABELS = frozenset({"nl", "onboarding", "non_pipeline", "broadcast", "skipped",
     "running", "done", "completed", "completed_with_recovery", "failed", "error", "blocked", "cancelled", "confirm",
-    "success", "unknown", "partial", "terminal", "pending", "server", "model", "answer_text", "answer_tool", "audited_terminal",
-    "pipeline_step_report", "per_device_report", "server_fallback", "trust_guard", "plan_suggestion", "answer_auditor", "invalid_plan",
-    "goal_task_queue", "classification_fallback", "plan_keyword", "window_policy", "classification_model", "explicit_pipeline",
-    "plan_declined", "orchestrator_decision", "protocol_recovery", "ordinary_task", "other", "grounded_report", "partial_report",
+    "success", "unknown", "partial", "terminal", "pending", "server", "model", "answer_text", "answer_tool",
+    "per_device_report", "server_fallback", "trust_guard",
+    "goal_task_queue", "window_policy",
+    "orchestrator_decision", "protocol_recovery", "ordinary_task", "other", "grounded_report", "partial_report",
     "ask_clarification", "report_failure", "request_confirmation", "dialogue", "conversation", "factual_answer",
     "history", "iteration_limit", "no_progress", "success_criteria", "browser_answer_unavailable", "completed_successfully",
-    "missing_tool_call", "multiple_tool_calls", "unexpected_tool", "invalid_terminal_payload", "terminal_audit_rejected", "model_output_truncated"})
+    "missing_tool_call", "multiple_tool_calls", "unexpected_tool", "invalid_terminal_payload", "model_output_truncated"})
 
 
 
@@ -103,8 +96,8 @@ try:
 except ImportError:
     from tool_registry import TOOL_METADATA
 _TRACE_TOOLS = frozenset(TOOL_METADATA) | frozenset({"answer.text", "answer.ask_clarification", "answer.report_failure",
-    "answer.request_confirmation", "web_search", "remember_fact", "forget_fact", "memory.list_facts", "memory.get_stats",
-    "memory_list_facts", "memory_get_stats", "answer_auditor", "tool_only_protocol", "task.cancel", "system.get_last_run_summary"})
+"web_search", "remember_fact", "forget_fact", "memory.list_facts", "memory.get_stats",
+    "memory_list_facts", "memory_get_stats", "tool_only_protocol", "task.cancel", "system.get_last_run_summary"})
 
 
 def _trace_journal_step(entry: dict) -> None:
@@ -117,8 +110,8 @@ def _trace_journal_step(entry: dict) -> None:
         name = entry.get("tool_name") or entry.get("action")
         record_lifecycle_event("tool_result", tool_name=name, status=entry.get("tool_status") or entry.get("status"),
             iteration=entry.get("iteration"), step_index=entry.get("step_index"), answer_type=result.get("answer_type"))
-        if name in {"tool_only_protocol", "answer_auditor"}:
-            record_lifecycle_event("recovery", source="answer_auditor" if name == "answer_auditor" else "protocol_recovery")
+        if name in {"tool_only_protocol"}:
+            record_lifecycle_event("recovery", source="protocol_recovery")
     except Exception:
         pass
 
@@ -132,7 +125,7 @@ def diagnostic_task(kind: str, task_lookup):
                 task = task_lookup(task_id) or {}
                 events = task.setdefault("diagnostic_trace", [])
                 token = _DIAGNOSTIC_CONTEXT.set({"task_id":str(task_id),"events":events,"seen":set(),"started":time.monotonic()})
-                mode = "pipeline" if (task.get("modes") or {}).get("pipeline") else kind
+                mode = kind
                 record_lifecycle_event("request_started", mode=mode, device_count=len(args[2]) if len(args)>2 and isinstance(args[2],list) else 0)
             except Exception:
                 task = {}
@@ -144,8 +137,7 @@ def diagnostic_task(kind: str, task_lookup):
                     for entry in task.get("commands") or []:
                         _trace_journal_step(entry)
                     receipt = task.get("task_receipt") or {}
-                    source = receipt.get("answer_source") or ("plan_suggestion" if task.get("plan_suggestion") else
-                        "answer_tool" if any(is_terminal_answer_tool(e.get("tool_name")) for e in task.get("commands") or []) else "server_fallback")
+                    source = receipt.get("answer_source") or ("answer_tool" if any(is_terminal_answer_tool(e.get("tool_name")) for e in task.get("commands") or []) else "server_fallback")
                     record_lifecycle_event("request_finished", status=task.get("status"), source=source,
                         terminal_reason=receipt.get("terminal_reason"), tool_count=len(task.get("commands") or []))
                 except Exception:
@@ -163,29 +155,21 @@ ANSWER_TOOL_NAMES = {
     "answer_text",
     "answer_ask_clarification",
     "answer_report_failure",
-    "answer_request_confirmation",
     "answer.text",
     "answer.ask_clarification",
     "answer.report_failure",
-    "answer.request_confirmation",
 }
 
 ANSWER_TEXT_NAMES = {"answer_text", "answer.text"}
 ANSWER_CLARIFICATION_NAMES = {"answer_ask_clarification", "answer.ask_clarification"}
 ANSWER_FAILURE_NAMES = {"answer_report_failure", "answer.report_failure"}
-ANSWER_CONFIRMATION_NAMES = {"answer_request_confirmation", "answer.request_confirmation"}
 
 RAW_CONTENT_CORRECTION = "Raw assistant content is not allowed. Use answer_text for any user-facing response."
 TOOL_CALL_CORRECTION = "Use registered tool names and valid JSON object arguments. Independent calls may share one response; dependent decisions wait for results."
 GROUNDED_CORRECTION = (
-    "Your answer was not grounded in current-run evidence. Ask yourself what tool is needed, "
-    "use the necessary registered tools, then answer through answer_text."
+    "Return a valid result, clarification question or failure reason. "
+    "Use the current facts; do not repeat actions just to repair a terminal payload."
 )
-INSUFFICIENT_EVIDENCE_CORRECTION = (
-    "Your answer_text says evidence is insufficient. Call the needed tool first or use clarification/failure."
-)
-
-ANSWER_TEXT_TYPES = {"pure_text", "grounded_report", "partial_report", "error_report", "clarification", "failure"}
 WRITE_CONTENT_PREVIEW_CHARS = 120
 def tool_result_token_budget():
     try:from .context_budget import configured_context_budget
@@ -291,10 +275,6 @@ def is_answer_failure_tool(tool_name: str | None) -> bool:
     return tool_name in ANSWER_FAILURE_NAMES or canonical_tool_name(tool_name) in ANSWER_FAILURE_NAMES
 
 
-def is_answer_confirmation_tool(tool_name: str | None) -> bool:
-    if not tool_name:
-        return False
-    return tool_name in ANSWER_CONFIRMATION_NAMES or canonical_tool_name(tool_name) in ANSWER_CONFIRMATION_NAMES
 
 
 def _next_idx(journal: list[dict[str, Any]]) -> int:
@@ -423,8 +403,6 @@ def compact_step_summary(action: str, result: Any = None, command: str = "") -> 
         return "clarification requested"
     if canonical == "answer.report_failure":
         return "failure reported"
-    if canonical == "answer.request_confirmation":
-        return "confirmation requested"
     return compact_tool_summary(action, result, command)
 
 
@@ -607,9 +585,7 @@ def confirmed_unknown_answer(journal, target_device_id, reason="confirmed_transp
     expired=reason=='confirmation_expired'
     payload={'answer_type':'partial_report',
              'text':'Ошибка связи после отправки подтверждённой команды. Она могла выполниться; результат неизвестен. Дальнейшие действия остановлены, автоматически команду не повторяю.',
-             'basis':[journal[-1]['step_id']],
-             'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,
-                           'has_sufficient_evidence':False,'missing_evidence_question':'Нет результата отправленной команды.'}}
+             'basis':[journal[-1]['step_id']]}
     if expired:payload['text']='Время ожидания подтверждения истекло. Команда не выполнялась; задача остановлена.'
     append_answer_step(journal,'answer_text',validate_answer_text_payload(payload,journal),target_device_id=target_device_id)
     return {'status':'error','answer':payload['text'],'commands':journal,'tasks':[],
@@ -654,21 +630,6 @@ def _current_non_answer_step_ids(journal: list[dict[str, Any]]) -> set[str]:
 
 
 
-def validate_basis_references(
-    basis: Any,
-    journal: list[dict[str, Any]],
-    *,
-    require_non_empty: bool,
-) -> list[str]:
-    if not isinstance(basis, list) or not all(isinstance(item, str) and item.strip() for item in basis):
-        raise ProtocolValidationError("basis must be an array of step_id strings", GROUNDED_CORRECTION)
-    if require_non_empty and not basis:
-        raise ProtocolValidationError("basis is required for grounded answer", GROUNDED_CORRECTION)
-    allowed = _current_non_answer_step_ids(journal)
-    invalid = [item for item in basis if item not in allowed]
-    if invalid:
-        raise ProtocolValidationError(f"basis references are not current non-answer steps: {invalid}", GROUNDED_CORRECTION)
-    return basis
 
 
 def file_state_history(journal):
@@ -766,7 +727,7 @@ def validate_answer_text_payload(payload, journal):
     """Minimal model result; legacy fields are hints, never completion authority."""
     if not isinstance(payload,dict):
         raise ProtocolValidationError('answer_text arguments must be an object')
-    allowed = {'result','unresolved','answer','text','answer_type','effects','remaining','basis','self_check','suggested_fact'}
+    allowed = {'result','unresolved','caveats','answer','text','answer_type','effects','remaining','basis','suggested_fact'}
     if set(payload)-allowed:
         raise ProtocolValidationError('Unknown answer fields; report answer/effects/remaining only.')
     compact = 'result' in payload
@@ -786,6 +747,10 @@ def validate_answer_text_payload(payload, journal):
     if (not isinstance(unresolved,list) or len(unresolved)>32
             or any(not isinstance(v,str) or not v.strip() or len(v)>1000 for v in unresolved)):
         raise ProtocolValidationError('unresolved must contain only substantive unfinished requirements')
+    caveats = payload.get('caveats', [])
+    if (not isinstance(caveats, list) or len(caveats) > 32
+            or any(not isinstance(v, str) or not v.strip() or len(v) > 1000 for v in caveats)):
+        raise ProtocolValidationError('caveats must contain substantive result limitations')
     if compact and (len(text)>8000 or any(k in payload for k in ('answer','text'))):
         raise ProtocolValidationError('result must be compact and cannot be mixed with answer/text')
     kind = payload.get('answer_type','result')
@@ -795,13 +760,13 @@ def validate_answer_text_payload(payload, journal):
     result = {'text':text,'answer_type':kind,'effects':effects,'remaining':remaining,
               'basis':[e['step_id'] for e in journal if e.get('step_id') and e.get('tool_type') not in {'system','answer'}],
               '_result_contract':3 if compact else 2}
+    result['caveats'] = caveats
     if compact or unresolved:result['unresolved']=unresolved
     if payload.get('suggested_fact') is not None:result['suggested_fact']=payload['suggested_fact']
     suggestion=re.search(r'\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]',text)
     if suggestion:
         result['text']=re.sub(r'\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]','',text).strip()
         result['suggested_fact']={'text':suggestion.group(1).strip(),'category':suggestion.group(2).strip()}
-    result['text']=re.sub(r'\[\[SUGGEST_PLAN:\s*([^\[\]]+?)\s*\]\]','',result['text']).strip()
     if not result['text']:raise ProtocolValidationError('answer_text needs a human answer, not only an internal annotation')
     return result
 
@@ -820,16 +785,3 @@ def validate_answer_report_failure_payload(payload: Any, journal: list[dict[str,
     # must not discard a useful failure report or consume another model turn.
     allowed = _current_non_answer_step_ids(journal)
     return {**payload, 'basis':list(dict.fromkeys(e['step_id'] for e in journal if e.get('step_id') in allowed))}
-
-
-def validate_answer_confirmation_payload(payload: Any, journal: list[dict[str, Any]]) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        raise ProtocolValidationError("answer_request_confirmation arguments must be an object", GROUNDED_CORRECTION)
-    required = {"message", "action", "risk", "command_preview", "basis"}
-    missing = sorted(required - set(payload))
-    if missing:
-        raise ProtocolValidationError(f"answer_request_confirmation missing required fields: {missing}", GROUNDED_CORRECTION)
-    if payload.get("risk") not in {"low", "medium", "high"}:
-        raise ProtocolValidationError("answer_request_confirmation risk is invalid", GROUNDED_CORRECTION)
-    validate_basis_references(payload.get("basis"), journal, require_non_empty=False)
-    return payload

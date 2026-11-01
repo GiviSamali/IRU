@@ -35,7 +35,7 @@ def test_deny_is_bound_only_to_original_task_and_new_request_requires_confirm_ag
     from server import orchestrator as orch
     async def semantic_decision(message, context, **kwargs):
         assert message == request_text
-        return orch.Decision(intent="delegate",objective=message,scope="device",target_device_ids=["device-1"]),{}
+        return orch.Decision(intent="delegate",objective=message,target_device_ids=["device-1"]),{}
     monkeypatch.setattr(orch,"decide",semantic_decision)
     device_key = f"{user['id']}:device-1"
     monkeypatch.setattr(tasks_router, "devices", runtime_state.devices)
@@ -85,8 +85,6 @@ def test_deny_is_bound_only_to_original_task_and_new_request_requires_confirm_ag
         "base_url": "http://unused",
         "api_key": "unused",
     })
-    async def fake_classify_task_complexity(message):
-        return ("SIMPLE", "")
 
 
     monkeypatch.setattr(controller, "_chat_completion_request", fake_chat_completion_request)

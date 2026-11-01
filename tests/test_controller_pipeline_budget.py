@@ -43,12 +43,7 @@ def _answer_call(call_id: str, text: str) -> dict:
                 "answer_type": "pure_text",
                 "text": text,
                 "basis": [],
-                "self_check": {
-                    "depends_on_current_external_state": False,
-                    "claims_completed_action": False,
-                    "has_sufficient_evidence": True,
-                    "missing_evidence_question": "",
-                },
+
             }, ensure_ascii=False),
         },
     }
@@ -76,7 +71,7 @@ def _run_worker_case(responses, send_command_fn=None):
     return asyncio.run(process_non_pipeline_command(user_message="Inspect the selected device",
         device_id="device-1",device_info={"os":"Windows","hostname":"devbox"},send_command_fn=send,
         get_file_link_fn=lambda *a:"/api/download/mock",chat_history=[],user_id=None,chat_id=None,
-        modes={},poll_task_id=None,cfg={"model":"mock-model","answer_auditor_enabled":False},system_msg="system",
+        modes={},poll_task_id=None,cfg={"model":"mock-model"},system_msg="system",
         machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=6,
         pick_model_fn=lambda *a:"mock-model",chat_completion_request_fn=_make_completion_fn(responses)))
 

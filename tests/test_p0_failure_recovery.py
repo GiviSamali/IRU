@@ -50,7 +50,7 @@ def run_worker(responses, send_results=None, tools=None):
         return await worker_controller.process_non_pipeline_command(user_message="Create the complete requested package",
             device_id="device-1",device_info={"os":"Windows"},send_command_fn=send,get_file_link_fn=lambda *a:"unused",
             chat_history=[],user_id=None,chat_id=None,modes={},poll_task_id=None,
-            cfg={"model":"deepseek-v4-pro","model_reasoner":"deepseek-v4-pro","max_tokens":4096,"answer_auditor_enabled":False},
+            cfg={"model":"deepseek-v4-pro","model_reasoner":"deepseek-v4-pro","max_tokens":4096},
             system_msg="system",machine_guid=None,mem_user_id=None,non_pipeline_tools=tools or NON_PIPELINE_TOOLS,
             max_iterations=6,pick_model_fn=lambda *a:"deepseek-v4-pro",chat_completion_request_fn=complete)
     return asyncio.run(run()), sent, requests
@@ -140,9 +140,7 @@ def failed_task(owner, chat):
         {"tool_name": "web_search", "step_id": "step_1", "status": "success", "device_id": "pc",
          "result": {"results": [{"title": "source", "url": "https://example.org", "content": "material"}]}},
         {"tool_name": "answer.text", "step_id": "step_2", "status": "terminal", "device_id": "pc",
-         "result": {"answer_type": "grounded_report", "text": text, "basis": ["step_1"],
-                    "self_check": {"depends_on_current_external_state": True, "claims_completed_action": False,
-                                   "has_sufficient_evidence": True, "missing_evidence_question": ""}}},
+         "result": {"answer_type": "grounded_report", "text": text, "basis": ["step_1"]}},
         {"tool_name": "pipeline_guard", "step_id": "step_3", "status": "blocked",
          "result": {"error": "model_output_truncated"}}]
     steps = [{"idx": 0, "title": "Research", "status": "done", "summary": text},
@@ -210,7 +208,6 @@ def test_report_text_without_accepted_terminal_is_not_recovered():
 
 def test_legacy_research_action_claim_does_not_hide_accepted_step_report():
     task = failed_task(2, 88)
-    task['commands'][1]['result']['self_check']['claims_completed_action'] = True
     text = task['commands'][1]['result']['text']
     assert saved_step_reports(task)[0]['text'] == text
     report = build_worker_report(task)
@@ -268,7 +265,7 @@ def test_new_action_and_continuation_use_delegate_not_old_worker(stored, monkeyp
     admissions = []
     async def decide(*args, **kwargs):
         return orch.Decision(intent="delegate", objective="Continue documents using saved research",
-                             execution_mode="simple", target_device_ids=["pc"], source_task_ids=["source"]), {}
+                              target_device_ids=["pc"], source_task_ids=["source"]), {}
     monkeypatch.setattr(orch, "decide", decide)
     async def delegate(choice, **kwargs):
         admissions.append(choice)

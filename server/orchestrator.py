@@ -55,7 +55,6 @@ class Assignment(BaseModel):
     required_source_task_ids: list[str] = Field(default_factory=list, max_length=8)
     replaces_source_task_id: str | None = Field(default=None, min_length=1, max_length=64)
     target_device_ids: list[str] | None = Field(default=None, max_length=8)
-    execution_scope: Literal["general","window","analysis"] | None = None
     window_effects: list[WindowEffect] | None = Field(default=None, max_length=16)
     # Mandatory objects this Assignment must open. An effect name alone never
     # says which object, so the requirement is stated here explicitly.
@@ -99,32 +98,21 @@ class Decision(BaseModel):
         except UnicodeEncodeError:return ""
         return value.strip()
 
-    @model_validator(mode="before")
-    @classmethod
-    def ignore_retired_decoration(cls, value):
-        # No schema/rendering feature; tolerate this obsolete key from older model replies only.
-        if isinstance(value,dict) and "highlights" in value:
-            return {key:item for key,item in value.items() if key!="highlights"}
-        return value
 
-    scope: Literal["device","server"] = "device"
     objective: str = Field(default="", max_length=2000)
     context_summary: str = Field(default="", max_length=2000)
     target_device_ids: list[str] = Field(default_factory=list, max_length=8)
     task_id: str | None = Field(default=None, max_length=64)
     cancel_scope: Literal["task", "goal", "chat"] = "task"
-    reference_quote: str = Field(default="",max_length=200)
     reference: Literal["explicit","unique","latest","active"] = "unique"
     show_execution_details: bool = False
     result_view: Literal["summary", "saved_report"] = "summary"
-    execution_mode: Literal["auto","simple","plan"] = "auto"
     source_task_ids: list[str] = Field(default_factory=list,max_length=3)
     assignments: list[Assignment] = Field(default_factory=list, max_length=16)
     goal_id: str | None = Field(default=None, max_length=64)
     goal_revision: int | None = Field(default=None, ge=1)
     task_revision: int | None = Field(default=None, ge=1)
     memory_authorizations: list[MemoryAuthorization] = Field(default_factory=list, max_length=4)
-    execution_scope: Literal["general","window","analysis"] = "general"
     window_effects: list[WindowEffect] = Field(default_factory=list, max_length=16)
 
 
@@ -233,13 +221,11 @@ memory_authorizations разрешает remember_fact только если т�
 не дают разрешения: оставь список пустым. Не определяй это по фиксированным фразам.
 Для delegate укажи assignments: самостоятельные проверяемые результаты с key, objective и depends_on.
 objective — цель человека; scope — разумные смысловые границы (объект, период, охват); constraints — ограничения исполнения. Не составляй обязательный план действий или подробный DoD. Worker сам выбирает инструменты и глубину. Не сужай исходную цель ради успеха. Scope/constraints не добавляют разрешений исходному запросу.
-Для поручения, результат которого только анализ, исследование или ответ без требуемого изменения внешнего состояния, укажи execution_scope=analysis. Не используй analysis для создания/изменения/передачи файла или управления приложением. Для файлов перечисли обязательные artifacts в assignments; для отсутствующего контракта эффект не считается подтверждённым. Семантическая оценка не может изменить выбранную здесь область поручения.
-Для результата, состоящего только в управлении существующими окнами, укажи execution_scope=window
-Условное действие не превращай в безусловный эффект. Для «найди PPTX: если одна — открой, иначе перечисли» сохрани условие в objective/constraints, выбери general и не объявляй open обязательным независимо от результата поиска. Способ выбирает Worker.
-Открытие приложения, документа или сайта также относится к window с window_effects=["open"]; Worker сам выбирает доступный разрешённый способ; window_control не имеет action="open".
+Условное действие не превращай в безусловный эффект. Для «найди PPTX: если одна — открой, иначе перечисли» сохрани условие в objective/constraints, не объявляй open обязательным независимо от результата поиска. Способ выбирает Worker.
+Открытие приложения, документа или сайта задаёт window_effects=["open"]; Worker сам выбирает доступный разрешённый способ; window_control не имеет action="open".
 Если открыть нужно конкретный объект, перечисли его в assignment.open_objects: {"type":"file|folder|url|app","path":"<точный путь или URL>","device_id":"<устройство>"}. window_effects=["open"] без open_objects не подтверждает открытие: Worker обязан доказать именно этот объект, иначе исход неподтверждён.
 и window_effects: запрошенные эффекты (например activate, minimize, maximize, restore, left, right,
-move_monitor, close). Это ограничения результата, не технические шаги Worker. Смешанная работа — general.
+move_monitor, close). Это ограничения результата, не технические шаги Worker.
 Список можно уточнить в каждом assignment. Не выводи намерение из фиксированных фраз.
 Виртуальные рабочие столы не поддерживаются window_control: не подменяй их физическими мониторами,
 не выдавай их за поддерживаемую возможность этого инструмента. Работа с несохранённым содержимым и опасные действия
@@ -273,7 +259,6 @@ move_monitor, close). Это ограничения результата, не �
 Отрицание, обсуждение возможности и просьба предложить варианты сами по себе не разрешают исполнение:
 отвечай conversation/clarify с предлагаемыми результатами, без delegate до поручения человека.
 Не требуй отдельного согласования многочастного запроса, уже явно порученного пользователем.
-execution_mode оставь simple. Отдельного режима PLAN и дополнительного Planner нет.
 Если человек дополняет обсуждаемую цель новым результатом, укажи её goal_id и goal_revision
 из задач текущего чата. Иначе оставь goal_id/goal_revision пустыми для новой цели.
 depends_on — локальные key этого решения. required_source_task_ids — обязательные результаты
@@ -297,7 +282,7 @@ Scheduler разрешит только сверку состояния инст
 нельзя молча изменить. Для состояния общей цели используй task_status с goal_id.
 Метод исполнения и инструменты выбирает Worker.
 Для межустройственного действия выбери все нужные устройства, включая устройство исходного файла.
-Для server web_search и памяти делегируй scope=server с пустым списком устройств. Для действий на устройстве scope=device.
+Для серверной работы задавай пустой target_device_ids; для действий на устройствах перечисли разрешённые устройства.
 Выбирай только перечисленные устройства пользователя; selected_device — подсказка. Offline не означает готовность. Не выбирай другой ПК вместо отсутствующего.
 Scheduler управляет зависимостями; Worker выполняет только назначенный результат, не управляя другими Workers.
 Не обещай принятие или выполнение до успешного server delegate. Нет execute_cmd/write_content и других исполнительных tools.
@@ -400,11 +385,8 @@ logger=logging.getLogger("iru.orchestrator")
 
 HANDOFF_ERRORS = {
     'device_not_owned_or_unavailable':'Не удалось передать поручение: выбранное устройство недоступно для выполнения. Проверь его подключение к ИРУ. Новая задача не запущена.',
-    'selected_device_not_owned_or_connected':'Не удалось передать поручение: выбранное устройство недоступно для выполнения. Проверь его подключение к ИРУ. Новая задача не запущена.',
     'target_device_required':'Для передачи поручения нужно выбрать доступное устройство. Новая задача не запущена.',
     'duplicate_target_device':'Не удалось передать поручение: устройство указано несколько раз. Новая задача не запущена.',
-    'execution_mode_unsupported':'Не удалось передать поручение: выбранный способ исполнения не поддерживается. Новая задача не запущена.',
-    'mixed_goal_requires_explicit_assignment_devices':'Для передачи поручения нужно указать устройство для каждого задания. Новая задача не запущена.',
 }
 
 
@@ -542,8 +524,6 @@ async def run_turn(cmd, user, chat_id, delegate):
                 # human's actual request instead of failing on missing decoration.
                 choice.objective=cmd.message.strip()[:2000]
             if not choice.objective:raise ValueError("missing_objective")
-            if cmd.modes.get("pipeline") or choice.execution_mode=="plan":
-                raise ValueError("execution_mode_unsupported")
             worker=await delegate(choice,request_key="turn:"+key)
             task.update(goal_id=worker.get("goal_id"),result_first=True)
             # One Goal is presented to the human; members are internal Operations.
@@ -614,7 +594,7 @@ async def run_turn(cmd, user, chat_id, delegate):
                 result = scheduler.amend_pending(choice.task_id, owner, chat_id,
                     expected_revision=choice.task_revision, human_request=cmd.message, objective=choice.objective,
                     memory_authorizations=[proof.model_dump() for proof in choice.memory_authorizations],
-                    execution_scope=choice.execution_scope,window_effects=choice.window_effects,
+                    window_effects=choice.window_effects,
                     preserve_file_bytes=choice.preserve_file_bytes)
                 answer = "Уточнение сохранено для ожидающего поручения. Версия " + str(result["revision"]) + "."
             elif choice.intent=="cancel":
@@ -635,13 +615,6 @@ async def run_turn(cmd, user, chat_id, delegate):
                 task.update(worker_report=source_report,execution_source_task_id=choice.task_id)
                 terminal=next((entry for entry in reversed(source.get('commands') or [])
                     if entry.get('tool_name')=='answer.text' and entry.get('status')=='terminal'),{})
-                informational=(source.get('execution_scope')=='analysis' or
-                    ((terminal.get('result') or {}).get('self_check') or {}).get('claims_completed_action') is False)
-                if (source_report['status'] in {'success','partial','unknown'} and informational
-                        and choice.answer.strip() and saved_step_reports(source)):
-                    answer='По сохранённым наблюдениям: '+choice.answer.strip()
-                    if source_report['status']=='partial':answer+='\n\nДиагностика выполнена частично; полного подтверждения результата нет.'
-                    elif source_report['status']=='unknown':answer+='\n\nИтог задачи не подтверждён.'
                 if source.get('goal_id') and not choice.show_execution_details and choice.result_view != 'saved_report':
                     try:
                         from .worker_scheduler import goal_view
@@ -785,7 +758,7 @@ def restore_dialogue(task_id, owner):
         "speech_diagnostics":metadata.get("speechDiagnostics") or {},
         "history_metadata":metadata,"execution_details":metadata.get("executionDetails") or "",
         "worker_report":metadata.get("workerReport"),"task_receipt":metadata.get("taskReceipt"),
-        "current_step":metadata.get("taskTitle"),"plan_suggestion":metadata.get("planSuggestion"),"plan_original_request":metadata.get("planOriginalRequest"),
+        "current_step":metadata.get("taskTitle"),
         "orchestrated":metadata.get("orchestrated") is True,
         "result_first":metadata.get("resultFirst") is True, "goal_id":metadata.get("goalId"),
         "proposed_objective":metadata.get("proposedObjective") or "",

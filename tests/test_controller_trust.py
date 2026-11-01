@@ -44,12 +44,7 @@ def _answer_call(call_id: str, text: str) -> dict:
                 "answer_type": "pure_text",
                 "text": text,
                 "basis": [],
-                "self_check": {
-                    "depends_on_current_external_state": False,
-                    "claims_completed_action": False,
-                    "has_sufficient_evidence": True,
-                    "missing_evidence_question": "",
-                },
+
             }, ensure_ascii=False),
         },
     }
@@ -447,8 +442,6 @@ def test_chat_broadcast_executes_independently_on_all_devices(client, monkeypatc
         "pending": {}, "ws": object(),
     }
 
-    async def fake_classify_task_complexity(message):
-        return ("SIMPLE", "")
 
     async def fake_process_nl_command(**kwargs):
         await kwargs["send_command_fn"](kwargs["device_id"], "execute_cmd", {"command": "whoami"})

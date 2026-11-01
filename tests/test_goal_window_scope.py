@@ -8,14 +8,12 @@ from server import database as db
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_tools import NON_PIPELINE_TOOLS
 from server.runtime_state import tasks
-from server.worker_scheduler import validated_execution_scope
-from server.window_policy import ordinary_window_request, direct_window_action, window_action_sequence
 
 
 @pytest.mark.parametrize("user_message", ["Убери это окно с экрана, оставив приложение работать", "Minimize the active window", "Сверни"])
 def test_semantic_window_scope_has_no_keyword_shortcut(monkeypatch, user_message):
     monkeypatch.setattr(db, "get_device_profile", lambda *a, **kw: None)
-    tasks["semantic-window"] = {"task_id":"semantic-window", "goal_id":"goal", "execution_scope":"window",
+    tasks["semantic-window"] = {"task_id":"semantic-window", "goal_id":"goal",
         "window_effects":["minimize"], "proposed_objective":"Minimize the active window"}
     llm, dispatched = [], []
     async def completion(**kwargs):
@@ -37,14 +35,5 @@ def test_semantic_window_scope_has_no_keyword_shortcut(monkeypatch, user_message
         assert len(llm) == 2  # Worker chooses the operation and then the terminal result.
         assert dispatched == [("pc","window.control",{"action":"minimize","target":"current"})]
         assert result["commands"][-1]["status"] == "terminal"
-        assert not ordinary_window_request(user_message)
-        assert direct_window_action(user_message, [], "pc") is None
-        assert window_action_sequence(user_message) == []
     finally:
         tasks.pop("semantic-window", None)
-
-
-@pytest.mark.parametrize("scope,effects", [("window",["move_virtual_desktop"]),("general",["close"]),("shell",[])])
-def test_scope_contract_rejects_unsupported_effects_or_scope(scope, effects):
-    with pytest.raises(ValueError, match="invalid_worker_execution_scope"):
-        validated_execution_scope(scope, effects)

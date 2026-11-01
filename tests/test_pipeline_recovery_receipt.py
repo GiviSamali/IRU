@@ -30,12 +30,7 @@ def _answer_text_call(call_id: str, text: str, basis: list[str]) -> dict:
                 "answer_type": "grounded_report",
                 "text": text,
                 "basis": basis,
-                "self_check": {
-                    "depends_on_current_external_state": True,
-                    "claims_completed_action": True,
-                    "has_sufficient_evidence": True,
-                    "missing_evidence_question": "",
-                },
+
             }),
         },
     }
@@ -76,7 +71,7 @@ def run_worker(responses,send, *, device_tool_fn=None,history=None):
     outcome=asyncio.run(process_non_pipeline_command(user_message="Inspect the environment and prepare the requested files",
         device_id="device-a",device_info={"os":"Windows","hostname":"alpha"},send_command_fn=send,
         get_file_link_fn=lambda *a:"/api/download/mock",chat_history=history or [],user_id=None,chat_id=None,
-        modes={},poll_task_id=None,cfg={"model":"mock-model","answer_auditor_enabled":False},system_msg="system",
+        modes={},poll_task_id=None,cfg={"model":"mock-model"},system_msg="system",
         machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=6,
         pick_model_fn=lambda *a:"mock-model",chat_completion_request_fn=_completion_fn(responses,captured),
         device_tool_fn=device_tool_fn))

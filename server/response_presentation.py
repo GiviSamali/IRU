@@ -113,7 +113,7 @@ def normalized_worker_report(task, report=None):
 
 
 def running_progress(task):
-    """Project existing PLAN progress; never infer it from generated answer text."""
+    """Project saved operation progress; never infer it from generated answer text."""
     steps = [step for plan in task.get("tasks") or [] if isinstance(plan, dict)
              for step in plan.get("steps") or [] if isinstance(step, dict)]
     done = [str(step["title"])[:200] for step in steps
@@ -152,7 +152,7 @@ def worker_presentation(task, report=None):
         opened=next((c for c in reversed(operations) if c.get('tool_name') in
             {'app.launch','app_launch','app.open_url','app_open_url'} and operation_facts(c)=='success'
             and c['result'].get('completion_state')=='success'),None)
-        if opened and task.get('execution_scope')!='analysis':
+        if opened:
             result=opened['result'];window=result.get('window') or {}
             human='Открытие подтверждено.'
             title=result.get('window_title') or window.get('title')
@@ -168,7 +168,7 @@ def worker_presentation(task, report=None):
     if (terminal.get('result') or {}).get('_result_contract')==3:
         if not effects and not opened:
             view['conversational_response']=report['summary']
-            if (status in {'partial','unknown'} and task.get('execution_scope')!='analysis'
+            if (status in {'partial','unknown'}
                     and not task.get('assigned_artifacts')):
                 try:
                     from .run_journal import unfinished_execution_result

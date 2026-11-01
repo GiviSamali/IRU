@@ -4,12 +4,11 @@ from pydantic import ValidationError
 
 from server.orchestrator import Decision, SYSTEM
 from server.worker_scheduler import validate_task_graph
-from server.controller import _select_llm_route
 
 
 def test_one_decision_carries_shared_research_and_three_deliverables():
-    decision = Decision(intent="delegate", objective="News and documents", scope="device",
-                        target_device_ids=["pc"], execution_mode="simple", assignments=[
+    decision = Decision(intent="delegate", objective="News and documents",
+                        target_device_ids=["pc"],  assignments=[
                             {"key": "news", "objective": "Preserve today's news with dates and sources"},
                             *[{"key": key, "objective": f"Create {key} from preserved news", "depends_on": ["news"]}
                               for key in ("docx", "pptx", "xlsx")]])
@@ -30,13 +29,8 @@ def test_non_delegation_needs_no_task_graph(intent):
 
 def test_routing_instructions_assign_decomposition_to_existing_orchestrator():
     assert "assignments" in SYSTEM
-    assert "Отдельного режима PLAN и дополнительного Planner нет" in SYSTEM
 
 
-def test_retired_pipeline_cannot_reach_controller():
-    with pytest.raises(ValueError, match="execution_mode_unsupported"):
-        _select_llm_route({"pipeline": True})
-    assert _select_llm_route({}).name == "non_pipeline"
 
 
 def test_pending_amendment_has_explicit_revision_and_no_new_task_graph():

@@ -166,7 +166,6 @@ def test_route_selection_has_no_classifier_llm_usage(client, monkeypatch):
     user = create_user("usage-routing-user")
     monkeypatch.setattr(controller, "load_llm_config", lambda: pytest.fail("Routing must not call a classifier"))
     assert not hasattr(controller, "classify_task_complexity")
-    assert controller._select_llm_route({}).name == "non_pipeline"
     summary = get_llm_usage_summary_for_poll_task(user["id"], "classify-task-1")
     assert summary["total_tokens"] == 0
 
@@ -185,14 +184,12 @@ def test_no_device_onboarding_llm_usage_is_attributed_to_user(client, monkeypatc
     import json
     from server import orchestrator as orch
     async def decide(message, context, **kwargs):
-        return orch.Decision(intent="delegate", scope="server", objective=message), {}
+        return orch.Decision(intent="delegate",  objective=message), {}
     monkeypatch.setattr(orch, "decide", decide)
     class WorkerClient(_FakeClient):
         async def post(self, url, headers=None, json=None):
             import json as json_module
-            payload={"answer_type":"pure_text", "text":"Connection instructions", "basis":[],
-                "self_check":{"claims_completed_action":False,"has_sufficient_evidence":True,
-                    "depends_on_current_external_state":False,"missing_evidence_question":""}}
+            payload={"answer_type":"pure_text", "text":"Connection instructions", "basis":[]}
             return _FakeResponse({"choices":[{"message":{"tool_calls":[{"id":"answer","function":{
                 "name":"answer_text","arguments":json_module.dumps(payload)}}]}}],
                 "usage":{"prompt_tokens":12,"completion_tokens":4}})
@@ -202,12 +199,6 @@ def test_no_device_onboarding_llm_usage_is_attributed_to_user(client, monkeypatc
     import server.controller_onboarding as controller_onboarding
     from server.database import create_user
 
-    monkeypatch.setattr(controller, "load_llm_config", lambda: {
-        "base_url": "https://api.deepseek.com/v1",
-        "api_key": "secret",
-        "model": "deepseek-chat",
-        "answer_auditor_enabled": False,
-    })
     monkeypatch.setattr(controller_onboarding.httpx, "AsyncClient", WorkerAsyncClient)
     user = create_user("usage-no-device-user")
     headers = _login_headers(client, user)

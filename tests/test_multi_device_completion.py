@@ -67,15 +67,14 @@ def test_verified_url_worker_stops_without_another_llm_or_verification(monkeypat
             return {"choices": [{"message": {"tool_calls": [{"id": "open", "function": {"name": "app_open_url", "arguments": json.dumps({"url": "https://music.yandex.ru"})}}]}}]}
         return {"choices": [{"message": {"tool_calls": [{"id": "answer", "function": {"name": "answer_text", "arguments": json.dumps({
             "answer_type": "grounded_report", "text": "Music opened.", "basis": ["step_1"],
-            "self_check": {"depends_on_current_external_state": True, "claims_completed_action": True,
-                           "has_sufficient_evidence": True, "missing_evidence_question": ""},
+
         })}}]}}]}
     async def send(device, action, params):
         sent.append((device, action))
         return {"status": "opened_verified", "launched": True, "window_found": True, "url": "https://music.yandex.ru"}
     result = asyncio.run(process_non_pipeline_command(user_message="Open music",device_id="device-1",
         device_info={"os":"Windows"},send_command_fn=send,get_file_link_fn=lambda *a:"",chat_history=[],
-        user_id=None,chat_id=None,modes={},poll_task_id=None,cfg={"model":"mock","answer_auditor_enabled":False},
+        user_id=None,chat_id=None,modes={},poll_task_id=None,cfg={"model":"mock"},
         system_msg="system",machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,
         max_iterations=4,pick_model_fn=lambda *a:"mock",chat_completion_request_fn=completion))
     assert len(calls) == 2 and sent == [("device-1", "app.open_url")]
@@ -115,9 +114,6 @@ def test_goal_preserves_each_device_result_without_summary_llm(tmp_path,monkeypa
             task["commands"][0].update(tool_name="execute_cmd", device_id=target,
                 command="Get-Content C:/Temp/note.txt",
                 result={"returncode":0,"stdout":f"Observed state on {target}","stderr":""})
-            from server.worker_reports import coverage_binding
-            task['commands'][-1]['result']['_coverage']={'coverage':'complete','evidence_refs':['source-1'],
-                'binding':coverage_binding(task['proposed_objective'],task['commands'][:-1],task['answer'])}
         else:
             evidence(journal,target,{"returncode":0,"stdout":"OK: opened_verified"})
             task.update(status="done",answer="Opened",commands=journal)
@@ -126,7 +122,7 @@ def test_goal_preserves_each_device_result_without_summary_llm(tmp_path,monkeypa
         try:
             devices=[f"{owner['id']}:{name}" for name in ("a","b")]
             admitted=await scheduler.submit_goal({"user_id":owner["id"],"chat_id":chat,
-                "message":"Read both devices","execution_scope":"analysis","device_ids":devices},[
+                "message":"Read both devices","device_ids":devices},[
                     {"key":name,"objective":f"Read device {name}","target_device_ids":[device]}
                     for name,device in zip(("a","b"),devices)],request_key="both-devices")
             await scheduler.runners[owner["id"]]

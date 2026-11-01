@@ -34,9 +34,7 @@ def success(t):
         tasks=[],task_receipt={'task_status':'completed','final_verification_status':'verified',
             'goal_completed':True,'answer_source':'audited_terminal'})
     t['commands'].append({'tool_name':'answer.text','status':'terminal','result':{
-        'answer_type':'grounded_report','text':'verified','basis':['step_1'],
-        'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,
-            'has_sufficient_evidence':True,'missing_evidence_question':''}}})
+        'answer_type':'grounded_report','text':'verified','basis':['step_1']}})
 
 
 async def wait_until(predicate):
@@ -283,8 +281,7 @@ def test_server_worker_search_has_current_journal_and_validated_terminal(owners,
     from server import controller_onboarding as onboarding
     from server.controller_trust import has_grounded_terminal_answer
     a,b=owners
-    answer={'answer_type':'grounded_report','text':'Forecast based on tool data','basis':['step_1'],
-        'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,'has_sufficient_evidence':True,'missing_evidence_question':''}}
+    answer={'answer_type':'grounded_report','text':'Forecast based on tool data','basis':['step_1']}
     messages=[{'tool_calls':[{'id':'search','function':{'name':'web_search','arguments':json.dumps({'query':'weather'})}}]},
         {'tool_calls':[{'id':'answer','function':{'name':'answer_text','arguments':json.dumps(answer)}}]},
         {'content':json.dumps({'valid':True,'reason':'Original informational goal supported by search evidence'})}]
@@ -303,7 +300,7 @@ def test_server_worker_search_has_current_journal_and_validated_terminal(owners,
     async def search(*a,**kw):return {'status':'success','results':[{'title':'Forecast','url':'https://example.invalid','snippet':'tool evidence'}]}
     monkeypatch.setattr(onboarding.httpx,'AsyncClient',Client);monkeypatch.setattr(onboarding,'run_web_search',search)
     result=asyncio.run(onboarding.process_onboarding_message('weather',usage_context={'user_id':a['id'],'worker_execution':True},
-        load_llm_config_fn=lambda:{'model':'mock-model','api_key':'fake-test','base_url':'https://example.invalid','answer_auditor_enabled':True},current_datetime_msk_fn=lambda:'2026-10-09'))
+        load_llm_config_fn=lambda:{'model':'mock-model','api_key':'fake-test','base_url':'https://example.invalid'},current_datetime_msk_fn=lambda:'2026-10-09'))
     assert has_grounded_terminal_answer(result['answer'],result['commands'])
     assert len(requested)==3 and len(requested[0]['messages'][0]['content'])<10000
     assert set(t['function']['name'] for t in requested[0]['tools']) <= {'web_search','remember_fact','forget_fact','memory_list_facts','memory_get_stats','answer_text','system_get_last_run_summary'}
@@ -771,7 +768,6 @@ def test_generated_scope_never_becomes_worker_human_request_or_instructions(owne
         return {'answer':'folder inspected','commands':[],'tasks':[]}
     async def transport(device,action,params,**kwargs):actions.append(action);return {'entries':[]}
     async def probe(**kwargs):pass
-    async def classify(*args,**kwargs):return 'SIMPLE',''
     monkeypatch.setattr(runtime,'process_nl_command',controller);monkeypatch.setattr(runtime,'send_command_to_agent',transport)
     monkeypatch.setattr(runtime,'_probe_python_toolchain_if_needed',probe);
     monkeypatch.setattr(runtime,'get_device_profile',lambda *args,**kwargs:None)
@@ -838,9 +834,7 @@ def test_p001_information_without_marker_preserves_verified_answer(owners):
     journal = []
     append_tool_step(journal, make_run_step(journal=journal, tool_name='execute_cmd',
         result={'returncode': 0, 'stdout': 'background: black', 'stderr': ''}, target_device_id='pc'))
-    payload = {'answer_type': 'grounded_report', 'text': 'Текущий фон: чёрный.', 'basis': ['step_1'],
-        'self_check': {'depends_on_current_external_state': True, 'claims_completed_action': False,
-            'has_sufficient_evidence': True, 'missing_evidence_question': ''}}
+    payload = {'answer_type': 'grounded_report', 'text': 'Текущий фон: чёрный.', 'basis': ['step_1']}
     append_answer_step(journal, 'answer_text', payload, target_device_id='pc')
     t.update(status='done', answer=payload['text'], commands=journal,
         task_receipt={'task_status': 'completed', 'answer_source': 'audited_terminal',
@@ -862,9 +856,7 @@ def test_p001_stdout_markers_and_model_flags_cannot_confirm_goal(owners):
         t = task(a)
         t.update(status='done', answer='Всё выполнено.', commands=[entry,
             {'tool_name': 'answer.text', 'status': 'terminal', 'result': {
-                'answer_type': 'grounded_report', 'text': 'Всё выполнено.', 'basis': ['step_1'],
-                'self_check': {'depends_on_current_external_state': True, 'claims_completed_action': True,
-                    'has_sufficient_evidence': True, 'missing_evidence_question': ''}}}])
+                'answer_type': 'grounded_report', 'text': 'Всё выполнено.', 'basis': ['step_1']}}])
         assert not build_worker_report(t)['goal_completed']
 
 
@@ -921,8 +913,7 @@ def test_server_worker_reserves_existing_last_turn_for_honest_partial_answer(own
         return {'tool_calls':[{'id':ident,'function':{'name':name,'arguments':json.dumps(args)}}]}
     def payload(kind,basis):
         return {'answer_type':kind,'text':'Поиск нашёл страницы, но нужных значений в выдержках нет.',
-            'basis':basis,'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,
-                'has_sufficient_evidence':False,'missing_evidence_question':'В выдержках нет нужных значений.'}}
+            'basis':basis}
     responses=[call('web_search',{'query':'current facts'},'s1'),call('web_search',{'query':'specific facts'},'s2'),
         call('answer_text',payload('grounded_report',['nonexistent']),'bad'),
         call('answer_text',payload('partial_report',['step_1','step_2']),'final'),
@@ -935,7 +926,7 @@ def test_server_worker_reserves_existing_last_turn_for_honest_partial_answer(own
     monkeypatch.setattr(controller,'_chat_completion_request',completion)
     monkeypatch.setattr(onboarding,'run_web_search',search)
     result=asyncio.run(onboarding.process_onboarding_message('Find current facts',usage_context={'user_id':a['id'],'worker_execution':True},
-        load_llm_config_fn=lambda:{'model':'mock-model','answer_auditor_enabled':True},current_datetime_msk_fn=lambda:'2026-10-10'))
+        load_llm_config_fn=lambda:{'model':'mock-model'},current_datetime_msk_fn=lambda:'2026-10-10'))
     assert [t['function']['name'] for t in captured[3]['tools']]==['answer_text']
     assert result['task_receipt']['goal_completed'] is False and result['task_receipt']['task_status']=='partial'
     assert [c['tool_name'] for c in result['commands']]==['web_search','web_search','answer.text']
@@ -952,9 +943,7 @@ def test_server_worker_has_one_terminal_repair_without_repeating_search(owners, 
         return {'tool_calls': [{'id': ident, 'function': {'name': name, 'arguments': json.dumps(args)}}]}
 
     text = 'Найдены страницы. Цена и нужное число деталей не подтверждены.'
-    payload = {'answer_type': 'partial_report', 'text': text, 'basis': ['step_1', 'step_2'],
-               'self_check': {'depends_on_current_external_state': True, 'claims_completed_action': False,
-                              'has_sufficient_evidence': False, 'missing_evidence_question': 'Нет цены.'}}
+    payload = {'answer_type': 'partial_report', 'text': text, 'basis': ['step_1', 'step_2']}
     final = call('answer_text', payload if repair != 'invalid' else {}, 'repair')
     if repair == 'search':
         final = call('web_search', {'query': 'must not execute'}, 'repair')
@@ -979,7 +968,7 @@ def test_server_worker_has_one_terminal_repair_without_repeating_search(owners, 
     with diagnostic_context_for_task('terminal-repair-test', task_state):
         result = asyncio.run(onboarding.process_onboarding_message('Find current facts',
             usage_context={'user_id': a['id'], 'worker_execution': True},
-            load_llm_config_fn=lambda: {'model': 'mock-model', 'answer_auditor_enabled': True},
+            load_llm_config_fn=lambda: {'model': 'mock-model'},
             current_datetime_msk_fn=lambda: '2026-10-18'))
 
     worker_requests = [request for request in requests if request['phase'] == 'onboarding']

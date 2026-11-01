@@ -46,7 +46,6 @@ CANONICAL_TOOL_NAMES = {
     "answer_text": "answer.text",
     "answer_ask_clarification": "answer.ask_clarification",
     "answer_report_failure": "answer.report_failure",
-    "answer_request_confirmation": "answer.request_confirmation",
     "write_content": "write_content",
     "read_file": "read_file",
     "execute_cmd": "execute_cmd",
@@ -408,15 +407,6 @@ TOOL_METADATA = {
         "returns": "terminal failure payload",
         "danger": "safe",
     },
-    "answer.request_confirmation": {
-        "category": "answer",
-        "tool_type": "answer",
-        "tool_label": "Запрос подтверждения",
-        "purpose": "Terminal confirmation request before a risky action.",
-        "when_to_use": ["dangerous or destructive action requires confirmation"],
-        "returns": "terminal confirmation payload",
-        "danger": "confirmation",
-    },
 }
 
 
@@ -605,9 +595,9 @@ DEVICE_TOOL_SCHEMAS = [
      'function': {'name': 'window_control',
                   'description': 'Управляй существующими окнами через нативный API. Для сворачивания, '
                                  'разворачивания, восстановления, активации, закрытия, геометрии и мониторов '
-                                 'используй этот tool, никогда execute_cmd или эмуляцию клавиатуры/мыши. '
-                                 'Несколько действий выполняй последовательными обычными вызовами, PLAN не '
-                                 'нужен. target=current — активное окно; last — последнее изменённое этим '
+                                 'этот tool возвращает факты нативного API. Выбирай разрешённый способ по поручению. '
+                                 'Несколько действий выполняй обычными вызовами, без обязательного плана; '
+                                 'target=current — активное окно; last — последнее изменённое этим '
                                  'capability окно на том же устройстве; имя приложения (Word, Excel, browser, VS '
                                  'Code) или заголовок. window_id только из результата этого tool, не придумывай. '
                                  'При ambiguous уточни пользователя по candidates, не выбирай случайно. '
@@ -983,9 +973,10 @@ DEVICE_TOOL_SCHEMAS = [
     },
     {
         "type": "function",
-        "function": {"name":"answer_text", "description":"Return a compact Worker result for the Orchestrator, not a user-facing reply. Use result for established findings and unresolved only for substantive unfinished requirements of the assigned goal. Optional recommendations belong in remaining and do not block completion. Server links evidence automatically; never claim verified/success or copy hashes/step IDs. Legacy answer remains accepted.",
+        "function": {"name":"answer_text", "description":"Return a compact Worker result for the Orchestrator, not a user-facing reply. Use result for established findings and unresolved only for substantive unfinished requirements of the assigned goal. Optional recommendations belong in remaining and do not block completion. Server links evidence automatically; never claim verified/success or copy hashes/step IDs. Report substantial interpretation limits in caveats.",
          "parameters":{"type":"object","additionalProperties":False,"anyOf":[{"required":["result"]},{"required":["answer"]}],"properties":{
              "result":{"type":"string","minLength":1,"maxLength":8000},
+             "caveats":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":1000}},
              "unresolved":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":1000}},
              "answer":{"type":"string","minLength":1,"maxLength":100000},
              "effects":{"type":"object","additionalProperties":False,"properties":{
@@ -1026,24 +1017,7 @@ DEVICE_TOOL_SCHEMAS = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "answer_request_confirmation",
-            "description": "Terminal confirmation request before risky action. Server-side only.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "message": {"type": "string"},
-                    "action": {"type": "string"},
-                    "risk": {"type": "string", "enum": ["low", "medium", "high"]},
-                    "command_preview": {"type": "string"},
-                    "basis": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["message", "action", "risk", "command_preview", "basis"],
-            },
-        },
-    },
+
 ]
 
 
@@ -1198,8 +1172,6 @@ def compact_tool_summary(action: str, result: Any = None, command: str = "") -> 
             return "clarification requested"
         if name == "answer.report_failure":
             return "failure reported"
-        if name == "answer.request_confirmation":
-            return "confirmation requested"
     if command:
         return command[:240]
     return f"{name} completed"

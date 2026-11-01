@@ -20,11 +20,11 @@ def payload(arguments):
 @pytest.mark.parametrize('bad,stage,error_type',[
  ({'choices':[{'finish_reason':'stop','message':{'content':'ordinary text','tool_calls':[]}}]},'llm_response','ValueError'),
  (payload({'intent':'conversation','answer':'reply','scope':None}),'decision_validation','ValidationError'),
- (payload({'intent':'conversation','answer':'reply','execution_mode':'unapproved'}),'decision_validation','ValidationError'),
+ (payload({'intent':'conversation','answer':'reply','target_device_ids':[None]}),'decision_validation','ValidationError'),
 ])
 def test_failed_decision_is_diagnosed_and_does_not_poison_following_turns(client,monkeypatch,caplog,bad,stage,error_type):
  user=owner();calls=[];delegated=[]
- answers=iter([bad,payload({'intent':'conversation','answer':'Привет!'}),payload({'intent':'conversation','answer':'Обсудим вопрос.'}),payload({'intent':'clarify','answer':'Что именно уточнить?'}),payload({'intent':'delegate','objective':'Показать состояние','scope':'device','target_device_ids':['pc']})])
+ answers=iter([bad,payload({'intent':'conversation','answer':'Привет!'}),payload({'intent':'conversation','answer':'Обсудим вопрос.'}),payload({'intent':'clarify','answer':'Что именно уточнить?'}),payload({'intent':'delegate','objective':'Показать состояние','target_device_ids':['pc']})])
  async def completion(*args,**kwargs):calls.append(args[3]);return next(answers)
  async def delegate(choice,**kwargs):delegated.append(choice);return {'task_id':'fake-worker','status':'running'}
  monkeypatch.setattr(orch,'_chat_completion_request',completion);monkeypatch.setattr(orch,'load_llm_config',lambda:{'model':'mock'})
@@ -48,7 +48,7 @@ def test_failed_decision_is_diagnosed_and_does_not_poison_following_turns(client
 @pytest.mark.parametrize('stage',['context_for','llm_config','llm_request','handoff'])
 def test_phase_errors_do_not_log_exception_messages_context_or_credentials(client,monkeypatch,caplog,stage):
  user=owner();secret='PRIVATE_SECRET_AND_CONTEXT_DO_NOT_LOG'
- async def completion(*args,**kwargs):return payload({'intent':'delegate','objective':'Read data','scope':'server'})
+ async def completion(*args,**kwargs):return payload({'intent':'delegate','objective':'Read data'})
  async def handoff(*args,**kwargs):raise RuntimeError(secret)
  def fail_context(*args,**kwargs):raise sqlite3.OperationalError(secret)
  def fail_config():raise FileNotFoundError(secret)
@@ -97,7 +97,7 @@ def test_invalid_json_has_one_format_retry_before_any_handoff(client,monkeypatch
  user=owner();requests=[];delegated=[]
  malformed=payload({})
  malformed['choices'][0]['message']['tool_calls'][0]['function']['arguments']='{"intent":"delegate","objective":"bad "quote"}'
- repaired=payload({'intent':'delegate','objective':'Create the requested file','scope':'server'})
+ repaired=payload({'intent':'delegate','objective':'Create the requested file'})
  async def completion(*args,**kwargs):
   assert not delegated
   assert not args[0].is_closed

@@ -341,7 +341,7 @@ async function cancelActiveTask(taskId = null) {
   if (!active?.task_id || active.cancelRequested) return;
   active.cancelRequested = true;
   const msg = state.messages.find(item => item._taskId === active.task_id);
-  const wasConfirm = Boolean(msg?.confirmTaskId || msg?.planReview);
+  const wasConfirm = Boolean(msg?.confirmTaskId);
   if (msg) {
     msg.loading = true;
     msg.currentStatus = 'cancelling';
@@ -629,9 +629,9 @@ function adaptiveMessageIndexes() {
   if(lastUser>=0)indexes.add(lastUser);
   state.messages.forEach((message,index)=>{
     if(message.role==='user')return;
-    if(message.taskKind==='worker' && !message.confirmTaskId && !message.planReview && message.taskStatus!=='waiting_input'
+    if(message.taskKind==='worker' && !message.confirmTaskId && message.taskStatus!=='waiting_input'
         && (message.loading || !isTaskTerminalStatus(message.taskStatus)))return;
-    if(index>lastUser || message.confirmTaskId || message.planReview || message.taskStatus==='waiting_input')indexes.add(index);
+    if(index>lastUser || message.confirmTaskId || message.taskStatus==='waiting_input')indexes.add(index);
   });
   return indexes;
 }
@@ -679,7 +679,7 @@ function renderMessages() {
     // The admitted delegation already has its own Worker UI status.
     if (m.role === 'assistant' && m.taskKind === 'orchestrator' && !m.loading &&
         !String(m.content || m.text || m.conversationalResponse || m.conversational_response || '').trim() &&
-        !m.planSuggestion && !m.confirmTaskId) continue;
+        !m.confirmTaskId) continue;
     const role = m.role === 'user' ? 'user' : 'assistant';
     const active = state.pendingTasks.find(item => item.task_id === m._taskId && item.kind !== 'orchestrator');
     const stopTarget=compact ? getActivePendingTask() : null;
@@ -694,12 +694,12 @@ function renderMessages() {
       view.blocks = view.blocks.filter(block => block.type !== 'task');
     }
     const workerInDock = m.taskKind === 'worker';
-    if(compact && !workerInDock && m.loading && !m.confirmTaskId && !m.planReview) {
+    if(compact && !workerInDock && m.loading && !m.confirmTaskId) {
       view.blocks=view.blocks.filter(block=>block.type!=='task');
       if(!view.blocks.some(block=>block.type==='text'||block.type==='goal'))view.blocks.unshift({type:'text',key:view.key+'-working',text:'Отвечаю…',long:false});
     }
     const resultFiles = workerInDock ? view.blocks.filter(block => block.type === 'file') : [];
-    if (workerInDock) view.blocks = view.blocks.filter(block => block.type !== 'task' && block.type !== 'file' && (block.type !== 'action' || m.confirmTaskId || m.planReview || m.planSuggestion || m.suggestedFact));
+    if (workerInDock) view.blocks = view.blocks.filter(block => block.type !== 'task' && block.type !== 'file' && (block.type !== 'action' || m.confirmTaskId || m.suggestedFact));
     let bodyHTML = IRUSmartUI.render(view, {
       expanded: state.expandedSmartBlocks,
       formatAssistantText: role === 'assistant',
@@ -912,7 +912,7 @@ async function sendMessage(options = {}) {
       device_id: isOnboarding ? '' : (state.selectedDevice || ids[0]),
       message: messageToSend,
       chat_id: sourceChatId,
-      orchestrate: true, request_id: requestId,
+      request_id: requestId,
       voice_provider: window.iruVoiceProvider?.() || 'yandex',
       broadcast: isBroadcast,
       modes: { ...state.modes },
@@ -1281,7 +1281,6 @@ function getCommandDetailsText(command, fallbackOutput) {
   if (command.tool_type === 'answer') {
     if (result.answer_type) lines.push(`answer_type: ${result.answer_type}`);
     if (Array.isArray(result.basis)) lines.push(`basis: ${result.basis.join(', ')}`);
-    if (result.self_check) lines.push(`self_check: ${JSON.stringify(result.self_check)}`);
   }
   const windowInfo = result.window || result.match || {};
   const detailFields = {
@@ -1661,4 +1660,3 @@ function updateCharCount() {
 
 bindChatListActions();
 bindChatMessageActions();
-

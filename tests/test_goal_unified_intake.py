@@ -10,8 +10,7 @@ from server.routers import tasks as routes
 from server.worker_scheduler import init_worker_storage
 
 
-@pytest.mark.parametrize("legacy_flag", [False, True])
-def test_legacy_orchestrate_flag_cannot_bypass_semantic_intake(tmp_path, monkeypatch, legacy_flag):
+def test_natural_language_intake_always_uses_orchestrator(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "intake.sqlite")
     db.init_db()
     init_worker_storage()
@@ -27,7 +26,7 @@ def test_legacy_orchestrate_flag_cannot_bypass_semantic_intake(tmp_path, monkeyp
         return {"status":"ok", "response_type":"orchestrator"}
 
     monkeypatch.setattr(routes, "run_turn", turn)
-    cmd = routes.NLCommand(message="Discuss possible documents", chat_id=chat, orchestrate=legacy_flag)
+    cmd = routes.NLCommand(message="Discuss possible documents", chat_id=chat)
     request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
     result = asyncio.run(routes.nl_command(cmd, request))
     assert result["response_type"] == "orchestrator"
@@ -36,13 +35,6 @@ def test_legacy_orchestrate_flag_cannot_bypass_semantic_intake(tmp_path, monkeyp
         assert c.execute("SELECT COUNT(*) FROM worker_jobs").fetchone()[0] == 0
 
 
-def test_retired_pipeline_mode_is_rejected_before_intake_or_worker(monkeypatch):
-    monkeypatch.setattr(routes, "get_current_user", lambda request: {"id":42})
-    cmd = routes.NLCommand(message="old client", modes={"pipeline":True})
-    with pytest.raises(HTTPException) as caught:
-        asyncio.run(routes.nl_command(cmd, object()))
-    assert caught.value.status_code == 422
-    assert caught.value.detail["code"] == "execution_mode_unsupported"
 
 
 @pytest.mark.parametrize("record", [None, {"user_id":8,"ws":object()}, {"user_id":7,"ws":None}])

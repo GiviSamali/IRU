@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'agent'))
 from core import window_control as wc
-from server.window_policy import ordinary_window_request, silent_window_success
+from server.window_policy import silent_window_success
 
 
 def window(handle=101, pid=10, title='Document — Word', process='WINWORD.EXE'):
@@ -128,19 +128,7 @@ def test_no_synthetic_input_or_shell_execution_and_pointer_sized_bindings():
         assert forbidden not in source
     assert "W.HWND" in source and 'argtypes' in source and 'SetThreadDpiAwarenessContext' in source
 
-@pytest.mark.parametrize('message', ['Сверни это окно','Сверни браузер','Разверни Word','Word вправо',
-    'Поставь браузер на левую половину экрана','Перенеси это окно на второй монитор',
-    'Верни окно в обычный размер','Покажи Excel','Закрой блокнот','Какие окна сейчас открыты?',
-    'Какое окно сейчас активно?','Поставь браузер слева, а VS Code справа','Сверни браузер на Second','На первом ПК Word вправо'])
-def test_window_commands_are_ordinary_without_classifier_llm(message, monkeypatch):
-    from server import controller
-    monkeypatch.setattr(controller,'load_llm_config',lambda: pytest.fail('classification LLM not needed'))
-    assert not ordinary_window_request(message)  # No lexical intent routing.
-    assert controller._select_llm_route({}).name == 'non_pipeline'
 
-@pytest.mark.parametrize('message', ['Создай Word и сверни браузер','Сверни браузер и скачай файл','Разработай план управления окнами'])
-def test_mixed_tasks_do_not_bypass_classification(message):
-    assert not ordinary_window_request(message)
 
 
 def test_response_policy_keeps_information_and_errors_audible():
@@ -166,8 +154,7 @@ def test_two_window_actions_on_same_device_without_plan(monkeypatch):
     result = _run_non_pipeline_case([
         tool_call('window_control',{'action':'left','target':'Word'},'one'),
         tool_call('window_control',{'action':'right','target':'VS Code'},'two'),
-        tool_call('answer_text',{'answer_type':'grounded_report','text':'Word слева, VS Code справа.','basis':['step_1','step_2'],
-            'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,'has_sufficient_evidence':True,'missing_evidence_question':''}},'answer')],send_command_fn=send)
+        tool_call('answer_text',{'answer_type':'grounded_report','text':'Word слева, VS Code справа.','basis':['step_1','step_2']},'answer')],send_command_fn=send)
     assert len(sent) == 2 and all(s[1] == 'window.control' for s in sent)
     assert result['tasks'] == [] and 'Word слева' in result['answer']
     assert silent_window_success({'status':'done','commands':result['commands']})
@@ -183,8 +170,7 @@ def test_explicit_device_routing_without_fallback(monkeypatch,device):
         if target != 'Second': raise RuntimeError('target_device_not_found_or_offline')
         return wc.WindowControl(FakeAdapter()).run(**args)
     result = _run_non_pipeline_case([tool_call('window_control',{'action':'minimize','target':'Word','device_id':device}),
-        tool_call('answer_text',{'answer_type':'pure_text','text':'Результат','basis':[],
-            'self_check':{'depends_on_current_external_state':False,'claims_completed_action':False,'has_sufficient_evidence':True,'missing_evidence_question':''}},'answer')],send_command_fn=send)
+        tool_call('answer_text',{'answer_type':'pure_text','text':'Результат','basis':[]},'answer')],send_command_fn=send)
     assert sent == [device]
     if device != 'Second': assert result['commands'][0]['result']['error']
 
@@ -243,9 +229,7 @@ def test_two_semantically_assigned_actions_finish_from_native_evidence(monkeypat
 def test_semantic_scope_has_one_worker_call_per_native_mutation_and_no_shell(monkeypatch,message,actions):
     from server import database
     from server.controller_non_pipeline import process_non_pipeline_command
-    from server.window_policy import window_action_sequence
     monkeypatch.setattr(database,'get_device_profile',lambda *a,**kw: None)
-    assert window_action_sequence(message) == []
     requests=[]; sent=[]
     async def completion(**kw):
         requests.append(kw)
@@ -290,11 +274,6 @@ def test_controller_stops_for_ambiguity_or_save_dialog_without_retry(monkeypatch
     assert not silent_window_success({'status':'done','commands':result['commands']})
 
 
-@pytest.mark.parametrize('message', ['Сверни', 'На весь экран', 'открой gpt', 'отлично А теперь проводник на второй виртуальный рабочий стол'])
-def test_reported_voice_phrases_skip_classification_llm(monkeypatch,message):
-    from server import controller
-    monkeypatch.setattr(controller,'load_llm_config',lambda: pytest.fail('No classifier LLM for this window request'))
-    assert controller._select_llm_route({}).name == 'non_pipeline'
 
 
 def run_actual_window_request(monkeypatch,message,send,completion=None,history=None,modes=None, *, effects=(),tool_args=None):
@@ -304,7 +283,7 @@ def run_actual_window_request(monkeypatch,message,send,completion=None,history=N
     from server.runtime_state import tasks
     monkeypatch.setattr(database,'get_device_profile',lambda *a,**kw:None)
     task_id='semantic-window-regression'
-    monkeypatch.setitem(tasks,task_id,{'task_id':task_id,'goal_id':'window-goal','execution_scope':'window',
+    monkeypatch.setitem(tasks,task_id,{'task_id':task_id,'goal_id':'window-goal',
         'window_effects':list(effects),'proposed_objective':message})
     calls=[]
     async def selected_tool(**kw):
@@ -351,11 +330,6 @@ def test_semantic_fullscreen_followup_uses_observed_same_device_window(monkeypat
     assert silent_window_success({'status':'done','commands':result['commands']})
 
 
-def test_relative_reference_never_uses_other_device_id(monkeypatch):
-    from server.window_policy import direct_window_action
-    history=[{'role':'assistant','commands':[{'tool_name':'window.control','target_device_id':'Second',
-        'result':{'status':'success','completion_state':'success','window':{'window_id':'a'*32}}}]}]
-    assert direct_window_action('на весь экран',history,'device-1') is None
 
 
 def test_ambiguous_semantic_window_task_can_ask_without_dispatch(monkeypatch):
@@ -413,8 +387,8 @@ def test_compact_controller_prompt_preserves_device_inventory_without_full_profi
     from types import SimpleNamespace
     from server.controller import _build_route_kwargs
     from server.runtime_state import tasks
-    monkeypatch.setitem(tasks,'compact-window',{'execution_scope':'window','window_effects':['activate']})
-    result=_build_route_kwargs(route=SimpleNamespace(name='non_pipeline',toolset_name='non_pipeline'),
+    monkeypatch.setitem(tasks,'compact-window',{'window_effects':['activate']})
+    result=_build_route_kwargs(
         runtime=SimpleNamespace(cfg={},machine_guid=None,mem_user_id=None,devices_block='givi first; Second second',
             hostname='first',os_info='Windows',os_version='',profile_block='',memory_block='',target_device_block='',
             os_rules='',current_datetime_msk='',python_toolchain_block='',device_context_block='',recent_artifact_context_block=''),
@@ -469,9 +443,3 @@ def test_restore_does_not_accept_unchanged_maximized_window(monkeypatch):
     adapter=Unchanged(); adapter.rows[0]['maximized']=True
     clock=iter([0,1]); monkeypatch.setattr(wc.time,'monotonic',lambda:next(clock))
     assert wc.WindowControl(adapter).run('restore')['error']=='action_not_verified'
-
-def test_back_restore_never_uses_other_device():
-    from server.window_policy import direct_window_action
-    history=[{'role':'assistant','commands':[{'tool_name':'window.control','target_device_id':'Second',
-        'result':{'status':'success','completion_state':'success','window':{'window_id':'a'*32}}}]}]
-    assert direct_window_action('разверни обратно',history,'device-1') is None

@@ -19,16 +19,14 @@ def msg(name, args, call_id="call"):
 
 def terminal(text="Observed result", grounded=False):
     return msg("answer_text",{"answer_type":"grounded_report" if grounded else "pure_text",
-        "text":text,"basis":["step_1"] if grounded else [],"self_check":{
-            "depends_on_current_external_state":grounded,"claims_completed_action":False,
-            "has_sufficient_evidence":True,"missing_evidence_question":""}})
+        "text":text,"basis":["step_1"] if grounded else []})
 
 
 def worker(completion,send, *, cfg=None,limit=6):
     return asyncio.run(controller.process_non_pipeline_command(user_message="Inspect and repair the deliverable",
         device_id="pc",device_info={"os":"Windows"},send_command_fn=send,get_file_link_fn=lambda *a:"link",
         chat_history=[],user_id=None,chat_id=None,modes={},poll_task_id=None,
-        cfg=cfg or {"model":"mock-model","answer_auditor_enabled":False},system_msg="system",
+        cfg=cfg or {"model":"mock-model"},system_msg="system",
         machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=limit,
         pick_model_fn=lambda *a:"mock-model",chat_completion_request_fn=completion))
 
@@ -97,24 +95,6 @@ def test_progress_allows_recovery_but_does_not_promote_plain_answer_to_goal_succ
     assert report["goal_completed"] is False
 
 
-def test_auditor_rejections_are_bounded(monkeypatch):
-    from server import answer_repair
-    monkeypatch.setenv("IRU_ANSWER_AUDITOR_ENABLED","1")
-    counts={"audit":0,"llm":0,"tools":0}
-    async def audit(**kw):
-        counts["audit"]+=1
-        return False,"unsupported",False
-    monkeypatch.setattr(controller,"audit_answer_payload",audit)
-    monkeypatch.setattr(answer_repair,"audit_answer_payload",audit)
-    async def completion(**kw):
-        counts["llm"]+=1
-        return msg("execute_cmd",{"command":"Get-Content C:/Temp/note.txt"}) if counts["llm"]==1 else terminal(grounded=True)
-    async def send(*args):
-        counts["tools"]+=1
-        return {"returncode":0,"stdout":"Observed note"}
-    result=worker(completion,send,cfg={"model":"mock-model","answer_auditor_enabled":True})
-    assert counts["tools"]==1 and 0<counts["audit"]<=7 and counts["llm"]<=7
-    assert (result.get("task_receipt") or {}).get("goal_completed") is not True
 
 
 @pytest.mark.parametrize("consumers",[0,3])

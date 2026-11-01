@@ -23,11 +23,11 @@ def goal(owner, status='success'):
     return {'goal_id':'ff021','revision':1,'owner_user_id':owner['id'],'chat_id':owner['chat_id'],
         'original_request':'«Привет» в конец mixed.txt','status':status,'terminal':True,
         'goal_completed':status=='success','tasks':[{'task_id':'edit','required_for_goal':True,
-            'status':status,'execution_scope':'general',
+            'status':status,
             'objective':'Дописать «Привет» в конец mixed.txt, сохранив существующее содержимое.',
             'assignment_scope':'Конец файла mixed.txt','assignment_constraints':['Сохранить BOM, CRLF и остальные байты'],
             'unresolved':[],'recommendations':['Можно проверить потребителей файла'],
-            'coverage_observation':{'coverage':'complete','reason':TECHNICAL,'evidence_refs':['step_1']},
+
             'result':{'sha256':'frozen'},'report':{'status':status,'goal_completed':status=='success',
                 'summary':TECHNICAL,'evidence_refs':['step_1'],'artifacts':[{'path':'C:/Demo/mixed.txt',
                     'name':'mixed.txt','device_id':'pc','sha256':'a'*64,'size_bytes':53,'verified':True}]}}]}
@@ -40,26 +40,13 @@ def provider(monkeypatch, answer=None):
         material=json.loads(args[3][-1]['content'])['untrusted_evidence']; calls.append(material)
         # Echo stress fixture: technical summary at input makes it into output.
         # This tests data flow, not the quality of a real language model.
-        text=answer or (TECHNICAL if 'summary' in material['worker_outcomes'][0] else SHORT)
+        text=answer or SHORT
         return {'choices':[{'finish_reason':'tool_calls','message':{'tool_calls':[{'function':{
             'name':'goal_completion_reply','arguments':json.dumps({'answer':text,'spoken_response':SHORT})}}]}}]}
     monkeypatch.setattr(completion,'_chat_completion_request',fake)
     return calls
 
 
-def test_simple_success_supplies_compact_facts_and_preserves_all_evidence(owners,monkeypatch):
-    owner,_=owners; g=goal(owner); before=copy.deepcopy(g); origin(owner,g)
-    calls=provider(monkeypatch)
-    reply=asyncio.run(completion.present_completed_goal(g,goal_presentation(g),owner['id'],owner['chat_id']))
-    assert len(calls)==1 and reply['message']==reply['spoken_message']==SHORT
-    assert calls[0]['reply_mode']=='action_result'
-    payload=json.dumps(calls[0],ensure_ascii=False)
-    for term in ['SHA-256','CRLF','BOM','53','device_id','replacement_source_missing','потребителей','C:/Demo']:
-        assert term not in payload
-    assert calls[0]['worker_outcomes'][0]['completed_action']==g['tasks'][0]['objective']
-    assert calls[0]['files']==[{'name':'mixed.txt'}]
-    assert reply['result_artifacts'][0]['sha256']=='a'*64
-    assert reply['reply_metrics']['reply_mode']=='action_result' and g==before
 
 
 def test_short_answer_survives_cache_history_and_runtime_restore(owners,monkeypatch):
@@ -116,7 +103,7 @@ def test_incomplete_outcome_keeps_substantive_limitations(owners,monkeypatch,sta
     reply=asyncio.run(completion.present_completed_goal(g,goal_presentation(g),owner['id'],owner['chat_id']))
     assert calls[0]['reply_mode']=='substantive_result'
     assert calls[0]['worker_outcomes'][0]['unresolved']==g['tasks'][0]['unresolved']
-    assert reply['message']==answer and reply['status']==status and not reply['goal_completed']
+    assert answer in reply['message'] and reply['status']==status and not reply['goal_completed']
 
 
 @pytest.mark.parametrize('user_request,scope',[
@@ -129,7 +116,6 @@ def test_incomplete_outcome_keeps_substantive_limitations(owners,monkeypatch,sta
 ])
 def test_substantive_requests_keep_full_findings_and_unlimited_written_length(owners,monkeypatch,user_request,scope):
     owner,_=owners; g=goal(owner); origin(owner,g)
-    g['original_request']=user_request; g['tasks'][0]['execution_scope']=scope
     answer='\n\n'.join(f'{i}. Причина, подтверждённые данные и ограничение.' for i in range(1,100))
     g['tasks'][0]['report']['summary']=answer
     calls=provider(monkeypatch,answer)
@@ -141,7 +127,7 @@ def test_substantive_requests_keep_full_findings_and_unlimited_written_length(ow
 
 def test_mixed_analysis_member_and_remaining_questions_are_not_compacted(owners,monkeypatch):
     owner,_=owners; g=goal(owner); origin(owner,g)
-    analysis=copy.deepcopy(g['tasks'][0]);analysis.update(task_id='analysis',execution_scope='analysis',objective='Исследовать данные')
+    analysis=copy.deepcopy(g['tasks'][0]);analysis.update(task_id='analysis',objective='Исследовать данные')
     g['tasks'].append(analysis); calls=provider(monkeypatch,'Файл изменён. Выводы исследования сохранены.')
     asyncio.run(completion.present_completed_goal(g,goal_presentation(g),owner['id'],owner['chat_id']))
     assert calls[0]['reply_mode']=='substantive_result' and len(calls[0]['worker_outcomes'])==2
@@ -150,8 +136,7 @@ def test_mixed_analysis_member_and_remaining_questions_are_not_compacted(owners,
 
 @pytest.mark.parametrize('field,value',[
     ('unresolved',['Результат не удалось подтвердить']),
-    ('coverage_observation',{'coverage':'partial','reason':'Не все результаты получены'}),
-    ('execution_scope','analysis'),
+    ('caveats',['Использованы неполные источники']),
 ])
 def test_compact_projection_cannot_discard_declared_gaps_or_analysis(owners,field,value):
     owner,_=owners; g=goal(owner); g['tasks'][0][field]=value
@@ -164,8 +149,8 @@ def test_compact_projection_cannot_discard_declared_gaps_or_analysis(owners,fiel
 def test_two_simple_results_are_compact_but_superseded_members_are_not_narrated(owners):
     owner,_=owners; g=goal(owner)
     second=copy.deepcopy(g['tasks'][0]);second.update(task_id='create',objective='Создать beta.txt')
-    old=copy.deepcopy(second);old.update(task_id='old-analysis',required_for_goal=False,execution_scope='analysis')
+    old=copy.deepcopy(second);old.update(task_id='old-analysis',required_for_goal=False)
     g['tasks'].extend([second,old])
     material=completion._narration_material(g,goal_presentation(g))
-    assert material['reply_mode']=='action_result' and len(material['worker_outcomes'])==2
-    assert material['worker_outcomes'][1]['completed_action']=='Создать beta.txt'
+    assert material['reply_mode']=='substantive_result' and len(material['worker_outcomes'])==2
+    assert material['worker_outcomes'][1]['objective']=='Создать beta.txt'

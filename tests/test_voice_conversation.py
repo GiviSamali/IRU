@@ -77,7 +77,7 @@ def test_long_primary_speech_avoids_editor_latency_and_does_not_fill_420(monkeyp
 @pytest.mark.parametrize('model_speech',['Всё сделала.','The requested deliverables are available.','Начну с исследования.'])
 def test_delegation_speech_uses_actual_admission_not_model_completion(client,monkeypatch,state,model_speech):
  user=db.create_user('admission-speaker');chat=db.create_chat(user['id'],'dialog')['id']
- async def decide(*args,**kwargs):return orch.Decision(intent='delegate',scope='server',objective='Проверить данные',spoken_response=model_speech),{}
+ async def decide(*args,**kwargs):return orch.Decision(intent='delegate',objective='Проверить данные',spoken_response=model_speech),{}
  async def delegate(*args,**kwargs):return {'task_id':'fake-worker','status':state}
  monkeypatch.setattr(orch,'decide',decide)
  cmd=SimpleNamespace(message='Проверь данные',request_id='admission',device_id='',modes={},broadcast=False)
@@ -97,8 +97,7 @@ def worker(status='done',action='app.open_url'):
 def test_action_speech_is_structured_and_chat_preserves_audited_text(monkeypatch):
  task=worker()
  task['commands'].append({'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report',
-  'text':task['answer'],'basis':['step_1'],'self_check':{'depends_on_current_external_state':True,
-  'claims_completed_action':True,'has_sufficient_evidence':True,'missing_evidence_question':''}}})
+  'text':task['answer'],'basis':['step_1']}})
  raw=task['answer'];report=build_worker_report(task)
  async def forbidden(*args):raise AssertionError('Action does not need another model')
  monkeypatch.setattr(voice,'shorten_answer',forbidden)
@@ -258,8 +257,7 @@ def test_dialogue_changes_topic_while_worker_and_delayed_report_stays_grounded(c
  active.update(status='done',answer='Технический журнал презентации.',commands=[{'tool_name':'write_content','device_id':'pc','step_id':'step_1','status':'success','result':{'path':r'C:\Users\Demo\Desktop\LAN.pptx','bytes_written':500}}],task_receipt={'task_status':'completed','goal_completed':True,'final_verification_status':'verified'})
  active['task_receipt']['answer_source']='audited_terminal'
  active['commands'].append({'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report',
-  'text':active['answer'],'basis':['step_1'],'self_check':{'depends_on_current_external_state':True,
-  'claims_completed_action':True,'has_sufficient_evidence':True,'missing_evidence_question':''}}})
+  'text':active['answer'],'basis':['step_1']}})
  assert asyncio.run(voice.spoken_parts(active))==[active['answer']]
  assert worker_presentation(active)['conversational_response']==active['answer']
  assert active['answer']=='Технический журнал презентации.'

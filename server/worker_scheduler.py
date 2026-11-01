@@ -45,12 +45,15 @@ def unknown_recovery_required(payload):
     return False
 
 
-def validated_execution_scope(scope, effects):
-    if (not isinstance(scope,str) or scope not in {"general","window","analysis"} or not isinstance(effects,list) or len(effects)>16
-            or any(not isinstance(effect,str) or effect not in WINDOW_EFFECTS for effect in effects)
-            or (scope != "window" and effects)):
-        raise ValueError("invalid_worker_execution_scope")
-    return scope, list(effects)
+
+
+def validate_window_effects(effects):
+    """Validate declared result effects, without selecting an execution class."""
+    allowed = {"list", "find", "active", "monitors", "activate", "minimize", "maximize",
+               "restore", "left", "right", "move_monitor", "close", "open"}
+    if not isinstance(effects, list) or len(effects) > 16 or any(
+            not isinstance(effect, str) or effect not in allowed for effect in effects):
+        raise ValueError("invalid_window_effects")
 
 
 def init_worker_storage():
@@ -231,8 +234,6 @@ def pinned_results(task_id, owner, chat_id, device_ids):
                     or data['report'].get('status') != 'success'
                     or data['report'].get('goal_completed') is not True):
                 raise ValueError("dependency_result_corrupt")
-            if not set(data["device_ids"]).issubset(device_ids):
-                raise ValueError("dependency_device_not_allowed")
             results.append({"result_id": row["result_id"], "sha256": row["sha256"], "data": data})
         return results
 
@@ -310,12 +311,11 @@ def goal_view(goal_id, owner, chat_id):
                             "objective": payload.get("proposed_objective") or payload.get("message"),
                             "expected_artifacts": payload.get("assigned_artifacts") or [],
                             "status": report.get('status') or row["state"], "report": report, "dependencies": edges,
-                            "execution_scope": payload.get('execution_scope','general'),
                             "assignment_scope": payload.get('assignment_scope') or '',
                             "assignment_constraints": payload.get('assignment_constraints') or [],
                             "unresolved":terminal.get('unresolved') or [],
                             "recommendations":terminal.get('remaining') or [],
-                            "coverage_observation":terminal.get('_coverage') or {},
+                            "caveats":terminal.get('caveats') or [],
                             "conversational_response": payload.get("conversational_response") or "",
                             "result": dict(result) if result else None})
         for member in members:
@@ -588,7 +588,7 @@ class WorkerScheduler:
         connection.execute("INSERT INTO worker_owner_capacity VALUES(?,?) ON CONFLICT(owner_user_id) DO UPDATE SET capacity=excluded.capacity",
                            (owner, self.max_active_workers))
 
-    def amend_pending(self, task_id, owner, chat_id, *, expected_revision, human_request, objective, memory_authorizations=None, execution_scope=None, window_effects=None, preserve_file_bytes=False):
+    def amend_pending(self, task_id, owner, chat_id, *, expected_revision, human_request, objective, memory_authorizations=None, window_effects=None, preserve_file_bytes=False):
         """CAS guards the original accepted payload and the dispatch boundary.
 
         Devices, dependencies and result identity cannot be changed by this API.
@@ -622,11 +622,10 @@ class WorkerScheduler:
             task = json.loads(row["payload"])
             if "dispatch_started_at" in task:
                 raise ValueError("task_already_dispatched")
-            new_scope = task.get("execution_scope","general") if execution_scope is None else execution_scope
             # A changed objective must not inherit a stale automatic-completion
             # contract. Semantic intake may explicitly supply the revised effects.
             new_effects = window_effects or []
-            new_scope, new_effects = validated_execution_scope(new_scope, new_effects)
+            validate_window_effects(new_effects)
             c.execute("INSERT INTO worker_task_revisions VALUES(?,?,?,?,?,?)",
                       (task_id, expected_revision + 1, row["payload"], human_request, objective, time.time()))
             authority = task.get("original_request") or task["message"]
@@ -638,7 +637,7 @@ class WorkerScheduler:
             task.update(memory_authorizations=proofs, memory_authority_request=human_request)
             if type(preserve_file_bytes) is not bool:
                 raise ValueError("invalid_file_preservation_constraint")
-            task.update(execution_scope=new_scope, window_effects=new_effects,
+            task.update(window_effects=new_effects,
                         preserve_file_bytes=task.get("preserve_file_bytes",False) or preserve_file_bytes)
             c.execute("UPDATE worker_jobs SET payload=?,updated_at=? WHERE task_id=?", (json.dumps(task, ensure_ascii=False), time.time(), task_id))
             metadata = db.message_task_metadata(task, task_id=task_id)
@@ -655,8 +654,6 @@ class WorkerScheduler:
         """Admit all deliverables or none; no Worker or LLM runs in this transaction."""
         if self.closing:
             raise ValueError("worker_shutting_down")
-        if (template.get("modes") or {}).get("pipeline"):
-            raise ValueError("execution_mode_unsupported")
         graph = validate_task_graph(assignments)
         if not isinstance(request_key, str) or not request_key:
             raise ValueError("goal_request_key_required")
@@ -675,9 +672,10 @@ class WorkerScheduler:
                 and any(item.get("preserve_file_bytes") is not True for item in assignments)):
             raise ValueError("mixed_goal_requires_assignment_file_constraints")
         assignment_devices = {}
-        assignment_scopes = {}
+        assignment_effects = {}
         assignment_preservation = {}
-        base_scope, base_effects = validated_execution_scope(template.get("execution_scope","general"), template.get("window_effects") or [])
+        base_effects = template.get("window_effects") or []
+        validate_window_effects(base_effects)
         allowed_devices = template.get("device_ids") or []
         for assignment in assignments:
             if type(assignment.get("preserve_file_bytes", False)) is not bool:
@@ -695,14 +693,10 @@ class WorkerScheduler:
                     or len(selected) != len(set(selected)) or not set(selected).issubset(allowed_devices)):
                 raise ValueError("device_outside_goal_assignment")
             assignment_devices[assignment["key"]] = selected
-            scope = assignment.get("execution_scope") or base_scope
             effects = assignment.get("window_effects")
-            if effects is None:
-                effects = base_effects if scope == base_scope else []
-            assignment_scopes[assignment["key"]] = validated_execution_scope(scope,effects)
-        for key, dependencies in graph.items():
-            if any(not set(assignment_devices[source]).issubset(assignment_devices[key]) for source in dependencies):
-                raise ValueError("dependency_device_not_allowed")
+            effects = base_effects if effects is None else effects
+            validate_window_effects(effects)
+            assignment_effects[assignment["key"]] = effects
         original = template.get("original_request") or template["message"]
         try:
             from .memory_intent_guard import bind_memory_authorization
@@ -719,7 +713,7 @@ class WorkerScheduler:
             "goal_id": goal_id, "expected_revision": expected_revision,
             "memory_authorizations":template.get("memory_authorizations") or [],
             "memory_authority_request":template.get("memory_authority_request"),
-            "execution_scope":base_scope,"window_effects":base_effects,
+            "window_effects":base_effects,
             "preserve_file_bytes":template.get("preserve_file_bytes",False),
         }).encode()).hexdigest()
         admitted = []
@@ -757,8 +751,6 @@ class WorkerScheduler:
                         WHERE j.task_id=? AND j.owner_user_id=? AND j.chat_id=?""", (source_id, owner, chat)).fetchone()
                     if not source or not goal_id or source["goal_id"] != goal_id:
                         raise ValueError("dependency_scope_mismatch")
-                    if not set(json.loads(source["payload"]).get("device_ids") or []).issubset(assignment_devices[assignment["key"]]):
-                        raise ValueError("dependency_device_not_allowed")
                     if source["state"] in {"partial","failed","blocked","cancelled","unknown"}:
                         raise ValueError("dependency_source_not_successful")
                 replacement = assignment.get("replaces_source_task_id")
@@ -827,7 +819,7 @@ class WorkerScheduler:
                         "open_objects": assignment.get("open_objects") or [],
                         "result_first": True,
                         "created_at": now, "worker_id": "worker-1", "orchestrated": True,
-                        "orchestrator_execution_mode": "simple", "modes": dict(template.get("modes") or {})}
+                        "modes": dict(template.get("modes") or {})}
                 if assignment.get("replaces_source_task_id"):
                     task["replaces_source_task_id"] = assignment["replaces_source_task_id"]
                     task["source_task_ids"] = list(dict.fromkeys([*(task.get("source_task_ids") or []),assignment["replaces_source_task_id"]]))
@@ -836,7 +828,7 @@ class WorkerScheduler:
                     if unknown_recovery_required(json.loads(previous['payload'])):
                         task['_action_outcome_unknown'] = True
                 task["device_ids"] = assignment_devices[key]
-                task["execution_scope"], task["window_effects"] = assignment_scopes[key]
+                task["window_effects"] = assignment_effects[key]
                 task["preserve_file_bytes"] = assignment_preservation[key]
                 if assignment.get("target_device_ids") is not None:
                     task["broadcast"] = False
@@ -931,7 +923,7 @@ class WorkerScheduler:
                 old=c.execute("SELECT * FROM worker_jobs WHERE owner_user_id=? AND request_key=?",(owner,request_key)).fetchone()
                 if old:
                     previous=json.loads(old["payload"])
-                    if any(previous.get(key)!=task.get(key) for key in ("chat_id","message","device_ids","modes","original_request","proposed_objective","orchestrator_execution_mode","source_task_ids")):raise ValueError("request_id_conflict")
+                    if any(previous.get(key)!=task.get(key) for key in ("chat_id","message","device_ids","modes","original_request","proposed_objective","source_task_ids")):raise ValueError("request_id_conflict")
                     return tasks.get(old["task_id"]) or restore_task(dict(old))
             active=c.execute("SELECT task_id FROM worker_jobs WHERE owner_user_id=? AND state IN ('running','waiting_confirmation','waiting_input')",(owner,)).fetchone()
             waiting=c.execute("SELECT COUNT(*) FROM worker_jobs WHERE owner_user_id=? AND state IN ('queued','waiting_dependency')",(owner,)).fetchone()[0]

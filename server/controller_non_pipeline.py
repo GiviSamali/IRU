@@ -59,12 +59,10 @@ try:
         compact_write_content_result,
         compact_search_material,
         is_answer_clarification_tool,
-        is_answer_confirmation_tool,
         is_answer_failure_tool,
         is_answer_text_tool,
         is_terminal_answer_tool,
         make_run_step,
-        validate_answer_confirmation_payload,
         validate_answer_report_failure_payload,
         validate_answer_text_payload,
         validate_tool_call_batch,
@@ -122,12 +120,10 @@ except ImportError:
         compact_write_content_result,
         compact_search_material,
         is_answer_clarification_tool,
-        is_answer_confirmation_tool,
         is_answer_failure_tool,
         is_answer_text_tool,
         is_terminal_answer_tool,
         make_run_step,
-        validate_answer_confirmation_payload,
         validate_answer_report_failure_payload,
         validate_answer_text_payload,
         validate_tool_call_batch,
@@ -216,9 +212,9 @@ async def process_non_pipeline_command(
     usage_context: dict | None = None,
 ) -> dict:
     try:
-        from .controller_shared import worker_assignment_scope, pinned_material_pending, worker_window_scope
+        from .controller_shared import worker_assignment_scope, pinned_material_pending
     except ImportError:
-        from controller_shared import worker_assignment_scope, pinned_material_pending, worker_window_scope
+        from controller_shared import worker_assignment_scope, pinned_material_pending
     try:
         from .tool_completion import normalize_operation_result
     except ImportError:
@@ -240,18 +236,16 @@ async def process_non_pipeline_command(
     except ImportError:
         from browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments
     browser_policy = BrowserTaskPolicy(user_message, device_id, chat_history)
-    window_only, expected_window_actions = worker_window_scope(poll_task_id)
-    # Execution scope describes required effects, never the method/tool inventory.
+    expected_window_actions = list((runtime_tasks.get(poll_task_id) or {}).get("window_effects") or [])
     non_pipeline_tools = deepcopy(DEFAULT_CONTROLLER_TOOLS)
     messages = [{"role": "system", "content": system_msg}]
     context = recent_browser_context(chat_history, device_id=device_id)
     if context:
         messages.append({"role": "system", "content": data_only_context("observed_browser_metadata", context)})
-    if window_only:
-        context = recent_window_context(chat_history)
-        if context:
-            messages.append({"role": "system", "content": data_only_context("observed_window_metadata", context)})
-    elif chat_history:
+    context = recent_window_context(chat_history)
+    if context:
+        messages.append({"role": "system", "content": data_only_context("observed_window_metadata", context)})
+    if chat_history:
         messages.extend(build_chat_messages(chat_history[:-1], filter_onboarding=True))
     messages.append({"role": "user", "content": user_message})
     current_user_index=len(messages)-1
@@ -592,32 +586,6 @@ async def process_non_pipeline_command(
                                     "tasks": [],
                                     "training_context": _training_context(device_info),
                                 }
-                            if is_answer_confirmation_tool(fn_name):
-                                if not any(tool.get("function", {}).get("name") == fn_name for tool in non_pipeline_tools):
-                                    raise ProtocolValidationError(
-                                        "Preview-only confirmation is not available in this worker toolset",
-                                        "Call the concrete action tool with exact parameters. Runtime will wait for required confirmation and resume this Worker.")
-                                payload = validate_answer_confirmation_payload(fn_args_preview, commands_log)
-                                append_answer_step(
-                                    commands_log,
-                                    fn_name,
-                                    payload,
-                                    target_device_id=target_device,
-                                    hostname=device_info.get("hostname") or target_device,
-                                    iteration=iteration + 1,
-                                )
-                                raise ConfirmationRequired(
-                                    command=payload.get("command_preview") or payload.get("action") or "",
-                                    device_id=target_device,
-                                    params={
-                                        "action": payload.get("action"),
-                                        "risk": payload.get("risk"),
-                                        "command_preview": payload.get("command_preview"),
-                                        "basis": payload.get("basis") or [],
-                                    },
-                                    answer=payload.get("message") or "Confirmation required",
-                                    commands_log=commands_log,
-                                )
                         except ProtocolValidationError as exc:
                             print(f"[tool-only] invalid answer tool: {exc.message}")
                             append_entry(make_run_step(journal=commands_log, tool_name='tool_only_protocol',
@@ -1233,7 +1201,7 @@ async def process_non_pipeline_command(
                             except ImportError:
                                 from window_policy import window_input_required
                             event = (window_input_required(fn_args, tool_result, commands_log, target_device)
-                                     if window_only and expected_window_actions == ["activate"] else None)
+                                     if fn_args.get("action") == "activate" else None)
                             if event:
                                 return {"answer":"", "commands":commands_log, "tasks":[], "input_required":event}
                             titles = [str(candidate.get("title") or candidate.get("process_name") or "Окно")
@@ -1246,9 +1214,7 @@ async def process_non_pipeline_command(
                             answer = question
                         else:
                             answer = str(tool_result["summary"])
-                            payload = {"answer_type": "partial_report", "text": answer, "basis": [commands_log[-1]["step_id"]],
-                                "self_check": {"depends_on_current_external_state": True, "claims_completed_action": False,
-                                               "has_sufficient_evidence": True, "missing_evidence_question": ""}}
+                            payload = {"answer_type": "partial_report", "text": answer, "basis": [commands_log[-1]["step_id"]]}
                             append_answer_step(commands_log, "answer_text", validate_answer_text_payload(payload, commands_log),
                                 target_device_id=target_device, hostname=device_info.get("hostname") or target_device,
                                 iteration=iteration + 1)

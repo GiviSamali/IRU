@@ -23,9 +23,7 @@ def test_schema_rejection_exception_cannot_hide_other_device_or_later_failure(va
                 'device_id': 'other' if variant == 'other_device' else 'pc',
                 'result': {'status': 'validation_error', 'error': 'unknown_tool_arguments', 'dispatched': False}}
     terminal = {'step_id': 'step_3', 'tool_name': 'answer.text', 'status': 'terminal', 'result': {
-        'answer_type': 'grounded_report', 'text': 'File created.', 'basis': ['step_1'],
-        'self_check': {'depends_on_current_external_state': True, 'claims_completed_action': True,
-                       'has_sufficient_evidence': True, 'missing_evidence_question': ''}}}
+        'answer_type': 'grounded_report', 'text': 'File created.', 'basis': ['step_1']}}
     journal = [write, rejected, terminal] if variant == 'other_device' else [write, terminal, rejected]
     assert not build_worker_report({'task_id':'local','worker_id':'worker-1','status':'done',
         'device_ids':['pc','other'],'commands':journal,'answer':'File created.'})['goal_completed']
@@ -96,10 +94,7 @@ def test_file_result_acceptance_through_runtime_report_and_history(owners, tmp_p
                 name, args = 'execute_cmd', {'command': f"Get-Content -LiteralPath '{path}'", 'artifact_paths': []}
             else:
                 name, args = 'answer_text', {
-                    'answer_type': 'grounded_report', 'text': answer, 'basis': ['step_1'],
-                    'self_check': {'depends_on_current_external_state': True,
-                                   'claims_completed_action': True, 'has_sufficient_evidence': True,
-                                   'missing_evidence_question': ''}}
+                    'answer_type': 'grounded_report', 'text': answer, 'basis': ['step_1']}
             return {'choices': [{'finish_reason': 'tool_calls', 'message': {'tool_calls': [{
                 'id': str(len(turns)), 'function': {'name': name, 'arguments': json.dumps(args)}}]}}]}
 
@@ -108,7 +103,7 @@ def test_file_result_acceptance_through_runtime_report_and_history(owners, tmp_p
             device_info=kwargs['device_info'], send_command_fn=send,
             get_file_link_fn=lambda *args: '', chat_history=[], user_id=None, chat_id=None,
             modes={}, poll_task_id=kwargs['poll_task_id'],
-            cfg={'model': 'mock-model', 'answer_auditor_enabled': True}, system_msg='system',
+            cfg={'model': 'mock-model'}, system_msg='system',
             machine_guid=None, mem_user_id=None, non_pipeline_tools=NON_PIPELINE_TOOLS,
             max_iterations=5, pick_model_fn=lambda *args: 'mock-model',
             chat_completion_request_fn=completion)

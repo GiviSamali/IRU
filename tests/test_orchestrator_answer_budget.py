@@ -27,7 +27,7 @@ def test_other_intents_reject_overlong_answer(intent):
 
 
 @pytest.mark.parametrize('critical', [
-    {'scope': None}, {'execution_mode': 'unapproved'},
+    {'scope': None}, {'target_device_ids': [None]},
     {'target_device_ids': [1]}, {'verified': True}, {'objective': 'x' * 2001},
 ])
 def test_shortening_never_bypasses_critical_validation(critical):

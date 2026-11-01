@@ -92,13 +92,13 @@ def test_native_literal_read_skips_confirmation_but_not_ownership(local_db,monke
 
 
 def test_cli_diagnostic_result_is_owned_by_worker(local_db,monkeypatch):
-    task={'task_id':'diagnostic','device_ids':['device-1'],'execution_scope':'general',
+    task={'task_id':'diagnostic','device_ids':['device-1'],
           'proposed_objective':'Interpret the diagnostic output'}
     monkeypatch.setitem(tasks,'diagnostic',task)
     seen=[]
     result=_run_case([_message(tool_calls=[_tool_call('run','execute_cmd',{'command':'python probe.py'})]),
                       answer('Diagnostic conclusion from the observed facts')],poll_task_id='diagnostic',captured=seen,
-                      cfg={'model':'mock','answer_auditor_enabled':True})
+                      cfg={'model':'mock'})
     assert len(seen)==2 and not any(x.get('phase')=='result_coverage' for x in seen)
     assert build_worker_report({**task,'status':'done','commands':result['commands'],'answer':result['answer']})['goal_completed']
 
@@ -119,27 +119,23 @@ def answer(text='Observed'):
     return _message(tool_calls=[_tool_call('final','answer_text',{'result':text,'unresolved':[]})])
 
 
-@pytest.mark.parametrize('scope,expected_assessments',[('general',0),('analysis',0)])
-def test_pptx_search_counts_all_llm_calls(local_db,monkeypatch,record_property,scope,expected_assessments):
-    task={'task_id':'find','execution_scope':scope,'proposed_objective':'Find PPTX on Desktop',
+def test_pptx_search_counts_all_llm_calls(local_db,monkeypatch,record_property):
+    task={'task_id':'find','proposed_objective':'Find PPTX on Desktop',
           'original_request':'Find PPTX on Desktop','device_ids':['device-1']}
     monkeypatch.setitem(tasks,'find',task)
     async def send(device,action,params):
         assert assess_action(action,params)['decision']=='ALLOW'
         return {'returncode':0,'stdout':json.dumps([{'FullName':'C:/Desktop/a.pptx','Name':'a.pptx'}]),'stderr':''}
     replies=[_message(tool_calls=[_tool_call('find','execute_cmd',{'command':PPTX_COMMAND})]),answer('C:/Desktop/a.pptx')]
-    if expected_assessments:
-        replies.append(_message(content=json.dumps({'coverage':'complete','evidence_refs':['step_1'],'reason':'Observed result matches requested listing'}),finish_reason='stop'))
     captured=[]
     result=_run_case(replies,poll_task_id='find',user_message=task['original_request'],send_command_fn=send,
-        captured=captured,cfg={'model':'fake','answer_auditor_enabled':True})
-    assessments=sum(c.get('phase')=='result_coverage' for c in captured)
-    assert assessments==expected_assessments and len(captured)-assessments==2
+        captured=captured,cfg={'model':'fake'})
+    assert len(captured)==2
     assert len([c for c in result['commands'] if c.get('tool_name')=='execute_cmd'])==1
     report=build_worker_report({**task,'status':'done','commands':result['commands'],'answer':result['answer']})
     # The successful listing plus the Worker terminal result completes this Assignment.
     assert report['status']=='success'
-    record_property('worker_llm_calls',2);record_property('assessor_calls',assessments)
+    record_property('worker_llm_calls',2);record_property('assessor_calls',0)
     record_property('total_llm_calls',len(captured))
     record_property('goal_status',report['status'])
 
@@ -147,7 +143,7 @@ def test_pptx_search_counts_all_llm_calls(local_db,monkeypatch,record_property,s
 @pytest.mark.parametrize('stale_first',[False,True])
 def test_confirmed_exact_edit_does_not_reassess_bytes(local_db,monkeypatch,stale_first):
     agent=FileAgent();captured=[]
-    task={'task_id':'exact','execution_scope':'general','preserve_file_bytes':True,
+    task={'task_id':'exact','preserve_file_bytes':True,
           'proposed_objective':'Replace draft with ready','assigned_artifacts':[PROJECT],'device_ids':['device-1']}
     monkeypatch.setitem(tasks,'exact',task)
     replies=([_message(tool_calls=[_tool_call('stale','write_content',{
@@ -156,14 +152,14 @@ def test_confirmed_exact_edit_does_not_reassess_bytes(local_db,monkeypatch,stale
         _message(tool_calls=[_tool_call('write','write_content',replacement())]),answer('Changed')]
     result=_run_case(replies,
         poll_task_id='exact',send_command_fn=agent.send,device_info={'os':'Windows','file_replace_protocol':2},
-        captured=captured,cfg={'model':'fake','answer_auditor_enabled':True})
+        captured=captured,cfg={'model':'fake'})
     assert len(captured)==3+int(stale_first) and not any(c.get('phase')=='result_coverage' for c in captured)
     assert [a for _,a,_ in agent.sent]==(['write_content'] if stale_first else [])+['get_file_content','write_content']
 
 
 def test_pptx_find_and_open_needs_no_assessor_when_object_is_proven(local_db,monkeypatch,record_property):
     path='C:/Desktop/a.pptx'
-    task={'task_id':'open','execution_scope':'general','proposed_objective':'Find and open a.pptx',
+    task={'task_id':'open','proposed_objective':'Find and open a.pptx',
           'original_request':'Find and open a.pptx','device_ids':['device-1'],
           'window_effects':['open'],'open_objects':[{'type':'file','path':path}]}
     monkeypatch.setitem(tasks,'open',task);captured=[]
@@ -176,7 +172,7 @@ def test_pptx_find_and_open_needs_no_assessor_when_object_is_proven(local_db,mon
     result=_run_case([
         _message(tool_calls=[_tool_call('find','execute_cmd',{'command':PPTX_COMMAND})]),
         _message(tool_calls=[_tool_call('open','app_launch',{'command':path})]),answer('Opened')],
-        poll_task_id='open',send_command_fn=send,captured=captured,cfg={'model':'fake','answer_auditor_enabled':True})
+        poll_task_id='open',send_command_fn=send,captured=captured,cfg={'model':'fake'})
     report=build_worker_report({**task,'status':'done','commands':result['commands'],'answer':result['answer']})
     assert report['goal_completed'] and len(captured)==3
     assert not any(c.get('phase')=='result_coverage' for c in captured)

@@ -37,7 +37,6 @@ def verified(task):
                   "device_id":"pc","result":{"path":r"C:\Users\Demo\Desktop\result.txt","bytes_written":2,"status":"ok","summary":"OK: file_written"}}],
        tasks=[],task_receipt={"task_status":"completed","goal_completed":True,"final_verification_status":"verified","answer_source":"audited_terminal"})
     payload=json.loads(_answer_call('answer',task['answer'],answer_type='grounded_report',basis=['step_1'])['function']['arguments'])
-    payload['self_check']['claims_completed_action']=False
     append_answer_step(task['commands'],'answer_text',payload)
 
 

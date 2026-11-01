@@ -181,15 +181,13 @@ def test_plan_worker_can_observe_after_unknown_without_dispatching_mutations(ini
         result = _answer_text_call('answer', 'Результат исходного действия неизвестен; каталог прочитан.', ['step_1', 'step_3'])
         args = json.loads(result['function']['arguments'])
         args.update(answer_type='partial_report')
-        args['self_check'].update(claims_completed_action=False, has_sufficient_evidence=False,
-                                 missing_evidence_question='Результат исходного действия не доказан.')
         result['function']['arguments'] = json.dumps(args)
         return msg(result)
     async def send(device, action, params):
         dispatched.append(action)
         return ({'status': 'unknown', 'error': 'confirmed_transport_outcome_unknown'} if len(dispatched) == 1
                 else {'path': 'C:/Temp', 'files': []})
-    result = worker(completion, send, cfg={'model': 'mock', 'answer_auditor_enabled': False})
+    result = worker(completion, send, cfg={'model': 'mock'})
     assert dispatched == [initial_tool, 'list_dir'] and len(calls) == 4
     assert result['commands'][0]['result']['status'] == 'unknown'
     assert result['commands'][1]['result']['error'] == 'mutation_blocked_after_unknown'

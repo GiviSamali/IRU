@@ -422,7 +422,7 @@ def worker_assignment_scope(task_id):
              "Report and verify completion of this assigned result only.\n"
              + data_only_context("assigned_result", {"objective": objective,
                  "human_authority_request":task.get('original_request') or task.get('message'),
-                 "execution_scope":task.get("execution_scope","general"), "window_effects":task.get("window_effects") or [],
+                 "window_effects":task.get("window_effects") or [],
                  "preserve_file_bytes":task.get("preserve_file_bytes",False),
                  "expected_artifacts":task.get("assigned_artifacts") or []}))
     block += ("\nOnly this Worker's deliverable is in scope. Choose the necessary tools and perform "
@@ -467,13 +467,6 @@ def file_edit_dispatch_error(task, action, params):
     return None
 
 
-def worker_window_scope(task_id):
-    try:
-        from .runtime_state import tasks
-    except ImportError:
-        from runtime_state import tasks
-    task = tasks.get(task_id) or {}
-    return task.get("execution_scope") == "window", list(task.get("window_effects") or [])
 
 
 def pinned_material_pending(task):

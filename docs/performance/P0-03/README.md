@@ -2,17 +2,9 @@
 
 > Пакет сохранён в репозитории по отдельной команде commit/push. Изменены только материалы аудита; production instrumentation не применено. HEAD и чистота ниже относятся к моменту измерений.
 
-Файлы: [числовые метрики](IRU-P0-03-metrics.json), [harness](iru_p0_03_baseline.py), [проверки](baseline_checks.py), [неприменённый diff](IRU-P0-03-proposed-instrumentation.diff).
+Архив измерений: [числовые метрики](IRU-P0-03-metrics.json) и [исторический неприменённый diff](IRU-P0-03-proposed-instrumentation.diff). Метрики, diff и исходный манифест хешей сохранены как исторические данные.
 
-Повторение из корня проекта в test environment:
-
-```sh
-python -m pytest -q docs/performance/P0-03/baseline_checks.py
-python docs/performance/P0-03/iru_p0_03_baseline.py --samples 30 --calibrate --output /tmp/iru-p0-03-metrics.json
-```
-
-На Windows замените output на путь в своём временном каталоге. Harness и проверки сами определяют корень checkout; исходники IRU не меняются. Для исследования snapshot обязателен контрольный commit a55512b либо его неизменённые runtime sources. Запускайте отдельным Python процессом с тестовыми dependencies. Файл baseline_checks.py не входит в обычный pytest discovery; запускается явно. Предложенный diff проверяется в памяти и не применяется к файлам.
-
+При очистке управляющего слоя 01.11.2026 удалены исполняемый harness и проверки старого instrumentation proposal: они зависели от упразднённых controller_pipeline, Assessor и PLAN API. Пакет не является актуальным способом запуска или проверки IRU. Для воспроизведения исторического измерения нужен указанный ниже исходный commit.
 
 Дата: 08.10.2026. Измерение, без оптимизации.
 

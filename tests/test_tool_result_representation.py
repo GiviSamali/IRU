@@ -83,15 +83,13 @@ def test_browser_bridge_serialization_is_unchanged_even_above_budget():
     assert original == saved
 
 
-def test_auditor_and_journal_still_receive_full_result_after_projection():
-    from server.answer_auditor import _compact_journal
+def test_journal_keeps_full_result_after_projection():
     from server.tool_completion import execute_cmd_result_is_negative
     original = entry({'stdout': 'full observation' * 5000, 'error': 'actual error', 'returncode': 4}, status='failed')
     saved = copy.deepcopy(original)
     shown = json.loads(serialize_tool_result_for_llm(original))
     assert shown['truncation']['truncated'] and original == saved
     assert wrap_tool_result_for_llm(original)['result'] == saved['result']
-    assert _compact_journal([original])[0]['result'] == saved['result']
     assert execute_cmd_result_is_negative(original['result']) is True
 
 

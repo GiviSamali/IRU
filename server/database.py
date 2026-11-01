@@ -525,10 +525,9 @@ def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
         "overallStatus": task.get("overall_status"), "taskTitle": task.get("current_step") or task.get("proposed_objective") or task.get("message"),
         "tasks": task.get("tasks") or [], "_taskId": task_id or task.get("task_id"),
         "resultFirst":task.get("result_first") is True,
-        "taskMode": "ordinary" if task.get("goal_id") else "plan" if (task.get("modes") or {}).get("pipeline") or (saved_receipt or {}).get("answer_source") == "pipeline_step_report" else "conversation" if task.get("device_ids") == [] else "ordinary",
+        "taskMode": "conversation" if task.get("device_ids") == [] else "ordinary",
         "goalId":task.get("goal_id"), "assignmentRevision":task.get("assignment_revision",1) if task.get("goal_id") else None,
         "taskElapsedMs": elapsed, "workerReport": task.get("worker_report"), "taskKind":task.get("kind"),
-        "planSuggestion":task.get("plan_suggestion"),"planOriginalRequest":task.get("plan_original_request"),
         "orchestrated":task.get("orchestrated") is True,"proposedObjective":task.get("proposed_objective"),"proposedContextSummary":task.get("proposed_context_summary"),
         "inputRequired":task.get("input_required"),
         "fullSpeechRequested":task.get("full_speech_requested") is True,"dialogueIntent":task.get("dialogue_intent"),"spokenResponse":task.get("dialogue_spoken_response"),
@@ -543,7 +542,7 @@ def message_task_metadata(task: dict, *, task_id: str | None = None) -> dict:
 def _message_metadata(value) -> dict:
     if not isinstance(value, dict):
         return {}
-    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs", "workerReport", "taskKind", "planSuggestion", "planOriginalRequest", "orchestrated", "proposedObjective", "proposedContextSummary", "conversationalResponse", "executionDetails", "assignmentDeviceIds", "sourceTaskIds", "diagnosticTrace", "workerStartedAt", "orchestratorMetrics", "dialogueIntent", "spokenResponse", "spokenResponseAnswer", "fullSpeechRequested", "inputRequired", "resultFirst")
+    allowed = ("taskStatus", "taskReceipt", "overallStatus", "taskTitle", "tasks", "_taskId", "taskMode", "taskElapsedMs", "workerReport", "taskKind", "orchestrated", "proposedObjective", "proposedContextSummary", "conversationalResponse", "executionDetails", "assignmentDeviceIds", "sourceTaskIds", "diagnosticTrace", "workerStartedAt", "orchestratorMetrics", "dialogueIntent", "spokenResponse", "spokenResponseAnswer", "fullSpeechRequested", "inputRequired", "resultFirst")
     return {key: value[key] for key in (*allowed, "goalId", "assignmentRevision") if key in value}
 
 

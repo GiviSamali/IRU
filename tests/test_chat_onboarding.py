@@ -16,7 +16,7 @@ def test_api_chat_uses_onboarding_mode_without_devices(client, monkeypatch):
 
     from server import orchestrator as orch
     async def decide(message, context, **kwargs):
-        return orch.Decision(intent="delegate", scope="server", objective=message), {}
+        return orch.Decision(intent="delegate",  objective=message), {}
     monkeypatch.setattr(orch, "decide", decide)
     user, headers = _create_and_login_user(client)
 

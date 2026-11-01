@@ -8,7 +8,7 @@ import pytest
 
 from server import database as db, orchestrator as orch
 from server.run_journal import validate_answer_text_payload, append_answer_step
-from server.worker_reports import build_worker_report, coverage_binding, coverage_request
+from server.worker_reports import build_worker_report
 from server.worker_scheduler import WorkerScheduler, owned_job, restore_task, goal_view
 from server.runtime_state import tasks
 from server.goal_presentation import goal_presentation
@@ -24,7 +24,7 @@ def entry(tool, result, number=1):
 def finish(steps, result='Получен результат.', *, scope='analysis', effects=(), unresolved=(), recommendations=(), open_objects=()):
     payload=validate_answer_text_payload({'result':result,'unresolved':list(unresolved),'remaining':list(recommendations)},steps)
     append_answer_step(steps,'answer_text',payload,target_device_id='pc')
-    return {'task_id':'synthetic','status':'done','device_ids':['pc'],'execution_scope':scope,
+    return {'task_id':'synthetic','status':'done','device_ids':['pc'],
         'window_effects':list(effects),'commands':steps,'answer':payload['text'],
         'open_objects':list(open_objects)}
 
@@ -48,12 +48,6 @@ def opened_requirement():
     return [{'type':'file','path':OPEN_PATH,'device_id':'pc'}]
 
 
-def complete_coverage_fixture(t):
-    """Represent the existing successful goal-coverage observation in pure fixtures."""
-    journal=t['commands'][:-1]
-    t['commands'][-1]['result']['_coverage']={'coverage':'complete',
-        'evidence_refs':[s['step_id'] for s in journal],
-        'binding':coverage_binding(coverage_request(t),journal,t['answer'])}
 
 
 def test_bcf16d6e_verified_open_is_spoken_by_orchestrator():
@@ -72,7 +66,6 @@ def test_b1daebcb_optional_recommendation_is_not_an_unfinished_requirement():
     t=finish([entry('execute_cmd',{'returncode':0,'stdout':'fileA.txt\nfolderB','stderr':''})],
         result='На рабочем столе файл fileA.txt и папка folderB. Проверен верхний уровень.',
         recommendations=['При необходимости открыть папку folderB'])
-    complete_coverage_fixture(t)
     report=build_worker_report(t)
     assert report['goal_completed']
     assert 'fileA.txt' in orch.present_worker_result(t,report)['conversational_response']
@@ -142,26 +135,11 @@ def test_unproved_effect_claim_is_not_the_orchestrator_reply():
     assert 'Файл создан' not in human and 'helper observation' in human
 
 
-def test_compact_controller_uses_existing_goal_coverage_once_without_repair(monkeypatch):
-    monkeypatch.setattr(db,'get_device_profile',lambda *a,**k:None)
-    tasks['compact']={'task_id':'compact','execution_scope':'analysis','original_request':'Посмотри рабочий стол'}
-    calls=[]
-    try:
-        result=_run_case([
-            _message(tool_calls=[_tool_call('read','execute_cmd',{'command':'Get-ChildItem','artifact_paths':[]})]),
-            _message(tool_calls=[_tool_call('result','answer_text',{'result':'Получен список файлов','unresolved':[],
-                'remaining':['Можно открыть папки']})]),
-            _message(content=json.dumps({'coverage':'complete','evidence_refs':['step_1'],'reason':'Listing obtained'}),finish_reason='stop')],poll_task_id='compact',captured=calls,
-            cfg={'model':'mock','answer_auditor_enabled':True})
-        assert len(calls)==3 and all(call['tools'] for call in calls[:2])
-        assert calls[-1]['tools'] is None and calls[-1]['phase']=='result_coverage'
-        assert result['commands'][-1]['result']['_result_contract']==3
-    finally:tasks.pop('compact',None)
 
 
 def test_open_controller_uses_unchanged_agent_api_and_no_narration_call(monkeypatch):
     monkeypatch.setattr(db,'get_device_profile',lambda *a,**k:None)
-    tasks['open-contract']={'task_id':'open-contract','execution_scope':'window','window_effects':['open'],
+    tasks['open-contract']={'task_id':'open-contract','window_effects':['open'],
         'open_objects':[{'type':'url','path':'https://ya.ru','device_id':'device-1'}]}
     calls=[];sent=[]
     async def send(device,action,params):
@@ -172,7 +150,7 @@ def test_open_controller_uses_unchanged_agent_api_and_no_narration_call(monkeypa
             _message(tool_calls=[_tool_call('open','app_open_url',{'url':'https://ya.ru'})]),
             _message(tool_calls=[_tool_call('finish','answer_text',{'result':'Opened','unresolved':[]})])],
             poll_task_id='open-contract',captured=calls,send_command_fn=send,
-            cfg={'model':'mock','answer_auditor_enabled':True})
+            cfg={'model':'mock'})
         assert sent==[('app.open_url',{'url':'https://ya.ru'})]
         assert len(calls)<=2 and all(call['tools'] for call in calls)
         t={**tasks['open-contract'],'status':'done','device_ids':['device-1'],'commands':result['commands'],'answer':result['answer']}
@@ -193,15 +171,14 @@ def test_goal_assignment_result_and_followup_use_existing_durable_path(owners,mo
         result=finish([entry('execute_cmd',{'returncode':0,'stdout':'server active; reconnects=15','stderr':''})],
             result='Сервер работает. В журнале 15 переподключений.',recommendations=['Можно отдельно исследовать причину'])
         t.update(status='done',answer=result['answer'],commands=result['commands'])
-        complete_coverage_fixture(t)
     async def scenario():
         scheduler=WorkerScheduler(execute)
         async def decide(message,context,**kwargs):
             dialogue.append((message,context))
             if len(dialogue)==1:
-                return orch.Decision(intent='delegate',objective='Осмотреть сервер',execution_scope='analysis',
+                return orch.Decision(intent='delegate',objective='Осмотреть сервер',
                     target_device_ids=['pc'],assignments=[orch.Assignment(key='inspect',objective='Проверить состояние сервера',
-                    scope='Текущее состояние и последние ошибки',constraints=['Только чтение'],execution_scope='analysis')]),{'llm_calls':1}
+                    scope='Текущее состояние и последние ошибки',constraints=['Только чтение'])]),{'llm_calls':1}
             jobs=context['tasks'];source=next(j for j in jobs if j['task_id']==received[0]['task_id'])
             assert source['report']['status']=='success' and '15 переподключений' in source['report']['summary']
             return orch.Decision(intent='task_status',task_id=source['task_id'],reference='explicit',
@@ -260,20 +237,6 @@ def test_legacy_api_answer_is_orchestrator_reply_not_internal_worker_material(ow
     finally:tasks.pop(tid,None)
 
 
-def test_existing_file_coverage_call_receives_optional_advice_separately():
-    from server.answer_auditor import assess_result_coverage
-    calls=[]
-    steps=[entry('office_docx',{'status':'success','action':'inspect','items':[{'text':'requested content'}]})]
-    payload=validate_answer_text_payload({'result':'Read-back matches','unresolved':[],
-        'remaining':['Можно добавить иллюстрации']},steps)
-    async def completion(**kwargs):
-        calls.append(kwargs)
-        material=json.loads(kwargs['messages'][-1]['content'])
-        assert material['remaining']==[] and material['optional_recommendations']==['Можно добавить иллюстрации']
-        return {'choices':[{'message':{'content':json.dumps({'coverage':'complete','evidence_refs':['step_1']})}}]}
-    result=asyncio.run(assess_result_coverage(client=None,cfg={'model':'mock','answer_auditor_enabled':True},
-        chat_completion_request_fn=completion,user_request='Create document',current_run_journal=steps,answer_payload=payload))
-    assert result['coverage']=='complete' and len(calls)==1 and calls[0]['tools'] is None
 
 
 def test_flat_server_imports_render_compact_result_without_provider(tmp_path):
@@ -288,7 +251,7 @@ from worker_reports import build_worker_report
 steps=[{'step_id':'step_1','tool_name':'window.control','target_device_id':'pc','result':{'status':'success','completion_state':'success','action':'minimize','summary':'Window minimized'}}]
 payload=validate_answer_text_payload({'result':'Findings','unresolved':[]},steps)
 append_answer_step(steps,'answer_text',payload)
-task={'task_id':'flat','status':'done','device_ids':['pc'],'execution_scope':'window','window_effects':['minimize'],'commands':steps,'answer':'Findings'}
+task={'task_id':'flat','status':'done','device_ids':['pc'],'window_effects':['minimize'],'commands':steps,'answer':'Findings'}
 report=build_worker_report(task)
 assert report['goal_completed'] and report['evidence_refs']==['step_1']
 assert present_worker_result(task,report)['conversational_response']=='Window minimized'
@@ -310,31 +273,3 @@ def test_goal_preserves_existing_file_content_verification_scope():
     projected=goal_presentation(goal)
     assert projected['result_artifacts'][0]['content_verified'] is False
     assert projected['result_artifacts'][0]['verification_scope']=='file_identity_and_format'
-
-
-def test_server_only_worker_uses_existing_coverage_with_compact_contract(monkeypatch):
-    from server import controller, controller_onboarding as onboarding, answer_auditor
-    calls=[]
-    async def completion(**kwargs):
-        calls.append(kwargs)
-        if kwargs['tools'] is None:
-            return _message(content=json.dumps({'coverage':'complete','evidence_refs':['step_1'],'reason':'Requested source found'}),finish_reason='stop')
-        assert kwargs['tools'] and 'answer_text(result=' in kwargs['messages'][0]['content']
-        return (_message(tool_calls=[_tool_call('search','web_search',{'query':'service information'})])
-            if len(calls)==1 else _message(tool_calls=[_tool_call('finish','answer_text',
-                {'result':'В источнике описано состояние сервиса.','unresolved':[],'remaining':['Можно расширить поиск']})]))
-    async def search(*args,**kwargs):
-        return {'status':'success','results':[{'title':'Service','url':'https://example.test','snippet':'service active'}]}
-    monkeypatch.setattr(controller,'_chat_completion_request',completion)
-    monkeypatch.setattr(onboarding,'run_web_search',search)
-    tasks['server-compact']={'task_id':'server-compact','execution_scope':'analysis','device_ids':[],
-        'original_request':'Проверь сведения о сервисе'}
-    try:
-        result=asyncio.run(onboarding.process_onboarding_message('Проверь сведения о сервисе',
-            usage_context={'poll_task_id':'server-compact','worker_execution':True},
-            load_llm_config_fn=lambda:{'model':'mock','answer_auditor_enabled':True},
-            current_datetime_msk_fn=lambda:'2026-10-27 MSK'))
-        assert len(calls)==3 and result['commands'][-1]['result']['_result_contract']==3
-        t={**tasks['server-compact'],'status':'done','commands':result['commands'],'answer':result['answer']}
-        assert build_worker_report(t)['goal_completed']
-    finally:tasks.pop('server-compact',None)

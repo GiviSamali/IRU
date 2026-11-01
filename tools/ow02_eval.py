@@ -15,16 +15,16 @@ import time
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT),str(ROOT/'tests')]
 SCENARIOS=[
- ('conversation','Стоит ли использовать Python для такой задачи?',{'conversation'},None),
- ('file','Создай текстовый файл на рабочем столе',{'delegate'},'simple'),
- ('presentation','Подготовь презентацию, документ и таблицу по статье',{'delegate'},'plan'),
- ('known_reference','Передай этот файл с givi на Second',{'delegate'},'simple'),
- ('missing_reference','Передай этот файл на Second',{'clarify'},None),
- ('status','Как там презентация?',{'task_status'},None),
- ('parallel_dialogue','Объясни разницу между TCP и UDP',{'conversation'},None),
- ('queue','А ещё подготовь таблицу расходов',{'delegate'},None),
- ('multi_device','На givi открой браузер, на Second открой приложение',{'delegate'},None),
- ('incomplete','Какой из этих вариантов лучше?',{'conversation','clarify'},None),
+ ('conversation','Стоит ли использовать Python для такой задачи?',{'conversation'}),
+ ('file','Создай текстовый файл на рабочем столе',{'delegate'}),
+ ('presentation','Подготовь презентацию, документ и таблицу по статье',{'delegate'}),
+ ('known_reference','Передай этот файл с givi на Second',{'delegate'}),
+ ('missing_reference','Передай этот файл на Second',{'clarify'}),
+ ('status','Как там презентация?',{'task_status'}),
+ ('parallel_dialogue','Объясни разницу между TCP и UDP',{'conversation'}),
+ ('queue','А ещё подготовь таблицу расходов',{'delegate'}),
+ ('multi_device','На givi открой браузер, на Second открой приложение',{'delegate'}),
+ ('incomplete','Какой из этих вариантов лучше?',{'conversation','clarify'}),
 ]
 
 
@@ -79,7 +79,7 @@ async def live(owner,chat,args,cfg):
  from server import orchestrator as orch, database as db
  from server.llm_usage import estimate_deepseek_cost_usd
  rows=[];spent=0.0
- for name,text,expected,mode in SCENARIOS[:args.max_calls]:
+ for name,text,expected in SCENARIOS[:args.max_calls]:
   context=provider_context(owner,chat,name)
   upper_input=len(json.dumps([orch.SYSTEM,context,text,orch.TOOL],ensure_ascii=True).encode())+2048
   reserve=estimate_deepseek_cost_usd(cfg.get('model'),{'cache_miss_tokens':upper_input,'completion_tokens':1200},cfg)
@@ -87,9 +87,9 @@ async def live(owner,chat,args,cfg):
   began=time.perf_counter();poll='ow02-live-'+name
   try:
    decision,metrics=await orch.decide(text,context,user_id=owner['id'],chat_id=chat,task_id=poll)
-   row={'scenario':name,'intent':decision.intent,'execution_mode':decision.execution_mode,
+   row={'scenario':name,'intent':decision.intent,
         'target_device_ids':decision.target_device_ids,'source_task_ids':decision.source_task_ids,
-        'routing_matches':decision.intent in expected,'mode_matches':mode is None or decision.execution_mode==mode,
+        'routing_matches':decision.intent in expected,
         'devices_valid':all(d in {'givi','Second'} for d in decision.target_device_ids),
         'reference_matches':name!='known_reference' or (decision.source_task_ids==['eval-task'] and set(decision.target_device_ids)=={'givi','Second'})}
   except Exception as exc:row={'scenario':name,'error_type':type(exc).__name__}
@@ -154,10 +154,10 @@ def main():
    try:cfg=load_llm_config()
    except Exception:cfg={'model':'deepseek-v4-flash'}
    estimates=[]
-   for name,text,expected,mode in SCENARIOS[:args.max_calls]:
+   for name,text,expected in SCENARIOS[:args.max_calls]:
     from server import orchestrator as orch
     upper=len(json.dumps([orch.SYSTEM,provider_context(owner,chat,name),text,orch.TOOL],ensure_ascii=True).encode())+2048
-    estimates.append({'scenario':name,'expected_intents':sorted(expected),'expected_mode':mode,
+    estimates.append({'scenario':name,'expected_intents':sorted(expected),
       'input_token_upper_estimate':upper,'output_token_limit':1200,
       'configured_price_upper_usd':estimate_deepseek_cost_usd(cfg.get('model'),{'cache_miss_tokens':upper,'completion_tokens':1200},cfg)})
    report={'mode':'estimate_only','model':cfg.get('model'),'price_source':'current repo/config rates, not a billing guarantee',

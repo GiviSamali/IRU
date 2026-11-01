@@ -48,7 +48,7 @@ async def ready(world, scheduler):
     devices[key]={'user_id':owner['id'],'ws':agent,'info':{'hostname':'pc','os':'Windows'},'pending':{}}
     monkeypatch.setattr(orch,'scheduler',scheduler)
     monkeypatch.setattr(routes,'scheduler',scheduler)
-    task=await admit(world,scheduler,'Переключись на Блокнот','window-input',execution_scope='window',window_effects=['activate'])
+    task=await admit(world,scheduler,'Переключись на Блокнот','window-input',window_effects=['activate'])
     for _ in range(200):
         job=owned_job(task['task_id'],owner['id'])
         if job['state']=='waiting_input':
@@ -212,11 +212,6 @@ def test_input_descriptor_rejects_completed_or_unknown_prior_side_effects():
     assert window_input_required({'action':'close'},result,[latest],'pc') is None
 
 
-def test_switch_wording_does_not_bypass_semantic_intake():
-    from server.window_policy import ordinary_window_request, window_action_sequence
-    for message in ('ИРУ, переключись на Блокнот','Переключись на Блокнот и удали файлы'):
-        assert ordinary_window_request(message) is False
-        assert window_action_sequence(message)==[]
 
 
 def test_restart_recovers_saved_question_as_unknown_without_execution(world):

@@ -24,9 +24,7 @@ from test_orchestrator_worker import wait_until
 
 def terminal(text, count=1, kind='grounded_report', action=False, sufficient=True, basis=None):
     return _tool_call('terminal','answer_text',{'answer_type':kind,'text':text,
-        'basis':basis if basis is not None else [f'step_{i+1}' for i in range(count)],
-        'self_check':{'depends_on_current_external_state':True,'claims_completed_action':action,
-                      'has_sufficient_evidence':sufficient,'missing_evidence_question':''}})
+        'basis':basis if basis is not None else [f'step_{i+1}' for i in range(count)]})
 
 
 def shell(command, stdout, code=0):
@@ -130,13 +128,6 @@ def install(world,steps,answer,number):
     responses=[_message(tool_calls=[_tool_call(str(i),name,args)]) for i,(name,args,_) in enumerate(steps)]
     responses.append(_message(tool_calls=[answer]))
     audits=[]
-    async def auditor(**kw):
-        audits.append(kw['answer_payload']['text'])
-        from server.worker_reports import coverage_binding
-        return {'coverage':'complete','evidence_refs':[e['step_id'] for e in kw['current_run_journal']],
-            'binding':coverage_binding(kw['user_request'],kw['current_run_journal'],kw['answer_payload']['text'])}
-    monkeypatch.setattr(__import__('server.answer_auditor',fromlist=['assess_result_coverage']),'assess_result_coverage',
-        lambda **kw:pytest.fail('No automatic assessor in ordinary execution'))
     async def process(**kw):
         complete=_completion_fn(copy.deepcopy(responses))
         return await controller.process_non_pipeline_command(
@@ -150,15 +141,15 @@ def install(world,steps,answer,number):
     return device,audits
 
 
-async def admit(world,scheduler,goal,tid, *, execution_scope="general", window_effects=(), assigned_artifacts=()):
+async def admit(world,scheduler,goal,tid, *, window_effects=(), assigned_artifacts=()):
     client,owner,key,monkeypatch=world
-    async def decide(*a,**kw):return orch.Decision(intent='delegate',objective=goal,scope='device',target_device_ids=['pc'],execution_mode='simple',execution_scope=execution_scope,window_effects=list(window_effects)),{}
+    async def decide(*a,**kw):return orch.Decision(intent='delegate',objective=goal,target_device_ids=['pc'],window_effects=list(window_effects)),{}
     monkeypatch.setattr(orch,'decide',decide)
     async def delegate(choice,**kw):
         assert choice.objective==goal
         return await scheduler.submit({'task_id':tid,'user_id':owner['id'],'chat_id':owner['chat_id'],
             'message':goal,'original_request':goal,'assigned_artifacts':list(assigned_artifacts),'device_ids':[key],'modes':{},'kind':'worker',
-            'orchestrated':True,'orchestrator_execution_mode':'simple','execution_scope':execution_scope,'window_effects':list(window_effects),'created_at':time.time(),'status':'running','results':{}},**kw)
+            'orchestrated':True,'window_effects':list(window_effects),'created_at':time.time(),'status':'running','results':{}},**kw)
     cmd=SimpleNamespace(message=goal,request_id=tid+'-turn',device_id='pc',modes={},broadcast=False)
     reply=await orch.run_turn(cmd,owner,owner['chat_id'],delegate)
     assert reply['worker_task_id']==tid

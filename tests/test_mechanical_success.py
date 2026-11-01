@@ -31,16 +31,12 @@ def replace(step="step_2"):
 def answer(step="step_4"):
     return {"task_id": "task-1", "step_id": step, "tool_name": "answer.text", "status": "terminal",
             "result": {"answer_type": "grounded_report", "text": "Готово: Название: Работаем.",
-                       "basis": ["step_2", "step_3"],
-                       "self_check": {"depends_on_current_external_state": True,
-                                      "claims_completed_action": True,
-                                      "has_sufficient_evidence": True,
-                                      "missing_evidence_question": ""}}}
+                       "basis": ["step_2", "step_3"]}}
 
 
 def task(commands, *, scope="general", artifacts=None):
     return {"task_id": "task-1", "worker_id": "worker-1", "status": "done",
-            "device_ids": ["givi"], "execution_scope": scope,
+            "device_ids": ["givi"],
             "assigned_artifacts": artifacts if artifacts is not None
             else ["project.txt в папке IRU-EC01-LIVE с новым названием"],
             "commands": commands, "answer": "Готово: Название: Работаем."}
@@ -77,11 +73,6 @@ def test_unknown_outcome_is_still_unknown():
     assert report["goal_completed"] is False
 
 
-def test_analysis_scope_still_needs_semantic_coverage():
-    """Semantic work keeps its meaning check; only mechanical proof is freed."""
-    report = build_worker_report(task([read("step_1", OLD), replace(), read("step_3", NEW), answer()],
-                                      scope="analysis", artifacts=[]))
-    assert report["status"] != "success"
 
 
 def _answer_with_unresolved(items):

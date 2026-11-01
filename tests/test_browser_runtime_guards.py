@@ -15,7 +15,6 @@ def setup_runtime(client, monkeypatch):
     devices[key]={"user_id":user["id"],"info":{"os":"Windows"},"ws":object(),"pending":{}}
     tasks["guard-task"]={"task_id":"guard-task","user_id":user["id"],"status":"running","modes":{},"created_at":time.time()}
     chat=db.create_chat(user["id"])
-    async def classify(*a,**kw):return "SIMPLE",""
 
     return user,key,chat["id"]
 

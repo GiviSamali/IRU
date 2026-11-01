@@ -30,11 +30,9 @@ try:
         get_device_profile,
         get_memory_stats,
         get_user_facts,
-        get_plan_trial_used,
         get_user_device_profiles,
         get_user_plan,
         increment_daily_commands,
-        set_plan_trial_used,
     )
     from ..runtime_state import (
         _dk,
@@ -48,7 +46,6 @@ try:
         is_task_cancel_requested,
         TASK_TTL,
         mark_suggested_fact_declined,
-        mark_plan_declined,
         request_task_cancel,
         tasks,
         TOKEN_TTL,
@@ -72,11 +69,9 @@ except ImportError:
         get_device_profile,
         get_memory_stats,
         get_user_facts,
-        get_plan_trial_used,
         get_user_device_profiles,
         get_user_plan,
         increment_daily_commands,
-        set_plan_trial_used,
     )
     from runtime_state import (
         _dk,
@@ -90,7 +85,6 @@ except ImportError:
         is_task_cancel_requested,
         TASK_TTL,
         mark_suggested_fact_declined,
-        mark_plan_declined,
         request_task_cancel,
         tasks,
         TOKEN_TTL,
@@ -129,9 +123,7 @@ async def execute_worker(task):
 scheduler.execute = execute_worker
 
 
-async def submit_worker(user, chat_id, message, target_ids, modes, *, request_key=None, context_summary="", objective="", broadcast=False, execution_mode="auto", source_task_ids=(), history_snapshot=None, assignments=None, goal_id=None, goal_revision=None, memory_authorizations=None, execution_scope="general", window_effects=None, preserve_file_bytes=False):
-    if (modes or {}).get("pipeline") or execution_mode == "plan":
-        raise ValueError("execution_mode_unsupported")
+async def submit_worker(user, chat_id, message, target_ids, modes, *, request_key=None, context_summary="", objective="", broadcast=False, source_task_ids=(), history_snapshot=None, assignments=None, goal_id=None, goal_revision=None, memory_authorizations=None, window_effects=None, preserve_file_bytes=False):
     if len(target_ids) != len(set(target_ids)):
         raise ValueError("duplicate_target_device")
     for did in target_ids:
@@ -146,11 +138,9 @@ async def submit_worker(user, chat_id, message, target_ids, modes, *, request_ke
         from ..worker_context import build_worker_context, capture_history
     except ImportError:
         from worker_context import build_worker_context, capture_history
-    task['orchestrator_execution_mode']=execution_mode if objective else 'auto'
     task['source_task_ids']=list(source_task_ids)
     task['memory_authorizations']=memory_authorizations or []
     task['memory_authority_request']=message
-    task['execution_scope']=execution_scope
     task['window_effects']=window_effects or []
     if type(preserve_file_bytes) is not bool:
         raise ValueError('invalid_file_preservation_constraint')
@@ -167,7 +157,7 @@ async def submit_worker(user, chat_id, message, target_ids, modes, *, request_ke
 
 
 router = APIRouter()
-logger = logging.getLogger("iru.run_plan")
+logger = logging.getLogger("iru.tasks")
 
 
 class DirectCommand(BaseModel):
@@ -184,18 +174,11 @@ class NLCommand(BaseModel):
     device_ids: list[str] = []
     modes: dict = {}
     voice_provider: str = Field(default="yandex", pattern="^(yandex|piper|elevenlabs)$")
-    orchestrate: bool = True  # Accepted for older clients; intake always uses Orchestrator.
     request_id: str | None = Field(default=None, min_length=1, max_length=64)
     input_task_id: str | None = Field(default=None, min_length=1, max_length=64)
     input_question_id: str | None = Field(default=None, min_length=32, max_length=32)
 
 
-class RunPlanBody(BaseModel):
-    original_request: str
-    device_id: Optional[str] = None
-    confirmed: bool = False
-    voice_source_task_id: str | None = None
-    source_task_id: str | None = None
 
 
 class PendingTaskAmendment(BaseModel):
@@ -316,9 +299,6 @@ async def direct_command(cmd: DirectCommand, request: Request):
 @router.post("/api/chat")
 async def nl_command(cmd: NLCommand, request: Request):
     user = get_current_user(request)
-    if cmd.modes.get("pipeline"):
-        raise HTTPException(status_code=422, detail={"code": "execution_mode_unsupported",
-            "message": "Режим PLAN больше не поддерживается. Передайте обычное поручение."})
     cleanup_old_tasks()
 
     client_ip = request.client.host if request.client else "unknown"
@@ -350,24 +330,13 @@ async def nl_command(cmd: NLCommand, request: Request):
         from worker_context import capture_history
     history_snapshot=capture_history(chat_id)
     async def delegate(choice, request_key):
-        if choice.scope=="device" and cmd.device_id and _dk(user["id"],cmd.device_id) not in user_devs:
-            raise ValueError("selected_device_not_owned_or_connected")
+        # Only actual Assignment targets grant device access. The UI selection
+        # is context; submit_worker validates every target before admission.
         targets=[_dk(user["id"],did) for did in choice.target_device_ids]
         if cmd.broadcast:
             targets=list(user_devs)
-        if choice.scope=="server":
-            # Scope describes execution, not the selected UI device. A purely
-            # server-side assignment must not inherit that device. Mixed goals
-            # need an explicit device subset on every assignment.
-            if any(item.target_device_ids for item in choice.assignments):
-                if any(item.target_device_ids is None for item in choice.assignments):
-                    raise ValueError("mixed_goal_requires_explicit_assignment_devices")
-                targets = list(dict.fromkeys([*targets, *( _dk(user["id"], did)
-                    for item in choice.assignments for did in (item.target_device_ids or []))]))
-            else:
-                targets=[]
-        elif not targets:
-            raise ValueError("target_device_required")
+        targets = list(dict.fromkeys([*targets, *(_dk(user["id"], did)
+            for item in choice.assignments for did in (item.target_device_ids or []))]))
         assignments = []
         for assignment in choice.assignments:
             item = assignment.model_dump()
@@ -378,11 +347,11 @@ async def nl_command(cmd: NLCommand, request: Request):
         # Never inject preparation tasks or expand a Worker's deliverable here.
         return await submit_worker(user,chat_id,cmd.message,targets,cmd.modes,request_key=request_key,
             context_summary=choice.context_summary,objective=choice.objective,broadcast=cmd.broadcast,
-            execution_mode=choice.execution_mode,source_task_ids=choice.source_task_ids,history_snapshot=history_snapshot,
+            source_task_ids=choice.source_task_ids,history_snapshot=history_snapshot,
             assignments=assignments,
             goal_id=choice.goal_id,goal_revision=choice.goal_revision,
             memory_authorizations=[proof.model_dump() for proof in choice.memory_authorizations],
-            execution_scope=choice.execution_scope,window_effects=choice.window_effects,
+            window_effects=choice.window_effects,
             preserve_file_bytes=choice.preserve_file_bytes)
     try:
         return await run_turn(cmd,user,chat_id,delegate)
@@ -672,19 +641,11 @@ async def api_get_task(task_id: str, request: Request):
         "overall_status": task.get("overall_status"),
         "confirm_data": task.get("confirm_data"),
         "input_required": task.get("input_required"),
-        "plan_review": task.get("plan_review"),
         "created_at": task["created_at"],
         "memory_stats": memory_stats,
         "suggested_fact": task.get("suggested_fact"),
     }
-    if task.get("plan_suggestion"):
-        response_task["plan_suggestion"] = task["plan_suggestion"]
-        response_task["plan_original_request"] = task.get("plan_original_request", "")
-        user_plan = get_user_plan(user["id"])
-        if user_plan == "free" and not _is_admin(user):
-            response_task["plan_trial_used"] = bool(get_plan_trial_used(user["id"]))
-    if task.get("auto_plan"):
-        response_task["auto_plan"] = True
+
 
     if task.get("kind") == "orchestrator" and task.get("result_first") and task.get("goal_id"):
         try:
@@ -752,16 +713,8 @@ async def api_cancel_task(task_id: str, request: Request):
     }
 
 
-class PlanReviewBody(BaseModel):
-    revision: str = Field(min_length=1, max_length=64)
-    action: Literal["approve", "revise"]
-    changes: str = Field(default="", max_length=4000)
 
 
-@router.post("/api/tasks/{task_id}/review-plan")
-async def api_review_plan(task_id: str, body: PlanReviewBody, request: Request):
-    get_current_user(request)
-    raise HTTPException(status_code=410, detail="execution_mode_unsupported")
 
 
 class CommandDecisionBody(BaseModel):
@@ -777,7 +730,7 @@ async def api_command_decision(task_id: str, body: CommandDecisionBody, request:
     if not task or task.get("user_id") != user["id"]:
         raise HTTPException(404, "Задача не найдена")
     data = task.get("confirm_data") or {}
-    if (task.get("status") != "confirm" or task.get("plan_review")
+    if (task.get("status") != "confirm"
             or data.get("confirmation_id") != body.confirmation_id):
         raise HTTPException(409, "Это подтверждение команды уже не актуально.")
     if body.via_voice and (not data.get("voice_allowed") or data.get("kind") != "command"):
@@ -795,9 +748,6 @@ async def api_confirm_task(task_id: str, request: Request, confirmation_id: str 
         raise HTTPException(status_code=404, detail="Задача не найдена")
     if task["status"] != "confirm":
         raise HTTPException(status_code=400, detail="Задача не ожидает подтверждения")
-
-    if task.get("plan_review") or (task.get("modes") or {}).get("pipeline"):
-        raise HTTPException(410, "execution_mode_unsupported")
 
     created = task.get("created_at")
     if type(created) not in (int, float) or not 0 <= time.time() - created <= TASK_TTL:
@@ -982,10 +932,6 @@ async def api_decline_fact(task_id: str, request: Request):
     return {"status": "ok", "memory_stats": _memory_stats_for_profile(user, profile)}
 
 
-@router.post("/api/tasks/{task_id}/decline_plan")
-async def api_decline_plan_suggestion(task_id: str, request: Request):
-    get_current_user(request)
-    raise HTTPException(status_code=410, detail="execution_mode_unsupported")
 
 
 @router.post("/api/tasks/{task_id}/deny")
@@ -1018,11 +964,6 @@ async def api_deny_task(task_id: str, request: Request):
     return {"status": "ok"}
 
 
-@router.post("/api/run_plan/{chat_id}")
-async def api_run_plan(chat_id: int, body: RunPlanBody, request: Request):
-    get_current_user(request)
-    raise HTTPException(status_code=410, detail={"code": "execution_mode_unsupported",
-        "message": "Режим PLAN удалён. Передайте обычное поручение через чат."})
 
 @router.get("/api/download/{token}")
 async def download_file(token: str, request: Request):

@@ -9,12 +9,10 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 try:
     from .. import voice
     from ..api_support import _is_admin, check_rate_limit, get_current_user
-    from ..database import get_user_plan, get_plan_trial_used
     from ..runtime_state import tasks
 except ImportError:
     import voice
     from api_support import _is_admin, check_rate_limit, get_current_user
-    from database import get_user_plan, get_plan_trial_used
     from runtime_state import tasks
 
 router = APIRouter(prefix="/api/voice")
@@ -50,7 +48,7 @@ def _piper_device(user_id: int, device_id: str | None) -> str:
 
 
 @router.post("/tasks/{task_id}/speech")
-async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0), revision: str | None = None,
+async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0),
                       confirmation: str | None = None, question: str | None = None, provider: str = "yandex", device_id: str | None = None):
     user = get_current_user(request)
     if provider not in {"yandex", "piper", "elevenlabs"}:
@@ -112,11 +110,8 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
     silence_task = {**task,"status":"done"} if normalized and normalized["status"]=="success" else task
     if (normalized is None or normalized["status"]=="success") and (silent_window_success(silence_task) or silent_browser_success(silence_task)):
         return Response(status_code=204)
-    if revision is not None:
-        raise HTTPException(410, "execution_mode_unsupported")
     pending = task.get("confirm_data") or {}
-    ordinary = (pending if task.get("status") == "confirm" and pending.get("kind") == "command" and pending.get("voice_allowed")
-                and not task.get("plan_review") else None)
+    ordinary = (pending if task.get("status") == "confirm" and pending.get("kind") == "command" and pending.get("voice_allowed") else None)
     if confirmation is not None and (not ordinary or ordinary.get("confirmation_id") != confirmation):
         raise HTTPException(409, "Подтверждение команды изменилось")
     input_event = task.get("input_required") or {}

@@ -31,17 +31,11 @@ def _tool_call(call_id: str, name: str, args: dict | None = None) -> dict:
 
 def _answer_payload(text: str = "ok", *, answer_type: str = "pure_text", basis: list[str] | None = None) -> dict:
     basis = basis or []
-    grounded = answer_type == "grounded_report"
     return {
         "answer_type": answer_type,
         "text": text,
         "basis": basis,
-        "self_check": {
-            "depends_on_current_external_state": grounded,
-            "claims_completed_action": grounded,
-            "has_sufficient_evidence": True,
-            "missing_evidence_question": "",
-        },
+
     }
 
 
@@ -105,7 +99,7 @@ def _run_case_unbound(
         chat_id=chat_id,
         modes={},
         poll_task_id=poll_task_id,
-        cfg=cfg or {"model": "mock-model", "max_tokens": 512, "answer_auditor_enabled": False},
+        cfg=cfg or {"model": "mock-model", "max_tokens": 512},
         system_msg="system",
         machine_guid=None,
         mem_user_id=mem_user_id,
@@ -357,12 +351,7 @@ def test_write_content_error_basis_blocks_completed_success_claim():
         "answer_type": "error_report",
         "text": "Не удалось записать файл: disk full.",
         "basis": ["step_1"],
-        "self_check": {
-            "depends_on_current_external_state": True,
-            "claims_completed_action": False,
-            "has_sufficient_evidence": False,
-            "missing_evidence_question": "write_content returned ERROR.",
-        },
+
     }
 
     result = _run_case([
@@ -482,7 +471,7 @@ def test_tool_registry_answer_tools_exist_and_canonical_names_map():
     tools = list_tools("answer")
     names = {tool["name"] for tool in tools["answer"]}
 
-    assert {"answer.text", "answer.ask_clarification", "answer.report_failure", "answer.request_confirmation"} <= names
+    assert {"answer.text", "answer.ask_clarification", "answer.report_failure"} <= names
     assert canonical_tool_name("answer_text") == "answer.text"
     assert canonical_tool_name("answer_report_failure") == "answer.report_failure"
 
@@ -1082,7 +1071,7 @@ def test_auditor_rejects_invalid_answer_and_retry_succeeds():
     result=_run_case([_message(tool_calls=[_tool_call('exec','execute_cmd',{'command':'mock'})]),
         _message(tool_calls=[_answer_call('claim','Действие выполнено.',answer_type='grounded_report',basis=['step_1'])]),
         _message(content=json.dumps({'coverage':'complete','evidence_refs':['step_1']}))],
-        captured=calls,send_command_fn=send,cfg={'model':'mock','answer_auditor_enabled':True})
+        captured=calls,send_command_fn=send,cfg={'model':'mock'})
     report=build_worker_report({**result,'task_id':'auditor-cannot-override','status':'done','original_request':'Задача'})
     assert not report['goal_completed'] and report['status']=='failed'
     assert len(sent)==1 and len(calls)==2  # Execution and candidate; no futile audit or repair for an opaque effect.
@@ -1107,7 +1096,7 @@ def test_common_terminal_result_requires_no_second_final_summary(monkeypatch):
 
 def test_goal_worker_iteration_limit_uses_existing_answer_only_repair(monkeypatch):
     monkeypatch.setitem(runtime_state.tasks,"repair-goal",{"task_id":"repair-goal","goal_id":"goal",
-        "proposed_objective":"Inspect a value","execution_scope":"general","window_effects":[]})
+        "proposed_objective":"Inspect a value","window_effects":[]})
     captured=[];sent=[]
     async def send(device,action,params):
         sent.append(action)

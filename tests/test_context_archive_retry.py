@@ -162,14 +162,12 @@ def test_server_controller_reads_archive_summary_then_original(owned,monkeypatch
         if index<3:
             name='system_get_last_run_summary';args=arguments[index]
         else:
-            name='answer_text';args={'answer_type':'grounded_report','text':reason,'basis':['step_3'],
-                'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,
-                'has_sufficient_evidence':True,'missing_evidence_question':''}}
+            name='answer_text';args={'answer_type':'grounded_report','text':reason,'basis':['step_3']}
         return {'choices':[{'message':{'role':'assistant','tool_calls':[{'id':f'call-{index}',
             'type':'function','function':{'name':name,'arguments':json.dumps(args)}}]}}]}
     monkeypatch.setattr(controller,'_chat_completion_request',complete)
     result=asyncio.run(controller_onboarding.process_onboarding_message('Почему мы выбрали этот вариант?',
         usage_context={'chat_id':owned['chat_id'],'user_id':owned['id'],'worker_execution':True},
-        load_llm_config_fn=lambda:{**config(),'answer_auditor_enabled':False},
+        load_llm_config_fn=lambda:{**config()},
         current_datetime_msk_fn=lambda:'2026-10-24'))
     assert len(seen)==4 and result['answer']==reason

@@ -35,7 +35,7 @@ def run_normal(monkeypatch,message,responses,send,history=None, *, real_completi
     if task_id:
         monkeypatch.setitem(tasks, task_id, {"task_id":task_id, "goal_id":"browser-goal",
             "original_request":message, "proposed_objective":assigned_objective,
-            "execution_scope":"general", "window_effects":[]})
+             "window_effects":[]})
     queue=iter(responses)
     original_send=send
     async def send(device,operation,params):
@@ -211,8 +211,7 @@ def test_full_browser_controller_flow_rereads_after_changes_and_refreshes_stale_
 
 
 def grounded(text="Получен ответ: тест", basis=None):
-    return call("answer_text",{"answer_type":"grounded_report","text":text,"basis":basis or ["step_1"],
-        "self_check":{"depends_on_current_external_state":True,"claims_completed_action":False,"has_sufficient_evidence":True,"missing_evidence_question":""}})
+    return call("answer_text",{"answer_type":"grounded_report","text":text,"basis":basis or ["step_1"]})
 
 
 def test_tabs_question_is_one_call_and_reports_current_tabs(monkeypatch):
@@ -276,7 +275,7 @@ def test_browser_repair_uses_live_http_client_instead_of_closed_client(monkeypat
     monkeypatch.setattr(normal.httpx,"AsyncClient",lambda **kw:client_type(**kw,transport=httpx.MockTransport(handle)))
     async def send(device,operation,params): return result(operation)
     outcome=run_normal(monkeypatch,"Прочитай последнее сообщение во вкладке чат gpt",[],send,
-        real_completion=_chat_completion_request,cfg_override={"model":"mock","base_url":"https://llm.invalid","api_key":"test-no-live-api","answer_auditor_enabled":auditor})
+        real_completion=_chat_completion_request,cfg_override={"model":"mock","base_url":"https://llm.invalid","api_key":"test-no-live-api"})
     assert outcome["answer"] == "Получен ответ: тест" and len(requests) == (4 if auditor else 3)
     assert "answer_text" in {tool["function"]["name"] for tool in requests[1]["tools"]}
     assert [tool["function"]["name"] for tool in requests[2]["tools"]] == ["answer_text"]

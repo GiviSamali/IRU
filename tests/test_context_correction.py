@@ -117,22 +117,18 @@ def test_server_only_loop_passes_real_user_boundary_and_source_options(owned,mon
     mid=db.add_message(owned['chat_id'],'user','Точный источник решения.')['id'];seen=[]
     async def complete(**kwargs):
         messages=kwargs['messages'];pointer=kwargs['usage_context']['context_current_user_index']
-        if kwargs.get('phase')=='onboarding.answer_auditor':
-            assert pointer==1 and json.loads(messages[pointer]['content'])['user_request']=='Почему принято решение?'
-            return {'choices':[{'message':{'content':json.dumps({'valid':True,'reason':'Exact owned original read'})}}]}
         assert messages[pointer]['content']=='Почему принято решение?'
         seen.append(kwargs)
         if len(seen)==1:
             return {'choices':[{'message':{'role':'assistant','tool_calls':[{'id':'source','type':'function','function':{
                 'name':'system_get_last_run_summary','arguments':json.dumps({'source_message_range':{'first':mid,'last':mid}})}}]}}]}
         assert 'Точный источник решения.' in messages[-1]['content']
-        payload={'answer_type':'grounded_report','text':'Причина в исходном сообщении.','basis':['step_1'],
-            'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,'has_sufficient_evidence':True,'missing_evidence_question':''}}
+        payload={'answer_type':'grounded_report','text':'Причина в исходном сообщении.','basis':['step_1']}
         return {'choices':[{'message':{'role':'assistant','tool_calls':[{'id':'final','type':'function','function':{'name':'answer_text','arguments':json.dumps(payload)}}]}}]}
     monkeypatch.setattr(controller,'_chat_completion_request',complete)
     result=asyncio.run(controller_onboarding.process_onboarding_message('Почему принято решение?',
         chat_history=[{'role':'user','content':'Старое поручение.'},{'role':'assistant','content':'Исторический ответ.'},{'role':'user','content':'Почему принято решение?'}],
-        usage_context={'chat_id':owned['chat_id'],'user_id':owned['id'],'worker_execution':True},load_llm_config_fn=lambda:{**config(),'answer_auditor_enabled':True},current_datetime_msk_fn=lambda:'2026-10-24'))
+        usage_context={'chat_id':owned['chat_id'],'user_id':owned['id'],'worker_execution':True},load_llm_config_fn=lambda:{**config()},current_datetime_msk_fn=lambda:'2026-10-24'))
     assert len(seen)==2 and result['answer']=='Причина в исходном сообщении.'
 
 

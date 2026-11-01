@@ -282,7 +282,7 @@ def run_controller(responses, send, monkeypatch, tmp_path, *, protected=True, ca
     return asyncio.run(process_non_pipeline_command(user_message='Replace four values', device_id='pc',
         device_info={'os':'Windows','file_replace_protocol':2}, send_command_fn=send,
         get_file_link_fn=lambda *a:'',chat_history=[],user_id=None,chat_id=None,modes={},
-        poll_task_id='ec01-controller',cfg={'model':'mock','answer_auditor_enabled':False},system_msg='system',
+        poll_task_id='ec01-controller',cfg={'model':'mock'},system_msg='system',
         machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=6,
         pick_model_fn=lambda *a:'mock',chat_completion_request_fn=_completion_fn(responses,captured)))
 

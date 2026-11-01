@@ -51,7 +51,7 @@ const IRUSmartUI = (() => {
     // Old history is normalized on the server. Browser prose/steps cannot
     // establish completion when an authoritative report is unavailable.
     const raw = normalizeStatus(message.taskStatus || message.task_status);
-    if (message.confirmTaskId || message.planReview) return 'waiting';
+    if (message.confirmTaskId) return 'waiting';
     if (message.loading) return 'running';
     return ['running','waiting','queued','waiting_confirmation','waiting_input','waiting_dependency','cancelled','failed','partial','blocked','unknown'].includes(raw) ? raw : 'unknown';
   }
@@ -159,14 +159,14 @@ const IRUSmartUI = (() => {
     const commands = list(m.loading ? m.liveCommands || m.commands : m.commands);
     const operations = commands.filter(command => !key(command.tool_name || command.action).startsWith('answer'));
     const conversationNegative = [m.taskStatus, (m.taskReceipt || m.task_receipt || {}).task_status, m.overallStatus].some(value => ['failed','blocked','partial','unknown','cancelled'].includes(normalizeStatus(value)));
-    const pureConversation = !executionDetails && !m.loading && !m.confirmTaskId && !m.planReview && !conversationNegative && !tasks.length && !operations.length
+    const pureConversation = !executionDetails && !m.loading && !m.confirmTaskId && !conversationNegative && !tasks.length && !operations.length
       && (key(lastTerminal(commands)?.result?.answer_type) === 'pure_text' || (m.taskMode === 'conversation' && normalizeStatus(m.taskStatus) === 'success'));
-    const hasTask = !pureConversation && (m.workerReport || m.worker_report || tasks.length || operations.length || m.loading || m.taskStatus || m.taskReceipt || m.task_receipt || m.confirmTaskId || m.planReview || executionDetails);
+    const hasTask = !pureConversation && (m.workerReport || m.worker_report || tasks.length || operations.length || m.loading || m.taskStatus || m.taskReceipt || m.task_receipt || m.confirmTaskId || executionDetails);
     if (hasTask && !goalSummary) {
       const status = taskState(m, tasks, commands);
       const receipt = m.taskReceipt || m.task_receipt || {};
-      const detailed = status !== 'success' || m.loading || m.confirmTaskId || m.planReview || m.cancelAvailable
-        || m.taskMode === 'plan' || receipt.answer_source === 'pipeline_step_report' || tasks.length > 0
+      const detailed = status !== 'success' || m.loading || m.confirmTaskId || m.cancelAvailable
+        || tasks.length > 0
         || operations.length !== 1 || !Number.isFinite(m.taskElapsedMs) || m.taskElapsedMs >= 30000
         || operations.some(command => command.step_index != null || commandState(command) !== 'success');
       blocks.push({ type:'task', key:id+'-task', status, label:LABELS[status], compact:!detailed,

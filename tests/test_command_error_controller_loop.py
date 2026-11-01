@@ -28,12 +28,7 @@ def _answer_call(call_id: str, text: str) -> dict:
                 "answer_type": "pure_text",
                 "text": text,
                 "basis": [],
-                "self_check": {
-                    "depends_on_current_external_state": False,
-                    "claims_completed_action": False,
-                    "has_sufficient_evidence": True,
-                    "missing_evidence_question": "",
-                },
+
             }, ensure_ascii=False),
         },
     }
@@ -47,7 +42,7 @@ def test_worker_dependency_error_is_structured_observation(tmp_path, monkeypatch
     if goal_member:
         monkeypatch.setitem(tasks, task_id, {"task_id": task_id, "goal_id": "goal",
             "original_request": "check PyQt5", "proposed_objective": "check PyQt5",
-            "execution_scope": "general", "window_effects": []})
+             "window_effects": []})
     captured_messages = []
 
     async def _send_command_fn(device_id, action, params):

@@ -19,7 +19,6 @@ def test_typed_partial_with_sufficient_subset_is_not_replaced_by_first_error():
     journal = [{'step_id':'step_1', 'tool_name':'execute_cmd', 'tool_type':'control',
                 'status':'failed', 'result':{'returncode':127, 'stdout':'observed subset', 'stderr':'BOM'}}]
     payload = _answer_payload('Наблюдения сохранены. База не прочитана.', answer_type='partial_report', basis=['step_1'])
-    payload['self_check'].update(claims_completed_action=False, has_sufficient_evidence=True)
     append_answer_step(journal, 'answer_text', payload)
     assert sanitize_result_text(payload['text'], journal) == payload['text']
     # A raw completion claim still receives the legacy guard.

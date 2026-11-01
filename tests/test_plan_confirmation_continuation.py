@@ -19,17 +19,6 @@ def test_invalid_goal_graph_cannot_silently_become_a_smaller_task(raw):
         validate_task_graph(raw)
 
 
-def test_orphaned_pipeline_confirmation_never_uses_single_command_completion(monkeypatch):
-    monkeypatch.setitem(runtime.tasks,"orphan-plan",{
-        "user_id":1,"status":"confirm","modes":{"pipeline":True}})
-    monkeypatch.setattr(routes,"get_current_user",lambda request:{"id":1})
-    async def send(*args,**kwargs):
-        pytest.fail("Retired PLAN must not execute")
-    monkeypatch.setattr(routes,"send_command_to_agent",send)
-    with pytest.raises(HTTPException) as caught:
-        asyncio.run(routes.api_confirm_task("orphan-plan",None))
-    assert caught.value.status_code==410
-    assert runtime.tasks["orphan-plan"]["status"]=="confirm"
 
 
 def tool(name,args,number):
@@ -73,7 +62,7 @@ def test_goal_worker_retains_confirmation_frame_and_independent_queue(client,mon
         return await process_non_pipeline_command(user_message=kw["user_message"],device_id=kw["device_id"],
             device_info=kw["device_info"],send_command_fn=kw["send_command_fn"],get_file_link_fn=kw["get_file_link_fn"],
             chat_history=kw["chat_history"],user_id=None,chat_id=None,modes={},poll_task_id=kw["poll_task_id"],
-            cfg={"model":"mock-model","answer_auditor_enabled":False},system_msg="system",
+            cfg={"model":"mock-model"},system_msg="system",
             machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=6,
             pick_model_fn=lambda *a:"mock-model",chat_completion_request_fn=completion)
     monkeypatch.setattr(runtime,"process_nl_command",process)

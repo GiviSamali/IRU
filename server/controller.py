@@ -3,15 +3,15 @@ Controller router for IRU LLM flows.
 
 This module is intentionally thin:
 1. builds normalized runtime context for the current request;
-2. selects an execution route and toolset;
-3. delegates execution to specialized modules.
+2. builds the Worker prompt and tool inventory;
+3. calls the common Worker loop directly.
 
 Execution details live outside this file:
 - controller_non_pipeline.py for standard tool loops
 - worker_scheduler.py for goal readiness and task admission
 - controller_onboarding.py for no-device onboarding chat
 - controller_prompts.py for prompt text
-- controller_tools.py for tool schemas and toolset registries
+- controller_tools.py for tool schemas
 """
 
 import json
@@ -19,7 +19,6 @@ import time
 import logging
 import os
 from dataclasses import dataclass
-from typing import Awaitable, Callable
 
 try:
     from .controller_non_pipeline import process_non_pipeline_command as _process_non_pipeline_command  # type: ignore
@@ -42,7 +41,7 @@ try:
         format_recent_artifact_context_block,
         strip_markdown,
     )
-    from .controller_tools import TOOLSET_REGISTRY  # type: ignore
+    from .controller_tools import NON_PIPELINE_TOOLS  # type: ignore
     from .device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
     from .llm_usage import LLM_ENTITY, extract_usage, record_llm_usage_event  # type: ignore
     from .python_toolchain import build_python_toolchain_block, get_cached_python_toolchain  # type: ignore
@@ -67,7 +66,7 @@ except ImportError:
         format_recent_artifact_context_block,
         strip_markdown,
     )
-    from controller_tools import TOOLSET_REGISTRY  # type: ignore
+    from controller_tools import NON_PIPELINE_TOOLS  # type: ignore
     from device_context import build_minimal_llm_context, format_minimal_llm_context_block  # type: ignore
     from llm_usage import LLM_ENTITY, extract_usage, record_llm_usage_event  # type: ignore
     from python_toolchain import build_python_toolchain_block, get_cached_python_toolchain  # type: ignore
@@ -123,17 +122,10 @@ class LLMRuntimeContext:
     recent_artifact_context_block: str = ""
 
 
-@dataclass(frozen=True)
-class LLMRouteSpec:
-    name: str
-    executor: Callable[..., Awaitable[dict]]
-    toolset_name: str | None = None
 
 
 def _pick_model(cfg: dict, modes: dict | None) -> str:
-    """Choose the configured ordinary/autonomous model; PLAN is unsupported."""
-    if (modes or {}).get("pipeline"):
-        raise ValueError("execution_mode_unsupported")
+    """Choose the configured ordinary/autonomous model."""
     base = cfg.get("model", "deepseek-v4-flash")
     reasoner = cfg.get("model_reasoner", "deepseek-v4-pro")
     is_complex = bool(modes) and modes.get("autonomous")
@@ -156,8 +148,8 @@ def _thinking_request_fields(
         # Ordinary window/browser selection reserves output for structured calls.
         return {"thinking": {"type": "disabled"}}
 
-    if (request_phase or "").endswith(("answer_auditor", ".auditor", "result_coverage", "goal_completion")):
-        # The auditor has a small strict-JSON output budget, not a worker's CoT budget.
+    if (request_phase or "").endswith(("goal_completion",)):
+        # Result narration reserves its output budget for the structured reply.
         return {"thinking": {"type": "disabled"}}
     base_model = cfg.get("model", "deepseek-v4-flash")
     reasoner_model = cfg.get("model_reasoner", "deepseek-v4-pro")
@@ -349,10 +341,6 @@ async def _chat_completion_request(
         raise
 
 
-def _get_toolset(name: str | None) -> list[dict] | None:
-    if not name:
-        return None
-    return TOOLSET_REGISTRY[name]
 
 
 def _resolve_memory_user_id(user_id: int | None, machine_guid: str | None) -> str | None:
@@ -430,15 +418,10 @@ def _build_non_pipeline_system_prompt(
     )
 
 
-def _select_llm_route(modes: dict) -> LLMRouteSpec:
-    if modes.get("pipeline"):
-        raise ValueError("execution_mode_unsupported")
-    return ROUTE_REGISTRY["non_pipeline"]
 
 
 def _build_non_pipeline_route_kwargs(
     *,
-    route: LLMRouteSpec,
     runtime: LLMRuntimeContext,
     user_message: str,
     device_id: str,
@@ -468,7 +451,7 @@ def _build_non_pipeline_route_kwargs(
         "system_msg": system_msg,
         "machine_guid": runtime.machine_guid,
         "mem_user_id": runtime.mem_user_id,
-        "non_pipeline_tools": _get_toolset(route.toolset_name),
+        "non_pipeline_tools": NON_PIPELINE_TOOLS,
         "max_iterations": MAX_ITERATIONS,
         "pick_model_fn": _pick_model,
         "chat_completion_request_fn": _chat_completion_request,
@@ -478,7 +461,6 @@ def _build_non_pipeline_route_kwargs(
 
 def _build_route_kwargs(
     *,
-    route: LLMRouteSpec,
     runtime: LLMRuntimeContext,
     user_message: str,
     device_id: str,
@@ -506,7 +488,6 @@ def _build_route_kwargs(
             "Запрещённые системные команды всё равно не выполняй."
         )
     return _build_non_pipeline_route_kwargs(
-        route=route,
         runtime=runtime,
         user_message=user_message,
         device_id=device_id,
@@ -521,15 +502,6 @@ def _build_route_kwargs(
         system_msg=system_msg,
         device_tool_fn=device_tool_fn,
     )
-
-
-ROUTE_REGISTRY = {
-    "non_pipeline": LLMRouteSpec(
-        name="non_pipeline",
-        executor=_process_non_pipeline_command,
-        toolset_name="non_pipeline",
-    ),
-}
 
 
 async def process_nl_command(
@@ -573,15 +545,13 @@ async def process_nl_command(
         user_id=user_id,
         chat_history=chat_history,
     )
-    route = _select_llm_route(modes)
     usage_context = {
         "user_id": user_id,
         "chat_id": chat_id,
         "poll_task_id": poll_task_id,
-        "route": route.name,
+        "route": "worker",
     }
     route_kwargs = _build_route_kwargs(
-        route=route,
         runtime=runtime,
         user_message=user_message,
         device_id=device_id,
@@ -598,7 +568,7 @@ async def process_nl_command(
         device_tool_fn=device_tool_fn,
     )
     route_kwargs["usage_context"] = usage_context
-    return await route.executor(**route_kwargs)
+    return await _process_non_pipeline_command(**route_kwargs)
 
 
 async def process_onboarding_message(

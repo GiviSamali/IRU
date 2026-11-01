@@ -34,16 +34,12 @@ def replace(step="step_2"):
 
 def answer(text=MODEL_TEXT, step="step_4"):
     return {"task_id": "task-1", "step_id": step, "tool_name": "answer.text", "status": "terminal",
-            "result": {"answer_type": "grounded_report", "text": text, "basis": ["step_2"],
-                       "self_check": {"depends_on_current_external_state": True,
-                                      "claims_completed_action": True,
-                                      "has_sufficient_evidence": True,
-                                      "missing_evidence_question": ""}}}
+            "result": {"answer_type": "grounded_report", "text": text, "basis": ["step_2"]}}
 
 
 def task(commands, artifacts, answer_text=MODEL_TEXT):
     return {"task_id": "task-1", "worker_id": "worker-1", "status": "done",
-            "device_ids": ["givi"], "execution_scope": "general",
+            "device_ids": ["givi"],
             "assigned_artifacts": artifacts, "commands": commands, "answer": answer_text}
 
 

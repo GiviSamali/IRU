@@ -21,8 +21,6 @@ RUNNING_TASK_STATUSES = {"running", "pending", "confirm", "cancelling", "queued"
 TERMINAL_TASK_STATUSES = {"done", "error", "completed", "completed_with_recovery", "failed", "cancelled", "blocked", "partial", "unknown", "interrupted", "success"}
 
 
-# Declined plan suggestions keyed by chat_id + request hash
-declined_plan_requests: dict[str, float] = {}
 
 
 # Declined suggested facts keyed by user_id + chat_id + fact hash
@@ -75,9 +73,6 @@ def create_download_link(device_id: str, file_path: str, user_id: int = 0) -> st
     return f"/api/download/{token}"
 
 
-def _request_hash(message: str) -> str:
-    normalized = (message or "").strip().lower()
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def build_suggested_fact_hash(user_id: int, chat_id: int, text: str, category: str | None = None) -> str:
@@ -87,17 +82,8 @@ def build_suggested_fact_hash(user_id: int, chat_id: int, text: str, category: s
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def mark_plan_declined(chat_id: int, message: str) -> None:
-    if not chat_id or not message:
-        return
-    declined_plan_requests[f"{chat_id}:{_request_hash(message)}"] = time.time()
 
 
-def is_plan_declined(chat_id: int, message: str) -> bool:
-    if not chat_id or not message:
-        return False
-    cleanup_old_tasks()
-    return f"{chat_id}:{_request_hash(message)}" in declined_plan_requests
 
 
 def mark_suggested_fact_declined(user_id: int, chat_id: int, text: str, category: str | None = None) -> str | None:
@@ -121,13 +107,7 @@ def cleanup_old_tasks() -> None:
     now = time.time()
     expired = [tid for tid, task in tasks.items() if now - task["created_at"] > TASK_TTL and not (task.get("worker_id") and task.get("status") not in TERMINAL_TASK_STATUSES)]
     for task_id in expired:
-        plan_decision = tasks[task_id].get("_pipeline_plan_future")
-        if plan_decision is not None and not plan_decision.done():
-            plan_decision.set_result({"action": "cancel"})
         tasks.pop(task_id, None)
-    expired_declines = [key for key, created_at in declined_plan_requests.items() if now - created_at > TASK_TTL]
-    for key in expired_declines:
-        declined_plan_requests.pop(key, None)
     expired_fact_declines = [key for key, created_at in declined_suggested_facts.items() if now - created_at > TASK_TTL]
     for key in expired_fact_declines:
         declined_suggested_facts.pop(key, None)

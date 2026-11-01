@@ -35,7 +35,7 @@ def test_repeated_observation_warns_but_does_not_skip_execution_or_end_goal():
         _message(tool_calls=[_answer_call('d','Change verified',answer_type='grounded_report',basis=['step_3'])]),
         _message(content='{"valid":true,"reason":"mock verification"}',finish_reason='stop')],
         user_message='Change the requested part only',send_command_fn=send,captured=captured,
-        cfg={'model':'mock-model','answer_auditor_enabled':True},max_iterations=4)
+        cfg={'model':'mock-model'},max_iterations=4)
     assert calls==['inspect','inspect','transform']
     assert any('repeat 2 times' in str(m.get('content')) for m in captured[2])
     assert build_worker_report(worker_task(result))['status']=='partial'
@@ -49,7 +49,7 @@ def test_repair_receipt_preserves_audited_goal_without_trusting_model_flags(audi
     if audited:responses.append(_message(content='{"valid":true,"reason":"mock write evidence"}',finish_reason='stop'))
     async def send(*args):return {'path':'C:/Temp/output.txt','bytes_written':2}
     result=_run_case(responses,user_message='Create a file',send_command_fn=send,
-        cfg={'model':'mock-model','answer_auditor_enabled':audited},max_iterations=1)
+        cfg={'model':'mock-model'},max_iterations=1)
     report=build_worker_report(worker_task(result))
     assert report['status']=='partial' and not report['goal_completed']  # Legacy flags never prove a file.
     assert (result.get('task_receipt') or {}).get('goal_completed') is not True
@@ -91,7 +91,7 @@ def test_thinking_request_preserves_reasoning_and_omits_unsupported_tool_choice(
     assert posts[0]['messages'][0]['reasoning_content']=='' and posts[0]['messages'][1]['reasoning_content']=='actual reasoning'
     assert messages==saved
     assert controller._thinking_request_fields({'model_reasoner':'deepseek-v4-pro'},'deepseek-v4-pro',phase='answer_repair.auditor')['thinking']['type']=='disabled'
-    assert controller._thinking_request_fields({'model_reasoner':'deepseek-v4-pro'},'deepseek-v4-pro',phase='result_coverage')=={'thinking':{'type':'disabled'}}
+    assert controller._thinking_request_fields({'model_reasoner':'deepseek-v4-pro'},'deepseek-v4-pro',phase='goal_completion')=={'thinking':{'type':'disabled'}}
 
 
 def test_provider_failure_preserves_observed_journal_and_artifact(monkeypatch):

@@ -66,7 +66,7 @@ _SYSTEM = (
 def _fingerprint(goal, projected):
     material = {
         "goal_id": goal.get("goal_id"),
-        "presentation_version": "ff02",
+        "presentation_version": "execution-v1.1",
         "revision": goal.get("revision"),
         "status": projected["status"],
         "request": goal.get('original_request'),
@@ -77,7 +77,7 @@ def _fingerprint(goal, projected):
             "evidence_refs": (item.get("report") or {}).get("evidence_refs"),
             "result": (item.get("result") or {}).get("sha256"),
             "scope": item.get('assignment_scope'),"constraints":item.get('assignment_constraints'),
-            "unresolved":item.get('unresolved'),"coverage":item.get('coverage_observation'),
+            "unresolved":item.get('unresolved'),"caveats":item.get('caveats'),
         } for item in goal.get("tasks") or []],
     }
     return hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
@@ -125,7 +125,7 @@ def _cached(goal, owner, chat, fingerprint, projected):
 
 def _needs_explanation(goal):
     members=[m for m in goal.get('tasks') or [] if m.get('required_for_goal',True)]
-    if not members or all(m.get('execution_scope')=='window' for m in members):return False
+    if not members:return False
     if all(m.get('status')=='success' and (m.get('report') or {}).get('artifacts')
            and all(a.get('verification_scope')=='copy_identity' for a in m['report']['artifacts']) for m in members):
         return False
@@ -135,43 +135,18 @@ def _needs_explanation(goal):
 def _narration_material(goal, projected):
     """Presentation only: compact completed actions, retain substantive findings.
 
-    General scope alone does not identify a simple action. Requests for analysis,
+    A completed action alone does not identify a simple reply. Requests for analysis,
     explanation or technical details (including a mixed Goal member) keep the
     full existing narrator context. Never infer completion from the prose here.
     """
     members=[entry for entry in goal.get('tasks') or [] if entry.get('required_for_goal',True)]
     request=goal.get('original_request') or ''
-    substantive=re.compile(
-        r'анализ|исслед|диагност|сравн|объясн|почему|причин|провер|посмотр|осмотр|'
-        r'изуч|оцен|найди|найти|состояни|нормаль|расскаж|\?|'
-        r'ошиб|проблем|вывод|рекомендац|отч[её]т|подроб|техническ|хеш|хэш|'
-        r'sha[ -]?256|\bbom\b|\bcrlf\b|байт|кодиров|audit|analy[sz]|investigat|'
-        r'diagnos|compar|explain|why|inspect|verify|check|report|detail|review|summari|look|find',re.I)
-    compact=bool(members) and projected.get('status')=='success' and projected.get('goal_completed') is True
-    compact=compact and not substantive.search(request)
-    compact=compact and all(
-        entry.get('status')=='success' and (entry.get('report') or {}).get('goal_completed') is True
-        and entry.get('execution_scope') in {'general','window','file'}
-        and not entry.get('unresolved')
-        and (entry.get('coverage_observation') or {}).get('coverage') in {None,'complete'}
-        and not substantive.search(' '.join(str(entry.get(key) or '') for key in ('objective','assignment_scope')))
-        for entry in members)
-    if compact:
-        # Goal status already represents verified completion of these assignments.
-        # No technical summary, intermediate errors, receipts or recommendations
-        # are needed to say the requested action was completed.
-        outcomes=[{'status':entry['status'],'completed_action':entry.get('objective') or request}
-                  for entry in members]
-        return {'reply_mode':'action_result','original_request':request,
-            'verified_goal_status':projected['status'],'worker_outcomes':outcomes,
-            'files':[{'name':file['name']} for file in projected.get('result_artifacts') or []]}
     outcomes=[{'status':entry.get('status'),'objective':entry.get('objective') or '',
         'scope':entry.get('assignment_scope') or '',
         'constraints':entry.get('assignment_constraints') or [],
         'unresolved':entry.get('unresolved') or [],
         'optional_recommendations':entry.get('recommendations') or [],
-        'coverage_observation':{key:(entry.get('coverage_observation') or {}).get(key)
-            for key in ('coverage','reason','evidence_refs')},
+        'caveats':entry.get('caveats') or [],
         'summary':(entry.get('report') or {}).get('summary') or '',
         'error_code':(entry.get('report') or {}).get('error_code'),
         'evidence_refs':(entry.get('report') or {}).get('evidence_refs') or [],
@@ -279,6 +254,10 @@ def _persist_to_dialogue(connection, goal, reply, owner, chat):
 
 async def present_completed_goal(goal, projected, owner, chat):
     """Return one stable post-goal reply; never downgrade a task on LLM failure."""
+    try:
+        from .goal_presentation import include_result_limits
+    except ImportError:
+        from goal_presentation import include_result_limits
     if not projected.get("terminal"):
         return projected
     fingerprint = _fingerprint(goal, projected)
@@ -293,7 +272,7 @@ async def present_completed_goal(goal, projected, owner, chat):
                     _persist_to_dialogue(c,goal,{**stored,'reply_fingerprint':fingerprint},owner,chat)
             except Exception:
                 pass
-        return {**projected, **stored}
+        return include_result_limits(goal, {**projected, **stored})
     key = (goal["goal_id"], goal["revision"], owner, chat)
     lock = _LOCKS.get(key)
     if lock is None:
@@ -305,7 +284,7 @@ async def present_completed_goal(goal, projected, owner, chat):
         except Exception:
             return projected
         if stored:
-            return {**projected, **stored}
+            return include_result_limits(goal, {**projected, **stored})
         reply = {"message": projected["message"],
                  "spoken_message": projected["spoken_message"],"reply_source":"template",
                  "reply_request_llm_calls":0,"reply_metrics":{'llm_calls':0,'estimated_cost_usd':0}}
@@ -319,6 +298,7 @@ async def present_completed_goal(goal, projected, owner, chat):
                 reply.update(reply_source='template_fallback',reply_request_llm_calls=1,
                     reply_metrics={'llm_calls':1,'latency_ms':round((time.monotonic()-started)*1000),
                         'usage':None,'estimated_cost_usd':None,'error_type':type(exc).__name__})
+        reply = include_result_limits(goal, reply)
         reply['reply_fingerprint']=fingerprint
         try:
             with db.get_db() as c:
@@ -330,6 +310,6 @@ async def present_completed_goal(goal, projected, owner, chat):
                      reply["message"], reply["spoken_message"], time.time()))
                 _persist_to_dialogue(c, goal, reply, owner, chat)
             stored = _cached(goal, owner, chat, fingerprint, projected)
-            return {**projected,**reply,**(stored or {}),'reply_request_llm_calls':reply.get('reply_request_llm_calls',0)}
+            return include_result_limits(goal, {**projected,**reply,**(stored or {}),'reply_request_llm_calls':reply.get('reply_request_llm_calls',0)})
         except Exception:
             return projected

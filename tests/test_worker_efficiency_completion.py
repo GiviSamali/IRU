@@ -92,7 +92,7 @@ def test_forty_identical_batch_searches_dispatch_once(monkeypatch):
 
 def test_twenty_calls_reserve_terminal_without_assessor(monkeypatch):
     from server import controller_non_pipeline as loop
-    monkeypatch.setitem(tasks,'research',{'task_id':'research','execution_scope':'analysis',
+    monkeypatch.setitem(tasks,'research',{'task_id':'research',
         'original_request':'Compare recent AI sources','device_ids':[]})
     dispatched=[]
     async def search(cfg,query,limit):
@@ -102,7 +102,7 @@ def test_twenty_calls_reserve_terminal_without_assessor(monkeypatch):
     turns += [answer('Compared the supplied sources')]
     seen=[]
     result=_run_case(turns,poll_task_id='research',max_iterations=20,captured=seen,
-                     cfg={'model':'mock','answer_auditor_enabled':True})
+                     cfg={'model':'mock'})
     assert len(seen)==20 and len(dispatched)==19
     assert all(t['function']['name'].startswith('answer_') for t in seen[19]['tools'])
     assert all(x.get('phase')!='result_coverage' for x in seen)
@@ -142,7 +142,7 @@ def test_news_to_pptx_scripted_path_four_worker_turns_no_assessor(monkeypatch):
     from server import controller_non_pipeline as loop
     path='C:/Desktop/news.pptx'
     task={'task_id':'news','original_request':'Recent AI news presentation',
-          'proposed_objective':'Recent AI news presentation','execution_scope':'general',
+          'proposed_objective':'Recent AI news presentation',
           'device_ids':['device-1'],'assigned_artifacts':[path]}
     monkeypatch.setitem(tasks,'news',task)
     queries=[]; dispatched=[]
@@ -160,7 +160,7 @@ def test_news_to_pptx_scripted_path_four_worker_turns_no_assessor(monkeypatch):
            answer('Created a presentation with dated facts and source links')]
     seen=[]
     result=_run_case(turns,user_message=task['original_request'],poll_task_id='news',max_iterations=20,
-        captured=seen,send_command_fn=send,cfg={'model':'mock','answer_auditor_enabled':True})
+        captured=seen,send_command_fn=send,cfg={'model':'mock'})
     assert len(seen)==4 and len(queries)==3 and dispatched==['office_pptx']
     assert 'https://example.org/1' in json.dumps(seen[2]['messages'])
     assert 'untrusted_search_excerpts' in json.dumps(seen[2]['messages'])
@@ -178,20 +178,20 @@ def test_unrecognized_response_never_defaults_to_success(result,expected):
 
 
 def test_successful_search_is_not_a_completed_research_assignment():
-    report=build_worker_report({'task_id':'r','status':'done','execution_scope':'analysis',
+    report=build_worker_report({'task_id':'r','status':'done',
         'original_request':'Compare A, B, C','commands':[search_step()]})
     assert not report['goal_completed']
 
 
 def test_unfinished_analysis_has_no_assessor_and_is_partial(monkeypatch):
     from server import controller_non_pipeline as loop
-    monkeypatch.setitem(tasks,'r',{'task_id':'r','execution_scope':'analysis','device_ids':[]})
+    monkeypatch.setitem(tasks,'r',{'task_id':'r','device_ids':[]})
     async def search(*args):return search_step()['result']
     monkeypatch.setattr(loop,'_run_web_search',search)
     seen=[]
     result=_run_case([_message(tool_calls=[_tool_call('q','web_search',{'query':'A'})]),
         answer('Known A',['Missing C'])],poll_task_id='r',captured=seen,
-        cfg={'model':'mock','answer_auditor_enabled':True})
+        cfg={'model':'mock'})
     report=build_worker_report({'task_id':'r','status':'done','commands':result['commands'],'answer':result['answer']})
     assert len(seen)==2 and report['status']=='partial'
 
@@ -289,7 +289,7 @@ def test_exact_text_write_needs_no_independent_content_approval():
 
 def test_optional_recommendation_does_not_block_worker_result():
     step=search_step()
-    report=build_worker_report({'task_id':'r','status':'done','execution_scope':'analysis','commands':[step,
+    report=build_worker_report({'task_id':'r','status':'done','commands':[step,
         {'step_id':'step_2','tool_name':'answer.text','tool_type':'answer','status':'terminal',
          'result':{'text':'Findings','_result_contract':3,'unresolved':[],'remaining':['Optional reading']}}]})
     assert report['goal_completed']
@@ -333,6 +333,6 @@ def test_applied_edit_delta_is_not_full_document_observation():
                   total_items=2,next_offset=1)
     step={'step_id':'step_1','tool_name':'office_pptx','status':'success','target_device_id':'device-1','result':result}
     report=build_worker_report({'task_id':'news','status':'done','device_ids':['device-1'],
-        'assigned_artifacts':[result['path']],'execution_scope':'analysis','original_request':'Review the whole document',
+        'assigned_artifacts':[result['path']],'original_request':'Review the whole document',
         'commands':[step]})
     assert not report['artifacts'][0]['content_observed'] and not report['goal_completed']

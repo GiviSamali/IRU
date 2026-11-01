@@ -10,7 +10,7 @@ window.IRUOperations = (() => {
   const surfaceSeenTasks=new Set(), goalSnapshots=new Map(), goalSnapshotErrors=new Set(), expandedSurfaceGoals=new Set();
   const surfaceDetailSources=new Map();
   const surface=()=>document.documentElement.classList.contains('iru-mini');
-  const validCommandConfirmation=(task,id)=>task?.task_id===id && task.status==='confirm' && !task.plan_review
+  const validCommandConfirmation=(task,id)=>task?.task_id===id && task.status==='confirm'
     && typeof task.confirm_data?.confirmation_id==='string'
     && task.confirm_data.confirmation_id.trim().length>0 && task.confirm_data.confirmation_id.length<=64
     && typeof task.confirm_data.command==='string' && task.confirm_data.command.trim().length>0;
@@ -397,7 +397,7 @@ window.IRUOperations = (() => {
       if(!r.ok)throw Error('Решение устарело или не принято. Обновите операцию.');
       if(endpoint==='command-decision')window.iruVoice?.commandDecisionResolved?.(id);
       const index=state.messages.findIndex(m=>m._taskId===id);
-      if(index>=0){state.messages[index].confirmTaskId=null;state.messages[index].planReview=null;state.messages[index].loading=true;renderMessages();pollTask(id,index);}
+      if(index>=0){state.messages[index].confirmTaskId=null;state.messages[index].loading=true;renderMessages();pollTask(id,index);}
       await show(id);
     }finally{busy=false;document.getElementById("operationsItems").setAttribute("aria-busy","false");}
   }

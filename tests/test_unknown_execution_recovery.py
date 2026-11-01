@@ -47,7 +47,7 @@ def test_rc_zero_never_proves_goal(owners):
 
 def test_unknown_replacement_reads_without_submitting(owners,monkeypatch):
     a=owners[0];t,fact_id=saved_task(a);store(t)
-    decide_as(monkeypatch,orch.Decision(intent='delegate',scope='server',objective='Повтори',
+    decide_as(monkeypatch,orch.Decision(intent='delegate',objective='Повтори',
         assignments=[orch.Assignment(key='retry',objective='Повтори',replaces_source_task_id=t['task_id'])]))
     async def forbidden(*args,**kwargs):pytest.fail('must not submit a replacement')
     result=asyncio.run(orch.run_turn(cmd('Еще раз попробуй'),a,a['chat_id'],forbidden))

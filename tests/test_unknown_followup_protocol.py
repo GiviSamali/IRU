@@ -71,7 +71,7 @@ def test_explicit_unknown_followup_is_observation_only_and_survives_restart(owne
             'artifacts':['HTML карты'],'depends_on':[]}],request_key='first')
         old=first['tasks'][0]['task_id']
         await until(lambda:owned_job(old,owner['id'])['state']=='unknown')
-        choice=orch.Decision(intent='delegate',scope='server',objective='Продолжить карту',
+        choice=orch.Decision(intent='delegate',objective='Продолжить карту',
             goal_id=first['goal_id'],goal_revision=1,assignments=[orch.Assignment(
                 key='retry',objective='Создать карту',artifacts=['HTML карты'],replaces_source_task_id=old)])
         decide_as(monkeypatch,choice)

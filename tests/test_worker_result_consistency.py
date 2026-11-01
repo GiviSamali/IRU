@@ -3,7 +3,7 @@ import hashlib
 
 import pytest
 
-from server.worker_reports import build_worker_report, coverage_binding, result_binding
+from server.worker_reports import build_worker_report, result_binding
 from server.response_presentation import worker_presentation
 from server.worker_scheduler import _final_snapshot, restore_task
 import json
@@ -40,8 +40,6 @@ def test_file_integrity_is_independent_of_worker_content_completeness(complete):
     steps=[{'step_id':'step_1','tool_name':'office_docx','target_device_id':'pc','result':result}]
     payload={'text':text,'_result_contract':3,'unresolved':[] if complete else ['Section two is absent.']}
     # A legacy assessor must neither revoke the write nor hide missing Worker work.
-    payload['_coverage']={'coverage':'partial' if complete else 'complete','evidence_refs':['step_1'],
-        'binding':coverage_binding('Write sections one and two',steps,text)}
     steps.append({'step_id':'step_2','tool_name':'answer.text','tool_type':'answer','status':'terminal','result':payload})
     task={'task_id':'local','status':'done','device_ids':['pc'],'assigned_artifacts':[path],
           'original_request':'Write sections one and two','answer':text,'commands':steps}
@@ -56,9 +54,6 @@ def test_file_integrity_is_independent_of_worker_content_completeness(complete):
 
 
 def test_bound_native_file_success_is_not_reassessed_on_read(monkeypatch):
-    from server import answer_auditor
-    monkeypatch.setattr(answer_auditor, 'assess_result_coverage',
-        lambda **kwargs: pytest.fail('Reading a saved result must not invoke a model'))
     path='C:/Temp/report.txt'
     task={'task_id':'local','status':'success','device_ids':['pc'], 'assigned_artifacts':[path],
           'answer':'Готово.', 'commands':[{'step_id':'step_1','tool_name':'write_content',

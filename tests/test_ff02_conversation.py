@@ -31,7 +31,7 @@ def fixture(owner, index=0, status='success'):
                 'Запрошенное состояние окна подтверждено. Папка IRU-EC01-LIVE открыта в Проводнике.' if index == 1 else
                 'В mixed.txt заменены три вхождения 2026 на 2024. Незатронутые байты сохранены.')
         members.append({'task_id': tid, 'status': status, 'required_for_goal': True,
-            'execution_scope': 'window' if index == 1 else 'file', 'objective': 'Создать ' + name,
+             'objective': 'Создать ' + name,
             'result': {'sha256': 'frozen'}, 'report': {'status': status,
                 'goal_completed': status == 'success', 'artifacts': files, 'evidence_refs': ['step_1'],
                 'summary': fact + '\n' + ('SHA-256 ' + 'a'*64 +

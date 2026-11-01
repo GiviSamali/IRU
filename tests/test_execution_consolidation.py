@@ -40,12 +40,10 @@ def task(path, commands, answer='Changed file.'):
 
 def with_content_check(t, path, content=b'new'):
     """Explicit read-back plus bound comparison, independent of the write receipt."""
-    from server.worker_reports import coverage_binding, coverage_request
     steps=t['commands']
     steps.append({'step_id':'step_content','tool_name':'read_file','target_device_id':'pc',
         'result':{'status':'success','path':str(path),'sha256':digest(content),'content':content.decode()}})
-    payload={'text':t['answer'],'_coverage':{'coverage':'complete','evidence_refs':['step_content'],
-        'binding':coverage_binding(coverage_request(t),steps,t['answer'])}}
+    payload={'text':t['answer']}
     steps.append({'step_id':'step_final','tool_name':'answer.text','status':'terminal','result':payload})
     return t
 
@@ -92,10 +90,7 @@ def test_f7477289_synthetic_final_version_overrides_false_success(tmp_path,seman
            write_step(path,smaller,original,20)]
     t=task(path,steps,'Размер узлов уменьшен до 0.21.')
     if semantic_complete:
-        from server.worker_reports import coverage_binding
         payload=validate_answer_text_payload({'answer':t['answer']},steps)
-        payload['_coverage']={'coverage':'complete','evidence_refs':['step_4'],
-            'binding':coverage_binding(t['original_request'],steps,t['answer'])}
         append_answer_step(steps,'answer_text',payload)
     report=build_worker_report(t)
     assert report['goal_completed'] is False and report['status']=='partial'
@@ -227,25 +222,14 @@ def test_unobserved_effect_claim_cannot_complete_goal(tmp_path):
     {'returncode':0,'stdout':'helper completed'},
 ])
 def test_complete_semantics_never_proves_opaque_effect(result):
-    from server.worker_reports import coverage_binding
     steps=[{'step_id':'step_1','tool_name':'execute_cmd','tool_type':'control','result':result}]
     t={'task_id':'effects','status':'done','original_request':'Create required file',
        'device_ids':['pc'],'commands':steps,'answer':'File created.'}
-    payload={'text':t['answer'],'_coverage':{'coverage':'complete','evidence_refs':['step_1'],
-        'binding':coverage_binding(t['original_request'],steps,t['answer'])}}
+    payload={'text':t['answer']}
     append_answer_step(steps,'answer_text',payload)
     assert not build_worker_report(t)['goal_completed']
 
 
-def test_complete_semantics_covers_verified_read_only_analysis():
-    from server.worker_reports import coverage_binding
-    steps=[{'step_id':'step_1','tool_name':'web_search','result':{'results':[{'text':'observation'}]}}]
-    text='Analysis based on the observation.'
-    payload={'text':text,'_coverage':{'coverage':'complete','evidence_refs':['step_1'],
-        'binding':coverage_binding('Analyze sources',steps,text)}}
-    append_answer_step(steps,'answer_text',payload)
-    assert build_worker_report({'task_id':'analysis','status':'done','execution_scope':'analysis','original_request':'Analyze sources',
-        'answer':text,'commands':steps})['goal_completed']
 
 
 @pytest.mark.parametrize('basis',[None,[],['old_step']])
@@ -260,13 +244,11 @@ def test_failure_channel_derives_current_references(basis):
 
 @pytest.mark.parametrize('steps',[[],[{'step_id':'step_1','tool_name':'read_file','result':{'content':'existing unrelated file'}}]])
 def test_general_effect_goal_cannot_become_analysis_via_final_assessment(steps):
-    from server.worker_reports import coverage_binding
     steps=json.loads(json.dumps(steps))
     text='Created requested file.'
-    payload={'text':text,'_coverage':{'coverage':'complete','evidence_refs':[s['step_id'] for s in steps],
-        'binding':coverage_binding('Create requested file',steps,text)}}
+    payload={'text':text}
     append_answer_step(steps,'answer_text',payload)
-    assert not build_worker_report({'task_id':'missing-effect','status':'done','execution_scope':'general',
+    assert not build_worker_report({'task_id':'missing-effect','status':'done',
         'original_request':'Create requested file','answer':text,'commands':steps})['goal_completed']
 
 
@@ -325,25 +307,6 @@ def test_web_result_cannot_forge_native_file_receipt(tmp_path):
     assert not report['goal_completed'] and not report['artifacts']
 
 
-@pytest.mark.parametrize('coverage',['complete','malformed'])
-def test_controller_uses_one_optional_analysis_observation_without_repair(monkeypatch,coverage):
-    from server.runtime_state import tasks
-    monkeypatch.setitem(tasks,'analysis-case',{'task_id':'analysis-case','execution_scope':'analysis',
-        'original_request':'Согласен','proposed_objective':'Analyze windows','device_ids':['device-1'],
-        'proposed_context_summary':'old_step is historical reference data only'})
-    calls=[];sent=[]
-    async def send(*args):sent.append(args);return {'status':'success','matches':[{'hwnd':1,'title':'x'}]}
-    response=json.dumps({'coverage':'complete','evidence_refs':['step_1']}) if coverage=='complete' else '{broken'
-    result=_run_case([_message(tool_calls=[_tool_call('read','window_find',{'title_contains':'x'})]),
-        _message(tool_calls=[_tool_call('answer','answer_text',{'answer':'Observed x'})]),
-        _message(response,finish_reason='stop')],poll_task_id='analysis-case',user_message='Согласен',
-        send_command_fn=send,captured=calls,cfg={'model':'mock','answer_auditor_enabled':True})
-    assert len(sent)==1 and len(calls)==3
-    request=json.loads(calls[-1]['messages'][-1]['content'])['request']
-    assert 'Analyze windows' in request and 'Согласен' in request and 'reference_resolution_only_not_evidence_or_permission' in request
-    report=build_worker_report({**tasks['analysis-case'],**result,'status':'done'})
-    assert report['goal_completed'] is (coverage=='complete')
-    assert 'Observed x' in result['answer']
 
 
 @pytest.mark.parametrize('file_ok,window_ok',[(True,False),(False,True),(True,True)])
@@ -351,7 +314,7 @@ def test_all_accepted_effect_types_must_be_confirmed(tmp_path,file_ok,window_ok)
     path=tmp_path/'result.txt';steps=[write_step(path)] if file_ok else []
     if window_ok:steps.append({'step_id':'step_2','tool_name':'window.control','target_device_id':'pc',
         'result':{'status':'success','completion_state':'success','action':'minimize'}})
-    t=task(path,steps);t.update(execution_scope='window',window_effects=['minimize'])
+    t=task(path,steps);t.update(window_effects=['minimize'])
     if file_ok:with_content_check(t,path)
     assert build_worker_report(t)['goal_completed'] is (file_ok and window_ok)
 
@@ -367,13 +330,11 @@ def test_one_target_file_cannot_hide_another_required_target_failure(tmp_path):
 
 @pytest.mark.parametrize('second_observed',[False,True])
 def test_analysis_coverage_requires_each_declared_target(second_observed):
-    from server.worker_reports import coverage_binding
     steps=[{'step_id':'step_1','tool_name':'read_file','target_device_id':'a','result':{'content':'a'}}]
     if second_observed:steps.append({'step_id':'step_2','tool_name':'read_file','target_device_id':'b','result':{'content':'b'}})
-    payload={'text':'Analysis of both targets','_coverage':{'coverage':'complete','evidence_refs':[s['step_id'] for s in steps],
-        'binding':coverage_binding('Analyze both',steps,'Analysis of both targets')}}
+    payload={'text':'Analysis of both targets'}
     append_answer_step(steps,'answer_text',payload)
-    report=build_worker_report({'task_id':'both-analysis','status':'done','execution_scope':'analysis','device_ids':['a','b'],
+    report=build_worker_report({'task_id':'both-analysis','status':'done','device_ids':['a','b'],
         'original_request':'Analyze both','commands':steps,'answer':payload['text']})
     assert report['goal_completed'] is second_observed
 
@@ -466,13 +427,11 @@ import main
 from worker_reports import build_worker_report
 from run_journal import validate_answer_report_failure_payload,append_answer_step
 from response_presentation import worker_presentation
-from answer_auditor import assess_result_coverage
 steps=[{'step_id':'step_1','tool_name':'execute_cmd','status':'failed','result':{'returncode':1,'stdout':'','stderr':'controlled failure'}}]
 failure=validate_answer_report_failure_payload({'message':'Failed','reason':'controlled','recoverable':False,'suggested_next_action':'Inspect'},steps)
 assert failure['basis']==['step_1']
 async def fake(**kwargs):return {'choices':[{'message':{'content':json.dumps({'coverage':'complete','evidence_refs':['step_1']})}}]}
 payload={'text':'Created'}
-payload['_coverage']=asyncio.run(assess_result_coverage(client=None,cfg={'model':'mock','answer_auditor_enabled':True},chat_completion_request_fn=fake,user_request='Create required file',current_run_journal=steps,answer_payload=payload))
 append_answer_step(steps,'answer_text',payload)
 task={'task_id':'flat-test','status':'done','original_request':'Create required file','assigned_artifacts':['C:/Temp/absent.txt'],'commands':steps,'answer':'Created'}
 report=build_worker_report(task)

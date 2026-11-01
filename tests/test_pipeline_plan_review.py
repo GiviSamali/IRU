@@ -45,7 +45,7 @@ def test_explicit_multi_result_request_is_admitted_without_plan_review(queue_own
         monkeypatch.setattr(routes, "scheduler", scheduler)
         async def decide(*args, **kwargs):
             return orch.Decision(intent="delegate", objective="Three independent descriptions",
-                target_device_ids=["pc"], execution_mode="simple", assignments=[
+                target_device_ids=["pc"],  assignments=[
                     {"key":key, "objective":f"Create description {key}"} for key in ("a","b","c")]), {}
         monkeypatch.setattr(orch, "decide", decide)
         cmd = SimpleNamespace(request_id="three", message="Create three separate descriptions", device_id="pc", modes={}, broadcast=False)

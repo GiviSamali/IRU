@@ -212,8 +212,6 @@ def test_decline_suggested_fact_does_not_insert_user_memory(client, monkeypatch)
         "ws": object(),
     }
 
-    async def fake_classify_task_complexity(message):
-        return ("SIMPLE", "")
 
     async def fake_process_nl_command(**kwargs):
         return {
@@ -235,7 +233,7 @@ def test_decline_suggested_fact_does_not_insert_user_memory(client, monkeypatch)
 
     from server import orchestrator as orch
     async def semantic_decision(message, context, **kwargs):
-        return orch.Decision(intent="delegate",objective=message,scope="device",target_device_ids=["device-1"]),{}
+        return orch.Decision(intent="delegate",objective=message,target_device_ids=["device-1"]),{}
     monkeypatch.setattr(orch,"decide",semantic_decision)
     monkeypatch.setattr(task_runtime, "process_nl_command", fake_process_nl_command)
 
@@ -270,8 +268,6 @@ def test_assistant_memory_claim_without_remember_action_is_not_memory_write(clie
         "ws": object(),
     }
 
-    async def fake_classify_task_complexity(message):
-        return ("SIMPLE", "")
 
     async def fake_process_nl_command(**kwargs):
         return {"answer": "Запомнил: тестовый факт.", "commands": [], "tasks": []}
@@ -279,7 +275,7 @@ def test_assistant_memory_claim_without_remember_action_is_not_memory_write(clie
 
     from server import orchestrator as orch
     async def semantic_decision(message, context, **kwargs):
-        return orch.Decision(intent="delegate",objective=message,scope="device",target_device_ids=["device-1"]),{}
+        return orch.Decision(intent="delegate",objective=message,target_device_ids=["device-1"]),{}
     monkeypatch.setattr(orch,"decide",semantic_decision)
     monkeypatch.setattr(task_runtime, "process_nl_command", fake_process_nl_command)
 

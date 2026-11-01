@@ -21,9 +21,7 @@ def _tool_call(call_id, name, args):
 
 
 def _answer_call(call_id, text):
-    return _tool_call(call_id,"answer_text",{"answer_type":"pure_text","text":text,"basis":[],
-        "self_check":{"depends_on_current_external_state":False,"claims_completed_action":False,
-                      "has_sufficient_evidence":True,"missing_evidence_question":""}})
+    return _tool_call(call_id,"answer_text",{"answer_type":"pure_text","text":text,"basis":[]})
 
 
 def _message(content="", tool_calls=None, finish_reason="tool_calls"):
@@ -44,7 +42,7 @@ async def _worker(responses, *, user_message="Report", chat_history=None, user_i
     return await process_non_pipeline_command(user_message=user_message,device_id="device-1",
         device_info={"os":"Windows"},send_command_fn=send_command_fn or send,get_file_link_fn=lambda *a:"",
         chat_history=chat_history or [],user_id=user_id,chat_id=None,modes={},poll_task_id=poll_task_id,
-        cfg={"model":"mock-model","answer_auditor_enabled":False},system_msg="system",
+        cfg={"model":"mock-model"},system_msg="system",
         machine_guid=None,mem_user_id=mem_user_id,non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=6,
         pick_model_fn=lambda *a:"mock-model",chat_completion_request_fn=_completion_fn(responses))
 
@@ -204,7 +202,7 @@ def run_worker(user, human_request, calls, *, shared=None, completed=None):
     task_id="memory-goal"
     old=tasks.get(task_id)
     tasks[task_id]={"task_id":task_id,"goal_id":"goal","original_request":human_request,
-        "proposed_objective":"Запомни модельный факт", "execution_scope":"general","window_effects":[]}
+        "proposed_objective":"Запомни модельный факт", "window_effects":[]}
     history=[{"role":"assistant","content":data_only_context("source_result",{
         "shared":shared or {},"completed":completed or []})}]
     try:

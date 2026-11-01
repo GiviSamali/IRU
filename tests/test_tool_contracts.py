@@ -180,8 +180,6 @@ def test_public_executable_inventory_actions_are_registered_and_contracted():
 def test_legacy_and_hidden_actions_are_explicitly_marked():
     inventory = {item["name"]: item for item in build_tool_inventory()}
 
-    assert inventory["create_plan"]["visibility"] == "legacy"
-    assert inventory["mark_step"]["visibility"] == "legacy"
     assert inventory["agent.disconnect"]["visibility"] == "legacy"
     assert inventory["window.screencapture"]["visibility"] == "hidden"
     assert inventory["window.screencapture"]["executable"] is False

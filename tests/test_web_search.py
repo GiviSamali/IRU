@@ -154,7 +154,7 @@ def test_unified_worker_delivers_search_result_to_llm(client, backend, monkeypat
     if goal_member:
         monkeypatch.setitem(tasks, task_id, {"task_id": task_id, "goal_id": "goal",
             "original_request": "Поиск", "proposed_objective": "Поиск",
-            "execution_scope": "general", "window_effects": []})
+             "window_effects": []})
     requests, replies = backend
     replies.append(httpx.Response(status, json=encoded()))
     captured = []
@@ -163,9 +163,7 @@ def test_unified_worker_delivers_search_result_to_llm(client, backend, monkeypat
         if tool_messages:
             captured.extend(json.loads(m['content']) for m in tool_messages)
             name = 'answer_text'
-            args = {'answer_type': 'pure_text', 'basis': [], 'text': 'Результаты поиска получены.', 'self_check': {
-                'depends_on_current_external_state': False, 'claims_completed_action': False,
-                'has_sufficient_evidence': True, 'missing_evidence_question': ''}}
+            args = {'answer_type': 'pure_text', 'basis': [], 'text': 'Результаты поиска получены.'}
         else:
             name, args = 'web_search', {'query': 'наука', 'max_results': 2}
         return {'choices': [{'finish_reason': 'tool_calls', 'message': {'content': '', 'tool_calls': [

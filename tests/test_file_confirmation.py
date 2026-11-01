@@ -115,7 +115,7 @@ def test_only_ordinary_confirmation_can_be_spoken(client, monkeypatch, command, 
     from test_voice_plan import prepare
     headers, _, _ = prepare(client, monkeypatch, admin=True)
     data = command_confirmation({"command": command, "params": {"command": command}})
-    runtime.tasks["offer"].update(status="confirm", plan_suggestion=None, confirm_data=data, answer="OLD ANSWER")
+    runtime.tasks["offer"].update(status="confirm",  confirm_data=data, answer="OLD ANSWER")
     monkeypatch.setenv("YANDEX_API_KEY", "test-only")
     spoken = []
     async def synthesize(text): spoken.append(text); return b"ogg"

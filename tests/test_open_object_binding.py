@@ -39,7 +39,7 @@ def open_step(required_path=DOC, *, observed_path=None, title="Presentation - Po
 
 def goal(steps, objects, *, effects=None, request="Открой презентацию"):
     return {"task_id": "open", "status": "done", "device_ids": ["pc"],
-            "execution_scope": "window", "window_effects": effects or ["open"],
+             "window_effects": effects or ["open"],
             "open_objects": objects, "proposed_objective": request, "commands": steps}
 
 

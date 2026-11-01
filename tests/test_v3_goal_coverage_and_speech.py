@@ -11,7 +11,7 @@ import pytest
 
 from server import database as db, orchestrator as orch, goal_completion as speech
 from server.run_journal import validate_answer_text_payload, append_answer_step
-from server.worker_reports import build_worker_report, coverage_binding, coverage_request, result_binding, saved_worker_report
+from server.worker_reports import build_worker_report, result_binding, saved_worker_report
 from server.goal_presentation import goal_presentation
 from server.runtime_state import tasks
 from test_orchestrator_worker import owners
@@ -26,39 +26,29 @@ from test_tool_only_protocol import _run_case, _message, _tool_call
 REQUEST='Прочитай A.txt, B.txt и C.txt целиком и сравни их содержимое.'
 
 
-def task_with_read(coverage=None, outcome='success', count=1):
+def task_with_read(outcome='success', count=1):
     steps=[{'step_id':f'step_{i+1}','tool_name':'read_file','target_device_id':'pc',
         'result':{'status':outcome,'path':f'C:/Synthetic/{name}.txt','content':'same' if name in 'AB' else 'different'}}
         for i,name in enumerate('ABC'[:count])]
     text='Прочитан только A; B и C не прочитаны, сравнение не выполнено.' if count==1 else 'A и B равны; C отличается.'
-    t={'task_id':'coverage','status':'done','device_ids':['pc'],'execution_scope':'analysis',
+    t={'task_id':'coverage','status':'done','device_ids':['pc'],
        'original_request':REQUEST,'proposed_objective':REQUEST,'answer':text,'commands':steps}
-    payload=validate_answer_text_payload({'result':text,'unresolved':[]},steps)
-    if coverage:
-        payload['_coverage']={'coverage':coverage,'evidence_refs':[s['step_id'] for s in steps],
-            'reason':'B и C не прочитаны; обязательное сравнение отсутствует.' if count==1 else 'Все источники и сравнение представлены.',
-            'binding':coverage_binding(coverage_request(t),steps,text)}
+    payload=validate_answer_text_payload({'result':text,'unresolved':['B и C не прочитаны; сравнение не выполнено.'] if count == 1 else []},steps)
     append_answer_step(steps,'answer_text',payload)
     return t
 
 
-@pytest.mark.parametrize('coverage',[None,'partial','unknown'])
-def test_successful_read_and_empty_unresolved_cannot_complete_missing_comparison(coverage):
-    t=task_with_read(coverage)
+def test_worker_reports_unfinished_comparison():
+    t=task_with_read()
     report=build_worker_report(t)
     assert report['status']=='partial' and report['goal_completed'] is False
 
 
-def test_complete_goal_coverage_is_bound_to_actual_request_and_sources():
-    t=task_with_read('complete',count=3)
-    assert build_worker_report(t)['goal_completed']
-    t['original_request']='Прочитай также D.txt и включи его в сравнение.'
-    assert not build_worker_report(t)['goal_completed']
 
 
 @pytest.mark.parametrize('outcome',['unknown','failed'])
 def test_positive_language_assessment_cannot_override_negative_execution(outcome):
-    assert not build_worker_report(task_with_read('complete',outcome))['goal_completed']
+    assert not build_worker_report(task_with_read(outcome=outcome))['goal_completed']
 
 
 def test_old_bound_false_success_is_rechecked_without_model_call():
@@ -68,34 +58,14 @@ def test_old_bound_false_success_is_rechecked_without_model_call():
     assert saved_worker_report(t)['status']=='partial'
 
 
-def test_real_controller_uses_existing_coverage_once_for_empty_unresolved(monkeypatch):
-    monkeypatch.setattr(db,'get_device_profile',lambda *a,**k:None)
-    tid='abc-current';t={'task_id':tid,'execution_scope':'analysis','original_request':REQUEST,'device_ids':['device-1']}
-    tasks[tid]=t;calls=[];sent=[]
-    async def send(device,action,params):
-        sent.append(params);return {'returncode':0,'stdout':'Only A content','stderr':''}
-    try:
-        result=_run_case([
-            _message(tool_calls=[_tool_call('read','execute_cmd',{'command':'Get-Content A.txt','artifact_paths':[]})]),
-            _message(tool_calls=[_tool_call('finish','answer_text',{'result':'Прочитан A; сравнение не выполнено.','unresolved':[]})]),
-            _message(content=json.dumps({'coverage':'partial','evidence_refs':['step_1'],'reason':'B and C not read; comparison missing'}),finish_reason='stop')],
-            poll_task_id=tid,user_message=REQUEST,send_command_fn=send,captured=calls,
-            cfg={'model':'mock','answer_auditor_enabled':True})
-        assert len(sent)==1 and len(calls)==3 and calls[-1]['phase']=='result_coverage'
-        material=json.loads(calls[-1]['messages'][-1]['content'])
-        assert material['request']==REQUEST and material['remaining']==[]
-        t.update(status='done',commands=result['commands'],answer=result['answer'])
-        assert not build_worker_report(t)['goal_completed']
-    finally:tasks.pop(tid,None)
 
 
 def goal(owner,status='partial',scope='analysis'):
     return {'goal_id':'speech-goal','revision':1,'owner_user_id':owner['id'],'chat_id':owner['chat_id'],
         'original_request':REQUEST,'status':status,'terminal':True,'goal_completed':status=='success',
-        'tasks':[{'task_id':'member','status':status,'execution_scope':scope,'objective':REQUEST,
+        'tasks':[{'task_id':'member','status':status,'objective':REQUEST,
             'report':{'status':status,'goal_completed':status=='success','summary':'Прочитан только A.',
-                'evidence_refs':['step_1'],'artifacts':[]},'result':{'result_id':'r'} if status=='success' else None,
-            'coverage_observation':{'coverage':'partial','reason':'B и C не прочитаны; сравнение не выполнено.'}}]}
+                'evidence_refs':['step_1'],'artifacts':[]},'result':{'result_id':'r'} if status=='success' else None}]}
 
 
 def origin(owner,g):
@@ -143,18 +113,11 @@ def test_partial_gets_real_orchestrator_model_reply_once_and_persisted_metrics(o
         assert row['content']==first['message']
         body=json.loads(calls[0][0][3][-1]['content'])['untrusted_evidence']
         assert body['original_request']==REQUEST and body['verified_goal_status']=='partial'
-        assert body['worker_outcomes'][0]['coverage_observation']['coverage']=='partial'
+        assert body['worker_outcomes'][0]['summary']=='Прочитан только A.'
         assert [tool['function']['name'] for tool in calls[0][1]['tools']]==['goal_completion_reply']
     asyncio.run(scenario())
 
 
-def test_simple_window_confirmation_does_not_call_model(owners,monkeypatch):
-    owner,_=owners;g=goal(owner,'success','window');origin(owner,g)
-    g['original_request']=g['tasks'][0]['objective']='Открой Яндекс'
-    g['tasks'][0]['report']['summary']='Открытие подтверждено.'
-    monkeypatch.setattr(speech,'_narrate',lambda *a:pytest.fail('Simple action must use template'))
-    result=asyncio.run(speech.present_completed_goal(g,goal_presentation(g),owner['id'],owner['chat_id']))
-    assert result['reply_source']=='template' and result['reply_metrics']['llm_calls']==0
 
 
 @pytest.mark.parametrize('mode',['contradiction','provider_error'])
@@ -176,7 +139,6 @@ def test_narration_failure_keeps_report_and_caches_safe_fallback(owners,monkeypa
 def test_successful_content_result_gets_model_reply_not_worker_echo(owners,monkeypatch):
     owner,_=owners;g=goal(owner,'success');origin(owner,g)
     g['tasks'][0]['report']['summary']='A и B совпадают, C отличается.'
-    g['tasks'][0]['coverage_observation']={'coverage':'complete','reason':'Прочитаны и сравнены все три файла.'}
     calls=provider(monkeypatch,text='Сравнение закончено: A и B одинаковы, а C содержит отличия.')
     reply=asyncio.run(speech.present_completed_goal(g,goal_presentation(g),owner['id'],owner['chat_id']))
     assert reply['reply_source']=='orchestrator_llm' and len(calls)==1
@@ -231,10 +193,6 @@ def test_request_worker_checked_report_orchestrator_model_and_cached_api(owners,
         executed.append(t)
         async def complete(**kwargs):
             worker_calls.append(kwargs)
-            if kwargs['tools'] is None:
-                assert kwargs['phase']=='result_coverage'
-                return _message(content=json.dumps({'coverage':'partial','evidence_refs':['step_1'],
-                    'reason':'B и C не прочитаны; обязательное сравнение отсутствует.'}),finish_reason='stop')
             if len(worker_calls)==1:
                 return _message(tool_calls=[_tool_call('read','execute_cmd',{'command':'Get-Content A.txt','artifact_paths':[]})])
             return _message(tool_calls=[_tool_call('finish','answer_text',
@@ -243,16 +201,16 @@ def test_request_worker_checked_report_orchestrator_model_and_cached_api(owners,
             dispatches.append((action,params));return {'returncode':0,'stdout':'A content only','stderr':''}
         result=await process_non_pipeline_command(user_message=t['message'],device_id='pc',device_info={'hostname':'pc','os':'Windows'},
             send_command_fn=send,get_file_link_fn=lambda *a:'',chat_history=t.get('worker_context') or [],user_id=owner['id'],
-            chat_id=owner['chat_id'],modes={},poll_task_id=t['task_id'],cfg={'model':'mock','answer_auditor_enabled':True},
+            chat_id=owner['chat_id'],modes={},poll_task_id=t['task_id'],cfg={'model':'mock'},
             system_msg='Worker',machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,
             max_iterations=4,pick_model_fn=lambda *a:'mock',chat_completion_request_fn=complete)
         t.update(status='done',answer=result['answer'],commands=result['commands'])
     async def scenario():
         scheduler=WorkerScheduler(execute)
         async def decide(*args,**kwargs):
-            return orch.Decision(intent='delegate',objective=REQUEST,target_device_ids=['pc'],execution_scope='analysis',
+            return orch.Decision(intent='delegate',objective=REQUEST,target_device_ids=['pc'],
                 assignments=[orch.Assignment(key='compare',objective=REQUEST,scope='Все три файла и обязательное сравнение',
-                    execution_scope='analysis',constraints=['Только чтение'])]),{'llm_calls':1}
+                    constraints=['Только чтение'])]),{'llm_calls':1}
         async def delegate(choice,request_key):
             template=admitted_task(owner,REQUEST);template['context_history']=[]
             admitted=await scheduler.submit_goal(template,[a.model_dump() for a in choice.assignments],request_key=request_key)

@@ -179,8 +179,6 @@ def test_simple_model_loop_keeps_journal_without_extra_model_calls(client, monke
         if lost and len(calls) == 3:
             args = json.loads(call['function']['arguments'])
             args.update(answer_type='partial_report', text='Исход команды неизвестен; наблюдение получено.')
-            args['self_check'].update(claims_completed_action=False, has_sufficient_evidence=False,
-                                     missing_evidence_question='Результат исходной команды не установлен.')
             call['function']['arguments'] = json.dumps(args)
         return {'choices': [{'message': {'tool_calls': [call]}}]}
     async def process(**kwargs):
@@ -188,7 +186,7 @@ def test_simple_model_loop_keeps_journal_without_extra_model_calls(client, monke
             user_message=kwargs['user_message'], device_id='givi', device_info={'os': 'Windows'},
             send_command_fn=kwargs['send_command_fn'], get_file_link_fn=lambda *a: '',
             chat_history=[], user_id=user['id'], chat_id=chat, modes={}, poll_task_id='guard-task',
-            cfg={'model': 'mock', 'answer_auditor_enabled': False}, system_msg='system',
+            cfg={'model': 'mock'}, system_msg='system',
             machine_guid=None, mem_user_id=None, non_pipeline_tools=NON_PIPELINE_TOOLS,
             max_iterations=4, pick_model_fn=lambda *a: 'mock', chat_completion_request_fn=completion)
     async def no_probe(**kwargs):

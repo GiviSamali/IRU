@@ -32,9 +32,7 @@ def completed(owner, suffix="pptx"):
         "tasks":[],"task_receipt":{"task_status":"completed","goal_completed":True,"final_verification_status":"verified","answer_source":"audited_terminal"}}
 
     result['commands'].append({'tool_name':'answer.text','status':'terminal','result':{
-        'answer_type':'grounded_report','text':result['answer'],'basis':['step_1'],
-        'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,
-            'has_sufficient_evidence':True,'missing_evidence_question':''}}})
+        'answer_type':'grounded_report','text':result['answer'],'basis':['step_1']}})
     return result
 
 
@@ -107,8 +105,7 @@ def test_informational_tool_results_remain_full_instead_of_generic_done(owner):
     text='Подробное объяснение устройства сети. '*80
     task['answer']=text
     task['commands']=[{'tool_name':'web_search','step_id':'step_1','status':'success','result':{'results':[{'title':'data'}]}},
-        {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':text,'basis':['step_1'],
-         'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,'has_sufficient_evidence':True,'missing_evidence_question':''}}}]
+        {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':text,'basis':['step_1']}}]
     view=worker_presentation(task)
     assert view['conversational_response']==text and view['execution_details']==''
 
@@ -255,9 +252,7 @@ def test_informational_execute_processing_keeps_inline_facts_in_text_and_speech(
         task['commands'].append({'tool_name':'write_content','step_id':'step_3','status':'success','device_id':'pc',
             'result':{'path':r'C:\Users\Owner\Desktop\parse_config.py','bytes_written':50}})
     basis=[entry['step_id'] for entry in task['commands']]
-    payload={'answer_type':'grounded_report','text':answer,'basis':basis,
-        'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,
-                      'has_sufficient_evidence':True,'missing_evidence_question':''}}
+    payload={'answer_type':'grounded_report','text':answer,'basis':basis}
     task['commands'].append({'tool_name':'answer.text','status':'terminal','result':payload})
     async def forbidden(*args):raise AssertionError('No editor LLM')
     monkeypatch.setattr(voice,'shorten_answer',forbidden)
@@ -274,9 +269,7 @@ def test_informational_execute_processing_keeps_inline_facts_in_text_and_speech(
 def test_completed_action_terminal_is_still_presented_as_short_outcome(owner,monkeypatch):
     task=completed(owner);answer=task['answer']
     task['commands'].append({'tool_name':'answer.text','status':'terminal','result':{
-        'answer_type':'grounded_report','text':answer,'basis':['step_1'],
-        'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,
-                      'has_sufficient_evidence':True,'missing_evidence_question':''}}})
+        'answer_type':'grounded_report','text':answer,'basis':['step_1']}})
     async def forbidden(*args):raise AssertionError('No editor LLM')
     monkeypatch.setattr(voice,'shorten_answer',forbidden)
     assert asyncio.run(voice.spoken_parts(task))==[answer]
@@ -287,8 +280,7 @@ def test_long_informational_worker_uses_brief_without_changing_grounded_answer(o
     task=completed(owner);answer='В config.ini задан port=8080. Подробное объяснение настроек. '*20
     task['answer']=answer
     task['commands']=[{'tool_name':'read_file','step_id':'step_1','status':'success','device_id':'pc','result':{'content':'port=8080'}},
-        {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':answer,'basis':['step_1'],
-         'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,'has_sufficient_evidence':True,'missing_evidence_question':''}}}]
+        {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':answer,'basis':['step_1']}}]
     seen=[]
     async def brief(source):seen.append(source['answer']);return 'В config.ini задан port=8080.'
     monkeypatch.setattr(voice,'shorten_answer',brief)
@@ -317,8 +309,7 @@ def test_shell_observation_lifecycle_without_action_marker(owner, monkeypatch, s
     task.update(answer=text, message='Получить информацию')
     task['commands']=[{'tool_name':'execute_cmd','step_id':'step_1','status':'success',
         'result':{'returncode':0,'stdout':stdout,'stderr':''}},
-        {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':text,'basis':['step_1'],
-        'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,'has_sufficient_evidence':True,'missing_evidence_question':''}}}]
+        {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':text,'basis':['step_1']}}]
     # Actual controller loop with a controlled device transport and model responses.
     # Exercise the enabled audit with a controlled provider verdict for the original goal.
     from test_tool_only_protocol import _run_case, _message, _execute_call, _tool_call
@@ -333,7 +324,7 @@ def test_shell_observation_lifecycle_without_action_marker(owner, monkeypatch, s
         _message(tool_calls=[_execute_call('read-2','Get-ChildItem -LiteralPath C:/Users/Owner/Desktop/IRU')]),
         _message(tool_calls=[_tool_call('final','answer_text',payload)]),
         _message(content='{"valid":true,"reason":"Original informational goal is supported by both observations"}',finish_reason='stop'),
-    ],user_message='Inspect the desktop folders',send_command_fn=transport,device_id='pc',cfg={'model':'mock-model','answer_auditor_enabled':True})
+    ],user_message='Inspect the desktop folders',send_command_fn=transport,device_id='pc',cfg={'model':'mock-model'})
     assert len(sent)==2 and all(action=='execute_cmd' for _,action,_ in sent)
     assert result['answer']==text
     task.update(answer=result['answer'],commands=result['commands'],task_receipt=result['task_receipt'])
@@ -359,10 +350,8 @@ def test_shell_observation_lifecycle_without_action_marker(owner, monkeypatch, s
         assert restored['answer']==text
         await scheduler.shutdown()
     asyncio.run(scenario())
-    task['commands'][-1]['result']['self_check']['claims_completed_action']=True
     task.pop('task_receipt')  # A changed self-check alone cannot grant completion.
     assert build_worker_report(task)['status']=='unknown'  # rc=0 does not prove an action.
-    task['commands'][-1]['result']['self_check']['claims_completed_action']=False
     task['answer']=text+' Неподтверждённое дополнение.'
     assert build_worker_report(task)['status']=='unknown'
 
@@ -389,8 +378,7 @@ def test_optional_history_presentation_fields_do_not_break_task_api(owner,monkey
 def test_informational_terminal_cannot_promote_uncertain_execution(owner,result):
  task=completed(owner);task.pop('task_receipt');task['answer']='Observed data'
  task['commands']=[{'tool_name':'execute_cmd','step_id':'step_1','status':'success','result':result},
- {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':task['answer'],'basis':['step_1'],
- 'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,'has_sufficient_evidence':True,'missing_evidence_question':''}}}]
+ {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':task['answer'],'basis':['step_1']}}]
  assert build_worker_report(task)['status']!='success'
 
 
@@ -398,8 +386,7 @@ def test_unrelated_ok_marker_cannot_confirm_uncertain_terminal_basis(owner):
  task=completed(owner);task.pop('task_receipt');task['answer']='Action completed'
  task['commands']=[{'tool_name':'execute_cmd','step_id':'step_1','status':'success','result':{'returncode':0,'stdout':'OK: unrelated'}},
  {'tool_name':'execute_cmd','step_id':'step_2','status':'success','result':{'returncode':0,'stdout':'process started'}},
- {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':task['answer'],'basis':['step_2'],
- 'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,'has_sufficient_evidence':True,'missing_evidence_question':''}}}]
+ {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':task['answer'],'basis':['step_2']}}]
  assert build_worker_report(task)['status']=='unknown'
 
 
@@ -407,8 +394,7 @@ def test_partial_terminal_keeps_verified_information_in_visible_response(owner):
  task=completed(owner)
  task.update(status='partial',answer='**Created first file.** Second file was denied.')
  task['task_receipt']={'task_status':'partial','goal_completed':False}
- task['commands'].append({'tool_name':'answer.text','status':'terminal','result':{'answer_type':'partial_report','text':task['answer'],'basis':['step_1'],
- 'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,'has_sufficient_evidence':False,'missing_evidence_question':''}}})
+ task['commands'].append({'tool_name':'answer.text','status':'terminal','result':{'answer_type':'partial_report','text':task['answer'],'basis':['step_1']}})
  assert build_worker_report(task)['status']=='partial'
  assert worker_presentation(task)['conversational_response']==task['answer']
  task['answer']+=' Unsupported extra claim.'
@@ -533,8 +519,7 @@ def test_empty_shell_observation_is_preserved_without_forcing_markers(owner):
  journal=[]
  for output in ('IRU',''):
   append_tool_step(journal,make_run_step(journal=journal,tool_name='execute_cmd',result={'returncode':0,'stdout':output,'stderr':''},target_device_id='pc'))
- payload={'answer_type':'grounded_report','text':text,'basis':['step_1','step_2'],
- 'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,'has_sufficient_evidence':True,'missing_evidence_question':''}}
+ payload={'answer_type':'grounded_report','text':text,'basis':['step_1','step_2']}
  append_answer_step(journal,'answer_text',payload,target_device_id='pc')
  task.update(answer=text,commands=journal)
  assert build_worker_report(task)['status']=='unknown'
@@ -552,8 +537,7 @@ def test_report_agrees_with_confirmed_zero_code_contract(owner,code):
  result={'returncode':code,'stdout':'OK: effect_verified'}
  assert confirmed_command_outcome(result)=='success'
  task['commands']=[{'tool_name':'execute_cmd','step_id':'step_1','status':'success','result':result},
- {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':task['answer'],'basis':['step_1'],
- 'self_check':{'depends_on_current_external_state':True,'claims_completed_action':True,'has_sufficient_evidence':True,'missing_evidence_question':''}}}]
+ {'tool_name':'answer.text','status':'terminal','result':{'answer_type':'grounded_report','text':task['answer'],'basis':['step_1']}}]
  assert build_worker_report(task)['status']=='unknown'
 
 

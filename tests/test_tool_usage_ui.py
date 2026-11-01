@@ -19,7 +19,6 @@ def test_chat_renderer_can_show_one_or_many_used_tools():
     assert "command.tool_type !== 'answer'" in source
     assert "parts.push('Ответ')" in source
     assert "answer_type" in source
-    assert "self_check" in source
 
 
 def test_chat_renderer_disables_fallback_used_tools_summary():

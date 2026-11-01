@@ -28,8 +28,7 @@ def test_no_device_memory_runs_through_authenticated_chat(client,monkeypatch,nam
     db.add_user_fact(str(other["id"]),"OTHER_PRIVATE_FACT","preference")
     args={"text":"prefers tea","category":"preference"} if name=="remember_fact" else {"fact_id":own_fact,"source":"user"} if name=="forget_fact" else {"limit":20}
     terminal={"answer_type":"partial_report","text":"Данные памяти обработаны; полнота результата отдельно не подтверждена.",
-        "basis":["step_1"],"self_check":{"depends_on_current_external_state":True,"claims_completed_action":False,
-            "has_sufficient_evidence":False,"missing_evidence_question":"Полный результат не проверен"}}
+        "basis":["step_1"]}
     replies=iter([{"tool_calls":[{"id":"memory-call","function":{"name":name,"arguments":json.dumps(args)}}]},
         {"tool_calls":[{"id":"terminal","function":{"name":"answer_text","arguments":json.dumps(terminal)}}]}])
     requests=[]
@@ -47,7 +46,7 @@ def test_no_device_memory_runs_through_authenticated_chat(client,monkeypatch,nam
         if not allowed:
             return orch.Decision(intent="conversation",answer="Обсуждение слова не изменяет память"),{}
         proofs=[{"operation":"remember_fact","human_quote":text}] if name=="remember_fact" else []
-        return orch.Decision(intent="delegate",objective=text,scope="server",memory_authorizations=proofs),{}
+        return orch.Decision(intent="delegate",objective=text,memory_authorizations=proofs),{}
     monkeypatch.setattr(orch,"decide",semantic_decision)
     monkeypatch.setattr(controller,"load_llm_config",lambda:{"model":"mock","base_url":"https://fixture.invalid","api_key":"test"})
     monkeypatch.setattr(onboarding.httpx,"AsyncClient",Provider)

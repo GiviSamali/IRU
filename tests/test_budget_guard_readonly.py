@@ -397,12 +397,7 @@ def _answer_call(call_id: str, text: str) -> dict:
                 "answer_type": "pure_text",
                 "text": text,
                 "basis": [],
-                "self_check": {
-                    "depends_on_current_external_state": False,
-                    "claims_completed_action": False,
-                    "has_sufficient_evidence": True,
-                    "missing_evidence_question": "",
-                },
+
             }, ensure_ascii=False),
         },
     }

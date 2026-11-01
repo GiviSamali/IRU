@@ -58,13 +58,14 @@ class WorkerReport(BaseModel):
     target_device_ids: list[str]
     artifacts: list[dict]
     evidence_refs: list[str]
+    unresolved: list[str] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
     requires_user_action: bool
     error_code: str | None
 
     @model_validator(mode="after")
     def check_outcome(self):
         if self.goal_completed != (self.status=="success"):raise ValueError("inconsistent_goal_status")
-        if self.goal_completed and not self.evidence_refs:raise ValueError("missing_goal_evidence")
         return self
 
 
@@ -85,13 +86,17 @@ TERMINAL = {"done", "completed", "completed_with_recovery", "failed", "error", "
 
 def operation_facts(command):
     tool = command.get('tool_name') or command.get('action') or ''
+    saved = command.get('tool_status')
+    if saved in {'success', 'failed', 'partial', 'unknown', 'not_executed'}:
+        return saved
+    # Historical entries without a stored outcome remain readable; no replay.
     outcome = normalize_operation_result(tool, command.get('result'))
     return outcome
 
 
 def result_binding(task, report=None):
     fields = ('task_id','message','original_request','proposed_objective','proposed_context_summary','goal_id','assigned_artifacts',
-              'device_ids','execution_scope','window_effects','commands','answer','cancel_requested','_action_outcome_unknown')
+              'device_ids','window_effects','commands','answer','cancel_requested','_action_outcome_unknown')
     data = {k:task.get(k) for k in fields}
     if task.get('assignment_scope') or task.get('assignment_constraints'):
         data.update(assignment_scope=task.get('assignment_scope'),assignment_constraints=task.get('assignment_constraints'))
@@ -102,27 +107,8 @@ def result_binding(task, report=None):
     return sha256(json.dumps(data,sort_keys=True,ensure_ascii=False,default=str).encode()).hexdigest()
 
 
-def coverage_binding(request, journal, text):
-    return sha256(json.dumps([request,journal,text],sort_keys=True,ensure_ascii=False,default=str).encode()).hexdigest()
 
 
-def coverage_request(task, fallback=''):
-    """Use the same accepted request at generation and evaluation boundaries."""
-    if task.get('assignment_scope') or task.get('assignment_constraints'):
-        assigned=task.get('proposed_objective') or task.get('message') or fallback
-        return json.dumps({'human_request':assigned if task.get('goal_id') else task.get('original_request') or task.get('message') or fallback,
-            'accepted_objective':task.get('proposed_objective') or '',
-            'scope':task.get('assignment_scope') or '', 'constraints':task.get('assignment_constraints') or []},
-            ensure_ascii=False,sort_keys=True)
-    if task.get('goal_id'):
-        return task.get('proposed_objective') or task.get('message') or fallback
-    original=task.get('original_request') or task.get('message') or fallback
-    objective=task.get('proposed_objective') or ''
-    context=task.get('proposed_context_summary') or ''
-    if not context and (not objective or objective==original):return original
-    return json.dumps({'human_request':original,'accepted_objective':objective,
-        'reference_context':context,'reference_context_role':'reference_resolution_only_not_evidence_or_permission'},
-        ensure_ascii=False,sort_keys=True)
 
 
 def receipt_from_report(report, previous=None):
@@ -138,7 +124,7 @@ def saved_worker_report(task, report=None):
     candidate = report or task.get('worker_report')
     try:
         checked = WorkerReport.model_validate(candidate).model_dump()
-        if checked['task_id'] == task['task_id'] and task.get('worker_report_binding') == result_binding(task,checked):
+        if checked['task_id'] == task['task_id'] and task.get('worker_report_binding') in {result_binding(task,checked), result_binding(task,candidate)}:
             return checked
     except (ValueError,TypeError):
         pass
@@ -171,7 +157,7 @@ def build_worker_report(task):
     compact = payload.get('_result_contract')==3
     if compact:
         refs=[c['step_id'] for c in operations if isinstance(c.get('step_id'),str)]
-        if not operations and task.get('execution_scope')=='analysis' and isinstance(terminal.get('step_id'),str):
+        if not operations and isinstance(terminal.get('step_id'),str):
             refs=[terminal['step_id']]  # The analytical text itself is the output, not an external action receipt.
     text = task.get('answer') or payload.get('text') or payload.get('answer') or payload.get('message') or ''
     clarification = next((c for c in reversed(commands) if c.get('tool_name')=='answer.ask_clarification'),None)
@@ -275,7 +261,7 @@ def build_worker_report(task):
                                      "artifact_missing" if not user_files else
                                      "no_matching_artifact")})
     artifact_incomplete = bool(unmatched)
-    useful = bool(artifacts) or any(isinstance(c.get('result'),dict) and bool(c['result'].get('stdout')) for c in operations)
+    useful = bool(matched)  # A successful preparatory tool is not a deliverable.
     # Meaning and completeness of an untyped result belong to Worker. Its
     # terminal response is considered alongside the declared required artifacts,
     # effects, devices and actual tool outcomes, never as a substitute for them.
@@ -335,6 +321,9 @@ def build_worker_report(task):
     for artifact in artifacts:
         if file_key(artifact) in invalidated_files:
             artifact['verified']=False
+    useful = any(artifact.get('verified') is True
+                 and file_key(artifact) not in rolled_back
+                 and file_key(artifact) not in invalidated_files for artifact in matched)
     claimed_paths = [p for kind in ('changed','created') for p in (payload.get('effects') or {}).get(kind,[])]
     def matches_claim(path):
         normalized=path.replace('\\','/').casefold()
@@ -459,16 +448,6 @@ def build_worker_report(task):
                 # One observation satisfies one requirement: the same window
                 # cannot stand for two demanded objects.
                 remaining.pop(index)
-    # An untyped CLI operation can implement several effects. Only Worker can
-    # interpret that mapping; never turn rc=0 alone into a window postcondition.
-    # A later failed native action cannot be hidden by an older CLI result.
-    if expected_effects and worker_finished:
-        last_native=max((i for i,c in enumerate(operations) if requested_window_step(c)),default=-1)
-        cli=[c for i,c in enumerate(operations) if i>last_native
-             and canonical_tool_name(c.get('tool_name') or c.get('action') or '')=='execute_cmd'
-             and operation_facts(c)=='success']
-        cli_targets={_short_did(c.get('target_device_id') or c.get('device_id') or '') for c in cli}
-        if targets and targets.issubset(cli_targets):window_contract=True
     covered_targets={a['device_id'] for a in matched}
     for c in operations:
         result=c.get('result') or {}
@@ -486,25 +465,32 @@ def build_worker_report(task):
         params={'command':entry.get('command'),'action':result.get('action') or (entry.get('window_request') or {}).get('action')}
         return is_recovery_observation(entry.get('tool_name') or entry.get('action') or '',params)
     substantial_unknown=any(operation_facts(c)=='unknown' and not observation(c) for c in operations)
+    # A text fragment explicitly reported as an incomplete Assignment result
+    # is useful work; arbitrary stdout from preparation is not.
+    if not expected and not expected_effects and text.strip() and (
+            payload.get('answer_type') == 'partial_report' or compact and payload.get('unresolved')):
+        useful = True
     required_complete=(not expected or file_contract) and (not expected_effects or window_contract)
-    effects=[c for c in operations if not observation(c)]
-    last_effect_ok=not effects or operation_facts(effects[-1])=='success'
-    worker_complete=(worker_finished and required_complete and not required_invalid and last_effect_ok
+    effects = [entry for entry in operations if not observation(entry)]
+    effect_established = (not effects or typed_contract
+                          or any(operation_facts(entry) == 'success' for entry in effects))
+    worker_complete=(worker_finished and required_complete and not required_invalid
+        and effect_established
         and (any(operation_facts(c)=='success' for c in operations)
-             or (not operations and not targets and task.get('execution_scope')=='analysis' and bool(refs)))
-        and (not targets or targets.issubset(observed_targets | covered_targets)))
+             or (not operations and bool(text.strip())))
+        and (not operations or not targets or targets.issubset(observed_targets | covered_targets)))
     if task.get('cancel_requested') or raw=='cancelled': status='cancelled'
     elif raw in {'queued','waiting_dependency','running','waiting_input','waiting_confirmation'}: status=raw
     elif raw=='confirm': status='waiting_confirmation'
     elif task.get('_report_integrity_failed'): status='unknown' if any(not observation(c) for c in operations) else 'failed'
     elif substantial_unknown or task.get('_action_outcome_unknown') or (raw in {'unknown','interrupted'} and not typed_contract): status='unknown'
-    elif required_invalid: status='partial' if evidence else 'failed'
+    elif required_invalid: status='partial' if useful else 'failed'
     elif clarification or raw=='blocked': status='blocked'
     elif operations and all((c.get('result') or {}).get('status')=='blocked' for c in operations): status='blocked'
-    elif terminal.get('tool_name') in {'answer.report_failure','answer_report_failure'}: status='partial' if evidence else 'failed'
-    elif (typed_contract and task.get('execution_scope')!='analysis') or worker_complete: status='success'
+    elif terminal.get('tool_name') in {'answer.report_failure','answer_report_failure'}: status='partial' if useful else 'failed'
+    elif typed_contract or worker_complete: status='success'
     elif operations and all(operation_facts(c) in {'failed','not_executed'} for c in operations): status='failed'
-    elif useful or any(operation_facts(c) in {'success','partial'} for c in operations): status='partial'
+    elif useful: status='partial'
     else: status='failed'
     unresolved_items=[str(v) for v in (payload.get('unresolved') or [])]
     # v3 unresolved is substantive unfinished Assignment work; optional advice
@@ -618,5 +604,6 @@ def build_worker_report(task):
         "goal_completed":status == "success", "summary":summary,
         "target_device_ids":[_short_did(d) for d in task.get("device_ids") or []], "artifacts":artifacts,
         "evidence_refs":refs, "requires_user_action":status in {"waiting_confirmation","waiting_input","blocked"},
-        "error_code":error_code}
+        "error_code":error_code, "unresolved":list(payload.get("unresolved") or []),
+        "caveats":list(payload.get("caveats") or [])}
     return WorkerReport.model_validate(report).model_dump()

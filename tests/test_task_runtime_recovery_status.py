@@ -85,7 +85,7 @@ def test_runtime_preserves_grounded_markdown_before_report(monkeypatch):
             "answer": "**Observed:** IRU",
             "commands": [
                 {"tool_name":"execute_cmd","step_id":"step_1","status":"success","result":{"returncode":0,"stdout":"OK: IRU"}},
-                {"tool_name":"answer.text","status":"terminal","result":{"answer_type":"grounded_report","text":"**Observed:** IRU","basis":["step_1"],"self_check":{"depends_on_current_external_state":True,"claims_completed_action":False,"has_sufficient_evidence":True,"missing_evidence_question":""}}}],
+                {"tool_name":"answer.text","status":"terminal","result":{"answer_type":"grounded_report","text":"**Observed:** IRU","basis":["step_1"]}}],
             "tasks": [],
             "task_receipt": {"task_status": "completed"},
         }

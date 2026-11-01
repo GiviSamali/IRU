@@ -24,7 +24,7 @@ def owner(tmp_path, monkeypatch):
 def template(owner, device=False):
     return {"user_id":owner["id"], "chat_id":owner["chat_id"], "message":"research and two results",
             "device_ids":[f"{owner['id']}:pc"] if device else [], "kind":"worker",
-            "created_at":time.time(), "execution_scope":"analysis", "modes":{}}
+            "created_at":time.time(),  "modes":{}}
 
 
 def complete(task):
@@ -34,14 +34,9 @@ def complete(task):
          "device_id":task["device_ids"][0] if task.get("device_ids") else "server", "result":{"status":"success", "results":[
              {"url":"https://example.org", "text":"Source material", "date":"2026-10-20"}]}},
         {"tool_name":"answer.text", "status":"terminal", "result":{
-            "answer_type":"grounded_report", "text":text, "basis":["source-1"],
-            "self_check":{"depends_on_current_external_state":True, "claims_completed_action":False,
-                          "has_sufficient_evidence":True, "missing_evidence_question":""}}}],
+            "answer_type":"grounded_report", "text":text, "basis":["source-1"]}}],
         task_receipt={"answer_source":"audited_terminal", "task_status":"completed",
                       "goal_completed":True, "final_verification_status":"verified"})
-    from server.worker_reports import coverage_binding
-    task['commands'][-1]['result']['_coverage']={'coverage':'complete','evidence_refs':['source-1'],
-        'binding':coverage_binding(task.get('proposed_objective') or task.get('message',''),task['commands'][:-1],text)}
 
 
 async def until(predicate):

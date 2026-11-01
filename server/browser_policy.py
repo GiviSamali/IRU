@@ -251,7 +251,7 @@ def validate_browser_arguments(operation: str, args: dict[str, Any]) -> dict[str
 
 
 def silent_browser_success(task: dict[str, Any]) -> bool:
-    if task.get("status") not in {"done", "completed", "completed_with_recovery"} or task.get("plan_suggestion"):
+    if task.get("status") not in {"done", "completed", "completed_with_recovery"}:
         return False
     commands = [command for command in task.get("commands", [])
                 if command.get("tool_type") != "answer"
@@ -303,9 +303,7 @@ def browser_partial_read(journal: list[dict[str, Any]]) -> dict[str, Any]:
     if isinstance(content, list):
         content = "\n".join(str(item.get("text", "")) if isinstance(item, dict) else str(item) for item in content)
     text = "Страница прочитана, но выделить запрошенный ответ не удалось. Полученный фрагмент:\n" + str(content)[-1600:]
-    return {"answer_type":"partial_report","text":text,"basis":[observed["step_id"]],
-            "self_check":{"depends_on_current_external_state":True,"claims_completed_action":False,
-                          "has_sufficient_evidence":True,"missing_evidence_question":"Не удалось выделить запрошенное сообщение"}}
+    return {"answer_type":"partial_report","text":text,"basis":[observed["step_id"]]}
 
 
 

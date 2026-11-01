@@ -13,7 +13,7 @@ from server.controller_tools import TOOLS, NON_PIPELINE_TOOLS, WORKER_TOOLS
 ])
 def test_deliverable_graph_uses_one_existing_orchestrator_call(monkeypatch, message):
     calls = []
-    payload = {"intent":"delegate", "scope":"server", "objective":"Three descriptions", "execution_mode":"simple",
+    payload = {"intent":"delegate",  "objective":"Three descriptions",
                "assignments":[{"key":key,"objective":f"Description {key}"} for key in ("a","b","c")]}
     monkeypatch.setattr(orch, "load_llm_config", lambda: {"model":"mock-model"})
     async def completion(*args, **kwargs):

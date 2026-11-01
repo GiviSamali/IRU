@@ -10,7 +10,7 @@ import pytest
 from server import database as db
 from server.controller_tools import NON_PIPELINE_TOOLS, worker_tool_inventory
 from server.runtime_state import tasks
-from server.worker_reports import build_worker_report, coverage_binding
+from server.worker_reports import build_worker_report
 from server.api_support import assess_action
 from test_tool_only_protocol import _run_case, _message, _tool_call
 
@@ -48,10 +48,10 @@ def test_multiple_calls_one_turn_and_correlated_provider_history():
     assert len({c['step_id'] for c in steps})==2
 
 
-@pytest.mark.parametrize('scope',['window','analysis','general'])
-def test_full_inventory_every_turn_and_no_route_completion(scope,monkeypatch):
+@pytest.mark.parametrize('effects',[['open'],[]])
+def test_full_inventory_every_turn_and_no_route_completion(effects,monkeypatch):
     tid='inventory'
-    monkeypatch.setitem(tasks,tid,{'task_id':tid,'execution_scope':scope,'window_effects':['open'] if scope=='window' else []})
+    monkeypatch.setitem(tasks,tid,{'task_id':tid,'window_effects':effects})
     seen=[]
     result=_run_case([_message(tool_calls=[_tool_call('c','execute_cmd',{'command':'hostname'})]),
                       answer('Observed')],poll_task_id=tid,captured=seen)
@@ -233,7 +233,7 @@ def test_cli_open_and_native_open_use_same_observed_object_contract():
     reports=[]
     for tool in ('app.launch','app.verify_launch'):
         reports.append(build_worker_report({'task_id':'open','status':'done','device_ids':['pc'],
-            'execution_scope':'general','window_effects':['open'],
+            'window_effects':['open'],
             'open_objects':[{'type':'file','path':'C:/a.docx'}],
             'commands':[{'step_id':'step_1','tool_name':tool,'target_device_id':'pc','result':result}]}))
     assert all(r['goal_completed'] for r in reports)
@@ -265,8 +265,6 @@ def test_office_and_cli_inline_observation_has_same_content_gate(tmp_path,monkey
     step={'step_id':'step_1','tool_name':method,'status':'success','target_device_id':'pc','result':result}
     payload={'_result_contract':3,'text':'Prepared' if coverage=='complete' else 'Required material missing',
              'unresolved':[] if coverage=='complete' else ['Required material missing']}
-    payload['_coverage']={'coverage':coverage,'evidence_refs':['step_1'],
-        'binding':coverage_binding('Prepare a factual presentation',[step],'Prepared')}
     task={'task_id':'t','status':'done','original_request':'Prepare a factual presentation',
         'assigned_artifacts':[str(path)],'device_ids':['pc'],'commands':[step,
             {'tool_name':'answer.text','status':'terminal','result':payload}],'answer':'Prepared'}
@@ -329,8 +327,7 @@ def test_cli_office_receipt_and_stdout_cannot_hide_missing_content_pages():
     create={'tool_name':'execute_cmd','step_id':'step_1','target_device_id':'pc','result':{
         'returncode':0,'stdout':'OK: file exists','stderr':'',
         'artifact_receipts':[receipt],'artifact_observations':[inspection]}}
-    payload={'text':'Observed content','_coverage':{'coverage':'complete','evidence_refs':['step_1'],
-        'binding':coverage_binding('request',[create],'Observed content')}}
+    payload={'text':'Observed content'}
     task={'task_id':'t','status':'done','original_request':'request','device_ids':['pc'],
         'assigned_artifacts':[path],'answer':'Observed content','commands':[
             create,{'tool_name':'answer.text','status':'terminal','result':payload}]}
@@ -357,7 +354,7 @@ def test_server_worker_uses_same_batch_and_failure_protocol(monkeypatch):
     permission=MEMORY_AUTHORIZATION.set(bind_memory_authorization('Research facts',[]))
     try:
         result=asyncio.run(process_onboarding_message(user_message='Research facts',chat_history=[],
-            usage_context={'worker_execution':True},load_llm_config_fn=lambda:{'model':'fake','answer_auditor_enabled':False},
+            usage_context={'worker_execution':True},load_llm_config_fn=lambda:{'model':'fake'},
             current_datetime_msk_fn=lambda:'2026-11-01'))
     finally:
         MEMORY_AUTHORIZATION.reset(permission);ORIGINAL_WORKER_REQUEST.reset(token)
@@ -372,13 +369,11 @@ def test_verified_text_bytes_do_not_override_explicit_missing_content():
     path='C:/short.txt';digest='a'*64
     step={'tool_name':'write_content','step_id':'step_1','target_device_id':'pc',
           'result':{'path':path,'verified':True,'committed':True,'file_sha256':digest,'total_size':5}}
-    payload={'_result_contract':3,'text':'Only a heading','unresolved':[],
-             '_coverage':{'coverage':'partial','evidence_refs':['step_1'],
-                 'binding':coverage_binding('Write the full report',[step],'Only a heading')}}
+    payload={'_result_contract':3,'text':'Only a heading','unresolved':['The required report body is missing.']}
     report=build_worker_report({'task_id':'t','status':'done','device_ids':['pc'],
         'original_request':'Write the full report','assigned_artifacts':[path],
         'commands':[step,{'tool_name':'answer.text','status':'terminal','result':payload}],'answer':'Only a heading'})
-    assert not report['goal_completed'] and not report['artifacts'][0]['content_verified']
+    assert not report['goal_completed'] and report['artifacts'][0]['verified']
 
 
 def test_substantive_unresolved_is_not_discarded_for_lacking_filename():
@@ -396,7 +391,7 @@ def test_substantive_unresolved_is_not_discarded_for_lacking_filename():
 @pytest.mark.parametrize('count,observed',[(1,True),(1,False),(2,False)])
 def test_find_pptx_conditional_cli_open_or_list(monkeypatch,count,observed):
     request='Find desktop PPTX: open if one, otherwise list them.'
-    task={'task_id':'conditional','goal_id':'g','execution_scope':'general',
+    task={'task_id':'conditional','goal_id':'g',
           'original_request':request,'proposed_objective':request,'device_ids':['device-1']}
     monkeypatch.setitem(tasks,'conditional',task)
     files=[f'C:/Desktop/{i}.pptx' for i in range(count)];sent=[]
@@ -415,7 +410,7 @@ def test_find_pptx_conditional_cli_open_or_list(monkeypatch,count,observed):
     refs=[f'step_{i+1}' for i in range(3 if count==1 else 1)]
     replies.append(_message(content=json.dumps({'coverage':'complete','evidence_refs':refs,'reason':'Conditional branch satisfied'}),finish_reason='stop'))
     result=_run_case(replies,poll_task_id='conditional',user_message=request,send_command_fn=send,
-                     cfg={'model':'fake','answer_auditor_enabled':True})
+                     cfg={'model':'fake'})
     report=build_worker_report({**task,'status':'done','commands':result['commands'],'answer':result['answer']})
     assert report['goal_completed']==(count>1 or observed)
     assert sent==(['execute_cmd','execute_cmd','app.verify_launch'] if count==1 else ['execute_cmd'])

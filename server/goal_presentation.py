@@ -87,14 +87,14 @@ def goal_presentation(goal: dict) -> dict:
             "cancelled": "Задача отменена.",
         }.get(status, message.split("\n", 1)[0].strip())
 
-    return {"goal_id": goal.get("goal_id"), "status": status,
+    return include_result_limits(goal, {"goal_id": goal.get("goal_id"), "status": status,
             "terminal": terminal, "goal_completed": success, "completed_count": done,
             "spoken_message": spoken,
             "total_count": total, "message": message, "artifacts": artifacts,
             "result_artifacts": result_artifacts,
             "requires_user_action": any(m.get("status") in {"waiting_confirmation", "waiting_input"}
                                        for m in members),
-            "task_ids": [m.get("task_id") for m in members]}
+            "task_ids": [m.get("task_id") for m in members]})
 
 
 def goal_result_message(goal):
@@ -114,14 +114,38 @@ def goal_result_message(goal):
         'unknown':'Исход части действий не подтверждён; автоматически их не повторяю.',
         'partial':'Часть поручения выполнить не удалось.','failed':'Поручение выполнить не удалось.',
         'blocked':'Для продолжения требуется уточнение или разрешение.','cancelled':'Поручение отменено.'}.get(goal.get('status'),'')
-    if status=='success' and members and all(m.get('execution_scope')=='window' for m in members):
-        request=(goal.get('original_request') or '').strip()
-        folder=re.fullmatch(r'откр(?:ой|ыть)\s+папку\s+([\w .-]+)[.!]?',request,re.I)
-        if folder:
-            return 'Открыл папку '+folder[1].rstrip('.!')+' в Проводнике.'
     if status in {'partial','failed','unknown'}:
         # Objectives identify the missing result without leaking diagnostic prose.
         missing=[str(m.get('objective') or '').strip() for m in members if m.get('status')!='success']
         missing=[s for s in missing if s and len(s)<=160 and '\\' not in s and '\n' not in s]
         if missing:prefix+=' Не завершено: '+'; '.join(missing[:3])+'.'
     return prefix or 'Результат сохранён в подробностях поручения.'
+
+
+def include_result_limits(goal, reply):
+    """Keep established limitations outside the language model's free text."""
+    unresolved, caveats = [], []
+    for member in goal.get('tasks') or []:
+        if not member.get('required_for_goal', True):
+            continue
+        report = member.get('report') or {}
+        for key, dest in (('unresolved', unresolved), ('caveats', caveats)):
+            for value in report.get(key) or member.get(key) or []:
+                if isinstance(value, str) and value.strip() and value not in dest:
+                    dest.append(value)
+    result = {**reply, 'unresolved': unresolved, 'caveats': caveats}
+    blocks = []
+    if unresolved:
+        blocks.append('Не выполнено:\n' + '\n'.join('- ' + v for v in unresolved))
+    if caveats:
+        blocks.append('Существенные ограничения:\n' + '\n'.join('- ' + v for v in caveats))
+    suffix = '\n\n'.join(blocks)
+    if suffix and suffix not in result.get('message', ''):
+        result['message'] = result.get('message', '').rstrip() + '\n\n' + suffix
+    if blocks:
+        notice = ('Часть поручения не выполнена. ' if unresolved else '')
+        notice += 'Есть существенные ограничения результата; подробности в чате.' if caveats else 'Подробности в чате.'
+        spoken = result.get('spoken_message', '')
+        if notice not in spoken:
+            result['spoken_message'] = (spoken + ' ' + notice).strip() if len(spoken) + len(notice) < 420 else notice
+    return result

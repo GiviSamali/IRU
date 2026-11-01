@@ -14,16 +14,6 @@ except ImportError:
 VISIBILITY_VALUES = {"public", "internal", "hidden", "legacy"}
 
 LEGACY_OR_INTERNAL_ACTIONS: dict[str, dict[str, Any]] = {
-    "create_plan": {
-        "visibility": "legacy",
-        "executable": False,
-        "notes": "legacy plan-tracking schema; not exposed in current non-pipeline/worker toolsets",
-    },
-    "mark_step": {
-        "visibility": "legacy",
-        "executable": False,
-        "notes": "legacy plan-tracking schema; not exposed in current non-pipeline/worker toolsets",
-    },
     "get_file_content": {
         "visibility": "internal",
         "executable": True,
@@ -100,7 +90,6 @@ CONTROLLER_EXECUTABLE_TOOL_NAMES = {
     "answer.text",
     "answer.ask_clarification",
     "answer.report_failure",
-    "answer.request_confirmation",
 }
 
 CONTROLLER_TRUST_INFERRED_ACTIONS = {

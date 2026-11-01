@@ -101,17 +101,3 @@ def test_business_plan_behaves_like_paid_plan_not_free(client):
     assert raw_command_response.status_code == 200
     assert raw_command_payload["status"] == "error"
     assert "Режим разработчика" not in raw_command_payload["error"]
-
-    chat_response = client.post("/api/chats", headers=headers, json={"title": "plan check"})
-    chat_id = chat_response.json()["chat"]["id"]
-
-    run_plan_response = client.post(
-        f"/api/run_plan/{chat_id}",
-        headers=headers,
-        json={"original_request": "Составь план"},
-    )
-    run_plan_payload = run_plan_response.json()
-
-    assert run_plan_response.status_code == 410
-    assert run_plan_payload["detail"]["code"] == "execution_mode_unsupported"
-    assert check_daily_command_limit(user["id"])["used"] == 30

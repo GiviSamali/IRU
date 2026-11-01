@@ -81,7 +81,7 @@ async def controller(responses,send,*,task_id='ff-controller',request='РџСЂ�
     return await process_non_pipeline_command(user_message=request,device_id='pc',
         device_info={'os':'Windows','file_replace_protocol':2},send_command_fn=send,get_file_link_fn=lambda *a:'',
         chat_history=[],user_id=None,chat_id=None,modes={},poll_task_id=task_id,
-        cfg={'model':'fake','answer_auditor_enabled':False},system_msg='system',machine_guid=None,mem_user_id=None,
+        cfg={'model':'fake'},system_msg='system',machine_guid=None,mem_user_id=None,
         non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=9,pick_model_fn=lambda *a:'fake',
         chat_completion_request_fn=completion)
 
@@ -130,7 +130,7 @@ def test_mixed_goal_actual_runtime_projects_only_assignment_preserves_authority_
             return queue.pop(0)
         result = await process_non_pipeline_command(**{name:kwargs[name] for name in (
             'user_message','device_id','device_info','send_command_fn','get_file_link_fn','chat_history',
-            'user_id','chat_id','modes','poll_task_id','device_tool_fn')},cfg={'model':'fake','answer_auditor_enabled':False},
+            'user_id','chat_id','modes','poll_task_id','device_tool_fn')},cfg={'model':'fake'},
             system_msg='system',machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,
             max_iterations=6,pick_model_fn=lambda *a:'fake',chat_completion_request_fn=completion)
         assert captured[0]['messages'][-1] == {'role':'user','content':objective}
@@ -182,7 +182,7 @@ def test_verified_open_without_completion_state_survives_followup_observation(to
         steps.append({'step_id':'s2','tool_name':followup,'target_device_id':'pc',
             'result':{'status':'success','window':{'window_id':'a'*32,'title':'Folder'}},
             'window_request':{'action':'find'}})
-    task = {'task_id':'open-ff','status':'done','device_ids':['pc'],'execution_scope':'window',
+    task = {'task_id':'open-ff','status':'done','device_ids':['pc'],
         'window_effects':['open'],'commands':steps,'answer':'РћС‚РєСЂС‹С‚РёРµ РїРѕРґС‚РІРµСЂР¶РґРµРЅРѕ.',
         'open_objects':[{'type':'folder','path':'C:/SyntheticFF01','device_id':'pc'} if tool=='app.launch'
                         else {'type':'url','path':'https://ya.ru','device_id':'pc'}]}
@@ -200,7 +200,7 @@ def test_verified_open_without_completion_state_survives_followup_observation(to
 ])
 def test_process_only_error_ambiguous_or_unknown_never_prove_window_open(result):
     report = build_worker_report({'task_id':'negative-open','status':'done','device_ids':['pc'],
-        'execution_scope':'window','window_effects':['open'],'commands':[
+        'window_effects':['open'],'commands':[
             {'step_id':'s1','tool_name':'app.launch','target_device_id':'pc','result':result}],
         'answer':'Process observation only.'})
     assert not report['goal_completed'] and report['status'] != 'success'
@@ -208,7 +208,7 @@ def test_process_only_error_ambiguous_or_unknown_never_prove_window_open(result)
 
 def test_verified_open_then_close_does_not_claim_the_window_remains_open():
     report = build_worker_report({'task_id':'closed','status':'done','device_ids':['pc'],
-        'execution_scope':'window','window_effects':['open'],'commands':[
+        'window_effects':['open'],'commands':[
             {'step_id':'s1','tool_name':'app.launch','target_device_id':'pc',
              'result':{'status':'launched_verified','window':{'pid':12}}},
             {'step_id':'s2','tool_name':'window.control','target_device_id':'pc',
@@ -217,7 +217,7 @@ def test_verified_open_then_close_does_not_claim_the_window_remains_open():
 
 
 def test_open_then_minimize_sequence_accepts_object_verified_launch(owner,monkeypatch):
-    monkeypatch.setitem(tasks,'ff-controller',{'task_id':'ff-controller','execution_scope':'window',
+    monkeypatch.setitem(tasks,'ff-controller',{'task_id':'ff-controller',
         'window_effects':['open','minimize']})
     sent = []
     async def send(device,action,params):
@@ -234,7 +234,7 @@ def test_open_then_minimize_sequence_accepts_object_verified_launch(owner,monkey
         call('window_control',{'action':'minimize','target':'current'})],send))
     assert sent == ['app.launch','window.control']
     report = build_worker_report({'task_id':'ff-controller','status':'done','device_ids':['pc'],
-        'execution_scope':'window','window_effects':['open','minimize'],
+        'window_effects':['open','minimize'],
         'open_objects':[{'type':'folder','path':'C:/SyntheticFF01','device_id':'pc'}],**result})
     assert report['goal_completed']
 
@@ -276,7 +276,7 @@ def test_real_unknown_blocks_replacement_retry_but_allows_observation(owner):
 
 def test_assignment_cannot_grant_memory_permission_absent_from_human_request(owner,monkeypatch):
     monkeypatch.setitem(tasks,'ff-controller',{'goal_id':'goal','proposed_objective':'Р—Р°РїРѕРјРЅРё С„Р°РєС‚ Рѕ С†РІРµС‚Рµ.',
-        'original_request':'РџСЂРѕС‡РёС‚Р°Р№ project.txt.','execution_scope':'general'})
+        'original_request':'РџСЂРѕС‡РёС‚Р°Р№ project.txt.'})
     async def no_device(*args):pytest.fail('Memory rejection needs no device call')
     result = asyncio.run(controller([call('remember_fact',{'text':'С†РІРµС‚ Р·РµР»С‘РЅС‹Р№','category':'other'}),
         answer('Р Р°Р·СЂРµС€РµРЅРёРµ РЅР° СЃРѕС…СЂР°РЅРµРЅРёРµ С„Р°РєС‚Р° РѕС‚СЃСѓС‚СЃС‚РІСѓРµС‚.')],no_device))

@@ -102,7 +102,6 @@ def test_general_preferences_remain_owner_scoped_without_matching_task_words(own
 
 def test_orchestrator_simple_mode_skips_only_redundant_classification(owners,monkeypatch):
     a,b=owners;classified=[];executed=[]
-    async def classifier(*args,**kwargs):classified.append(1);return 'SIMPLE',''
     async def controller(**kwargs):executed.append(kwargs);return {'answer':'done','commands':[],'tasks':[]}
     async def probe(**kwargs):pass
     monkeypatch.setattr(runtime,'process_nl_command',controller)
@@ -110,7 +109,7 @@ def test_orchestrator_simple_mode_skips_only_redundant_classification(owners,mon
     monkeypatch.setattr(runtime,'add_training_record',lambda *a,**k:None)
     async def scenario():
         for mode in ['auto','simple']:
-            t=task(a,'limited ordinary task');t.update(orchestrated=True,orchestrator_execution_mode=mode,results={},broadcast=False)
+            t=task(a,'limited ordinary task');t.update(orchestrated=True,results={},broadcast=False)
             tasks[t['task_id']]=t
             await runtime.run_nl_task(t['task_id'],a['id'],t['message'],t['device_ids'],a['chat_id'])
         assert len(classified)==0 and len(executed)==2
@@ -121,7 +120,7 @@ def test_orchestrator_simple_mode_skips_only_redundant_classification(owners,mon
 def test_plan_proposal_does_not_execute_and_restores_multi_device_assignment(owners,monkeypatch):
     a,b=owners
     devices[f"{a['id']}:second"]={'user_id':a['id'],'ws':object(),'info':{}}
-    async def decide(*args,**kwargs):return orch.Decision(intent='delegate',objective='untrusted',execution_mode='plan',target_device_ids=['pc','second']),{}
+    async def decide(*args,**kwargs):return orch.Decision(intent='delegate',objective='untrusted',target_device_ids=['pc','second']),{}
     monkeypatch.setattr(orch,'decide',decide)
     async def forbidden(*a,**k):raise AssertionError('PLAN still requires consent')
     cmd=SimpleNamespace(request_id='plan-mode',message='Создай несколько документов на двух ПК',device_id='pc',modes={},broadcast=False)
@@ -242,9 +241,7 @@ def test_p002_recent_worker_artifact_survives_handoff_without_becoming_basis(own
     assert data['current_run_evidence'] is False and estimate_tokens(data) <= max(256,configured_context_budget()//4)
     assert 'LARGE_OLD_OUTPUT' not in json.dumps(context) and 'old_step' not in json.dumps(context)
     assert context[-1] == {'role': 'user', 'content': 'Теперь сделай линии тоньше'}
-    payload = {'answer_type': 'grounded_report', 'text': 'Новое изменение выполнено.', 'basis': ['old_step'],
-        'self_check': {'depends_on_current_external_state': True, 'claims_completed_action': True,
-            'has_sufficient_evidence': True, 'missing_evidence_question': ''}}
+    payload = {'answer_type': 'grounded_report', 'text': 'Новое изменение выполнено.', 'basis': ['old_step']}
     with pytest.raises(ProtocolValidationError):
         validate_answer_text_payload(payload, [])
 
@@ -346,9 +343,7 @@ def test_p003a_interpretation_cannot_expand_scope_permission_or_current_basis(ow
         build_worker_context(a['id'], b['chat_id'], original, [f"{a['id']}:pc"], [], **interpretation)
     with pytest.raises(ValueError, match='reference_task'):
         build_worker_context(a['id'], a['chat_id'], original, [f"{a['id']}:pc"], [], ['foreign-task'], **interpretation)
-    payload = {'answer_type': 'grounded_report', 'text': 'Выполнено.', 'basis': ['old_step'],
-        'self_check': {'depends_on_current_external_state': True, 'claims_completed_action': True,
-            'has_sufficient_evidence': True, 'missing_evidence_question': ''}}
+    payload = {'answer_type': 'grounded_report', 'text': 'Выполнено.', 'basis': ['old_step']}
     with pytest.raises(ProtocolValidationError):
         validate_answer_text_payload(payload, [])
     confirmation = command_confirmation({'command': 'Remove-Item C:/Temp/example.txt', 'params': {'risk': 'dangerous'}})

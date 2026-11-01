@@ -109,7 +109,7 @@ try:
 except ImportError:
     from run_journal import diagnostic_task, record_lifecycle_event
 
-logger = logging.getLogger("iru.run_plan")
+logger = logging.getLogger("iru.tasks")
 
 
 async def _call_with_optional_usage_context(fn, *args, usage_context: dict | None = None, **kwargs):

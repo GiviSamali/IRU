@@ -21,9 +21,7 @@ def test_server_worker_keeps_its_assignment_after_strict_prompt(monkeypatch):
         if len(captured)==1:
             return {'choices':[{'message':{'tool_calls':[{'id':'search','function':{
                 'name':'web_search','arguments':json.dumps({'query':'RAG research'})}}]}}]}
-        payload={'answer_type':'partial_report','text':'Search failed; no sources yet','basis':['step_1'],
-            'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,
-                'has_sufficient_evidence':False,'missing_evidence_question':'Sources missing'}}
+        payload={'answer_type':'partial_report','text':'Search failed; no sources yet','basis':['step_1']}
         return {'choices':[{'message':{'tool_calls':[{'id':'answer','function':{
             'name':'answer_text','arguments':json.dumps(payload)}}]}}]}
     async def search(*args):return {'error':'controlled HTTP 429'}
@@ -31,7 +29,7 @@ def test_server_worker_keeps_its_assignment_after_strict_prompt(monkeypatch):
     monkeypatch.setattr(controller,'_chat_completion_request',completion)
     asyncio.run(onboarding.process_onboarding_message('Prepare the complete package',
         usage_context={'worker_execution':True,'poll_task_id':'research'},
-        load_llm_config_fn=lambda:{'model':'mock','api_key':'test','answer_auditor_enabled':False},
+        load_llm_config_fn=lambda:{'model':'mock','api_key':'test'},
         current_datetime_msk_fn=lambda:'2026-10-21'))
     prompt=captured[0]['messages'][0]['content']
     assert 'Research RAG only; siblings create documents' in prompt
@@ -54,7 +52,7 @@ def test_server_scope_device_hint_does_not_lose_valid_intake(owner,monkeypatch,m
     async def turn(cmd,user,chat,delegate):
         assignments=[orch.Assignment(key='research',objective='Research RAG',target_device_ids=None if implicit else [])]
         if mixed:assignments.append(orch.Assignment(key='doc',objective='Create document',target_device_ids=['pc'],depends_on=['research']))
-        return await delegate(orch.Decision(intent='delegate',scope='server',target_device_ids=['pc'],assignments=assignments),'request')
+        return await delegate(orch.Decision(intent='delegate',target_device_ids=['pc'],assignments=assignments),'request')
     monkeypatch.setattr(routes,'run_turn',turn)
     cmd=routes.NLCommand(message='Continue the package',device_id='pc',chat_id=owner['chat_id'])
     if implicit:
@@ -163,7 +161,7 @@ def test_direct_deliverables_reach_scheduler_without_preparation(owner,monkeypat
         return {'goal_id':'goal','tasks':[{'task_id':'accepted','status':'queued'}]}
     monkeypatch.setattr(routes,'scheduler',SimpleNamespace(submit_goal=submit))
     async def turn(cmd,user,chat,delegate):
-        decision=orch.Decision(intent='delegate',scope='device',target_device_ids=['pc'],
+        decision=orch.Decision(intent='delegate',target_device_ids=['pc'],
             objective='Make independent documents',
             assignments=[
                 orch.Assignment(key='word',objective='Write Word',artifacts=['report.docx']),

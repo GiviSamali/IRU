@@ -121,9 +121,7 @@ def test_deleted_or_foreign_chat_is_never_recreated_or_modified(owners,foreign):
 
 
 def payload(text,kind='grounded_report',basis=None):
-    return {'answer_type':kind,'text':text,'basis':basis or ['step_1'],
-            'self_check':{'depends_on_current_external_state':True,'claims_completed_action':False,
-                          'has_sufficient_evidence':True,'missing_evidence_question':''}}
+    return {'answer_type':kind,'text':text,'basis':basis or ['step_1']}
 
 
 @pytest.mark.parametrize('text,result,expected',[
@@ -136,7 +134,7 @@ def test_runtime_applies_content_guard_to_structurally_valid_terminal(monkeypatc
     key='1:pc';tid='trust-review'
     runtime.tasks[tid]={'task_id':tid,'user_id':1,'chat_id':1,'message':'Проверь папку','original_request':'Проверь папку',
         'device_ids':[key],'status':'running','results':{},'modes':{},'orchestrated':True,
-        'orchestrator_execution_mode':'simple','created_at':time.time(),'worker_id':'worker-1'}
+        'created_at':time.time(),'worker_id':'worker-1'}
     runtime.devices[key]={'user_id':1,'info':{'hostname':'pc','os':'Windows'},'pending':{}}
     commands=[{'tool_name':'execute_cmd','step_id':'step_1','status':'failed' if result['returncode'] else 'success','result':result},
               {'tool_name':'answer.text','status':'terminal','result':payload(text)}]
@@ -162,7 +160,7 @@ def test_runtime_history_failure_preserves_answer_and_evidence(monkeypatch):
     key='1:pc';tid='history-review';text='**Папка:** `IRU` существует.'
     runtime.tasks[tid]={'task_id':tid,'user_id':1,'chat_id':1,'message':'Проверь папку',
         'device_ids':[key],'status':'running','results':{},'modes':{},'orchestrated':True,
-        'orchestrator_execution_mode':'simple','created_at':time.time(),'worker_id':'worker-1'}
+        'created_at':time.time(),'worker_id':'worker-1'}
     runtime.devices[key]={'user_id':1,'info':{'hostname':'pc','os':'Windows'},'pending':{}}
     commands=[{'tool_name':'execute_cmd','step_id':'step_1','status':'success','result':{'returncode':0,'stdout':'IRU'}},
               {'tool_name':'answer.text','status':'terminal','result':payload(text)}]
@@ -189,7 +187,6 @@ def test_model_informational_flag_cannot_confirm_original_action_goal(owners):
     assert build_worker_report(t)['status']=='unknown'
     assert not build_worker_report(t)['goal_completed']
     t['task_receipt']={'answer_source':'audited_terminal','task_status':'completed','goal_completed':True,'final_verification_status':'verified'}
-    t['commands'][-1]['result']['self_check']['claims_completed_action']=True
     t['commands'].insert(0,{'tool_name':'execute_cmd','step_id':'step_0','status':'success','result':{'returncode':0,'stdout':'OK: unrelated'}})
     assert build_worker_report(t)['status']=='unknown'
 
@@ -198,7 +195,7 @@ def test_model_informational_flag_cannot_confirm_original_action_goal(owners):
 def test_false_completion_disguised_as_negative_report_still_rejected(kind):
     from server.controller_trust import enforce_trusted_answer
     text='Готово, файл создан.'
-    answer=payload(text,kind);answer['self_check']['has_sufficient_evidence']=False
+    answer=payload(text,kind)
     journal=[{'tool_name':'execute_cmd','step_id':'step_1','status':'failed',
               'result':{'returncode':5,'stderr':'Access denied','stdout':''}},
              {'tool_name':'answer.text','status':'terminal','result':answer}]
@@ -209,20 +206,15 @@ def test_action_goal_with_wrong_information_label_rejected_through_full_lifecycl
     from test_integrity_lifecycle import install, admit, capture, shell, terminal
     from test_tool_only_protocol import _message, _tool_call, _completion_fn
     from server import controller_non_pipeline as controller
-    from server.answer_auditor import audit_answer_payload
     client,owner,key,monkeypatch=world
     goal='Создай новый файл C:/Temp/new.txt и проверь создание'
     steps=[shell('Get-Item C:/Temp/new.txt','new.txt')]
     wrong=terminal('Файл существует.',action=False)
     partial=terminal('Подтверждено существование файла. Создание нового файла не доказано.',kind='partial_report',sufficient=False)
     device,_=install(world,steps,partial,121)
-    monkeypatch.setattr(controller,'audit_answer_payload',audit_answer_payload)
     captured=[]
     responses=[_message(tool_calls=[_tool_call('read','execute_cmd',steps[0][1])]),
-               _message(tool_calls=[wrong]),
-               _message(content='{"valid":false,"reason":"The action goal is not proved; the worker informational label does not change it"}',finish_reason='stop'),
-               _message(tool_calls=[partial]),
-               _message(content='{"valid":true,"reason":"Honest partial observations; no proof of creation"}',finish_reason='stop')]
+               _message(tool_calls=[partial])]
     async def process(**kw):
         return await controller.process_non_pipeline_command(
             user_message=kw['user_message'],device_id=kw['device_id'],device_info=kw['device_info'],
@@ -308,7 +300,7 @@ def test_history_deleted_during_real_worker_keeps_all_presentations_and_queue(wo
             # Keep a second real queued job; finalization must advance it.
             second=await scheduler.submit({'task_id':'after-history-deletion','user_id':owner['id'],'chat_id':owner['chat_id'],
                 'message':goal,'original_request':goal,'device_ids':[key],'modes':{},'kind':'worker',
-                'orchestrated':True,'orchestrator_execution_mode':'simple','created_at':time.time(),'status':'running','results':{}})
+                'orchestrated':True,'created_at':time.time(),'status':'running','results':{}})
             device.steps.extend(copy.deepcopy(steps))
             await scheduler.runners[owner['id']]
             assert len(deleted)==2 and len(device.calls)==2
@@ -340,7 +332,6 @@ def test_launch_only_receipt_cannot_confirm_goal_even_with_ok_text(owners, statu
     t = task(owner, "Открой файл и подтверди результат")
     answer = "Файл открыт."
     terminal = payload(answer)
-    terminal["self_check"]["claims_completed_action"] = True
     t.update(status="done", answer=answer, task_receipt={
         "answer_source": "audited_terminal", "task_status": "completed",
         "goal_completed": True, "final_verification_status": "verified",

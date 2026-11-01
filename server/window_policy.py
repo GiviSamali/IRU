@@ -3,7 +3,7 @@ import re
 
 def silent_window_success(task):
     # Information, failed attempts, pending save dialogs and other tools must stay audible.
-    if task.get('status') not in {'done', 'completed', 'completed_with_recovery'} or task.get('plan_suggestion'):
+    if task.get('status') not in {'done', 'completed', 'completed_with_recovery'}:
         return False
     actions = [c for c in task.get('commands', []) if c.get('tool_type') != 'answer'
                and (c.get('tool_name') or c.get('action')) not in {'answer_text', 'answer.text'}]
@@ -13,21 +13,12 @@ def silent_window_success(task):
         and (c.get('result') or {}).get('response_policy') == 'silent_on_success'
         for c in actions)
 
-def normalize_window_request(message):
-    return re.sub(r'\s+', ' ', str(message or '')).strip().casefold()
 
 
-def ordinary_window_request(message):
-    """Retired route hint: natural-language intent belongs to Orchestrator."""
-    return False
 
 
-def window_action_sequence(message):
-    return []
 
 
-def unsupported_virtual_desktop_request(message):
-    return False
 
 def recent_window_context(history, *, device_id=None):
     """Keep only observed opaque IDs and device-scoped window evidence, never legacy HWNDs."""
@@ -58,8 +49,6 @@ def recent_window_context(history, *, device_id=None):
     return rows
 
 
-def direct_window_action(message, history, device_id):
-    return None
 
 
 def window_input_required(args, result, journal, device_id):

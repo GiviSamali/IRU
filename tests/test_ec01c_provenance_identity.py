@@ -40,11 +40,7 @@ def write_step(task_id, name, digest, *, device="givi", verified=True, committed
 
 def answer_step(task_id, basis, *, step="step_2"):
     return {"task_id": task_id, "step_id": step, "tool_name": "answer.text", "status": "terminal",
-            "result": {"answer_type": "grounded_report", "text": "Готово.", "basis": basis,
-                       "self_check": {"depends_on_current_external_state": True,
-                                      "claims_completed_action": True,
-                                      "has_sufficient_evidence": True,
-                                      "missing_evidence_question": ""}}}
+            "result": {"answer_type": "grounded_report", "text": "Готово.", "basis": basis}}
 
 
 def report(labels, commands, *, task_id="task-1", device="givi"):

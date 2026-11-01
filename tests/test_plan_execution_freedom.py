@@ -28,7 +28,7 @@ def run_recovery(commands, observations):
     outcome=asyncio.run(process_non_pipeline_command(user_message="Inspect and repair the script",
         device_id="pc",device_info={"os":"Windows"},send_command_fn=send,get_file_link_fn=lambda *a:"",
         chat_history=[],user_id=None,chat_id=None,modes={},poll_task_id=None,
-        cfg={"model":"mock-model","answer_auditor_enabled":False},system_msg="system",
+        cfg={"model":"mock-model"},system_msg="system",
         machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,
         max_iterations=8,pick_model_fn=lambda *a:"mock-model",chat_completion_request_fn=completion))
     return outcome,sent
