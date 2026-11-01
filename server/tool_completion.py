@@ -181,7 +181,7 @@ def confirmed_window_effect(entry):
         from tool_registry import canonical_tool_name
     tool = canonical_tool_name(entry.get('tool_name') or entry.get('action') or '')
     result = entry.get('result') or {}
-    if (not isinstance(result,dict) or entry.get('status') == 'unknown'
+    if (not isinstance(result,dict)
             or normalize_operation_result(tool,result) != 'success'):
         return None
     if tool in {'window.close','app.close'}:
