@@ -19,7 +19,7 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
         env["LANG"] = env.get("LANG", "C.UTF-8")
 
         result = subprocess.run(
-            ["/bin/bash", "-c", command],
+            ["/bin/bash", "-e", "-o", "pipefail", "-c", command],
             capture_output=True,
             timeout=timeout,
             env=env,

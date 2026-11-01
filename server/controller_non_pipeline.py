@@ -11,7 +11,7 @@ import httpx
 try:
     from .api_support import is_recovery_observation
     from . import database as db  # type: ignore
-    from .answer_auditor import assess_result_coverage  # type: ignore
+    from .answer_auditor import assess_result_coverage, semantic_assessment_enabled  # type: ignore
     from .controller_budget import CommandBudget, _debug_enabled  # type: ignore
     from .controller_tools import NON_PIPELINE_TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
     from .controller_shared import (  # type: ignore
@@ -58,6 +58,7 @@ try:
         append_answer_step,
         append_tool_step,
         compact_write_content_result,
+        compact_search_material,
         is_answer_clarification_tool,
         is_answer_confirmation_tool,
         is_answer_failure_tool,
@@ -74,7 +75,7 @@ try:
 except ImportError:
     from api_support import is_recovery_observation
     import database as db  # type: ignore
-    from answer_auditor import assess_result_coverage  # type: ignore
+    from answer_auditor import assess_result_coverage, semantic_assessment_enabled  # type: ignore
     from controller_budget import CommandBudget, _debug_enabled  # type: ignore
     from controller_tools import NON_PIPELINE_TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
     from controller_shared import (  # type: ignore
@@ -121,6 +122,7 @@ except ImportError:
         append_answer_step,
         append_tool_step,
         compact_write_content_result,
+        compact_search_material,
         is_answer_clarification_tool,
         is_answer_confirmation_tool,
         is_answer_failure_tool,
@@ -302,6 +304,10 @@ async def process_non_pipeline_command(
     def compact_journal_result(entry):
         result=entry.get('result') or {}
         if len(json.dumps(result,ensure_ascii=False,default=str))<=1800:return result
+        if entry.get('tool_name')=='web_search':
+            return {'details_omitted':True,'step_id':entry.get('step_id'),'query':entry.get('command'),
+                    'returned_records':len((entry.get('result') or {}).get('results') or []),
+                    'full_material_tool':'system_get_last_run_summary'}
         critical=('path','file_sha256','sha256','artifact_receipts','requested_object','observed_object',
                   'returncode','error','committed','verified','complete','next_offset','total_items','window')
         facts={k:result[k] for k in critical if isinstance(result,dict) and k in result}
@@ -393,6 +399,30 @@ async def process_non_pipeline_command(
     print(f"[llm] выбрана модель: {model} (base={base_model}, autonomous={bool(modes.get('autonomous'))})")
 
     timeout = httpx.Timeout(120.0, connect=10.0)
+    model_calls = 0
+    original_request_fn = chat_completion_request_fn
+    async def bounded_request(**kwargs):
+        nonlocal model_calls
+        if model_calls >= min(max_iterations, 20):
+            raise RuntimeError('worker_llm_budget_exhausted')
+        model_calls += 1
+        return await original_request_fn(**kwargs)
+    chat_completion_request_fn = bounded_request
+    max_iterations = min(max_iterations, 20)
+    async def assess_payload(client, payload):
+        try:
+            from .worker_reports import semantic_assessment_question, coverage_request
+        except ImportError:
+            from worker_reports import semantic_assessment_question, coverage_request
+        context=runtime_tasks.get(poll_task_id) or {}
+        question=semantic_assessment_question(context,commands_log,payload)
+        if question and model_calls < max_iterations:
+            payload['_coverage']=await assess_result_coverage(client=client,cfg=cfg,
+                chat_completion_request_fn=chat_completion_request_fn,
+                user_request=coverage_request(context,user_message),current_run_journal=commands_log,
+                answer_payload=payload,usage_context=usage_context,question=question)
+
+
     async with httpx.AsyncClient(timeout=timeout) as client:
         for iteration in range(max_iterations):
             if is_task_cancel_requested(poll_task_id):
@@ -412,16 +442,25 @@ async def process_non_pipeline_command(
                           'status':e.get('status'),'result':compact_journal_result(e)}
                          for e in commands_log[:from_index]]
                 messages[history_start_index:last] = [{'role':'system','content':data_only_context(
-                    'earlier_actions', {'done':state,'remaining':'Original Assignment minus confirmed effects; decide from evidence.',
+                    'earlier_actions', {'done':state,'search_material':compact_search_material(commands_log[:from_index]),'remaining':'Original Assignment minus confirmed effects; decide from evidence.',
                         'recommendation':'Reuse verified facts; retrieve omitted details by step_id, not by replay.'})}]
             if pending_corrections:
                 messages.append({'role':'user','content':'\n'.join(dict.fromkeys(pending_corrections))})
                 pending_corrections.clear()
+            try:
+                from .worker_reports import needs_semantic_assessment
+            except ImportError:
+                from worker_reports import needs_semantic_assessment
+            assessment_expected=semantic_assessment_enabled(cfg) and needs_semantic_assessment(runtime_tasks.get(poll_task_id) or {}, commands_log)
+            final_turn = model_calls >= max_iterations - (2 if assessment_expected and max_iterations>1 else 1)
+            turn_tools=([t for t in non_pipeline_tools if is_terminal_answer_tool(t['function']['name'])]
+                        if final_turn else non_pipeline_tools)
             set_current_step(poll_task_id, "ИРУ думает...")
             # The accepted Assignment is already pinned in system_msg. Expose
             # the existing turn budget without another plan/report/context layer.
             messages[0]={**messages[0],'content':system_msg+f'\nRuntime action turns remaining: {max_iterations-iteration}/{max_iterations}. '
-                'Preparation is not a substitute for required outputs. Do not invent missing evidence to finish.'}
+                'Preparation is not a substitute for required outputs. Do not invent missing evidence to finish.'
+                + (' FINAL TURN: return a substantive terminal result now. No new actions. State established findings and substantive unresolved requirements.' if final_turn else '')}
             print(f"[llm] iteration {iteration + 1}/{max_iterations}, messages={len(messages)}")
             try:
                 phase = f"non_pipeline.iteration.{iteration + 1}"
@@ -432,7 +471,7 @@ async def process_non_pipeline_command(
                     cfg=cfg,
                     model=model,
                     messages=deepcopy(messages),
-                    tools=non_pipeline_tools,
+                    tools=turn_tools,
                     max_tokens=cfg.get("max_tokens", 32768),
                     tool_choice="auto",
                     usage_context={**(usage_context or {}), "phase": phase,"context_current_user_index":current_user_index},
@@ -483,16 +522,7 @@ async def process_non_pipeline_command(
                     except ImportError:
                         from controller_trust import sanitize_result_text
                     payload = validate_answer_text_payload({'answer':sanitize_result_text(last_candidate,commands_log)},commands_log)
-                    context = runtime_tasks.get(poll_task_id) or {}
-                    try:
-                        from .worker_reports import needs_semantic_assessment, coverage_request
-                    except ImportError:
-                        from worker_reports import needs_semantic_assessment, coverage_request
-                    if needs_semantic_assessment(context, commands_log, payload):
-                        payload['_coverage'] = await assess_result_coverage(client=client,cfg=cfg,
-                            chat_completion_request_fn=chat_completion_request_fn,
-                            user_request=coverage_request(context,user_message),
-                            current_run_journal=commands_log,answer_payload=payload,usage_context=usage_context)
+                    await assess_payload(client, payload)
                     append_answer_step(commands_log,'answer_text',payload,target_device_id=device_id)
                     return {'answer':payload['text'],'commands':commands_log,'tasks':[]}
                 break
@@ -527,6 +557,12 @@ async def process_non_pipeline_command(
                         add_correction('Correct invalid tool arguments; independent completed actions must not be replayed.')
                         continue
 
+                    if final_turn and not is_terminal_answer_tool(fn_name):
+                        append_tool_message(tool_call['id'],append_entry(tool_log_entry(fn_name,
+                            {'status':'blocked','dispatched':False,'error':'final_turn_actions_disabled'},
+                            target_device_id=device_id,iteration=iteration+1)))
+                        continue
+
                     if (pinned_material_pending(runtime_tasks.get(poll_task_id) or {})
                             and fn_name not in {"system_get_last_run_summary", "system_list_tools", "answer_text", "answer_ask_clarification", "answer_report_failure"}):
                         append_tool_message(tool_call['id'],append_entry(tool_log_entry(fn_name,
@@ -541,10 +577,6 @@ async def process_non_pipeline_command(
                                 answer_payload = validate_answer_text_payload(fn_args_preview, commands_log)
                                 answer_payload = sanitize_system_list_tools_answer(answer_payload, commands_log)
                                 try:
-                                    from .worker_reports import needs_semantic_assessment, coverage_request
-                                except ImportError:
-                                    from worker_reports import needs_semantic_assessment, coverage_request
-                                try:
                                     from .controller_trust import sanitize_result_text
                                 except ImportError:
                                     from controller_trust import sanitize_result_text
@@ -552,11 +584,7 @@ async def process_non_pipeline_command(
                                 context = runtime_tasks.get(poll_task_id) or {}
                                 if pinned_material_pending(context):
                                     answer_payload['remaining'].append('Required dependency material was not fully read.')
-                                if needs_semantic_assessment(context, commands_log, answer_payload):
-                                    answer_payload['_coverage'] = await assess_result_coverage(client=client,cfg=cfg,
-                                        chat_completion_request_fn=chat_completion_request_fn,
-                                        user_request=coverage_request(context,user_message),
-                                        current_run_journal=commands_log,answer_payload=answer_payload,usage_context=usage_context)
+                                await assess_payload(client, answer_payload)
                                 append_answer_step(commands_log,fn_name,answer_payload,target_device_id=target_device,
                                                    hostname=device_info.get('hostname') or target_device,iteration=iteration+1)
                                 return {'answer':answer_payload['text'],'commands':commands_log,'tasks':[],
@@ -780,12 +808,14 @@ async def process_non_pipeline_command(
                     if prior_read_only_step:
                         source_id=prior_read_only_step['step_id']
                         stalled_calls[source_id]=stalled_calls.get(source_id,0)+1
-                        if stalled_calls[source_id]>=2:
+                        if stalled_calls[source_id]>=2 and fn_name!='web_search':
                             return {'answer':'Повторная проверка не даёт новых результатов; оставшаяся работа не завершена.',
                                 'commands':commands_log,'tasks':[], 'training_context':_training_context(device_info),
                                 'task_receipt':{'task_status':'partial',
                                     'answer_source':'server_fallback','terminal_reason':'no_progress'}}
                         duplicate_message = duplicate_read_only_tool_message(fn_name, prior_read_only_step)
+                        if fn_name=='web_search':
+                            duplicate_message['result']=compact_search_material([prior_read_only_step])
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call["id"],
@@ -850,7 +880,7 @@ async def process_non_pipeline_command(
                         set_current_step(poll_task_id, "Формирую ссылку на файл")
 
                     if fn_name == "system_list_tools":
-                        tool_result = list_tools(fn_args.get("category", "all"))
+                        tool_result = {"status":"success", **list_tools(fn_args.get("category", "all"))}
                         available_files = {tool['function']['name']:tool['function']
                             for tool in file_tools_for_device(DEFAULT_CONTROLLER_TOOLS, device_info)}
                         if 'files' in tool_result:
@@ -1080,7 +1110,7 @@ async def process_non_pipeline_command(
                         try:
                             file_path = fn_args["file_path"]
                             url = get_file_link_fn(target_device, file_path)
-                            tool_result = ({"url": url, "file_path": file_path} if url else
+                            tool_result = ({"status":"success", "url": url, "file_path": file_path} if url else
                                 {"status":"blocked","dispatched":False,"error":"file_link_unavailable"})
                         except Exception as exc:
                             tool_result = {"error": str(exc)}

@@ -13,6 +13,7 @@ except ImportError:
 
 
 READ_ONLY_IDEMPOTENT_TOOLS = {
+    "web_search",
     "system.list_tools",
     "memory.get_stats",
     "memory.list_facts",
@@ -45,6 +46,10 @@ def normalize_tool_args_for_repeat_guard(tool_name: str, args: dict[str, Any] | 
         normalized["category"] = "all"
     if canonical == "memory.list_facts" and not normalized.get("limit"):
         normalized["limit"] = 20
+    if canonical == 'web_search':
+        normalized['query'] = str(normalized.get('query') or '').strip()
+        normalized['max_results'] = min(int(normalized.get('max_results') or 5), 10)
+        normalized.pop('refresh', None)
     return _clean_value(normalized)
 
 
@@ -73,17 +78,19 @@ def find_prior_successful_read_only_tool_step(
     tool_name: str,
     args: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
+    if canonical_tool_name(tool_name) == 'web_search' and (args or {}).get('refresh'):
+        return None
     key = repeat_guard_key(tool_name, args)
     if not key:
         return None
     for entry in reversed(journal):
-        if canonical_tool_name(entry.get('tool_name') or entry.get('action','')) not in READ_ONLY_IDEMPOTENT_TOOLS:
+        if canonical_tool_name(tool_name) != 'web_search' and canonical_tool_name(entry.get('tool_name') or entry.get('action','')) not in READ_ONLY_IDEMPOTENT_TOOLS:
             break  # Any possible state change invalidates cached native observations.
         if canonical_tool_name(tool_name).startswith("web.") and canonical_tool_name(entry.get("tool_name") or entry.get("action", "")) in {"web.wait","web.fill","web.activate","web.focus"}:
             break  # A browser action/wait invalidates earlier observations.
         if entry.get("repeat_guard_key") != key:
             continue
-        if entry.get("status") in {"failed", "error", "blocked"}:
+        if entry.get("status") not in {"success"}:
             continue
         result = entry.get("result")
         if isinstance(result, dict) and result.get("error"):
@@ -123,6 +130,7 @@ def repeated_command_observation(journal: list[dict[str, Any]]) -> dict[str, Any
 def duplicate_read_only_tool_message(tool_name: str, prior_step: dict[str, Any]) -> dict[str, Any]:
     previous_step_id = str(prior_step.get("step_id") or "")
     return {
+        **({'result': prior_step.get('result'), 'reused': True} if canonical_tool_name(tool_name)=='web_search' else {}),
         "status": "duplicate_read_only_tool_call",
         "tool_name": canonical_tool_name(tool_name),
         "previous_step_id": previous_step_id,

@@ -1367,11 +1367,12 @@ def window_close(
     user32.PostMessageW(int(window["handle"]), WM_CLOSE, 0, 0)
     time.sleep(0.5)
     target_pid = int(pid or window.get("pid") or 0)
-    alive = _process_alive(target_pid)
-    if force and alive:
+    exists = bool(user32.IsWindow(int(window["handle"])))
+    if force and exists:
         subprocess.run(["taskkill", "/PID", str(target_pid), "/F"], capture_output=True, text=True, timeout=10, creationflags=_subprocess_creationflags())
-        alive = _process_alive(target_pid)
-    return {"status": "still_running" if alive else "closed", "window": window, "pid": target_pid}
+        exists = bool(user32.IsWindow(int(window["handle"])))
+    return {"status": "still_running" if exists else "closed", "window": window, "pid": target_pid,
+            "window_closed": not exists}
 
 
 def _launch_creationflags() -> int:

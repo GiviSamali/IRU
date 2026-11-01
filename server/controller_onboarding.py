@@ -5,7 +5,7 @@ import httpx
 try:
     from .web_search import run_web_search
     from .controller_tools import TOOLS
-    from .controller_prompts import DYNAMIC_CONTEXT_RULES, INSTRUCTION_TEXT, ONBOARDING_PROMPT  # type: ignore
+    from .controller_prompts import DYNAMIC_CONTEXT_RULES, WORKER_EXECUTION_RULES, INSTRUCTION_TEXT, ONBOARDING_PROMPT  # type: ignore
     from .memory_intent_guard import memory_permissions_from_human_request, blocked_memory_write_result
     from .memory_tools import run_memory_tool, MEMORY_TOOL_NAMES
     from .python_toolchain import validate_toolchain_fact_against_receipt
@@ -14,7 +14,7 @@ try:
 except ImportError:
     from web_search import run_web_search
     from controller_tools import TOOLS
-    from controller_prompts import DYNAMIC_CONTEXT_RULES, INSTRUCTION_TEXT, ONBOARDING_PROMPT  # type: ignore
+    from controller_prompts import DYNAMIC_CONTEXT_RULES, WORKER_EXECUTION_RULES, INSTRUCTION_TEXT, ONBOARDING_PROMPT  # type: ignore
     from memory_intent_guard import memory_permissions_from_human_request, blocked_memory_write_result
     from memory_tools import run_memory_tool, MEMORY_TOOL_NAMES
     from python_toolchain import validate_toolchain_fact_against_receipt
@@ -76,7 +76,7 @@ async def process_onboarding_message(
             get_file_link_fn=lambda *args:None,chat_history=chat_history,user_id=user_id,
             chat_id=(usage_context or {}).get('chat_id'),modes={},
             poll_task_id=(usage_context or {}).get('poll_task_id'),cfg=cfg,
-            system_msg=DYNAMIC_CONTEXT_RULES+'Server Worker. Device actions unavailable. '+current_datetime_msk_fn(),
+            system_msg=DYNAMIC_CONTEXT_RULES+WORKER_EXECUTION_RULES+'Server Worker. Device actions unavailable. '+current_datetime_msk_fn(),
             machine_guid=None,mem_user_id=str(user_id) if user_id is not None else None,
             non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=20,
             pick_model_fn=lambda cfg,modes:cfg['model'],chat_completion_request_fn=_chat_completion_request,

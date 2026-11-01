@@ -125,39 +125,54 @@ def coverage_request(task, fallback=''):
         ensure_ascii=False,sort_keys=True)
 
 
-def needs_semantic_assessment(task, journal=None, answer_payload=None):
-    # A file receipt proves bytes/format, not coverage of requested content.
-    # Object/range selection may still require meaning; native bytes alone do not replace it.
+def semantic_assessment_question(task, journal=None, answer_payload=None):
+    """Name the missing meaning, never re-check an executor's storage proof.
+
+    No assessor can repair a missing artifact, unknown mutation or an explicit
+    unfinished requirement. The same report projection recognizes complete
+    byte edits/copies/preservation before considering a semantic observation.
+    """
+    journal=journal or []
+    if answer_payload:
+        if answer_payload.get('unresolved') or (answer_payload.get('_result_contract')!=3 and answer_payload.get('remaining')):
+            return None
+        if task.get('_action_outcome_unknown'):
+            return None
+        if task.get('task_id'):
+            preview=build_worker_report({**task,'status':'done','answer':answer_payload['text'],
+                'commands':[*journal,{'tool_name':'answer.text','tool_type':'answer',
+                                     'status':'terminal','result':answer_payload}]})
+            writes=[c for c in journal if c.get('tool_name')=='write_content'
+                    and (c.get('result') or {}).get('committed') is not False]
+            exact_preserved=(task.get('preserve_file_bytes') and bool(writes)
+                and all((c.get('result') or {}).get('mode') in {'replace','replace_exact'}
+                        and operation_facts(c)=='success' for c in writes))
+            if (preview['goal_completed'] and task.get('execution_scope')!='analysis'
+                    and (exact_preserved or not task.get('assigned_artifacts'))):
+                return None
+            if preview['status'] in {'unknown','blocked','cancelled'}:
+                return None
+            if preview.get('error_code') in {'artifact_receipt_missing','artifact_match_ambiguous',
+                                            'required_file_change_reverted'}:
+                return None
     if task.get('execution_scope')=='analysis' and not task.get('window_effects'):
-        return True
-    if not task.get('assigned_artifacts'):
-        if not task.get('window_effects') and task.get('proposed_objective') and journal:
-            # Opaque command output may require interpreting CONTENT against
-            # the goal. A closed literal listing is not such an assessment.
-            # Do not confuse this with proof of an external postcondition.
-            try:
-                from .api_support import read_only_execute_command
-            except ImportError:
-                from api_support import read_only_execute_command
-            return any(c.get('tool_name')=='execute_cmd' and operation_facts(c)=='success'
-                and isinstance((c.get('result') or {}).get('stdout'),str)
-                and c['result']['stdout'].strip()
-                and not read_only_execute_command({'command':c.get('command')}) for c in journal)
-        return False
-    if task.get('preserve_file_bytes') and task.get('task_id') and journal and answer_payload:
-        writes=[c for c in journal if c.get('tool_name')=='write_content'
-                and (c.get('result') or {}).get('committed') is not False]
-        if not writes or any((c.get('result') or {}).get('mode') not in {'replace','replace_exact'}
-                             or operation_facts(c)!='success' for c in writes):
-            return True
-        # Reuse the existing projection: an exact native edit with all required
-        # postconditions does not need a second model to confirm the same bytes.
-        preview=build_worker_report({**task,'status':'done','answer':answer_payload['text'],
-            'commands':[*journal,{'tool_name':'answer.text','tool_type':'answer',
-                                 'status':'terminal','result':answer_payload}]})
-        if preview['goal_completed']:
-            return False
-    return True
+        return 'Does the actual finding/comparison cover the accepted sources, scope and required conclusions, with evidence and limitations?'
+    if task.get('assigned_artifacts'):
+        return 'Does the CURRENT saved content cover the requested sections, data and meaning beyond the already proven write/copy/format operation?'
+    if not task.get('window_effects') and task.get('proposed_objective') and journal:
+        try:
+            from .api_support import read_only_execute_command
+        except ImportError:
+            from api_support import read_only_execute_command
+        if any(c.get('tool_name')=='execute_cmd' and operation_facts(c)=='success'
+               and str((c.get('result') or {}).get('stdout') or '').strip()
+               and not read_only_execute_command({'command':c.get('command')}) for c in journal):
+            return 'Do the interpreted command observations support the requested diagnosis/conclusion, rather than merely successful execution?'
+    return None
+
+
+def needs_semantic_assessment(task, journal=None, answer_payload=None):
+    return semantic_assessment_question(task,journal,answer_payload) is not None
 
 
 def receipt_from_report(report, previous=None):
@@ -430,6 +445,10 @@ def build_worker_report(task):
                         and observation.get('items')):
                     pages.append(observation)
             if tool in {'office_docx','office_xlsx','office_pptx'}:
+                if (result.get('operation_verified') is True and result.get('action')=='create'
+                        and isinstance((result.get('applied_input') or {}).get('data'),dict)
+                        and result.get('path')==artifact['path'] and result.get('sha256')==artifact['sha256']):
+                    return True  # Native roundtrip checked this complete bounded input, not just the first inspect page.
                 if ((result.get('action')=='inspect' or result.get('operation_verified') is True) and result.get('items')
                         and result.get('path')==artifact['path'] and result.get('sha256')==artifact['sha256']):
                     if 'total_items' not in result:

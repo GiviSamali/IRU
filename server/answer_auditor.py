@@ -15,7 +15,7 @@ def semantic_assessment_enabled(cfg):
 
 
 async def assess_result_coverage(*, client, cfg, chat_completion_request_fn,
-                                 user_request, current_run_journal, answer_payload, usage_context=None):
+                                 user_request, current_run_journal, answer_payload, usage_context=None, question=None):
     text = answer_payload['text']
     unavailable = {'coverage':'unknown','evidence_refs':[], 'reason':'semantic assessment unavailable',
                    'binding':coverage_binding(user_request,current_run_journal,text)}
@@ -24,7 +24,7 @@ async def assess_result_coverage(*, client, cfg, chat_completion_request_fn,
         from .run_journal import wrap_tool_result_for_llm
     except ImportError:
         from run_journal import wrap_tool_result_for_llm
-    material = {'request':user_request, 'answer':text,
+    material = {'request':user_request, 'answer':text, 'question':question,
                 'observations':[wrap_tool_result_for_llm(e) for e in current_run_journal],
                 'remaining':answer_payload.get('remaining',[])}
     if answer_payload.get('_result_contract')==3:
@@ -36,6 +36,8 @@ async def assess_result_coverage(*, client, cfg, chat_completion_request_fn,
         'Compare the actual result with the complete accepted request and scope. An empty unresolved/remaining '
         'list is only the Worker self-report, not proof of completeness. A successful read does not establish '
         'that all requested sources were read or that a required comparison/diagnosis was performed. '
+        'Answer only the supplied missing semantic question. Do not re-check storage, transfer, formatting or exact edits already proven by native receipts. '
+        'Native operation_verified projections are saved content observations; do not demand a separate inspect of the same facts. '
         'For requested files, compare actual read-back content with the accepted request. File existence, hash, '
         'valid format, paragraph counts and a create receipt alone do not prove completeness of content. '
         'Reference current content inspection steps; if content is absent or required sections/data are missing, '
@@ -71,6 +73,6 @@ async def assess_result_coverage(*, client, cfg, chat_completion_request_fn,
                 artifacts.append({k:item[k] for k in ('device_id','path','sha256','coverage','evidence_refs')})
         return {'coverage':parsed['coverage'],'evidence_refs':refs,
                 **({'artifacts':artifacts} if 'artifacts' in parsed else {}),
-                'reason':str(parsed.get('reason',''))[:2000],'binding':unavailable['binding']}
+                'question':question,'reason':str(parsed.get('reason',''))[:2000],'binding':unavailable['binding']}
     except (Exception,asyncio.TimeoutError):
         return unavailable

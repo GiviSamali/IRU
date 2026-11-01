@@ -7,7 +7,7 @@ except ImportError:
 
 EXECUTE_CMD_DESCRIPTION = (
     "Execute PowerShell/CMD/Bash commands and available programs on the selected device. "
-    "The command must check its own necessary postconditions and propagate failures. "
+    "Execute the assigned operation and check its available result within this call. Propagate EACH required failure immediately (including nested programs and pipeline stages); a later successful command must not mask an earlier failure. "
     "Returncode zero confirms execution, not the whole user goal; echo OK is not evidence. "
     "Use artifact_paths for final changed files and preserve_content_paths for formatting-only Office edits. "
     "Ownership, path restrictions, exact-action confirmations, preservation and unknown-outcome guards apply."
@@ -244,6 +244,7 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "refresh": {"type":"boolean", "description":"Bypass current-task reuse only when deliberately refreshing stale sources; not needed for a refined query.","default":False},
                     "query": {"type": "string", "description": "Поисковый запрос"},
                     "max_results": {"type": "integer", "description": "Сколько результатов вернуть (по умолчанию 5, максимум 10)", "default": 5}
                 },

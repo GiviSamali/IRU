@@ -592,6 +592,11 @@ def office(tool, action, path, data=None, changes=None, selector=None, expected_
                 committed=True
                 os.unlink(tmp)
             require(fingerprint(target)==digest,"file_changed_after_commit")
+            applied_input={'data':data} if action=='create' else {'changes':changes}
+            # Large inputs keep the existing paginated observation route.
+            import json
+            if len(json.dumps(applied_input,ensure_ascii=False))>10000:
+                applied_input=None
             receipt={"type":"file","path":str(target),"verified":True,"size_bytes":target.stat().st_size,
                      "sha256":digest,"source_task_id":_source_task_id,"created_or_changed":before != digest,
                      "operation":action,
@@ -601,6 +606,7 @@ def office(tool, action, path, data=None, changes=None, selector=None, expected_
                     "sha256":digest,"source_task_id":_source_task_id,"summary":summary,
                     "content_preserved":True if preserve_content else None,
                     "operation_verified":True,"verification_scope":"supported_elements_roundtrip",
+                    "applied_input":applied_input,
                     **saved_inspection,
                     "files_verified":[str(target)],"artifact_receipts":[receipt]}
     except ImportError:

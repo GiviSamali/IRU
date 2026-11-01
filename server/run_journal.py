@@ -463,12 +463,43 @@ def wrap_tool_result_for_llm(entry: dict[str, Any]) -> dict[str, Any]:
     return wrapped
 
 
+def compact_search_material(journal, max_chars=12000):
+    """Deterministic data projection, not a summary or verification of claims.
+
+    Round-robin across searches avoids one large result crowding out all later
+    topics. URL fragments are ignored; query strings remain source identity.
+    """
+    from urllib.parse import urldefrag
+    searches=[e for e in journal if e.get('tool_name')=='web_search'
+              and e.get('status')=='success' and isinstance(e.get('result'),dict)
+              and not e['result'].get('error')]
+    sources=[]; seen=set(); total=sum(len(e['result'].get('results') or []) for e in searches)
+    for index in range(max((len(e['result'].get('results') or []) for e in searches),default=0)):
+        for entry in searches:
+            items=entry['result'].get('results') or []
+            if index>=len(items) or not isinstance(items[index],dict):continue
+            item=items[index]; url=str(item.get('url') or '')
+            key=urldefrag(url)[0]
+            if not key or key in seen:continue
+            candidate={'step_id':entry.get('step_id'),'query':str(entry.get('command') or '')[:160],
+                       'published_date':str(item.get('published_date') or item.get('date') or '')[:80],
+                       'title':str(item.get('title') or '')[:220],
+                       'url':url,'excerpt':str(item.get('content') or '')[:700]}
+            if len(json.dumps(sources+[candidate],ensure_ascii=False))>max_chars:continue
+            seen.add(key); sources.append(candidate)
+    return {'trust_level':'untrusted_search_excerpts','sources':sources,
+            'returned_records':total,'selected_sources':len(sources),'details_omitted':total>len(sources),
+            'full_material_tool':'system_get_last_run_summary'}
+
+
 def serialize_tool_result_for_llm(entry: dict[str, Any]) -> str:
     """Bound the model's projection without slicing JSON or changing evidence."""
     try:from .context_budget import estimate_tokens
     except ImportError:from context_budget import estimate_tokens
     token_budget=tool_result_token_budget()
     wrapped = wrap_tool_result_for_llm(entry)
+    if entry.get('tool_name')=='web_search' and entry.get('status')=='success' and not (entry.get('result') or {}).get('error'):
+        wrapped['result']=compact_search_material([entry],max_chars=max(1200,min(12000,token_budget*3)))
     payload = json.dumps(wrapped, ensure_ascii=False)
     if canonical_tool_name(str(wrapped["tool_name"])).startswith("web.") or estimate_tokens(payload) <= token_budget:
         return payload
@@ -687,7 +718,7 @@ def unfinished_execution_result(journal, reason):
     attempts = [e for e in journal if e.get('tool_type') not in {'system', 'answer'}
                 and e.get('tool_name') not in {'tool_only_protocol', 'llm_request'}]
     failed_only = bool(attempts) and all(e.get('status') in {'failed', 'error', 'blocked'} for e in attempts)
-    status = 'unknown' if unknown else 'partial' if states else 'failed' if failed_only else 'unknown'
+    status = 'unknown' if unknown else 'partial' if states or any(e.get('status')=='success' for e in attempts) else 'failed' if failed_only else 'unknown'
     lines = ['Завершение поручения не подтверждено. Журнал выполненных действий сохранён.']
     lines.append(f'Причина остановки: {reason}.')
     lines.append('')
@@ -710,6 +741,11 @@ def unfinished_execution_result(journal, reason):
         detail = result.get('error') or result.get('stderr')
         if detail:
             lines.append(f"{device}: {redact(detail)[:1200]}")
+    search_material=compact_search_material(attempts, max_chars=5000)
+    if search_material['sources']:
+        lines.append('Найденные источники (поисковые выдержки, достоверность и полнота не установлены):')
+        for source in search_material['sources']:
+            lines.append(f"- {source['title']} — {source['url']} ({source['step_id']}): {source['excerpt']}")
     lines.append('')
     # Preserve useful observations without inventing a semantic conclusion or
     # treating a failing shell pipeline as wholly empty. Never promote model text.

@@ -38,6 +38,7 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
             # Surface nested executable failures instead of shell exit 0.
             guarded = (
                 "$global:LASTEXITCODE=0; $ErrorActionPreference='Stop'; "
+                "if ($PSVersionTable.PSVersion -ge [version]'7.3') { $PSNativeCommandUseErrorActionPreference=$true }; "
                 "try { " + command + "; "
                 "if ($global:LASTEXITCODE -is [int] -and $global:LASTEXITCODE -ne 0) "
                 "{ exit $global:LASTEXITCODE } "

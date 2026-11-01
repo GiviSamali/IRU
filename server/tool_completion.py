@@ -50,7 +50,7 @@ def normalize_operation_result(tool_name: str, result: Any) -> str:
         return 'unknown'
     if status in {'partial','partial_success'} or completion == 'partial_success':
         return 'partial'
-    if result.get('error') or status in {'error','failed','blocked','cancelled','missing','not_found'} or completion in {'error','failed'}:
+    if result.get('error') or status in {'error','failed','blocked','cancelled','missing','not_found','still_running'} or completion in {'error','failed'}:
         return 'failed'
     if status in {'pending','started','launch_requested','staged'}:
         return 'partial'
@@ -65,7 +65,21 @@ def normalize_operation_result(tool_name: str, result: Any) -> str:
         return 'success' if (result.get('verified') is True and result.get('committed') is True
             and isinstance(result.get('path'),str) and isinstance(result.get('file_sha256'),str)
             and re.fullmatch('[a-fA-F0-9]{64}',result['file_sha256'])) else 'partial'
-    return 'success'
+    if tool_name in {'office_docx','office_xlsx','office_pptx'}:
+        return 'success' if (status=='success' and result.get('action') in {'create','edit','inspect'}
+            and isinstance(result.get('path'),str) and result['path']
+            and isinstance(result.get('sha256'),str) and re.fullmatch('[a-fA-F0-9]{64}',result['sha256'])
+            and (isinstance(result.get('items'),list) if result['action']=='inspect'
+                 else result.get('verified') is True and isinstance(result.get('artifact_receipts'),list)
+                      and bool(result['artifact_receipts']))) else 'unknown'
+    if tool_name=='web_search' and isinstance(result.get('results'),list):
+        return 'success'
+    if tool_name=='list_dir' and isinstance(result.get('path'),str) and all(isinstance(result.get(k),list) for k in ('dirs','files')):
+        return 'success'
+    if status in {'ok','success','done','completed','executed','finished','found','verified',
+                   'closed','focused','launched_verified','opened_verified','launched','active','changed','ready','available'} or completion=='success':
+        return 'success'
+    return 'unknown'
 
 
 def operation_step_status(tool_name: str, result: Any, *, terminal=False) -> str:
@@ -155,6 +169,10 @@ def confirmed_window_effect(entry):
     if (not isinstance(result,dict) or entry.get('status') == 'unknown'
             or normalize_operation_result(tool,result) != 'success'):
         return None
+    if tool in {'window.close','app.close'}:
+        return 'close' if result.get('status')=='closed' else None
+    if tool=='window.focus':
+        return 'activate' if result.get('status') in {'focused','verified'} else None
     requested = result.get('requested_object')
     if isinstance(requested,dict):
         return 'open' if object_open_proven(requested,result.get('observed_object'),result) else None
