@@ -25,61 +25,76 @@ def execute_cmd_returncode_is_zero(code: Any) -> bool:
 
 def normalize_operation_result(tool_name: str, result: Any) -> str:
     """One operation outcome. Never establishes completion of a user goal."""
-    if not isinstance(result, dict):
-        return 'unknown'
-    if result.get('dispatched') is False:
-        return 'not_executed'
-    status, completion = result.get('status'), result.get('completion_state')
-    if status is not None and not isinstance(status, str):
-        return 'unknown'
-    if completion is not None and not isinstance(completion, str):
-        return 'unknown'
-    error = str(result.get('error') or '')
-    if tool_name == 'write_content' and result.get('committed') is True and result.get('verified') is not True:
-        return 'unknown'
-    if tool_name == 'write_content' and not result.get('append') and result.get('mode') not in {'replace','replace_exact'}:
-        intended = result.get('expected_content_sha256') or result.get('content_sha256')
-        if intended and result.get('file_sha256') and intended != result['file_sha256']:
-            return 'unknown'
-    if result.get('returncode') == -1 and result.get('error'):
-        return 'unknown'
-    if status in {'unknown','disconnected'} or completion == 'unknown' or any(
-            word in error.lower() for word in ('outcome_unknown','postcondition_unknown','agent_disconnected','timeout','timed out','таймаут')):
-        return 'unknown'
-    if tool_name=='execute_cmd' and (status in {'pending','started','launch_requested'} or completion=='partial_success'):
-        return 'unknown'
-    if status in {'partial','partial_success'} or completion == 'partial_success':
-        return 'partial'
-    if result.get('error') or status in {'error','failed','blocked','cancelled','missing','not_found','still_running'} or completion in {'error','failed'}:
+    try:
+        from .tool_registry import canonical_tool_name
+        from .api_support import is_recovery_observation
+    except ImportError:
+        from tool_registry import canonical_tool_name
+        from api_support import is_recovery_observation
+    tool_name=canonical_tool_name(tool_name)
+    observation=is_recovery_observation(tool_name, result if isinstance(result,dict) else {})
+    malformed='failed' if observation else 'unknown'
+    if not isinstance(result,dict):return malformed
+    if result.get('dispatched') is False:return 'not_executed'
+    status,completion=result.get('status'),result.get('completion_state')
+    if status is not None and not isinstance(status,str):return malformed
+    if completion is not None and not isinstance(completion,str):return malformed
+    if result.get('error') is not None and not isinstance(result.get('error'),str):return malformed
+    error=str(result.get('error') or '')
+    # Older adapters used the observed domain state as the read operation status.
+    if (not error and tool_name=='system.get_last_run_summary' and result.get('last_task_id')
+            and isinstance(result.get('used_tools'),list)):return 'success'
+    if (status in {'unknown','disconnected'} or completion=='unknown'
+            or any(word in error.lower() for word in ('outcome_unknown','postcondition_unknown','agent_disconnected','timeout','timed out','таймаут'))):
+        return 'failed' if observation else 'unknown'
+    if tool_name=='execute_cmd' and status in {'pending','started','launch_requested'}:
+        return 'failed' if observation else 'unknown'
+    if status in {'partial','partial_success'} or completion=='partial_success':return 'partial'
+    if result.get('error') or status in {'error','failed','blocked','cancelled'} or completion in {'error','failed'}:
+        return 'failed'
+    # A domain summary cannot override an explicit operation failure/uncertainty.
+    if (tool_name=='device.check_runtime' and isinstance(result.get('runtime_summary'),dict)
+            and status in {None,'','ok','success','done','completed','missing','broken','install_required','degraded'}):return 'success'
+    if result.get('error') or status in {'error','failed','blocked','cancelled','missing','not_found','still_running',
+            'not_running','title_mismatch','window_minimized','unavailable','broken','install_required'} or completion in {'error','failed'}:
         return 'failed'
     if status in {'pending','started','launch_requested','staged'}:
         return 'partial'
-    code = result.get('returncode')
+    code=result.get('returncode')
     if code is not None and not execute_cmd_returncode_is_zero(code):
-        return 'failed' if type(code) is int else 'unknown'
-    if tool_name == 'execute_cmd':
-        return 'success' if (execute_cmd_returncode_is_zero(code) and isinstance(result.get('stdout'), str)
-            and status in {None,'','ok','success','done','completed','executed','finished'}
-            and completion in {None,'','success'}) else 'unknown'
-    if tool_name == 'write_content':
+        return 'failed' if type(code) is int else malformed
+    if tool_name=='execute_cmd':
+        return 'success' if execute_cmd_returncode_is_zero(code) else malformed
+    if tool_name=='write_content':
+        if result.get('committed') is True and result.get('verified') is not True:return 'unknown'
+        if (status in {'ok','success'} and 'verified' not in result and 'committed' not in result
+                and result.get('mode') not in {'replace','replace_exact'} and isinstance(result.get('path'),str)
+                and type(result.get('bytes_written')) is int and result['bytes_written']>=0):
+            return 'success'  # Legacy write acknowledgement, not an invented hash receipt.
+        intended=result.get('expected_content_sha256') or result.get('content_sha256')
+        if (not result.get('append') and result.get('mode') not in {'replace','replace_exact'}
+                and intended and result.get('file_sha256') and intended!=result['file_sha256']):return 'unknown'
         return 'success' if (result.get('verified') is True and result.get('committed') is True
             and isinstance(result.get('path'),str) and isinstance(result.get('file_sha256'),str)
-            and re.fullmatch('[a-fA-F0-9]{64}',result['file_sha256'])) else 'partial'
+            and re.fullmatch('[a-fA-F0-9]{64}',result['file_sha256'])) else malformed
     if tool_name in {'office_docx','office_xlsx','office_pptx'}:
         return 'success' if (status=='success' and result.get('action') in {'create','edit','inspect'}
             and isinstance(result.get('path'),str) and result['path']
             and isinstance(result.get('sha256'),str) and re.fullmatch('[a-fA-F0-9]{64}',result['sha256'])
-            and (isinstance(result.get('items'),list) if result['action']=='inspect'
-                 else result.get('verified') is True and isinstance(result.get('artifact_receipts'),list)
-                      and bool(result['artifact_receipts']))) else 'unknown'
-    if tool_name=='web_search' and isinstance(result.get('results'),list):
+            and (isinstance(result.get('items'),list) if result['action']=='inspect' else result.get('verified') is True)) else malformed
+    if tool_name=='list_dir':
+        return 'success' if isinstance(result.get('path'),str) and all(isinstance(result.get(k),list) for k in ('dirs','files')) else 'failed'
+    if tool_name=='read_file' and isinstance(result.get('text'),str) and result.get('complete') is True and isinstance(result.get('file_sha256'),str):
         return 'success'
-    if tool_name=='list_dir' and isinstance(result.get('path'),str) and all(isinstance(result.get(k),list) for k in ('dirs','files')):
-        return 'success'
+    if tool_name=='device.get_passport':
+        return 'success' if (isinstance(result.get('device_id'),str) and isinstance(result.get('hostname'),str)
+            and type(result.get('online')) is bool and isinstance(result.get('context_handles'),dict)) else 'failed'
+    if tool_name=='system.list_tools' and all(isinstance(v,list) for v in result.values()):return 'success'
+    if tool_name=='web_search' and isinstance(result.get('results'),list):return 'success'
     if status in {'ok','success','done','completed','executed','finished','found','verified',
-                   'closed','focused','launched_verified','opened_verified','launched','active','changed','ready','available'} or completion=='success':
+                  'closed','focused','launched_verified','opened_verified','launched','active','changed','ready','available'} or completion=='success':
         return 'success'
-    return 'unknown'
+    return malformed
 
 
 def operation_step_status(tool_name: str, result: Any, *, terminal=False) -> str:
@@ -180,10 +195,8 @@ def confirmed_window_effect(entry):
         return result.get('action') if result.get('completion_state') == 'success' else None
     if tool not in {'app.launch','app.open_url'} or result.get('status') == 'ambiguous':
         return None
-    if tool == 'app.launch':
-        # A legacy receipt carries no object identity: the launch is a request,
-        # never proof that a particular document was opened.
-        return None
+    if tool == 'app.launch' and result.get('status')=='launched':
+        return 'open'  # Process launch succeeded; no claim of visibility/content.
     window = result.get('window')
     verified = result.get('status') in {'launched_verified','opened_verified'} or result.get('completion_state') == 'success'
     observed_window = (isinstance(window,dict) and bool(window) and window.get('visible') is not False

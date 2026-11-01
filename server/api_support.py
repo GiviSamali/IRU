@@ -244,9 +244,11 @@ def is_recovery_observation(action, params, *, device_os=None):
         return params.get("action") == "inspect"
     if action == "window.control":
         return params.get("action") in {"active", "list", "find", "monitors"}
+    if action == "device.prepare_runtime":
+        return params.get("mode") == "check"
     if action == "device.refresh_state":
         return params.get("mode", "snapshot") == "snapshot"
-    return action in {"list_dir", "read_file", "get_file_content", "device.get_cached_passport", "device.get_passport",
+    return action in {"list_dir", "read_file", "get_file_content", "device.get_cached_passport", "device.get_passport", "device.check_runtime",
                       "window.list", "window.find", "window.verify", "app.verify_launch",
                       "web_search", "web.tabs", "web.read", "web.elements", "web.wait", "memory.get_stats",
                       "memory.list_facts", "system.list_tools", "system.get_last_run_summary"}

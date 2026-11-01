@@ -58,7 +58,7 @@ def worker_case(number):
         result={'status':'success','completion_state':'success','action':action,'target':'Notepad','verified':True}
         return ('Закрой экземпляр Notepad с PID 42, оставь PID 43' if number==8 else 'Сверни Notepad с PID 42 только на pc'), [('window_control',{'action':action,'target':'Notepad','pid':42},result)],terminal('Действие выполнено на pc.',action=True),'success'
     if number==11:
-        return 'Открой файл и подтверди результат',[shell('Start-Process notepad.exe C:/Temp/first.txt','process started')],terminal('Файл открыт.',action=True),'unknown'
+        return 'Открой файл и подтверди результат',[shell('Start-Process notepad.exe C:/Temp/first.txt','process started')],terminal('Команда открытия выполнена.',action=True),'success'
     if number==12:
         return 'Прочитай недоступную заметку',[shell('Get-Content C:/Temp/missing.txt','ERROR: file_not_found',1)],terminal('Файл не найден.',kind='error_report',sufficient=False),'failed'
     if number==13:
@@ -128,7 +128,6 @@ def install(world,steps,answer,number):
     device=Device(key,steps)
     devices[key]={'user_id':owner['id'],'ws':device,'info':{'hostname':'pc','os':'Windows'},'pending':{}}
     responses=[_message(tool_calls=[_tool_call(str(i),name,args)]) for i,(name,args,_) in enumerate(steps)]
-    if number==14:responses.append(_message(tool_calls=[terminal('Я создала файл.',action=True)]))
     responses.append(_message(tool_calls=[answer]))
     audits=[]
     async def auditor(**kw):
@@ -136,7 +135,8 @@ def install(world,steps,answer,number):
         from server.worker_reports import coverage_binding
         return {'coverage':'complete','evidence_refs':[e['step_id'] for e in kw['current_run_journal']],
             'binding':coverage_binding(kw['user_request'],kw['current_run_journal'],kw['answer_payload']['text'])}
-    monkeypatch.setattr(controller,'assess_result_coverage',auditor)
+    monkeypatch.setattr(__import__('server.answer_auditor',fromlist=['assess_result_coverage']),'assess_result_coverage',
+        lambda **kw:pytest.fail('No automatic assessor in ordinary execution'))
     async def process(**kw):
         complete=_completion_fn(copy.deepcopy(responses))
         return await controller.process_non_pipeline_command(
@@ -251,7 +251,7 @@ def test_worker_connected_lifecycle(world,number):
                 assert device.adapter.calls==[(101,'minimize',None)]
                 assert not other.calls and not other.adapter.calls
                 assert all(row['minimized'] is False for row in other.adapter.rows)
-            if number==14:assert 'Я создала файл.' in audits and task['answer']!='Я создала файл.'
+            if number==14:assert not audits and 'Доказательств создания' in task['answer']
             if number==16:
                 task['history_metadata']={'executionDetails':{'invalid':True}}
                 task['orchestrator_metrics']='invalid metrics'

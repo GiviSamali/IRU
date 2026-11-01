@@ -1205,7 +1205,7 @@ def compact_tool_summary(action: str, result: Any = None, command: str = "") -> 
     return f"{name} completed"
 
 
-def tool_log_fields(action: str, result: Any = None, command: str = "", target_device_id: str | None = None) -> dict[str, Any]:
+def tool_log_fields(action: str, result: Any = None, command: str = "", target_device_id: str | None = None, *, normalized_status: str | None = None) -> dict[str, Any]:
     name = canonical_tool_name(action)
     meta = TOOL_METADATA.get(name)
     if not meta:
@@ -1214,7 +1214,7 @@ def tool_log_fields(action: str, result: Any = None, command: str = "", target_d
         "tool_name": name,
         "tool_type": meta.get("tool_type", "typed"),
         "tool_label": meta.get("tool_label") or name,
-        "tool_status": operation_step_status(canonical_tool_name(action or ''), result),
+        "tool_status": normalized_status if normalized_status is not None else operation_step_status(canonical_tool_name(action or ''), result),
         "target_device_id": target_device_id,
         "summary": compact_tool_summary(action, result, command),
     }
@@ -1249,6 +1249,7 @@ def compact_device_passport(device_id: str, dev: dict | None, profile: dict | No
     current = context.get("current_device") or {}
     state = current.get("state_summary") if isinstance(current.get("state_summary"), dict) else {}
     return {
+        "status": "success",
         "device_id": current.get("device_id") or device_id,
         "hostname": current.get("hostname") or device_id,
         "online": bool(current.get("online")),

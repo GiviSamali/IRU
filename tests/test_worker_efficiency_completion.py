@@ -13,7 +13,7 @@ from server.runtime_state import tasks
 from server.run_journal import compact_search_material, serialize_tool_result_for_llm, unfinished_execution_result
 from server.tool_repeat_guard import mark_read_only_tool_step, find_prior_successful_read_only_tool_step
 from server.tool_completion import normalize_operation_result, confirmed_window_effect
-from server.worker_reports import build_worker_report, semantic_assessment_question
+from server.worker_reports import build_worker_report
 from test_tool_only_protocol import _run_case, _message, _tool_call
 
 
@@ -90,7 +90,7 @@ def test_forty_identical_batch_searches_dispatch_once(monkeypatch):
     assert len([m for m in seen[1]['messages'] if m.get('role')=='tool'])==40
 
 
-def test_twenty_call_budget_includes_reserved_terminal_and_assessor(monkeypatch):
+def test_twenty_calls_reserve_terminal_without_assessor(monkeypatch):
     from server import controller_non_pipeline as loop
     monkeypatch.setitem(tasks,'research',{'task_id':'research','execution_scope':'analysis',
         'original_request':'Compare recent AI sources','device_ids':[]})
@@ -98,17 +98,17 @@ def test_twenty_call_budget_includes_reserved_terminal_and_assessor(monkeypatch)
     async def search(cfg,query,limit):
         dispatched.append(query);return search_step()['result']
     monkeypatch.setattr(loop,'_run_web_search',search)
-    turns=[_message(tool_calls=[_tool_call(f'q{i}','web_search',{'query':f'AI detail {i}'})]) for i in range(18)]
-    turns += [answer('Compared the supplied sources'),_message(content=json.dumps(
-        {'coverage':'complete','evidence_refs':['step_1'],'reason':'scripted semantic fixture'}),finish_reason='stop')]
+    turns=[_message(tool_calls=[_tool_call(f'q{i}','web_search',{'query':f'AI detail {i}'})]) for i in range(19)]
+    turns += [answer('Compared the supplied sources')]
     seen=[]
     result=_run_case(turns,poll_task_id='research',max_iterations=20,captured=seen,
                      cfg={'model':'mock','answer_auditor_enabled':True})
-    assert len(seen)==20 and len(dispatched)==18
-    assert all(t['function']['name'].startswith('answer_') for t in seen[18]['tools'])
-    assert seen[19]['phase']=='result_coverage'
-    assert 'FINAL TURN' in seen[18]['messages'][0]['content']
+    assert len(seen)==20 and len(dispatched)==19
+    assert all(t['function']['name'].startswith('answer_') for t in seen[19]['tools'])
+    assert all(x.get('phase')!='result_coverage' for x in seen)
+    assert 'FINAL TURN' in seen[19]['messages'][0]['content']
     assert result['commands'][-1]['tool_name']=='answer.text'
+
 
 
 def test_provider_ignoring_final_inventory_cannot_execute_new_action():
@@ -138,10 +138,10 @@ def office_result(task_id='news',device='device-1',path='C:/Desktop/news.pptx'):
              'sha256':'a'*64,'size_bytes':1024,'source_task_id':task_id,'format':'pptx','artifact_role':'final'}]}
 
 
-def test_news_to_pptx_scripted_path_four_worker_turns_one_semantic_call(monkeypatch):
+def test_news_to_pptx_scripted_path_four_worker_turns_no_assessor(monkeypatch):
     from server import controller_non_pipeline as loop
     path='C:/Desktop/news.pptx'
-    task={'task_id':'news','worker_id':'worker-1','original_request':'Recent AI news presentation',
+    task={'task_id':'news','original_request':'Recent AI news presentation',
           'proposed_objective':'Recent AI news presentation','execution_scope':'general',
           'device_ids':['device-1'],'assigned_artifacts':[path]}
     monkeypatch.setitem(tasks,'news',task)
@@ -157,18 +157,14 @@ def test_news_to_pptx_scripted_path_four_worker_turns_one_semantic_call(monkeypa
            _message(tool_calls=[_tool_call('q3','web_search',{'query':'AI regulation dated sources'})]),
            _message(tool_calls=[_tool_call('create','office_pptx',{'action':'create','path':path,
               'data':{'slides':[{'title':'News','bullets':['Dated fact https://example.org/1']}]}})]),
-           answer('Created a presentation with dated facts and source links'),
-           _message(content=json.dumps({'coverage':'complete','evidence_refs':['step_1','step_4'],
-              'artifacts':[{'device_id':'device-1','path':path,'sha256':'a'*64,'coverage':'complete','evidence_refs':['step_4']}],
-              'reason':'Fixture supplies the required topics and dated sources'}),finish_reason='stop')]
+           answer('Created a presentation with dated facts and source links')]
     seen=[]
     result=_run_case(turns,user_message=task['original_request'],poll_task_id='news',max_iterations=20,
         captured=seen,send_command_fn=send,cfg={'model':'mock','answer_auditor_enabled':True})
-    assert len(seen)==5 and len(queries)==3 and dispatched==['office_pptx']
+    assert len(seen)==4 and len(queries)==3 and dispatched==['office_pptx']
     assert 'https://example.org/1' in json.dumps(seen[2]['messages'])
     assert 'untrusted_search_excerpts' in json.dumps(seen[2]['messages'])
-    assert seen[-1]['phase']=='result_coverage'
-    assert 'question' in json.loads(seen[-1]['messages'][-1]['content'])
+    assert not any(x.get('phase')=='result_coverage' for x in seen)
     report=build_worker_report({**task,'status':'done','commands':result['commands'],'answer':result['answer']})
     assert report['goal_completed'] and report['artifacts'][0]['content_verified']
 
@@ -187,11 +183,18 @@ def test_successful_search_is_not_a_completed_research_assignment():
     assert not report['goal_completed']
 
 
-def test_unknown_mutation_or_unfinished_work_does_not_spend_assessor_call():
-    task={'task_id':'r','execution_scope':'analysis','_action_outcome_unknown':True}
-    assert semantic_assessment_question(task,[search_step()],{'text':'Known facts','unresolved':[]}) is None
-    task.pop('_action_outcome_unknown')
-    assert semantic_assessment_question(task,[search_step()],{'text':'Known facts','unresolved':['Missing C']}) is None
+def test_unfinished_analysis_has_no_assessor_and_is_partial(monkeypatch):
+    from server import controller_non_pipeline as loop
+    monkeypatch.setitem(tasks,'r',{'task_id':'r','execution_scope':'analysis','device_ids':[]})
+    async def search(*args):return search_step()['result']
+    monkeypatch.setattr(loop,'_run_web_search',search)
+    seen=[]
+    result=_run_case([_message(tool_calls=[_tool_call('q','web_search',{'query':'A'})]),
+        answer('Known A',['Missing C'])],poll_task_id='r',captured=seen,
+        cfg={'model':'mock','answer_auditor_enabled':True})
+    report=build_worker_report({'task_id':'r','status':'done','commands':result['commands'],'answer':result['answer']})
+    assert len(seen)==2 and report['status']=='partial'
+
 
 
 def test_closed_native_window_is_sufficient_even_when_process_still_alive(monkeypatch):
@@ -270,22 +273,27 @@ def test_valid_office_receipt_without_content_coverage_is_not_assignment_success
     step={'step_id':'step_1','tool_name':'office_pptx','status':'success','target_device_id':'device-1','result':office_result()}
     report=build_worker_report({'task_id':'news','status':'done','device_ids':['device-1'],
         'assigned_artifacts':[path],'original_request':'Required comparison of A, B and C',
-        'commands':[step,{'tool_name':'answer.text','status':'terminal','result':{'text':'Done','_result_contract':3,'unresolved':[]}}]})
+        'commands':[step,{'tool_name':'answer.text','status':'terminal','result':{'text':'Missing required comparison','_result_contract':3,'unresolved':['Required comparison of A, B and C is absent']}}]})
     assert not report['goal_completed']
 
 
-def test_exact_text_write_does_not_need_semantic_storage_recheck():
+def test_exact_text_write_needs_no_independent_content_approval():
     path='C:/x.txt'
     step={'step_id':'step_1','tool_name':'write_content','target_device_id':'pc','status':'success',
           'result':{'status':'ok','mode':'replace_exact','path':path,'verified':True,'committed':True,'file_sha256':'a'*64,'total_size':5}}
-    assert semantic_assessment_question({'task_id':'text','preserve_file_bytes':True,'device_ids':['pc'],'assigned_artifacts':[path]},
-        [step],{'text':'Written','_result_contract':3,'unresolved':[]}) is None
+    report=build_worker_report({'task_id':'text','status':'done','preserve_file_bytes':True,'device_ids':['pc'],
+        'assigned_artifacts':[path],'commands':[step]})
+    assert report['goal_completed'] and report['artifacts'][0]['verified']
 
 
-def test_optional_recommendation_does_not_suppress_required_semantic_question():
-    question=semantic_assessment_question({'execution_scope':'analysis'},[search_step()],
-        {'text':'Findings','_result_contract':3,'unresolved':[],'remaining':['Optional further reading']})
-    assert question and 'scope' in question
+
+def test_optional_recommendation_does_not_block_worker_result():
+    step=search_step()
+    report=build_worker_report({'task_id':'r','status':'done','execution_scope':'analysis','commands':[step,
+        {'step_id':'step_2','tool_name':'answer.text','tool_type':'answer','status':'terminal',
+         'result':{'text':'Findings','_result_contract':3,'unresolved':[],'remaining':['Optional reading']}}]})
+    assert report['goal_completed']
+
 
 
 def test_prepared_windows_native_command_checks_each_required_exit(monkeypatch):
@@ -325,6 +333,6 @@ def test_applied_edit_delta_is_not_full_document_observation():
                   total_items=2,next_offset=1)
     step={'step_id':'step_1','tool_name':'office_pptx','status':'success','target_device_id':'device-1','result':result}
     report=build_worker_report({'task_id':'news','status':'done','device_ids':['device-1'],
-        'assigned_artifacts':[result['path']],'original_request':'Review the whole document',
+        'assigned_artifacts':[result['path']],'execution_scope':'analysis','original_request':'Review the whole document',
         'commands':[step]})
     assert not report['artifacts'][0]['content_observed'] and not report['goal_completed']

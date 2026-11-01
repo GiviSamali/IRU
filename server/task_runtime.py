@@ -260,6 +260,7 @@ async def _probe_python_toolchain_if_needed(
 
 class AgentOutcomeUnknown(RuntimeError):
     """Delivery may have happened; never use this error to retry an action."""
+    outcome_unknown = True
 
 
 async def send_command_to_agent(
@@ -392,6 +393,11 @@ async def send_command_to_agent(
     try:
         await ws.send_text(msg)
         result = await asyncio.wait_for(future, timeout=wait_timeout)
+        if not isinstance(result, dict):
+            if is_recovery_observation(action, params,device_os=(dev.get('info') or {}).get('os')):
+                result={'status':'failed','error':'tool_result_contract_error','detail':'Agent response must be an object'}
+            else:
+                raise AgentOutcomeUnknown('malformed_response_after_dispatch')
         if isinstance(result, dict) and (
                 str(result.get("error") or "").startswith("AGENT_DISCONNECTED:")
                 or result.get("status") == "unknown" or result.get("completion_state") == "unknown"
@@ -829,19 +835,19 @@ def _format_live_snapshot_summary(results: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _device_operation_outcome(result):
+def _device_operation_outcome(result, task=None, device_id=None):
+    """Use the same WorkerReport for broadcast; do not vote over tool statuses."""
     try:
-        from .tool_completion import normalize_operation_result
+        from .worker_reports import build_worker_report
     except ImportError:
-        from tool_completion import normalize_operation_result
-    outcomes=[normalize_operation_result(c.get('tool_name') or c.get('action') or '',c.get('result'))
-              for c in result.get('commands',[]) if c.get('tool_type') not in {'system','answer'}]
-    if 'unknown' in outcomes:return 'unknown'
-    if not outcomes:return 'unknown'
-    if all(v=='success' for v in outcomes):return 'ok'
-    if any(v in {'success','partial'} for v in outcomes):return 'partial'
-    return 'error'
-
+        from worker_reports import build_worker_report
+    context=dict(task or {})
+    context.setdefault('task_id',next((c.get('task_id') for c in result.get('commands',[]) if c.get('task_id')),'device-result'))
+    if device_id is not None:context['device_ids']=[device_id]
+    context.update(status='done',answer=result.get('answer',''),commands=result.get('commands',[]),
+                   task_receipt=result.get('task_receipt') or {})
+    status=build_worker_report(context)['status']
+    return 'ok' if status=='success' else 'error' if status=='failed' else status
 
 
 @diagnostic_task("nl", lambda task_id: tasks.get(task_id))
@@ -1051,6 +1057,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     from file_transfer import transfer_file
                 result = await transfer_file(user_id, task_id, params, send_owned_command,
                                              lambda: is_task_cancel_requested(task_id))
+                if result.get('status')=='unknown':task['_action_outcome_unknown']=True
                 if task.get("_action_outcome_unknown"):
                     return {**result, "status": "unknown", "error": "confirmed_transport_outcome_unknown"}
                 return result
@@ -1202,7 +1209,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     return {"status": "failed", "device_id": target_short, "error": receipt.get("error") if isinstance(receipt, dict) else "missing activation receipt"}
                 valid, reason = validate_activation_receipt(receipt)
                 if not valid:
-                    return {"status": "failed", "device_id": target_short, "error": f"invalid activation receipt: {reason}"}
+                    return {"status":"unknown","device_id":target_short,"error":"tool_result_contract_error",
+                            "detail":f"invalid activation receipt: {reason}"}
                 summary = compact_activation_summary(receipt)
                 target_dev["activation_receipt"] = receipt
                 target_dev["activation_summary"] = summary
@@ -1238,13 +1246,15 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     return {"status": "failed", "device_id": target_short, "error": receipt.get("error") if isinstance(receipt, dict) else "missing Python runtime receipt"}
                 valid, reason = validate_python_runtime_receipt(receipt)
                 if not valid:
-                    return {"status": "failed", "device_id": target_short, "error": f"invalid Python runtime receipt: {reason}"}
+                    return {"status":"failed" if mode=="check" else "unknown","device_id":target_short,
+                            "mode":mode,"error":"tool_result_contract_error","detail":f"invalid Python runtime receipt: {reason}"}
                 summary = compact_python_runtime_summary(receipt)
                 target_dev["python_runtime_receipt"] = receipt
                 target_dev["python_runtime_summary"] = summary
                 update_device_python_runtime_summary(target_short, summary, user_id=user_id)
                 return {
-                    "status": summary.get("runtime_status"),
+                    "status": ('success' if mode=='check' or summary.get('runtime_status')=='ok' else
+                               'partial' if summary.get('runtime_status')=='degraded' else 'failed'),
                     "device_id": target_short,
                     "mode": mode,
                     "runtime_summary": summary,
@@ -1297,7 +1307,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 device_answer = sanitize_result_text(device_answer, result.get("commands", []))
             return {
                 "device_id": device_id,
-                "status": _device_operation_outcome(result) if is_broadcast else "ok",
+                "status": _device_operation_outcome(result,task,device_id) if is_broadcast else "ok",
                 "answer": device_answer,
                 "commands": result.get("commands", []),
                 "tasks": result.get("tasks", []),

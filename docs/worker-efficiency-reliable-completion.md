@@ -1,5 +1,7 @@
 # IRU — Worker Efficiency & Reliable Completion
 
+> Последующее уточнение владельца: автоматический Assessor в обычном исполнении отменён. Текущие границы — [operation-result-contract.md](operation-result-contract.md). Этот документ сохраняет историю предыдущего пакета.
+
 ## Контекст
 
 Репозиторий: `GiviSamali/IRU`.

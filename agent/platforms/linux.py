@@ -36,8 +36,10 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
     except subprocess.TimeoutExpired:
         return {"stdout": "", "stderr": "", "returncode": -1,
                 "error": f"Таймаут: команда выполнялась дольше {timeout} сек"}
+    except (FileNotFoundError, PermissionError) as e:
+        return {"status":"failed","dispatched":False,"stdout":"","stderr":str(e),"returncode":-1,"error":str(e)}
     except Exception as e:
-        return {"stdout": "", "stderr": "", "returncode": -1, "error": str(e)}
+        return {"stdout": "", "stderr": "", "returncode": -1, "error": str(e), "status":"unknown"}
 
 
 def get_desktop_path() -> str:

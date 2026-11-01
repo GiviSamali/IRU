@@ -11,7 +11,6 @@ import httpx
 try:
     from .api_support import is_recovery_observation
     from . import database as db  # type: ignore
-    from .answer_auditor import assess_result_coverage, semantic_assessment_enabled  # type: ignore
     from .controller_budget import CommandBudget, _debug_enabled  # type: ignore
     from .controller_tools import NON_PIPELINE_TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
     from .controller_shared import (  # type: ignore
@@ -75,7 +74,6 @@ try:
 except ImportError:
     from api_support import is_recovery_observation
     import database as db  # type: ignore
-    from answer_auditor import assess_result_coverage, semantic_assessment_enabled  # type: ignore
     from controller_budget import CommandBudget, _debug_enabled  # type: ignore
     from controller_tools import NON_PIPELINE_TOOLS as DEFAULT_CONTROLLER_TOOLS  # type: ignore
     from controller_shared import (  # type: ignore
@@ -399,30 +397,7 @@ async def process_non_pipeline_command(
     print(f"[llm] выбрана модель: {model} (base={base_model}, autonomous={bool(modes.get('autonomous'))})")
 
     timeout = httpx.Timeout(120.0, connect=10.0)
-    model_calls = 0
-    original_request_fn = chat_completion_request_fn
-    async def bounded_request(**kwargs):
-        nonlocal model_calls
-        if model_calls >= min(max_iterations, 20):
-            raise RuntimeError('worker_llm_budget_exhausted')
-        model_calls += 1
-        return await original_request_fn(**kwargs)
-    chat_completion_request_fn = bounded_request
     max_iterations = min(max_iterations, 20)
-    async def assess_payload(client, payload):
-        try:
-            from .worker_reports import semantic_assessment_question, coverage_request
-        except ImportError:
-            from worker_reports import semantic_assessment_question, coverage_request
-        context=runtime_tasks.get(poll_task_id) or {}
-        question=semantic_assessment_question(context,commands_log,payload)
-        if question and model_calls < max_iterations:
-            payload['_coverage']=await assess_result_coverage(client=client,cfg=cfg,
-                chat_completion_request_fn=chat_completion_request_fn,
-                user_request=coverage_request(context,user_message),current_run_journal=commands_log,
-                answer_payload=payload,usage_context=usage_context,question=question)
-
-
     async with httpx.AsyncClient(timeout=timeout) as client:
         for iteration in range(max_iterations):
             if is_task_cancel_requested(poll_task_id):
@@ -447,12 +422,7 @@ async def process_non_pipeline_command(
             if pending_corrections:
                 messages.append({'role':'user','content':'\n'.join(dict.fromkeys(pending_corrections))})
                 pending_corrections.clear()
-            try:
-                from .worker_reports import needs_semantic_assessment
-            except ImportError:
-                from worker_reports import needs_semantic_assessment
-            assessment_expected=semantic_assessment_enabled(cfg) and needs_semantic_assessment(runtime_tasks.get(poll_task_id) or {}, commands_log)
-            final_turn = model_calls >= max_iterations - (2 if assessment_expected and max_iterations>1 else 1)
+            final_turn = iteration == max_iterations - 1
             turn_tools=([t for t in non_pipeline_tools if is_terminal_answer_tool(t['function']['name'])]
                         if final_turn else non_pipeline_tools)
             set_current_step(poll_task_id, "ИРУ думает...")
@@ -522,7 +492,6 @@ async def process_non_pipeline_command(
                     except ImportError:
                         from controller_trust import sanitize_result_text
                     payload = validate_answer_text_payload({'answer':sanitize_result_text(last_candidate,commands_log)},commands_log)
-                    await assess_payload(client, payload)
                     append_answer_step(commands_log,'answer_text',payload,target_device_id=device_id)
                     return {'answer':payload['text'],'commands':commands_log,'tasks':[]}
                 break
@@ -584,7 +553,6 @@ async def process_non_pipeline_command(
                                 context = runtime_tasks.get(poll_task_id) or {}
                                 if pinned_material_pending(context):
                                     answer_payload['remaining'].append('Required dependency material was not fully read.')
-                                await assess_payload(client, answer_payload)
                                 append_answer_step(commands_log,fn_name,answer_payload,target_device_id=target_device,
                                                    hostname=device_info.get('hostname') or target_device,iteration=iteration+1)
                                 return {'answer':answer_payload['text'],'commands':commands_log,'tasks':[],
@@ -1206,6 +1174,8 @@ async def process_non_pipeline_command(
                     if (normalize_operation_result(fn_name, tool_result) == 'unknown'
                             and not is_recovery_observation(fn_name, fn_args,device_os=device_info.get('os'))):
                         recovery_only = True
+                        if poll_task_id in runtime_tasks:
+                            runtime_tasks[poll_task_id]['_action_outcome_unknown'] = True
                     if tool_result.get('error') == 'confirmation_expired':
                         try:
                             from .run_journal import confirmed_unknown_answer

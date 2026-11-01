@@ -287,6 +287,12 @@ async def transfer_file(owner, run_id, args, send, cancelled=lambda: False):
             raise ValueError('upload_not_verified')
         stage = 'download'
         received = await call(target, 'file.transfer_download', {'path': target_path, 'transfer_id': tid, 'token': down, 'finish_token': finish, 'size': size, 'sha256': sha})
+        if not all(field in received for field in ('size','sha256','verified','path')):
+            try:
+                from .task_runtime import AgentOutcomeUnknown
+            except ImportError:
+                from task_runtime import AgentOutcomeUnknown
+            raise AgentOutcomeUnknown('malformed_target_transfer_receipt')
         if received.get('size') != size or received.get('sha256') != sha or received.get('verified') is not True or received.get('path') != target_path:
             raise ValueError('target_integrity_mismatch')
         result = {'status': 'success', 'source_device': source, 'target_device': target, 'filename': filename, 'bytes_transferred': size,
@@ -302,7 +308,7 @@ async def transfer_file(owner, run_id, args, send, cancelled=lambda: False):
     except (Exception, asyncio.CancelledError) as exc:
         # Do not expose transport URLs/credentials or arbitrary exception text to model/logs.
         reason = str(exc) if isinstance(exc, ValueError) else ('task_cancelled' if isinstance(exc, asyncio.CancelledError) else 'agent_or_transport_failure')
-        result = {'status': 'failed', 'stage': stage, 'error': reason[:200]}
+        result = {'status': 'unknown' if getattr(exc,'outcome_unknown',False) else 'failed', 'stage': stage, 'error': reason[:200]}
         if tid and get_transfer(tid):
             update(tid, status='failed', result_json=json.dumps(result), upload_hash=None, download_hash=None, finish_hash=None)
         if isinstance(exc, asyncio.CancelledError):

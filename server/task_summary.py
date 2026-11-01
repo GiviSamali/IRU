@@ -235,7 +235,8 @@ def get_last_run_summary(
     task_status = str(task.get("status") or "unknown")
     partial_success_likely = bool(success_entries and (failed_entries or task_status.lower() in FAILED_STATUSES))
     return {
-        "status": task_status,
+        "status": "success",
+        "source_status": task_status,
         "last_task_id": task.get("task_id"),
         "chat_id": task.get("chat_id"),
         "used_tools": list(dict.fromkeys(used_tools)),

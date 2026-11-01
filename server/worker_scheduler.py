@@ -29,10 +29,20 @@ WINDOW_EFFECTS = frozenset({"list","find","active","monitors","activate","minimi
 
 def unknown_recovery_required(payload):
     """Persist uncertainty across explicitly requested follow-ups, never replay it."""
-    return bool(payload.get('_action_outcome_unknown') or any(
-        (entry.get('status') == 'unknown' or (entry.get('result') or {}).get('status') == 'unknown')
-        and entry.get('tool_type') not in {'system','answer'}
-        for entry in payload.get('commands') or []))
+    try:
+        from .worker_reports import operation_facts
+        from .api_support import is_recovery_observation
+    except ImportError:
+        from worker_reports import operation_facts
+        from api_support import is_recovery_observation
+    if payload.get('_action_outcome_unknown'):return True
+    for entry in payload.get('commands') or []:
+        if entry.get('tool_type') in {'system','answer'} or operation_facts(entry)!='unknown':continue
+        result=entry.get('result') if isinstance(entry.get('result'),dict) else {}
+        params={'command':entry.get('command'),'action':result.get('action') or (entry.get('window_request') or {}).get('action'),
+                'mode':result.get('mode')}
+        if not is_recovery_observation(entry.get('tool_name') or entry.get('action') or '',params):return True
+    return False
 
 
 def validated_execution_scope(scope, effects):

@@ -262,6 +262,8 @@ def compact_write_content_result(args: dict[str, Any] | None, result: Any = None
         compact["error"] = error
     if original.get("arg_warnings"):
         compact["arg_warnings"] = original.get("arg_warnings")
+    if args.get('expected_text') is not None and 'mode' not in compact:
+        compact['mode']='replace_exact'  # Requested contract; missing strong receipts remain unknown.
     return compact
 
 
@@ -321,11 +323,10 @@ def make_run_step(
     idx = _next_idx(journal)
     canonical = canonical_tool_name(tool_name)
     terminal = is_terminal_answer_tool(tool_name)
-    final_status = status or operation_step_status(canonical_tool_name(tool_name or ''), result, terminal=terminal)
-    if not terminal and tool_type != 'system' and final_status == 'success':
-        final_status = operation_step_status(canonical, result)
+    final_status = (status if status and (terminal or tool_type=='system') else
+                    operation_step_status(canonical,result,terminal=terminal))
     final_summary = summary or compact_step_summary(tool_name, result, command)
-    fields = tool_log_fields(tool_name, result, command, target_device_id)
+    fields = tool_log_fields(tool_name, result, command, target_device_id, normalized_status=final_status)
     entry = {
         "journal_entry_id": uuid4().hex,
         "action": tool_name,
@@ -360,9 +361,6 @@ def append_tool_step(journal: list[dict[str, Any]], entry: dict[str, Any]) -> di
     # Preserve a stable storage identity across checkpoints and finalization.
     entry.setdefault("journal_entry_id", uuid4().hex)
     if entry.get("step_id") and entry.get("idx") is not None:
-        if entry.get('tool_type') not in {'system','answer'} and entry.get('status')=='success':
-            entry['status'] = entry['tool_status'] = operation_step_status(
-                canonical_tool_name(entry.get('action') or entry.get('tool_name') or ''),entry.get('result'))
         journal.append(entry)
         _trace_journal_step(entry)
         return entry
@@ -371,8 +369,8 @@ def append_tool_step(journal: list[dict[str, Any]], entry: dict[str, Any]) -> di
     canonical = canonical_tool_name(action)
     result = entry.get("result")
     command = entry.get("command") or f"[tool] {canonical}"
-    status = entry.get("status") or operation_step_status(canonical_tool_name(action), result)
-    fields = tool_log_fields(action, result, command, entry.get("target_device_id") or entry.get("device_id"))
+    status = entry.get("tool_status") or operation_step_status(canonical, result, terminal=is_terminal_answer_tool(canonical))
+    fields = tool_log_fields(action, result, command, entry.get("target_device_id") or entry.get("device_id"), normalized_status=status)
     entry["step_id"] = f"step_{idx}"
     entry["idx"] = idx
     entry["created_at"] = entry.get("created_at") or datetime.now(timezone.utc).isoformat()
@@ -381,8 +379,6 @@ def append_tool_step(journal: list[dict[str, Any]], entry: dict[str, Any]) -> di
     entry["tool_type"] = fields.get("tool_type") or entry.get("tool_type") or "typed"
     entry["tool_status"] = fields.get("tool_status") or entry.get("tool_status") or status
     entry["status"] = status
-    if entry.get("tool_type") not in {"system","answer"} and entry.get("status")=="success":
-        entry["status"] = entry["tool_status"] = operation_step_status(canonical,result)
     entry["summary"] = entry.get("summary") or fields.get("summary") or compact_step_summary(action, result, command)
     if "target_device_id" not in entry:
         entry["target_device_id"] = entry.get("device_id")

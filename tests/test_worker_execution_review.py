@@ -5,7 +5,7 @@ import pytest
 from server import database as db, task_runtime as runtime
 from server.api_support import assess_action, is_recovery_observation
 from server.runtime_state import tasks
-from server.worker_reports import needs_semantic_assessment, build_worker_report
+from server.worker_reports import build_worker_report
 from test_tool_only_protocol import _run_case, _message, _tool_call
 from test_ff01_worker_execution import FileAgent, PROJECT, replacement
 
@@ -59,10 +59,10 @@ def test_shell_or_artifact_declaration_cannot_extend_read_grammar(extra):
     assert not is_recovery_observation('execute_cmd',{'command':PPTX_COMMAND,**extra})
 
 
-def test_general_objective_is_not_a_reason_to_call_assessor():
-    assert not needs_semantic_assessment({'execution_scope':'general','proposed_objective':'Find PPTX'})
-    assert needs_semantic_assessment({'execution_scope':'analysis','proposed_objective':'Compare A, B, C'})
-    assert needs_semantic_assessment({'execution_scope':'general','assigned_artifacts':['report.pptx']})
+def test_regular_worker_has_no_automatic_assessor_entrypoint():
+    import server.controller_non_pipeline as loop
+    assert not hasattr(loop,'assess_result_coverage')
+
 
 
 def test_powershell_names_are_not_safe_native_programs_on_other_os():
@@ -91,25 +91,35 @@ def test_native_literal_read_skips_confirmation_but_not_ownership(local_db,monke
     assert len(sent)==2
 
 
-def test_general_opaque_report_still_requires_content_assessment():
-    task={'execution_scope':'general','proposed_objective':'Interpret the diagnostic output'}
-    journal=[{'tool_name':'execute_cmd','command':'python probe.py',
-        'result':{'returncode':0,'stdout':'Diagnostic facts','stderr':''}}]
-    assert needs_semantic_assessment(task,journal,{'text':'Findings'})
+def test_cli_diagnostic_result_is_owned_by_worker(local_db,monkeypatch):
+    task={'task_id':'diagnostic','device_ids':['device-1'],'execution_scope':'general',
+          'proposed_objective':'Interpret the diagnostic output'}
+    monkeypatch.setitem(tasks,'diagnostic',task)
+    seen=[]
+    result=_run_case([_message(tool_calls=[_tool_call('run','execute_cmd',{'command':'python probe.py'})]),
+                      answer('Diagnostic conclusion from the observed facts')],poll_task_id='diagnostic',captured=seen,
+                      cfg={'model':'mock','answer_auditor_enabled':True})
+    assert len(seen)==2 and not any(x.get('phase')=='result_coverage' for x in seen)
+    assert build_worker_report({**task,'status':'done','commands':result['commands'],'answer':result['answer']})['goal_completed']
 
 
-def test_preservation_flag_alone_cannot_waive_content_assessment():
+
+def test_preservation_flag_alone_does_not_allow_overwrite(local_db,monkeypatch):
     task={'task_id':'t','preserve_file_bytes':True,'assigned_artifacts':['C:/x.txt']}
-    journal=[{'tool_name':'write_content','result':{'path':'C:/x.txt','mode':'overwrite',
-        'committed':True,'verified':True,'file_sha256':'a'*64,'total_size':1}}]
-    assert needs_semantic_assessment(task,journal,{'text':'Written'})
+    monkeypatch.setitem(tasks,'t',task)
+    sent=[]
+    async def send(*args):sent.append(args);return {'status':'ok'}
+    result=_run_case([_message(tool_calls=[_tool_call('bad','write_content',{'path':'C:/x.txt','content':'Written'})]),
+                      answer('Not changed')],poll_task_id='t',send_command_fn=send)
+    assert not sent and result['commands'][0]['result']['dispatched'] is False
+
 
 
 def answer(text='Observed'):
     return _message(tool_calls=[_tool_call('final','answer_text',{'result':text,'unresolved':[]})])
 
 
-@pytest.mark.parametrize('scope,expected_assessments',[('general',0),('analysis',1)])
+@pytest.mark.parametrize('scope,expected_assessments',[('general',0),('analysis',0)])
 def test_pptx_search_counts_all_llm_calls(local_db,monkeypatch,record_property,scope,expected_assessments):
     task={'task_id':'find','execution_scope':scope,'proposed_objective':'Find PPTX on Desktop',
           'original_request':'Find PPTX on Desktop','device_ids':['device-1']}
@@ -127,8 +137,8 @@ def test_pptx_search_counts_all_llm_calls(local_db,monkeypatch,record_property,s
     assert assessments==expected_assessments and len(captured)-assessments==2
     assert len([c for c in result['commands'] if c.get('tool_name')=='execute_cmd'])==1
     report=build_worker_report({**task,'status':'done','commands':result['commands'],'answer':result['answer']})
-    # No new shortcut: a listing operation alone does not certify an untyped Goal.
-    assert report['status']==('success' if expected_assessments else 'partial')
+    # The successful listing plus the Worker terminal result completes this Assignment.
+    assert report['status']=='success'
     record_property('worker_llm_calls',2);record_property('assessor_calls',assessments)
     record_property('total_llm_calls',len(captured))
     record_property('goal_status',report['status'])

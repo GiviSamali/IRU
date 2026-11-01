@@ -263,7 +263,8 @@ def test_office_and_cli_inline_observation_has_same_content_gate(tmp_path,monkey
         result=actions.execute_cmd('synthetic creation',artifact_paths=[str(path)],_artifact_task_id='t')
     for receipt in result['artifact_receipts']:receipt['device_id']='pc'
     step={'step_id':'step_1','tool_name':method,'status':'success','target_device_id':'pc','result':result}
-    payload={'_result_contract':3,'text':'Prepared','unresolved':[]}
+    payload={'_result_contract':3,'text':'Prepared' if coverage=='complete' else 'Required material missing',
+             'unresolved':[] if coverage=='complete' else ['Required material missing']}
     payload['_coverage']={'coverage':coverage,'evidence_refs':['step_1'],
         'binding':coverage_binding('Prepare a factual presentation',[step],'Prepared')}
     task={'task_id':'t','status':'done','original_request':'Prepare a factual presentation',
@@ -272,7 +273,7 @@ def test_office_and_cli_inline_observation_has_same_content_gate(tmp_path,monkey
     report=build_worker_report(task)
     assert report['artifacts'][0]['content_observed'] is True
     assert report['goal_completed']==(coverage=='complete')
-    assert report['artifacts'][0]['content_verified']==(coverage=='complete')
+    assert report['artifacts'][0]['content_verified'] is True  # Operation observation does not change with semantic completeness.
 
 
 def test_cli_zero_and_echo_cannot_certify_nonexistent_artifact(tmp_path,monkeypatch):

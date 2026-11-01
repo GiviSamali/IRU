@@ -265,7 +265,7 @@ const IRUSmartUI = (() => {
       const open = expanded(block, context);
       return `<section class="smart-block smart-file${open ? ' expanded' : ''}" data-block-type="file" data-smart-key="${esc(block.key)}">
         <div class="smart-file-heading"><span class="smart-file-kind">${esc(block.extension || 'Файл')}</span><strong title="${esc(block.path)}">${esc(block.name)}</strong></div>
-        ${block.verified?`<div class="smart-file-verified">${block.contentVerified?'Файл и полнота содержания подтверждены':block.verificationScope==='copy_identity'?'Подтверждена идентичность копии':'Файл подтверждён; полнота содержания не проверена'}</div>`:''}
+        ${block.verified?`<div class="smart-file-verified">${block.verificationScope==='copy_identity'?'Подтверждена идентичность копии':block.contentVerified?'Файл сохранён; данные подтверждены инструментом':'Файл подтверждён'}</div>`:''}
         ${block.goalResult?'':`<div class="smart-file-meta"><span>${esc(block.device)}</span></div>`}
         <div class="smart-file-actions">
           <button type="button" data-action="open-message-file" data-device-id="${esc(encodeURIComponent(block.device))}" data-file-path="${esc(encodeURIComponent(block.path))}">Открыть на устройстве</button>

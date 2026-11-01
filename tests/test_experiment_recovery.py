@@ -395,13 +395,13 @@ def test_real_temporary_file_edit_reaches_audited_report_and_restore(world,tmp_p
             return {'choices':[{'message':{'content':json.dumps({'coverage':'complete','reason':'actual read-back matches requested edit and preserved code',
                 'evidence_refs':['step_1']})}}]}
         return await answer_auditor.assess_result_coverage(**{**kwargs,'chat_completion_request_fn':completion})
-    monkeypatch.setattr(controller,'assess_result_coverage',audit)
+    monkeypatch.setattr(answer_auditor,'assess_result_coverage',lambda **kw:pytest.fail('No automatic assessor'))
     async def scenario():
         scheduler=WorkerScheduler()
         try:
             task=await admit(world,scheduler,'Измени порог в рабочем файле на 2, сохрани остальной код','real-file-edit',assigned_artifacts=[str(target)])
             await asyncio.wait_for(scheduler.runners[owner['id']],20)
-            assert len(device.calls)==1 and audits==['actual-audit'], [e.get('result') for e in task.get('commands',[])]
+            assert len(device.calls)==1 and audits==[], [e.get('result') for e in task.get('commands',[])]
             assert task['worker_report']['status']=='success' and task['worker_report']['goal_completed']
             assert target.read_text(encoding='utf-8')==expected
             restored=restore_task(owned_job(task['task_id'],owner['id']))

@@ -3,7 +3,7 @@ import hashlib
 
 import pytest
 
-from server.worker_reports import build_worker_report, coverage_binding, needs_semantic_assessment, result_binding
+from server.worker_reports import build_worker_report, coverage_binding, result_binding
 from server.response_presentation import worker_presentation
 from server.worker_scheduler import _final_snapshot, restore_task
 import json
@@ -28,52 +28,34 @@ def test_incomplete_outcome_never_presents_model_done_as_final(outcome):
         assert 'Готово' in view['execution_details']  # journal material retained, not the verdict
 
 
-@pytest.mark.parametrize('coverage', [None, 'partial', 'complete', 'receipt_only', 'stale_read', 'counts_only'])
-def test_valid_docx_does_not_prove_requested_content(coverage):
-    path = 'C:/Temp/report.docx'
-    package = b'valid package with sections one and two' if coverage=='complete' else b'valid package with only section one'
-    digest = hashlib.sha256(package).hexdigest()
-    native = {'path': path, 'device_id': 'pc', 'source_task_id': 'local', 'verified': True,
-              'created_or_changed': True, 'size_bytes': 4096, 'sha256': digest,
-              'format': 'docx', 'artifact_role': 'final'}
-    steps = [{'step_id': 'step_1', 'tool_name': 'office_docx', 'target_device_id': 'pc',
-              'result': {'status': 'success', 'action': 'create', 'artifact_receipts': [native]}},
-             {'step_id': 'step_2', 'tool_name': 'office_docx', 'target_device_id': 'pc',
-              'result': {'status': 'success', 'action': 'inspect', 'path': path, 'sha256': digest,
-                         'items': [{'type': 'paragraph', 'text': 'Section one'}]}}]
-    if coverage == 'complete':
-        steps[-1]['result']['items'].append({'type': 'paragraph', 'text': 'Section two'})
-    if coverage == 'stale_read':steps[-1]['result']['sha256']='0'*64
-    if coverage == 'counts_only':steps[-1]['result'].pop('items')
-    task = {'task_id': 'local', 'status': 'done', 'device_ids': ['pc'],
-            'original_request': 'Write a report with sections one and two',
-            'execution_scope': 'general', 'assigned_artifacts': [path],
-            'answer': 'Готово. Отчёт полностью проверен.', 'commands': steps}
-    payload = {'text': task['answer']}
-    if coverage:
-        payload['_coverage'] = {'coverage': 'partial' if coverage=='partial' else 'complete',
-            'evidence_refs': ['step_1' if coverage=='receipt_only' else 'step_2'],
-            'reason': 'Section two is absent' if coverage == 'partial' else 'content comparison supplied',
-            'binding': coverage_binding(task['original_request'], steps, task['answer'])}
-    steps.append({'step_id': 'step_3', 'tool_name': 'answer.text', 'status': 'terminal', 'result': payload})
-    assert needs_semantic_assessment(task)
-    report = build_worker_report(task)
-    assert report['artifacts'][0]['verified']  # native format/identity proof survives
-    if coverage != 'complete':
-        assert not report['goal_completed'] and report['status'] == 'partial'
-        assert report['artifacts'][0]['content_verified'] is False
-        assert report['error_code'] == 'artifact_content_unconfirmed'
-        view = worker_presentation(task, report)['conversational_response']
-        assert 'Готово' not in view and 'полностью проверен' not in view
-        assert 'содержан' in view.lower()
-    else:
-        # A bound content assessment is still powerless without current file proof.
-        assert report['goal_completed'] and report['artifacts'][0]['content_verified']
-        native['verified'] = False
-        assert not build_worker_report(task)['goal_completed']
+@pytest.mark.parametrize('complete',[False,True])
+def test_file_integrity_is_independent_of_worker_content_completeness(complete):
+    path='C:/Temp/report.docx';digest=hashlib.sha256(b'package').hexdigest()
+    native={'path':path,'device_id':'pc','source_task_id':'local','verified':True,
+            'created_or_changed':True,'size_bytes':4096,'sha256':digest,'format':'docx','artifact_role':'final'}
+    result={'status':'success','action':'create','path':path,'sha256':digest,'verified':True,
+            'artifact_receipts':[native],'operation_verified':True,
+            'applied_input':{'data':{'elements':[{'text':'Section one'}]}}}
+    text='Report complete' if complete else 'Section two is absent.'
+    steps=[{'step_id':'step_1','tool_name':'office_docx','target_device_id':'pc','result':result}]
+    payload={'text':text,'_result_contract':3,'unresolved':[] if complete else ['Section two is absent.']}
+    # A legacy assessor must neither revoke the write nor hide missing Worker work.
+    payload['_coverage']={'coverage':'partial' if complete else 'complete','evidence_refs':['step_1'],
+        'binding':coverage_binding('Write sections one and two',steps,text)}
+    steps.append({'step_id':'step_2','tool_name':'answer.text','tool_type':'answer','status':'terminal','result':payload})
+    task={'task_id':'local','status':'done','device_ids':['pc'],'assigned_artifacts':[path],
+          'original_request':'Write sections one and two','answer':text,'commands':steps}
+    report=build_worker_report(task)
+    assert report['artifacts'][0]['verified'] and report['artifacts'][0]['content_observed']
+    assert report['goal_completed']==complete
+    if not complete:
+        assert report['status']=='partial' and 'Section two' in report['summary']
+    native['verified']=False
+    assert not build_worker_report(task)['goal_completed']
 
 
-def test_old_bound_file_success_is_not_reused_as_content_verification(monkeypatch):
+
+def test_bound_native_file_success_is_not_reassessed_on_read(monkeypatch):
     from server import answer_auditor
     monkeypatch.setattr(answer_auditor, 'assess_result_coverage',
         lambda **kwargs: pytest.fail('Reading a saved result must not invoke a model'))
@@ -88,6 +70,6 @@ def test_old_bound_file_success_is_not_reused_as_content_verification(monkeypatc
          'artifacts':[{k:v for k,v in a.items() if k not in {'content_verified','verification_scope'}} for a in report['artifacts']]}
     task.update(worker_report=old,worker_report_binding=result_binding(task,old))
     restored=restore_task({'task_id':'local','state':'success','payload':json.dumps(task),'report':json.dumps(old)})
-    assert restored['worker_report']['status']=='partial'
-    assert not restored['worker_report']['goal_completed']
-    assert 'Готово' not in worker_presentation(restored)['conversational_response']
+    assert restored['worker_report']['status']=='success'
+    assert restored['worker_report']['goal_completed']
+    assert restored['worker_report']['artifacts'][0]['verified']

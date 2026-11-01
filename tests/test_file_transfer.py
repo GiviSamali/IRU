@@ -404,3 +404,22 @@ def test_cleanup_preserves_completed_idempotency_receipt(env):
     relay.cleanup_transfers()
     assert relay.get_transfer(tid)['status'] == 'completed'
     assert json.loads(relay.get_transfer(tid)['result_json']) == result
+
+
+def test_malformed_download_ack_is_unknown_and_cached_without_replay(env):
+    tmp,_,_=env
+    digest=hashlib.sha256(b'abc').hexdigest();calls=[]
+    target=str(tmp/'target.bin')
+    async def send(device,action,params,user_id):
+        calls.append(action)
+        if action=='file.transfer_stat':return {'size':3,'sha256':digest,'filename':'source.bin'}
+        if action=='file.transfer_target':return {'path':target}
+        if action=='file.transfer_upload':
+            relay.update(params['transfer_id'],status='uploaded');return {'status':'ok'}
+        if action=='file.transfer_download':return {}  # May have committed; receipt was damaged.
+        raise AssertionError(action)
+    args={'source_device_id':'a','target_device_id':'b','source_path':str(tmp/'source.bin'),'target_path':target}
+    first=asyncio.run(relay.transfer_file(1,'damaged-receipt',args,send))
+    second=asyncio.run(relay.transfer_file(1,'damaged-receipt',args,send))
+    assert first['status']=='unknown' and first['stage']=='download'
+    assert second==first and len(calls)==4
