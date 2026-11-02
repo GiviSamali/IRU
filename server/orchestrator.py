@@ -50,7 +50,11 @@ class Assignment(BaseModel):
     objective: str = Field(min_length=1, max_length=4000)
     scope: str = Field(default="", max_length=2000)
     constraints: list[str] = Field(default_factory=list, max_length=16)
-    artifacts: list[str] = Field(default_factory=list, max_length=16)
+    artifacts: list[str] = Field(default_factory=list, max_length=16, description=(
+        "Required output files this Assignment must create or change, identified by filename or path. "
+        "These obligations require file receipts. Use [] for observations, directory listings, "
+        "analysis and answers delivered as chat text. Describe textual results in objective; "
+        "do not invent a file requirement or filename when no output file is required."))
     depends_on: list[str] = Field(default_factory=list, max_length=15)
     required_source_task_ids: list[str] = Field(default_factory=list, max_length=8)
     replaces_source_task_id: str | None = Field(default=None, min_length=1, max_length=64)
@@ -247,8 +251,15 @@ move_monitor, close). Это ограничения результата, не �
 документы, не изменяет их и не выполняет соседние поручения.
 Каждый исполнитель документа сам выбирает инструменты, создаёт необходимые папки и свой
 конечный файл, наполняет и проверяет его. Не поручай одному Worker создание или заполнение
-файлов, закреплённых за другими Task. В artifacts перечисли ожидаемые выходные объекты
-конкретного результата; это перечень результата, а не разрешение изменять посторонние файлы.
+файлов, закреплённых за другими Task. В artifacts перечисли только обязательные выходные
+файлы, которые это задание должно создать или изменить, с именем файла или путём.
+Каждый элемент artifacts требует файловой квитанции; это не общий перечень результатов
+и не разрешение изменять посторонние файлы. Для наблюдений, списка каталога, анализа
+и текстового ответа в чате задавай artifacts=[]; сам результат опиши в objective.
+Например, «Что у нас на рабочем столе?» — artifacts=[]; «Сохрани список в desktop.txt» —
+artifacts=["desktop.txt"]. Входные файлы и объекты, которые нужно только прочитать или открыть,
+не являются artifacts; для обязательного открытия используй open_objects.
+Не придумывай выходной файл или его имя ради заполнения artifacts.
 Не считай существование файла доказательством нового создания или изменения: исполнитель
 должен подтвердить собственный вклад и итоговые свойства результата.
 Две независимые задачи (в том числе на разных устройствах) не должны иметь искусственных

@@ -22,6 +22,26 @@ def test_assignments_are_strict_deliverables_not_executable_commands():
         Decision(intent="delegate", assignments=[{"key": "x", "objective": "x", "execute_cmd": "whoami"}])
 
 
+def test_assignment_artifacts_schema_exposes_file_receipt_boundary():
+    from server.orchestrator import Assignment, TOOL
+    field = TOOL["function"]["parameters"]["$defs"]["Assignment"]["properties"]["artifacts"]
+    description = field["description"]
+    assert "Required output files" in description
+    assert "file receipts" in description
+    assert "Use []" in description and "chat text" in description
+    assert "objective" in description
+    listing = Assignment(key="desktop", objective="List desktop contents in the answer")
+    saved = Assignment(key="save", objective="Save the listing in desktop.txt", artifacts=["desktop.txt"])
+    assert listing.model_dump()["artifacts"] == []
+    assert saved.model_dump()["artifacts"] == ["desktop.txt"]
+
+
+def test_assignment_artifacts_instructions_distinguish_chat_and_saved_listing():
+    assert '«Что у нас на рабочем столе?» — artifacts=[]' in SYSTEM
+    assert '«Сохрани список в desktop.txt» —\nartifacts=["desktop.txt"]' in SYSTEM
+    assert "для обязательного открытия используй open_objects" in SYSTEM
+
+
 @pytest.mark.parametrize("intent", ["conversation", "clarify", "cancel", "task_status"])
 def test_non_delegation_needs_no_task_graph(intent):
     assert Decision(intent=intent).assignments == []
