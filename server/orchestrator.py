@@ -572,7 +572,8 @@ async def run_turn(cmd, user, chat_id, delegate):
                 except ImportError:
                     from goal_completion import present_completed_goal
                     from goal_presentation import goal_presentation
-                reply=await present_completed_goal(goal,goal_presentation(goal),owner,chat_id)
+                reply=await present_completed_goal(goal,goal_presentation(goal),owner,chat_id,
+                    origin_task_id=tid,current_request=cmd.message)
                 answer=reply['message']
                 task.update(dialogue_spoken_response=reply['spoken_message'],dialogue_speech_answer=answer)
         elif choice.intent in {"task_status","cancel","amend"}:
@@ -638,7 +639,8 @@ async def run_turn(cmd, user, chat_id, delegate):
                     goal=goal_view(source['goal_id'],owner,chat_id)
                     required=[member for member in goal['tasks'] if member.get('required_for_goal',True)]
                     if goal.get('terminal') and len(required)==1 and required[0]['task_id']==choice.task_id:
-                        reply=await present_completed_goal(goal,goal_presentation(goal),owner,chat_id)
+                        reply=await present_completed_goal(goal,goal_presentation(goal),owner,chat_id,
+                            origin_task_id=tid,current_request=cmd.message)
                         answer=reply['message']
                         task.update(dialogue_spoken_response=reply['spoken_message'],dialogue_speech_answer=answer)
                 if choice.show_execution_details or choice.result_view == "saved_report":

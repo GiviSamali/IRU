@@ -58,16 +58,18 @@ async def api_get_messages(chat_id: int, request: Request):
                 or not message.get("resultFirst") or not message.get("goalId")):
             continue
         gid = message["goalId"]
-        if gid not in cache:
+        reply_key = (gid, message.get('_taskId'))
+        if reply_key not in cache:
             try:
                 goal = goal_view(gid, user["id"], chat_id)
                 presentation = goal_presentation(goal)
                 if presentation['terminal']:
-                    presentation = await present_completed_goal(goal, presentation, user['id'], chat_id)
-                cache[gid] = presentation
+                    presentation = await present_completed_goal(goal, presentation, user['id'], chat_id,
+                        origin_task_id=message.get('_taskId'))
+                cache[reply_key] = presentation
             except ValueError:
-                cache[gid] = None
-        presentation = cache[gid]
+                cache[reply_key] = None
+        presentation = cache[reply_key]
         if presentation is None:
             message.update(content="Результат цели недоступен.",taskStatus="unknown",taskKind="goal")
         else:

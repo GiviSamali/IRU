@@ -60,13 +60,65 @@ _SYSTEM = (
     "не говори, что поручение выполнено: объясни полученное и существенный пробел. "
     "Отделяй наблюдения от гипотез; рекомендации не являются невыполненными требованиями. "
     "Смысл исходного поручения и границы каждого assignment сохраняй."
+    " current_request задаёт область текущего ответа; worker_outcomes — его результаты. "
+    "goal_context содержит предыдущие результаты только для понимания контекста и статуса, "
+    "а не как автоматически включаемые части ответа. При answer_scope=whole_goal нужен общий итог. "
+    "Отрази существенные caveats и unresolved текущих результатов в самом ответе: "
+    "после успешной LLM-реплики система не добавляет второй блок ограничений."
 )
+
+
+def _reply_goal(goal, owner, chat, origin_task_id=None, current_request=None):
+    """Select narration subjects using the durable turn-to-assignment relation."""
+    if origin_task_id is None:
+        return {**goal, 'reply_scope': 'whole_goal', 'reply_mode': 'whole_goal',
+                'current_request': current_request or goal.get('original_request') or ''}
+    with db.get_db() as c:
+        turn = c.execute('SELECT request_key,message_id FROM orchestrator_turns '
+            'WHERE owner_user_id=? AND chat_id=? AND task_id=?',
+            (owner, chat, origin_task_id)).fetchone()
+        if not turn:
+            raise ValueError('goal_reply_turn_not_found')
+        human = c.execute("SELECT content FROM messages WHERE chat_id=? AND role='user' "
+            'AND id<? ORDER BY id DESC LIMIT 1', (chat, turn['message_id'])).fetchone()
+        rows = c.execute('SELECT j.task_id,j.payload FROM worker_goal_request_tasks r '
+            'JOIN worker_jobs j ON j.task_id=r.task_id '
+            'JOIN worker_goal_tasks g ON g.task_id=j.task_id '
+            'WHERE r.owner_user_id=? AND r.request_key=? AND j.owner_user_id=? '
+            'AND j.chat_id=? AND g.goal_id=? ORDER BY j.created_at,j.rowid',
+            (owner, 'turn:' + turn['request_key'], owner, chat, goal['goal_id'])).fetchall()
+    # A status/summary turn creates no Assignments: the caller explicitly addresses
+    # the whole Goal. A delegation turn addresses exactly its admitted Tasks.
+    ids = {row['task_id'] for row in rows}
+    selected = [m for m in goal.get('tasks') or [] if m.get('task_id') in ids]
+    if rows and len(selected) != len(ids):
+        raise ValueError('goal_reply_tasks_missing')
+    request = current_request
+    if request is None and rows:
+        payload = json.loads(rows[0]['payload'])
+        request = payload.get('original_request') or payload.get('message')
+    if request is None and human:
+        request = human['content']
+    if request is None:
+        raise ValueError('goal_reply_request_missing')
+    members = goal.get('tasks') or []
+    first_current = next((i for i, member in enumerate(members) if member.get('task_id') in ids), len(members))
+    return {**goal, 'tasks': selected if rows else goal.get('tasks') or [],
+            'reply_scope': 'turn:' + origin_task_id, 'reply_mode': 'current_turn' if rows else 'whole_goal',
+            'reply_origin_task_id': origin_task_id, 'reply_message_id': turn['message_id'],
+            'current_request': request,
+            'goal_context': {'original_request': goal.get('original_request'), 'status': goal.get('status'),
+                'previous_outcomes': [{'task_id': m.get('task_id'), 'objective': m.get('objective'),
+                    'status': m.get('status'), 'summary': (m.get('report') or {}).get('summary')}
+                    for m in members[:first_current] if m.get('task_id') not in ids] if rows else []}}
 
 
 def _fingerprint(goal, projected):
     material = {
         "goal_id": goal.get("goal_id"),
-        "presentation_version": "execution-v1.1",
+        "presentation_version": "reply-scope-v1",
+        "reply_scope": goal.get('reply_scope'),
+        "current_request": goal.get('current_request'),
         "revision": goal.get("revision"),
         "status": projected["status"],
         "request": goal.get('original_request'),
@@ -88,16 +140,27 @@ def _prepare_storage(connection):
         goal_id TEXT NOT NULL, revision INTEGER NOT NULL,
         owner_user_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
         fingerprint TEXT NOT NULL, answer TEXT NOT NULL, spoken TEXT NOT NULL,
-        created_at REAL NOT NULL, PRIMARY KEY(goal_id, revision)
+        created_at REAL NOT NULL, reply_scope TEXT NOT NULL DEFAULT 'legacy',
+        PRIMARY KEY(goal_id, revision, reply_scope)
     )""")
+    columns = {row[1] for row in connection.execute('PRAGMA table_info(goal_completion_replies)')}
+    if 'reply_scope' not in columns:
+        # Preserve all old replies; they cannot satisfy a newly scoped request.
+        connection.execute('ALTER TABLE goal_completion_replies RENAME TO goal_completion_replies_legacy')
+        _prepare_storage(connection)
+        connection.execute('INSERT INTO goal_completion_replies '
+            '(goal_id,revision,owner_user_id,chat_id,fingerprint,answer,spoken,created_at,reply_scope) '
+            "SELECT goal_id,revision,owner_user_id,chat_id,fingerprint,answer,spoken,created_at,'legacy' "
+            'FROM goal_completion_replies_legacy')
+        connection.execute('DROP TABLE goal_completion_replies_legacy')
 
 
 def _cached(goal, owner, chat, fingerprint, projected):
     with db.get_db() as c:
         _prepare_storage(c)
         row = c.execute("""SELECT fingerprint,answer,spoken FROM goal_completion_replies
-            WHERE goal_id=? AND revision=? AND owner_user_id=? AND chat_id=?""",
-            (goal["goal_id"], goal["revision"], owner, chat)).fetchone()
+            WHERE goal_id=? AND revision=? AND owner_user_id=? AND chat_id=? AND reply_scope=?""",
+            (goal["goal_id"], goal["revision"], owner, chat, goal['reply_scope'])).fetchone()
     if not row:
         return None
     if row["fingerprint"] != fingerprint:
@@ -140,7 +203,7 @@ def _narration_material(goal, projected):
     full existing narrator context. Never infer completion from the prose here.
     """
     members=[entry for entry in goal.get('tasks') or [] if entry.get('required_for_goal',True)]
-    request=goal.get('original_request') or ''
+    request=goal.get('current_request') or goal.get('original_request') or ''
     outcomes=[{'status':entry.get('status'),'objective':entry.get('objective') or '',
         'scope':entry.get('assignment_scope') or '',
         'constraints':entry.get('assignment_constraints') or [],
@@ -151,7 +214,8 @@ def _narration_material(goal, projected):
         'error_code':(entry.get('report') or {}).get('error_code'),
         'evidence_refs':(entry.get('report') or {}).get('evidence_refs') or [],
         'artifacts':(entry.get('report') or {}).get('artifacts') or []} for entry in members]
-    return {'reply_mode':'substantive_result','original_request':request,
+    return {'reply_mode':'substantive_result','answer_scope':goal.get('reply_mode','whole_goal'),'original_request':request,
+        'current_request':goal.get('current_request') or request, 'goal_context':goal.get('goal_context') or {},
         'verified_goal_status':projected['status'],'worker_outcomes':outcomes}
 
 
@@ -206,7 +270,7 @@ async def _narrate(goal, projected):
             raise ValueError('goal_completion_invalid_answer')
         if not isinstance(spoken,str) or not 5<=len(spoken.strip())<=420:
             raise ValueError('goal_completion_invalid_speech')
-        speech=conversational_speech(spoken,request=goal.get('original_request') or '')
+        speech=conversational_speech(spoken,request=goal.get('current_request') or goal.get('original_request') or '')
         if not speech:raise ValueError('goal_completion_unusable_speech')
         if projected['status']!='success':
             import re
@@ -238,6 +302,8 @@ def _persist_to_dialogue(connection, goal, reply, owner, chat):
         metadata = json.loads(row["task_metadata"] or "{}")
         if metadata.get("goalId") != goal["goal_id"] or metadata.get("resultFirst") is not True:
             continue
+        if goal.get('reply_message_id') != row['message_id']:
+            continue
         # Do not overwrite another conversation or a manually authored answer.
         if row["content"] and metadata.get("goalCompletionRevision") is None:
             continue
@@ -252,7 +318,7 @@ def _persist_to_dialogue(connection, goal, reply, owner, chat):
         break
 
 
-async def present_completed_goal(goal, projected, owner, chat):
+async def present_completed_goal(goal, projected, owner, chat, *, origin_task_id=None, current_request=None):
     """Return one stable post-goal reply; never downgrade a task on LLM failure."""
     try:
         from .goal_presentation import include_result_limits
@@ -260,6 +326,19 @@ async def present_completed_goal(goal, projected, owner, chat):
         from goal_presentation import include_result_limits
     if not projected.get("terminal"):
         return projected
+    goal = _reply_goal(goal, owner, chat, origin_task_id, current_request)
+    # Rebuild fallback/limits from the same subjects as the narrator. Goal status
+    # remains the scheduler's established status, never a new language assessment.
+    try:
+        from .goal_presentation import goal_presentation
+    except ImportError:
+        from goal_presentation import goal_presentation
+    projected = goal_presentation(goal)
+    def finish(reply):
+        if reply.get('reply_source') in {'orchestrator_llm', 'cached_existing'}:
+            limits = include_result_limits(goal, {**reply, 'message': '', 'spoken_message': ''})
+            return {**reply, 'caveats': limits['caveats'], 'unresolved': limits['unresolved']}
+        return include_result_limits(goal, reply)
     fingerprint = _fingerprint(goal, projected)
     try:
         stored = _cached(goal, owner, chat, fingerprint, projected)
@@ -272,8 +351,8 @@ async def present_completed_goal(goal, projected, owner, chat):
                     _persist_to_dialogue(c,goal,{**stored,'reply_fingerprint':fingerprint},owner,chat)
             except Exception:
                 pass
-        return include_result_limits(goal, {**projected, **stored})
-    key = (goal["goal_id"], goal["revision"], owner, chat)
+        return finish({**projected, **stored})
+    key = (goal["goal_id"], goal["revision"], goal['reply_scope'], owner, chat)
     lock = _LOCKS.get(key)
     if lock is None:
         lock = asyncio.Lock()
@@ -284,7 +363,7 @@ async def present_completed_goal(goal, projected, owner, chat):
         except Exception:
             return projected
         if stored:
-            return include_result_limits(goal, {**projected, **stored})
+            return finish({**projected, **stored})
         reply = {"message": projected["message"],
                  "spoken_message": projected["spoken_message"],"reply_source":"template",
                  "reply_request_llm_calls":0,"reply_metrics":{'llm_calls':0,'estimated_cost_usd':0}}
@@ -298,18 +377,18 @@ async def present_completed_goal(goal, projected, owner, chat):
                 reply.update(reply_source='template_fallback',reply_request_llm_calls=1,
                     reply_metrics={'llm_calls':1,'latency_ms':round((time.monotonic()-started)*1000),
                         'usage':None,'estimated_cost_usd':None,'error_type':type(exc).__name__})
-        reply = include_result_limits(goal, reply)
+        reply = finish(reply)
         reply['reply_fingerprint']=fingerprint
         try:
             with db.get_db() as c:
                 _prepare_storage(c)
                 c.execute("""INSERT OR IGNORE INTO goal_completion_replies
-                    (goal_id,revision,owner_user_id,chat_id,fingerprint,answer,spoken,created_at)
-                    VALUES(?,?,?,?,?,?,?,?)""",
+                    (goal_id,revision,owner_user_id,chat_id,fingerprint,answer,spoken,created_at,reply_scope)
+                    VALUES(?,?,?,?,?,?,?,?,?)""",
                     (goal["goal_id"], goal["revision"], owner, chat, fingerprint,
-                     reply["message"], reply["spoken_message"], time.time()))
+                     reply["message"], reply["spoken_message"], time.time(), goal['reply_scope']))
                 _persist_to_dialogue(c, goal, reply, owner, chat)
             stored = _cached(goal, owner, chat, fingerprint, projected)
-            return include_result_limits(goal, {**projected,**reply,**(stored or {}),'reply_request_llm_calls':reply.get('reply_request_llm_calls',0)})
+            return finish({**projected,**reply,**(stored or {}),'reply_request_llm_calls':reply.get('reply_request_llm_calls',0)})
         except Exception:
             return projected

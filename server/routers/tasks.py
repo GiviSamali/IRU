@@ -662,7 +662,8 @@ async def api_get_task(task_id: str, request: Request):
                     from ..goal_completion import present_completed_goal
                 except ImportError:
                     from goal_completion import present_completed_goal
-                presentation = await present_completed_goal(goal, presentation, user["id"], task["chat_id"])
+                presentation = await present_completed_goal(goal, presentation, user["id"], task["chat_id"],
+                    origin_task_id=task['task_id'],current_request=task.get('message'))
         except ValueError:
             # A deleted or inaccessible Goal never gives access to another chat.
             presentation = {"status": "unknown", "terminal": True,

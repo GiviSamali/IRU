@@ -90,7 +90,8 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
                     from ..goal_completion import present_completed_goal
                 except ImportError:
                     from goal_completion import present_completed_goal
-                goal_result = await present_completed_goal(goal, goal_result, user["id"], task["chat_id"])
+                goal_result = await present_completed_goal(goal, goal_result, user["id"], task["chat_id"],
+                    origin_task_id=task['task_id'],current_request=task.get('message'))
         except ValueError:
             raise HTTPException(404, "Результат цели недоступен") from None
         if not goal_result["terminal"]:
