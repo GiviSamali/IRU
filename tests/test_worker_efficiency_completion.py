@@ -164,7 +164,7 @@ def test_news_to_pptx_scripted_path_four_worker_turns_no_assessor(monkeypatch):
         captured=seen,send_command_fn=send,cfg={'model':'mock'})
     assert len(seen)==4 and len(queries)==3 and dispatched==['office_pptx']
     assert 'https://example.org/1' in json.dumps(seen[2]['messages'])
-    assert 'untrusted_search_excerpts' in json.dumps(seen[2]['messages'])
+    assert 'untrusted_tool_data' in json.dumps(seen[2]['messages'])
     assert not any(x.get('phase')=='result_coverage' for x in seen)
     report=build_worker_report({**task,'status':'done','commands':result['commands'],'answer':result['answer']})
     assert report['goal_completed'] and report['artifacts'][0]['content_verified']

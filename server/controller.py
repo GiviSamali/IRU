@@ -218,7 +218,8 @@ async def _chat_completion_request(
 
     try:from .context_budget import fit_request, calibrated_config
     except ImportError:from context_budget import fit_request, calibrated_config
-    request_json, token_budget = fit_request(request_json, calibrated_config(cfg,model), usage_context.get('context_current_user_index'))
+    request_json, token_budget = fit_request(request_json, calibrated_config(cfg,model), usage_context.get('context_current_user_index'),
+        preserve_tool_context=usage_context.get('preserve_worker_tool_context') is True)
     usage_context['metadata']['context_budget'] = token_budget
 
     resp = None

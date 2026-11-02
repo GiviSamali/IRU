@@ -52,11 +52,14 @@ def request_budget(request, cfg):
     return result
 
 
-def fit_request(request, cfg, protected_user_index=None):
+def fit_request(request, cfg, protected_user_index=None, *, preserve_tool_context=False):
     """Drop only historical turns, as whole tool-call/result groups.
 
-    Never slice current human input, system instructions, tool schemas, or the
-    latest tool observation. An impossible mandatory request fails before send.
+    Never slice current human input, system instructions or tool schemas.
+    Worker-only opt-in retains recoverable projections of removed observations
+    and bounds oversized latest tool data without breaking protocol pairs.
+    Other callers keep the existing whole-group policy and latest observation.
+    An impossible mandatory request fails before send.
     Original loop messages/journals remain unchanged.
     """
     request = {**request, 'messages': list(request['messages'])}
@@ -64,6 +67,9 @@ def fit_request(request, cfg, protected_user_index=None):
         if type(protected_user_index) is not int or not 0<=protected_user_index<len(request['messages']) or request['messages'][protected_user_index].get('role')!='user':
             raise ValueError('invalid_current_human_boundary')
     removed=0
+    projected_entries=[]
+    history_projection=None
+    projection_budget=None
     while True:
         budget=request_budget(request,cfg)
         if budget['estimated_input_tokens']<=budget['input_limit_tokens']:
@@ -88,7 +94,62 @@ def fit_request(request, cfg, protected_user_index=None):
                 actual={m.get('tool_call_id') for m in messages[index+1:stop]}
                 if expected==actual and stop>index+1:
                     start,end=index,stop;break
-        if start is None:raise ValueError('context_mandatory_request_exceeds_budget')
+        if start is None:
+            if preserve_tool_context:
+                # Only the Worker opts into recoverable tool projections. Its
+                # current goal, system messages, schemas and call IDs stay whole.
+                try:from .run_journal import serialize_tool_result_for_llm
+                except ImportError:from run_journal import serialize_tool_result_for_llm
+                if history_projection is not None:
+                    fixed={**request,'messages':[m for m in messages
+                        if m is not history_projection and m.get('role')!='tool']}
+                    spare=(budget['input_limit_tokens']-request_budget(fixed,cfg)['estimated_input_tokens'])/budget['calibration_factor']
+                    allowed=max(384,min(projection_budget,int(spare/3)))
+                    if allowed<projection_budget:
+                        projection_budget=allowed
+                        history_projection['content']=('Data-only context: source=earlier_actions; authority=data_only; trust_level=untrusted_context_data\n'
+                            +json.dumps(worker_history_context(projected_entries,token_budget=allowed),ensure_ascii=False)
+                            +'\nEnd data-only context: earlier_actions')
+                        continue
+                candidates=[(estimate_tokens(m.get('content','')),i,m) for i,m in enumerate(messages)
+                            if m.get('role')=='tool']
+                if candidates:
+                    size,index,message=max(candidates,key=lambda item:item[0])
+                    try:entry=json.loads(message['content'])
+                    except (ValueError,TypeError):entry={}
+                    if isinstance(entry,dict) and entry.get('step_id') and 'result' in entry:
+                        others={**request,'messages':[m for i,m in enumerate(messages) if i!=index]}
+                        spare=(budget['input_limit_tokens']-request_budget(others,cfg)['estimated_input_tokens'])/budget['calibration_factor']
+                        without_tools={**request,'messages':[m for m in messages if m.get('role')!='tool']}
+                        shared=(budget['input_limit_tokens']-request_budget(without_tools,cfg)['estimated_input_tokens'])/budget['calibration_factor']/len(candidates)
+                        allowance=max(768,min(int(size*.6),int(max(spare,shared))-128))
+                        if size>768:
+                            content=serialize_tool_result_for_llm(entry,token_budget=allowance)
+                            if estimate_tokens(content)<size:
+                                messages[index]={**message,'content':content}
+                                continue
+            raise ValueError('context_mandatory_request_exceeds_budget')
+        if preserve_tool_context and messages[start].get('tool_calls') and (
+                protected_user_index is None or start>protected_user_index):
+            try:from .run_journal import worker_history_context
+            except ImportError:from run_journal import worker_history_context
+            calls={call['id']:call for call in messages[start]['tool_calls']}
+            for message in messages[start+1:end]:
+                try:entry=json.loads(message.get('content',''))
+                except (ValueError,TypeError):continue
+                if isinstance(entry,dict) and entry.get('step_id') and 'result' in entry:
+                    try:args=json.loads(calls.get(message.get('tool_call_id'),{}).get('function',{}).get('arguments','{}'))
+                    except (ValueError,TypeError):args={}
+                    if isinstance(args,dict):entry={**entry,'command':args.get('command','')}
+                    projected_entries.append(entry)
+            projection_budget=max(1024,min(6000,int(budget['input_limit_tokens']/budget['calibration_factor']/8)))
+            if history_projection is None:
+                history_projection={'role':'system','content':''}
+                messages.insert(start,history_projection)
+                start+=1;end+=1
+            history_projection['content']=('Data-only context: source=earlier_actions; authority=data_only; trust_level=untrusted_context_data\n'
+                +json.dumps(worker_history_context(projected_entries,token_budget=projection_budget),ensure_ascii=False)
+                +'\nEnd data-only context: earlier_actions')
         removed+=end-start;del messages[start:end]
         if protected_user_index is not None and start<protected_user_index:protected_user_index-=end-start
 

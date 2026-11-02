@@ -143,7 +143,8 @@ def test_notes_survive_bounded_history_but_never_replace_original_facts():
     history = run_journal.worker_history_context(journal)
     assert history['working_notes']['step_ids'] == ['step_1']
     assert history['steps'][0]['step_id'] == 'step_1'
-    assert 'ORIGINAL-FACT-' not in json.dumps(history)
+    assert len(json.dumps(history)) < len(json.dumps(journal))
+    assert history['steps'][0]['details_omitted']
     assert 'ORIGINAL-FACT-' in run_journal.read_current_step(journal, 'step_1')['report_text']
 
 

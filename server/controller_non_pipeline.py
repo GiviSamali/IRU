@@ -57,7 +57,7 @@ try:
         append_answer_step,
         append_tool_step,
         compact_write_content_result,
-        worker_history_context,
+        wrap_tool_result_for_llm,
         read_current_step,
         is_answer_clarification_tool,
         is_answer_failure_tool,
@@ -119,7 +119,7 @@ except ImportError:
         append_answer_step,
         append_tool_step,
         compact_write_content_result,
-        worker_history_context,
+        wrap_tool_result_for_llm,
         read_current_step,
         is_answer_clarification_tool,
         is_answer_failure_tool,
@@ -293,8 +293,6 @@ async def process_non_pipeline_command(
 
     pending_corrections = []
 
-    history_start_index = len(messages)
-
     def add_correction(correction: str):
         # Keep thinking history even when an attempted call was rejected. Invalid
         # tool calls are not replayed or added as executed evidence.
@@ -338,7 +336,7 @@ async def process_non_pipeline_command(
         messages.append({
             "role": "tool",
             "tool_call_id": tool_call_id,
-            "content": serialize_tool_result_for_llm(entry),
+            "content": json.dumps(wrap_tool_result_for_llm(entry), ensure_ascii=False),
         })
 
     def cancelled_result(iteration: int | None = None) -> dict:
@@ -383,18 +381,8 @@ async def process_non_pipeline_command(
         for iteration in range(max_iterations):
             if is_task_cancel_requested(poll_task_id):
                 return cancelled_result(iteration + 1)
-            # Retain the latest provider exchange verbatim (including reasoning).
-            # Earlier completed exchanges become data-only journal projections.
-            groups = [i for i in range(history_start_index,len(messages))
-                      if messages[i].get('role')=='assistant' and messages[i].get('tool_calls')]
-            if len(groups)>1:
-                last = groups[-1]
-                from_index = len(commands_log)
-                for i,entry in enumerate(commands_log):
-                    if entry.get('iteration') == iteration:
-                        from_index=i;break
-                messages[history_start_index:last] = [{'role':'system','content':data_only_context(
-                    'earlier_actions', worker_history_context(commands_log[:from_index]))}]
+            # Keep completed exchanges, including paged originals. The provider's
+            # existing request budget reduces them only when the request is full.
             if pending_corrections:
                 messages.append({'role':'user','content':'\n'.join(dict.fromkeys(pending_corrections))})
                 pending_corrections.clear()
@@ -424,7 +412,8 @@ async def process_non_pipeline_command(
                     max_tokens=cfg.get("max_tokens", 32768),
                     tool_choice="auto",
                     # The transient budget message precedes the real user turn.
-                    usage_context={**(usage_context or {}), "phase": phase,"context_current_user_index":current_user_index+1},
+                    usage_context={**(usage_context or {}), "phase": phase,"context_current_user_index":current_user_index+1,
+                                   "preserve_worker_tool_context": True},
                     phase=phase,
                 )
             except httpx.HTTPStatusError as exc:

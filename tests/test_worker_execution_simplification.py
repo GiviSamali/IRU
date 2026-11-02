@@ -183,9 +183,9 @@ def test_compact_history_can_retrieve_full_own_step(monkeypatch):
         _message(tool_calls=[_tool_call('b','web_search',{'query':'second'})]),
         _message(tool_calls=[_tool_call('c','system_get_last_run_summary',{'step_id':'step_1','report_offset':0})]),
         answer('Read')],captured=seen)
-    state=next(m for m in seen[2]['messages'] if 'earlier_actions' in m.get('content',''))
-    assert 'step_1' in state['content'] and 'details_omitted' in state['content']
-    assert len(json.dumps(seen[2]['messages']))<len(json.dumps(seen[1]['messages']))+5000
+    observations=[json.loads(m['content']) for m in seen[2]['messages'] if m.get('role')=='tool']
+    assert observations[0]['step_id']=='step_1'
+    assert len(observations[0]['result']['results'][0]['content'])>18000
     page=next(c['result'] for c in result['commands'] if c.get('tool_name')=='system.get_last_run_summary')
     assert page['status']=='success' and 0 < page['next_offset'] <= 4000 and 'first' in page['report_text']
     assert len(result['commands'][0]['result']['results'][0]['content'])>18000

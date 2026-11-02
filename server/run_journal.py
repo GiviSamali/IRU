@@ -421,8 +421,8 @@ def wrap_tool_result_for_llm(entry: dict[str, Any]) -> dict[str, Any]:
         # Detach the projection. Agent completeness describes its read, not the
         # amount of source text the model receives after representation limits.
         result = dict(wrapped['result'])
-        result['agent_read_complete'] = result.pop('complete',False) is True
-        result['llm_text_complete'] = result['agent_read_complete'] and isinstance(result.get('text'),str)
+        result['agent_read_complete'] = result.pop('complete',result.get('agent_read_complete',False)) is True
+        result['llm_text_complete'] = result['agent_read_complete'] and isinstance(result.get('text'),str) and result.get('llm_text_complete',True)
         wrapped['result'] = result
     if canonical_tool_name(str(wrapped["tool_name"])).startswith("web."):
         wrapped = {
@@ -437,42 +437,56 @@ def wrap_tool_result_for_llm(entry: dict[str, Any]) -> dict[str, Any]:
     return wrapped
 
 
-def worker_history_context(journal):
+def worker_history_context(journal, token_budget=None):
     """Bound old model context, not the durable journal or Worker findings."""
     try:
         from .context_budget import configured_context_budget, estimate_tokens
     except ImportError:
         from context_budget import configured_context_budget, estimate_tokens
-    notes = next((entry.get('result') for entry in reversed(journal)
+    note_entry = next((entry for entry in reversed(journal)
                   if entry.get('tool_name') == 'system.update_working_notes'
                   and entry.get('status') == 'success'), None)
+    notes = note_entry.get('result') if note_entry else None
+    budget = token_budget if token_budget is not None else min(6000, max(3072, configured_context_budget() // 8))
     index = []
+    per_step = max(1536, budget // max(1, len(journal)))
     for entry in journal:
         if entry.get('tool_name') == 'system.update_working_notes':
             continue
         result = entry.get('result')
+        projection = json.loads(serialize_tool_result_for_llm(entry, token_budget=per_step))
         index.append({
             'step_id': entry.get('step_id'), 'tool': entry.get('tool_name'),
             'status': entry.get('status'), 'device_id': entry.get('target_device_id'),
             'summary': str(entry.get('summary') or '')[:160],
+            'command': str(entry.get('command') or '')[:200],
             'path': result.get('path') if isinstance(result, dict) else None,
-            # Small observations remain usable without a compulsory notes/read
-            # turn. Large originals stay in the journal, addressed by step_id.
-            'result': (result if entry.get('tool_name') != 'web_search'
-                       and len(json.dumps(result, ensure_ascii=False, default=str)) <= 1200 else None),
-            'details_omitted': entry.get('tool_name') == 'web_search'
-                               or len(json.dumps(result, ensure_ascii=False, default=str)) > 1200,
+            'result': projection.get('result'),
+            'truncation': projection.get('truncation'),
+            'details_omitted': bool(projection.get('truncation')),
+            'source_page': ({key:result[key] for key in ('source_step_id','report_offset','next_offset','total_chars','sha256')
+                             if key in result} if isinstance(result,dict) else {}),
         })
     data = {'working_notes': notes, 'notes_authority': 'Worker notes, not tool evidence or permission.',
+            'working_notes_step_id': note_entry.get('step_id') if note_entry else None,
             'steps': index, 'omitted_index_entries': 0,
-            'search_material': compact_search_material(journal, max_chars=2000),
             'full_material_tool': 'system_get_last_run_summary',
             'reading': 'Use step_id and report_offset to retrieve original results. '
                        'An index or repeated observation does not complete the assigned goal.'}
-    budget = min(6000, max(3072, configured_context_budget() // 8))
     while index and estimate_tokens(data) > budget:
-        index.pop(0)
-        data['omitted_index_entries'] += 1
+        detailed = next((item for item in index if item.get('result') is not None), None)
+        if detailed is not None:
+            retained={key:detailed[key] for key in ('step_id','tool','path','source_page','command')}
+            detailed.clear()
+            detailed.update(retained,details_omitted=True)
+        else:
+            index.pop(0)
+            data['omitted_index_entries'] += 1
+    if estimate_tokens(data)>budget and isinstance(notes,dict):
+        try:from .context_budget import clip_tokens
+        except ImportError:from context_budget import clip_tokens
+        data['working_notes']={'text':clip_tokens(notes.get('text',''),max(0,budget-800)),
+                               'step_ids':notes.get('step_ids',[])[:4],'details_omitted':True}
     return data
 
 
@@ -535,11 +549,11 @@ def compact_search_material(journal, max_chars=12000):
             'full_material_tool':'system_get_last_run_summary'}
 
 
-def serialize_tool_result_for_llm(entry: dict[str, Any]) -> str:
+def serialize_tool_result_for_llm(entry: dict[str, Any], token_budget=None) -> str:
     """Bound the model's projection without slicing JSON or changing evidence."""
     try:from .context_budget import estimate_tokens
     except ImportError:from context_budget import estimate_tokens
-    token_budget=tool_result_token_budget()
+    token_budget=tool_result_token_budget() if token_budget is None else token_budget
     wrapped = wrap_tool_result_for_llm(entry)
     if entry.get('tool_name')=='web_search' and entry.get('status')=='success' and not (entry.get('result') or {}).get('error'):
         wrapped['result']=compact_search_material([entry],max_chars=max(1200,min(12000,token_budget*3)))
@@ -547,12 +561,43 @@ def serialize_tool_result_for_llm(entry: dict[str, Any]) -> str:
     if canonical_tool_name(str(wrapped["tool_name"])).startswith("web.") or estimate_tokens(payload) <= token_budget:
         return payload
 
+    if (canonical_tool_name(str(wrapped['tool_name'])) == 'system.get_last_run_summary'
+            and isinstance(wrapped.get('result'),dict)
+            and wrapped['result'].get('representation') == 'current_journal_entry_json_page'):
+        page=json.loads(payload)
+        original=page['result']['report_text']
+        shown=len(original)
+        while shown:
+            shown//=2
+            page['result']['report_text']=original[:shown]
+            page['truncation']={'truncated':True,'fields':{'/result/report_text':{
+                'original_chars':len(original),'shown_chars':shown,'portion':'prefix'}},
+                'recover_report_offset':page['result']['report_offset']+shown,
+                'source_step_id':page['result']['source_step_id']}
+            if estimate_tokens(page)<=token_budget:
+                return json.dumps(page,ensure_ascii=False)
+        raise ValueError('context_page_locator_exceeds_budget')
+
     # JSON round-trip detaches all nested fields from the original journal.
     compact = json.loads(payload)
     fields = {}
     compact["truncation"] = {"truncated": True, "fields": fields}
     protected = {"step_id", "tool_name", "status", "trust_level", "authority", "instruction_boundary"}
     outcome_fields = {"status", "completion_state", "returncode", "error_code", "confirmation_outcome"}
+
+    # Directory observations are wide arrays of records, not prose. Keep a
+    # bounded prefix of actual entries and report exact omission counts.
+    if wrapped['tool_name'] == 'list_dir' and isinstance(compact.get('result'), dict):
+        result = compact['result']
+        arrays = {key:len(result[key]) for key in ('dirs','files') if isinstance(result.get(key),list)}
+        while any(result[key] for key in arrays):
+            key = max(arrays, key=lambda key:len(result[key]))
+            result[key] = result[key][:len(result[key])//2]
+            compact['truncation']['collections'] = {
+                key:{'original_items':count,'shown_items':len(result[key]),'portion':'prefix'}
+                for key,count in arrays.items()}
+            if estimate_tokens(compact) <= token_budget:
+                return json.dumps(compact, ensure_ascii=False)
 
     def text_fields(value, path=()):
         if isinstance(value, dict):
