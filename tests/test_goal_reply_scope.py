@@ -4,6 +4,8 @@ import copy
 import json
 import time
 
+import pytest
+
 from server import database as db, goal_completion as completion, orchestrator
 from server.goal_presentation import goal_presentation
 from test_orchestrator_worker import owners
@@ -24,7 +26,8 @@ def setup_goal(owner):
             c.execute('INSERT INTO messages(chat_id,role,content,created_at) VALUES(?,?,?,?)',
                       (owner['chat_id'], 'user', request, time.time()))
             mid = c.execute('INSERT INTO messages(chat_id,role,content,task_metadata,created_at) VALUES(?,?,?,?,?)',
-                (owner['chat_id'], 'assistant', '', json.dumps({'goalId': g['goal_id'], 'resultFirst': True}), time.time())).lastrowid
+                (owner['chat_id'], 'assistant', '', json.dumps({'goalId': g['goal_id'], 'resultFirst': True,
+                    'taskKind': 'orchestrator', '_taskId': 'turn-' + key}), time.time())).lastrowid
             mids[key] = mid
             c.execute('INSERT INTO orchestrator_turns VALUES(?,?,?,?,?,?,?,?)',
                 (owner['id'], key, 'f', 'turn-' + key, owner['chat_id'], mid, '{}', time.time()))
@@ -121,3 +124,93 @@ def test_legacy_cache_migration_preserves_old_reply_without_reusing_it(owners):
         row = c.execute('SELECT answer,reply_scope FROM goal_completion_replies').fetchone()
         assert tuple(row) == ('old answer', 'legacy')
         completion._prepare_storage(c)
+
+
+def partial_goal(owner):
+    g, mids = setup_goal(owner)
+    g.update(status='partial', goal_completed=False)
+    desktop = g['tasks'][0]
+    desktop.update(status='failed', result=None)
+    desktop['report'].update(status='failed', goal_completed=False, summary='Desktop could not be read')
+    return g, mids
+
+
+def test_successful_current_result_is_distinct_from_partial_goal_in_narration(owners):
+    owner, _ = owners
+    g, _ = partial_goal(owner)
+    before = copy.deepcopy(g)
+    scoped = completion._reply_goal(g, owner['id'], owner['chat_id'], 'turn-work')
+    material = completion._narration_material(scoped, goal_presentation(scoped))
+    assert material['verified_goal_status'] == 'partial'
+    assert [m['status'] for m in material['worker_outcomes']] == ['success']
+    # The narrator can state success of Work without claiming Goal success.
+    assert material.get('verified_current_result_status') == 'success'
+    assert g == before
+
+
+@pytest.mark.parametrize('desktop_failed', [False, True])
+def test_desktop_work_summary_chat_reload_and_voice_keep_reply_scope(owners, monkeypatch, desktop_failed):
+    from server import voice, worker_scheduler
+    from server.routers import chats as chat_routes, voice as voice_routes
+    from server.runtime_state import tasks
+
+    owner, _ = owners
+    g, _ = partial_goal(owner) if desktop_failed else setup_goal(owner)
+    before = copy.deepcopy(g)
+    calls, spoken = [], []
+    monkeypatch.setattr(completion, 'load_llm_config', lambda: {'model': 'fake'})
+    monkeypatch.setattr(worker_scheduler, 'goal_view', lambda *args: copy.deepcopy(g))
+    monkeypatch.setattr(chat_routes, 'get_current_user', lambda _: owner)
+    monkeypatch.setattr(voice_routes, 'get_current_user', lambda _: owner)
+    monkeypatch.setattr(voice_routes, 'check_rate_limit', lambda _: True)
+    monkeypatch.setattr(voice, 'speech_configured', lambda: True)
+
+    async def provider(*args, **kwargs):
+        material = json.loads(args[3][-1]['content'])['untrusted_evidence']
+        calls.append(material)
+        subjects = [m['objective'] for m in material['worker_outcomes']]
+        if subjects == ['What is inside Work?']:
+            text = 'Готово. Папку Работа прочитал: 28 объектов.'
+        elif len(subjects) == 2:
+            text = 'Desktop прочитать не удалось. Папку Работа прочитал.' if desktop_failed else 'Desktop и папка Работа прочитаны.'
+        else:
+            text = 'Desktop прочитать не удалось.' if desktop_failed else 'Desktop прочитан.'
+        return {'choices': [{'finish_reason': 'tool_calls', 'message': {'tool_calls': [{'function': {
+            'name': 'goal_completion_reply', 'arguments': json.dumps({'answer': text, 'spoken_response': text})}}]}}]}
+
+    async def synthesize(text):
+        spoken.append(text)
+        return b'fake-audio'
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError('No additional speech LLM')
+
+    monkeypatch.setattr(completion, '_chat_completion_request', provider)
+    monkeypatch.setattr(voice, 'synthesize', synthesize)
+    monkeypatch.setattr(voice, 'shorten_answer', forbidden)
+    monkeypatch.setitem(tasks, 'turn-work', {'task_id': 'turn-work', 'user_id': owner['id'],
+        'chat_id': owner['chat_id'], 'kind': 'orchestrator', 'result_first': True,
+        'goal_id': g['goal_id'], 'status': 'done', 'message': 'What is inside Work?', 'answer': ''})
+
+    async def scenario():
+        first = await chat_routes.api_get_messages(owner['chat_id'], None)
+        again = await chat_routes.api_get_messages(owner['chat_id'], None)
+        for reply in (first, again):
+            messages = {m['_taskId']: m for m in reply['messages'] if m.get('_taskId')}
+            assert messages['turn-work']['content'] == 'Готово. Папку Работа прочитал: 28 объектов.'
+            assert 'Desktop' in messages['turn-summary']['content']
+            assert 'Работа' in messages['turn-summary']['content']
+        response = await voice_routes.task_speech('turn-work', None, part=0)
+        assert response.status_code == 200
+        monkeypatch.delitem(tasks, 'turn-work')
+        restored = await voice_routes.task_speech('turn-work', None, part=0)
+        assert restored.status_code == 200
+        assert spoken == ['Готово. Папку Работа прочитал: 28 объектов.'] * 2
+        assert len(calls) == 3  # Reload and voice reuse the three scoped replies.
+        work = next(m for m in calls if m['current_request'] == 'What is inside Work?')
+        assert [m['caveats'] for m in work['worker_outcomes']] == [['work limit']]
+        assert work['verified_goal_status'] == ('partial' if desktop_failed else 'success')
+        if desktop_failed:
+            assert work.get('verified_current_result_status') == 'success'
+        assert g == before
+    asyncio.run(scenario())

@@ -57,6 +57,7 @@ _SYSTEM = (
     "Для успешной цели говори от первого лица в мужском роде. "
     "Если данных для предметного вывода недостаточно, так и скажи."
     " Технический статус уже установлен WorkerReport и неизменяем. При partial/unknown/failed "
+    "в области текущего ответа "
     "не говори, что поручение выполнено: объясни полученное и существенный пробел. "
     "Отделяй наблюдения от гипотез; рекомендации не являются невыполненными требованиями. "
     "Смысл исходного поручения и границы каждого assignment сохраняй."
@@ -65,6 +66,10 @@ _SYSTEM = (
     "а не как автоматически включаемые части ответа. При answer_scope=whole_goal нужен общий итог. "
     "Отрази существенные caveats и unresolved текущих результатов в самом ответе: "
     "после успешной LLM-реплики система не добавляет второй блок ограничений."
+    " verified_goal_status относится ко всей Goal. При answer_scope=current_turn формулируй "
+    "итог текущего поручения по verified_current_result_status и worker_outcomes: успешный "
+    "текущий результат можно назвать выполненным, даже если вся Goal остаётся partial. "
+    "Не выдавай при этом всю Goal за выполненную."
 )
 
 
@@ -93,12 +98,14 @@ def _reply_goal(goal, owner, chat, origin_task_id=None, current_request=None):
     selected = [m for m in goal.get('tasks') or [] if m.get('task_id') in ids]
     if rows and len(selected) != len(ids):
         raise ValueError('goal_reply_tasks_missing')
-    request = current_request
+    # Restored in-memory dialogues may carry a placeholder message. Prefer the
+    # durable human turn or admitted Assignment request over that projection.
+    request = human['content'] if human else None
     if request is None and rows:
         payload = json.loads(rows[0]['payload'])
         request = payload.get('original_request') or payload.get('message')
-    if request is None and human:
-        request = human['content']
+    if request is None:
+        request = goal.get('original_request') or current_request
     if request is None:
         raise ValueError('goal_reply_request_missing')
     members = goal.get('tasks') or []
@@ -116,7 +123,7 @@ def _reply_goal(goal, owner, chat, origin_task_id=None, current_request=None):
 def _fingerprint(goal, projected):
     material = {
         "goal_id": goal.get("goal_id"),
-        "presentation_version": "reply-scope-v1",
+        "presentation_version": "reply-scope-v2",
         "reply_scope": goal.get('reply_scope'),
         "current_request": goal.get('current_request'),
         "revision": goal.get("revision"),
@@ -214,8 +221,13 @@ def _narration_material(goal, projected):
         'error_code':(entry.get('report') or {}).get('error_code'),
         'evidence_refs':(entry.get('report') or {}).get('evidence_refs') or [],
         'artifacts':(entry.get('report') or {}).get('artifacts') or []} for entry in members]
+    states = {entry.get('status') for entry in members}
+    current_status = ('success' if members and all(entry.get('status') == 'success'
+        and (entry.get('report') or {}).get('goal_completed') is True and entry.get('result') for entry in members)
+        else next(iter(states)) if len(states) == 1 and states != {'success'} else 'partial' if states else 'unknown')
     return {'reply_mode':'substantive_result','answer_scope':goal.get('reply_mode','whole_goal'),'original_request':request,
         'current_request':goal.get('current_request') or request, 'goal_context':goal.get('goal_context') or {},
+        'verified_current_result_status':current_status,
         'verified_goal_status':projected['status'],'worker_outcomes':outcomes}
 
 
@@ -272,7 +284,9 @@ async def _narrate(goal, projected):
             raise ValueError('goal_completion_invalid_speech')
         speech=conversational_speech(spoken,request=goal.get('current_request') or goal.get('original_request') or '')
         if not speech:raise ValueError('goal_completion_unusable_speech')
-        if projected['status']!='success':
+        reply_status = (material['verified_current_result_status'] if material['answer_scope']=='current_turn'
+                        else projected['status'])
+        if reply_status!='success':
             import re
             if any(re.match(r'^\s*(?:\*\*)?(?:готово|всё выполнено|задача выполнена|done)\b',value,re.I)
                    for value in (answer,spoken)):
@@ -326,6 +340,16 @@ async def present_completed_goal(goal, projected, owner, chat, *, origin_task_id
         from goal_presentation import include_result_limits
     if not projected.get("terminal"):
         return projected
+    if origin_task_id is None:
+        # Compatibility callers may omit the turn only when its origin is unique.
+        with db.get_db() as c:
+            rows = c.execute('SELECT t.task_id,m.task_metadata FROM orchestrator_turns t '
+                'JOIN messages m ON m.id=t.message_id WHERE t.owner_user_id=? AND t.chat_id=?',
+                (owner, chat)).fetchall()
+        origins = [row['task_id'] for row in rows if json.loads(row['task_metadata'] or '{}').get('goalId')==goal['goal_id']]
+        if len(origins)==1:
+            origin_task_id = origins[0]
+            current_request = current_request or goal.get('original_request') or ''
     goal = _reply_goal(goal, owner, chat, origin_task_id, current_request)
     # Rebuild fallback/limits from the same subjects as the narrator. Goal status
     # remains the scheduler's established status, never a new language assessment.

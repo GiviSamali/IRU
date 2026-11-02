@@ -40,7 +40,7 @@ def test_goal_speech_intent_survives_cache_and_actual_tts_route(owners,monkeypat
     monkeypatch.setattr(voice,'synthesize',synthesize)
     monkeypatch.setattr(voice,'shorten_answer',forbidden)
     tasks['turn']={'task_id':'turn','user_id':owner['id'],'chat_id':owner['chat_id'],
-        'kind':'orchestrator','result_first':True,'goal_id':g['goal_id'],'status':'done','message':'Диалог','answer':''}
+        'kind':'orchestrator','result_first':True,'goal_id':g['goal_id'],'status':'done','message':user_request,'answer':''}
     async def scenario():
         reply=await completion.present_completed_goal(g,goal_presentation(g),owner['id'],owner['chat_id'])
         assert reply['message']==written and reply['spoken_message']==spoken
