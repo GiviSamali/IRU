@@ -20,6 +20,17 @@ ALIASES = {
     'browser': {'chrome.exe', 'msedge.exe', 'firefox.exe', 'comet.exe', 'browser.exe', 'opera.exe', 'brave.exe'},
 }
 
+def activate_window(user32, handle, *, minimized, show=False):
+    if minimized or show:
+        show_window = user32.ShowWindow if show else user32.ShowWindowAsync
+        show_window(handle, 9 if minimized else 5)
+    return bool(user32.SetForegroundWindow(handle))
+
+
+def request_window_close(user32, handle):
+    return bool(user32.PostMessageW(handle, 0x0010, 0, 0))
+
+
 class WindowsAdapter:
     def __init__(self):
         if os.name != 'nt':
@@ -125,9 +136,8 @@ class WindowsAdapter:
         if action in {'minimize', 'maximize', 'restore'}:
             self.u.ShowWindowAsync(handle, {'minimize': 6, 'maximize': 3, 'restore': 9}[action]); return True
         if action == 'activate':
-            if self.u.IsIconic(handle): self.u.ShowWindowAsync(handle, 9)
-            return bool(self.u.SetForegroundWindow(handle))
-        if action == 'close': return bool(self.u.PostMessageW(handle, 0x0010, 0, 0))  # WM_CLOSE, never terminate
+            return activate_window(self.u, handle, minimized=self.u.IsIconic(handle))
+        if action == 'close': return request_window_close(self.u, handle)
         self.u.ShowWindowAsync(handle, 9)
         return bool(self.u.SetWindowPos(handle, None, rect['left'], rect['top'], rect['right']-rect['left'], rect['bottom']-rect['top'], 0x4014))
 

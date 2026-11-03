@@ -64,10 +64,12 @@ def select_context_facts(facts, query, *, limit=4):
 
 # SQLite builds the uncorrelated IN lookup once per query. Do not correlate
 # json_each with each message: fully covered archives would rescan every summary.
+RECENT_DIALOGUE_LIMIT = 32
+
 _PENDING_SOURCE_IDS_SQL = '''
     SELECT m.id FROM messages m WHERE m.chat_id=? AND m.id < (
         SELECT MIN(id) FROM (SELECT id FROM messages
-            WHERE chat_id=? AND id<=? ORDER BY id DESC LIMIT 6))
+            WHERE chat_id=? AND id<=? ORDER BY id DESC LIMIT ?))
     AND m.id NOT IN (SELECT j.value FROM context_summaries s,json_each(s.source_ids) j
         WHERE s.owner_user_id=? AND s.chat_id=? AND j.value IS NOT NULL)
     ORDER BY m.id LIMIT 128
@@ -202,12 +204,10 @@ def resolve_sources(owner, chat_id, ids=None, offset=0, *, message_range=None, e
 
 
 def history_for(owner, chat_id, exclude_id=None, *, query="", selection=None):
-    recent=source_rows(owner,chat_id,exclude_id=exclude_id,limit=32)
-    # Two opening anchors plus bounded lexical matches, not a full transcript.
-    with db.get_db() as c:
-        prefix=[r[0] for r in c.execute('SELECT id FROM messages WHERE chat_id=? AND id!=? ORDER BY id LIMIT 2',(chat_id,exclude_id or -1))]
+    recent=source_rows(owner,chat_id,exclude_id=exclude_id,limit=RECENT_DIALOGUE_LIMIT)
+    recent_ids = {row["id"] for row in recent}
     matches=source_rows(owner,chat_id,exclude_id=exclude_id,limit=16,before_id=recent[0]['id'] if recent else None,query=query) if query else []
-    rows=sorted({r['id']:r for r in [*source_rows(owner,chat_id,prefix),*matches,*recent]}.values(),key=lambda r:r['id'])
+    rows=sorted({r['id']:r for r in [*matches,*recent]}.values(),key=lambda r:r['id'])
     rows=[r for r in rows if not ((json.loads(r.get('task_metadata') or '{}') or {}).get('resultFirst') and (json.loads(r.get('task_metadata') or '{}') or {}).get('taskKind')=='worker')]
     ids=[r['id'] for r in rows]
     with db.get_db() as c:
@@ -246,9 +246,9 @@ def history_for(owner, chat_id, exclude_id=None, *, query="", selection=None):
         summaries.append({'id':item['id'],'items':json.loads(item['content']),'source_message_ids':source_ids,
             'source_hash':item['source_hash'].removeprefix('v2:'),'related_task_ids':json.loads(item['related_tasks']),
             'source_verified':False,'authority':'data_only'})
-    history=[{'id':r['id'],'role':r['role'],'content':history_content(r)} for r in rows if r['id'] not in covered]
+    history=[{'id':r['id'],'role':r['role'],'content':r['content'] if r['id'] in recent_ids else history_content(r)} for r in rows if r['id'] in recent_ids or r['id'] not in covered]
     if selection is not None:
-        selection.update(recent_limit=32,match_limit=16,selection_incomplete=bounds[2]>len(set(ids)|covered),
+        selection.update(recent_limit=RECENT_DIALOGUE_LIMIT,match_limit=16,selection_incomplete=bounds[2]>len(set(ids)|covered),
             first_message_id=bounds[0],last_message_id=bounds[1],total_messages=bounds[2])
         directory=summary_archive(owner,chat_id)
         if directory.get('total_summaries',0)>len(summaries):
@@ -292,13 +292,13 @@ async def compress_context(context, cfg, model, message, system, tools, owner, c
     selection = context.get('history_selection') or {}
     if selection.get('selection_incomplete'):
         # Compress chronological batches, irrespective of lexical matches. Keep
-        # the newest six messages raw. Covered sources are excluded in SQLite,
+        # the recent dialogue raw. Covered sources are excluded in SQLite,
         # including summaries not selected for this particular prompt.
         with db.get_db() as c:
             if not c.execute('SELECT 1 FROM chats WHERE id=? AND user_id=?',(chat_id,owner)).fetchone():
                 raise ValueError('context_chat_not_owned')
             pending = [r[0] for r in c.execute(_PENDING_SOURCE_IDS_SQL,
-                (chat_id,chat_id,selection['last_message_id'],owner,chat_id))]
+                (chat_id,chat_id,selection['last_message_id'],RECENT_DIALOGUE_LIMIT,owner,chat_id))]
         originals = source_rows(owner,chat_id,pending)
     trigger = 'selection_gap' if originals else 'token_budget'
     if not originals and budget['estimated_input_tokens'] <= budget['input_limit_tokens']: return context
@@ -309,7 +309,7 @@ async def compress_context(context, cfg, model, message, system, tools, owner, c
             values = values[:-1]; context[key] = values; context['context_truncated'] = True
     if not originals and request_budget(request(context), cfg)['estimated_input_tokens'] <= budget['input_limit_tokens']: return context
     history = list(context.get('history') or [])
-    old = [r for r in history[:-6] if type(r.get("id")) is int]
+    old = [r for r in history[:-RECENT_DIALOGUE_LIMIT] if type(r.get("id")) is int]
     if not originals:
         if not old: return bounded_context(context, request, cfg)
         originals = source_rows(owner, chat_id, [r['id'] for r in old])
@@ -395,7 +395,7 @@ def bounded_context(context, request, cfg):
         if archive and archive['entries']:
             archive['entries'].pop()
             archive['next_arguments']={'summary_archive_offset':len(archive['entries'])}
-        elif len(context['history'])>6:
+        elif len(context['history']) > RECENT_DIALOGUE_LIMIT:
             omitted.append(context['history'].pop(0)['id'])
         elif context.get('source_messages'):
             omitted.append(context['source_messages'].pop(0)['id'])

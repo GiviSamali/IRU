@@ -79,7 +79,7 @@ def window_input_required(args, result, journal, device_id):
         f"{index + 1}. {row.get('title') or row['process_name']}" for index, row in enumerate(options))
     return {'type':'input_required','question_id':uuid.uuid4().hex,'question':question,
             'options':options,'operation':{'action':'activate'},'device_id':device_id,
-            'basis':[journal[-1]['step_id']], 'phase':'waiting','expires_at':time.time()+120}
+            'basis':[journal[-1]['step_id']], 'phase':'waiting','expires_at':time.time()+60}
 
 
 def window_input_choice(text, options):

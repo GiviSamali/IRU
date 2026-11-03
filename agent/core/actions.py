@@ -1332,10 +1332,7 @@ def window_focus(handle: int | None = None, pid: int | None = None, title_contai
 
     user32 = ctypes.windll.user32
     hwnd = int(window["handle"])
-    SW_RESTORE = 9
-    SW_SHOW = 5
-    user32.ShowWindow(hwnd, SW_RESTORE if window.get("minimized") else SW_SHOW)
-    ok = bool(user32.SetForegroundWindow(hwnd))
+    ok = activate_window(user32, hwnd, minimized=window.get("minimized"), show=True)
     return {"status": "focused" if ok else "failed", "window": window}
 
 
@@ -1367,8 +1364,7 @@ def window_close(
     import ctypes
 
     user32 = ctypes.windll.user32
-    WM_CLOSE = 0x0010
-    user32.PostMessageW(int(window["handle"]), WM_CLOSE, 0, 0)
+    request_window_close(user32, int(window["handle"]))
     time.sleep(0.5)
     target_pid = int(pid or window.get("pid") or 0)
     exists = bool(user32.IsWindow(int(window["handle"])))
@@ -2121,7 +2117,7 @@ def activate_device(mode: str = "soft", device_id: str = "") -> dict:
     return receipt
 
 
-from .window_control import window_control
+from .window_control import activate_window, request_window_close, window_control
 from .office_tools import office as _office
 
 ACTIONS = {

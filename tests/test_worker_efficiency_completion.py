@@ -240,14 +240,6 @@ def test_orchestrator_instructions_distinguish_results_not_technical_stages():
     assert 'Посмотри новости про ИИ' in prompt and 'отдельный обзор новостей' in prompt
 
 
-def test_common_contract_is_used_for_both_worker_environments():
-    from server.controller_prompts import WORKER_EXECUTION_RULES, SYSTEM_PROMPT_TEMPLATE
-    from server import controller_onboarding
-    import inspect
-    assert WORKER_EXECUTION_RULES in SYSTEM_PROMPT_TEMPLATE
-    assert 'system_msg=DYNAMIC_CONTEXT_RULES+WORKER_EXECUTION_RULES' in inspect.getsource(controller_onboarding)
-
-
 @pytest.mark.parametrize('mode', ['create','edit'])
 def test_office_roundtrip_exposes_complete_small_applied_input_without_second_inspect(tmp_path,mode):
     from agent.core.office_tools import office

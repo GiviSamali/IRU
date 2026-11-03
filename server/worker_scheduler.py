@@ -605,12 +605,12 @@ class WorkerScheduler:
         connection.execute("INSERT INTO worker_owner_capacity VALUES(?,?) ON CONFLICT(owner_user_id) DO UPDATE SET capacity=excluded.capacity",
                            (owner, self.max_active_workers))
 
-    def amend_pending(self, task_id, owner, chat_id, *, expected_revision, human_request, objective, memory_authorizations=None, window_effects=None, preserve_file_bytes=False):
+    def amend_pending(self, task_id, owner, chat_id, *, expected_revision, human_request, objective, memory_authorizations=None, window_effects=None, preserve_file_bytes=False, allow_running=False):
         """CAS guards the original accepted payload and the dispatch boundary.
 
         Devices, dependencies and result identity cannot be changed by this API.
         The authenticated new human request, not historical context, authorizes
-        the revision. A running task is never silently rewritten.
+        the revision. Running clarifications keep the existing dispatch scope.
         """
         if (type(expected_revision) is not int or expected_revision < 1
                 or not isinstance(human_request, str) or not human_request.strip()
@@ -632,12 +632,15 @@ class WorkerScheduler:
                 WHERE j.task_id=? AND j.owner_user_id=? AND j.chat_id=?""", (task_id, owner, chat_id)).fetchone()
             if not row:
                 raise ValueError("task_not_owned_or_in_chat")
-            if row["state"] not in {"queued", "waiting_dependency"}:
+            live = tasks.get(task_id)
+            running = (allow_running and row["state"] == "running" and live
+                       and live.get("status") == "running" and not live.get("cancel_requested"))
+            if not running and row["state"] not in {"queued", "waiting_dependency"}:
                 raise ValueError("task_already_dispatched")
             if row["revision"] != expected_revision:
                 raise ValueError("task_revision_conflict")
             task = json.loads(row["payload"])
-            if "dispatch_started_at" in task:
+            if not running and "dispatch_started_at" in task:
                 raise ValueError("task_already_dispatched")
             # A changed objective must not inherit a stale automatic-completion
             # contract. Semantic intake may explicitly supply the revised effects.
@@ -645,24 +648,33 @@ class WorkerScheduler:
             validate_window_effects(new_effects)
             c.execute("INSERT INTO worker_task_revisions VALUES(?,?,?,?,?,?)",
                       (task_id, expected_revision + 1, row["payload"], human_request, objective, time.time()))
-            authority = task.get("original_request") or task["message"]
-            task.update(message=authority + "\n\nУточнение пользователя:\n" + human_request, proposed_objective=objective,
-                        original_request=authority + "\n\nУточнение пользователя:\n" + human_request,
-                        assignment_revision=expected_revision + 1)
-            # An amendment does not inherit permission to store facts from an
-            # older request; only the new current human decision may supply it.
-            task.update(memory_authorizations=proofs, memory_authority_request=human_request)
-            if type(preserve_file_bytes) is not bool:
-                raise ValueError("invalid_file_preservation_constraint")
-            task.update(window_effects=new_effects,
-                        preserve_file_bytes=task.get("preserve_file_bytes",False) or preserve_file_bytes)
+            if running:
+                task["assignment_revision"] = expected_revision + 1
+                task.setdefault("running_clarifications", []).append(human_request)
+                task["preserve_file_bytes"] = task.get("preserve_file_bytes", False) or preserve_file_bytes
+            else:
+                authority = task.get("original_request") or task["message"]
+                task.update(message=authority + "\n\nУточнение пользователя:\n" + human_request, proposed_objective=objective,
+                            original_request=authority + "\n\nУточнение пользователя:\n" + human_request,
+                            assignment_revision=expected_revision + 1)
+                # An amendment does not inherit permission to store facts from an
+                # older request; only the new current human decision may supply it.
+                task.update(memory_authorizations=proofs, memory_authority_request=human_request)
+                if type(preserve_file_bytes) is not bool:
+                    raise ValueError("invalid_file_preservation_constraint")
+                task.update(window_effects=new_effects,
+                            preserve_file_bytes=task.get("preserve_file_bytes",False) or preserve_file_bytes)
             c.execute("UPDATE worker_jobs SET payload=?,updated_at=? WHERE task_id=?", (json.dumps(task, ensure_ascii=False), time.time(), task_id))
             metadata = db.message_task_metadata(task, task_id=task_id)
             c.execute("UPDATE messages SET task_metadata=? WHERE id=? AND chat_id=? AND role='assistant'",
                       (json.dumps(metadata, ensure_ascii=False), row["message_id"], chat_id))
             c.execute("UPDATE worker_goal_tasks SET revision=revision+1 WHERE task_id=?", (task_id,))
             c.execute("UPDATE worker_goals SET revision=revision+1 WHERE goal_id=?", (row["goal_id"],))
-        if task_id in tasks:
+        if running:
+            live.update(assignment_revision=task["assignment_revision"],
+                        running_clarifications=task["running_clarifications"],
+                        preserve_file_bytes=task["preserve_file_bytes"], history_metadata=metadata)
+        elif task_id in tasks:
             tasks[task_id].update(task)
             tasks[task_id]["history_metadata"] = metadata
         return {"task_id": task_id, "goal_id": row["goal_id"], "revision": expected_revision + 1, "status": row["state"]}
@@ -1115,7 +1127,7 @@ class WorkerScheduler:
                     # Ordinary confirmation unwinds its controller; retain the slot
                     # until the existing confirmation handler produces a terminal result.
                     if task.get("status") == "waiting_input":
-                        task['_window_input_deadline']=time.monotonic()+max(0,min(120,
+                        task['_window_input_deadline']=time.monotonic()+max(0,min(60,
                             task['input_required']['expires_at']-time.time()))
                         _finalize_report(task)
                     while task.get("status") not in TERMINAL and not self.closing:
@@ -1182,7 +1194,13 @@ class WorkerScheduler:
             if (event.get('question_id')!=question_id or event.get('phase')!='waiting'
                     or time.time()>=event.get('expires_at',0)):
                 raise ValueError('input_question_not_active')
-            event.update(choice=window_input_choice(text,event['options']),phase='claimed')
+            if event.get('kind') == 'worker_clarification':
+                reply = (text or '').strip()
+                if not reply:
+                    raise ValueError('invalid_input_choice')
+                event.update(reply=reply, phase='claimed')
+            else:
+                event.update(choice=window_input_choice(text,event['options']),phase='claimed')
             saved.update(input_required=event,status='running')
             c.execute("UPDATE worker_jobs SET state='running',payload=?,updated_at=? WHERE task_id=? AND owner_user_id=? AND state='waiting_input'",
                       (json.dumps(saved,ensure_ascii=False),time.time(),task_id,owner))

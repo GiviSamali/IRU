@@ -917,9 +917,10 @@ async function sendMessage(options = {}) {
       broadcast: isBroadcast,
       modes: { ...state.modes },
     };
-    const awaiting = [...state.messages].reverse().find(row => row.inputRequired?.phase === 'waiting' && row.taskStatus === 'waiting_input');
+    const awaiting = [...state.messages].reverse().find(row => row.inputRequired?.phase === 'waiting'
+      && row.taskStatus === 'waiting_input' && Date.now() < row.inputRequired.expires_at * 1000);
     const choice = messageToSend.trim().toLocaleLowerCase().replace(/[.!]$/,'');
-    if (awaiting && (/^(?:[0-9]+|первое|второе|третье|четвёртое|пятое)$/.test(choice)
+    if (awaiting && (awaiting.inputRequired.kind === 'worker_clarification' || /^(?:[0-9]+|первое|второе|третье|четвёртое|пятое)$/.test(choice)
         || awaiting.inputRequired.options.some(option => String(option.title || '').toLocaleLowerCase() === choice))) {
       body.input_task_id = awaiting._taskId;
       body.input_question_id = awaiting.inputRequired.question_id;

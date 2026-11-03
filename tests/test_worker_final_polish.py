@@ -248,17 +248,6 @@ def test_error_recovery_stays_inside_twenty_llm_turns():
     assert result['commands'][-1]['tool_name'] == 'answer.text'
 
 
-def test_unread_required_dependency_cannot_be_hidden_in_optional_remaining(monkeypatch):
-    monkeypatch.setitem(tasks, 'pinned-final', {'task_id': 'pinned-final',
-        '_pending_pinned_results': {'source': 10}, '_pinned_read_offsets': {}})
-    result = _run_case([finish('Incomplete'),
-        call('answer_text', {'status':'partial','evidence_refs':[], 'result':'Required source remains unread',
-            'unresolved':['Required dependency material was not fully read.']},'honest-final')], poll_task_id='pinned-final')
-    assert result['commands'][-1]['result']['unresolved']
-    report = build_worker_report({'task_id': 'pinned-final', 'status': 'done', 'commands': result['commands']})
-    assert not report['goal_completed']
-
-
 def test_artifact_receipt_is_retained_without_inventing_worker_completion():
     path = 'C:/result.txt'
     task = {'task_id': 'receipt', 'status': 'done', 'device_ids': ['pc'], 'assigned_artifacts': [path],

@@ -222,7 +222,8 @@ def _narration_material(goal, projected):
         'summary':(entry.get('report') or {}).get('summary') or '',
         'error_code':(entry.get('report') or {}).get('error_code'),
         'evidence_refs':(entry.get('report') or {}).get('evidence_refs') or [],
-        'artifacts':(entry.get('report') or {}).get('artifacts') or []} for entry in members]
+        'artifacts':(entry.get('report') or {}).get('artifacts') or [],
+        'worker_report':entry.get('report')} for entry in members]
     states = {entry.get('status') for entry in members}
     current_status = next(iter(states)) if len(states) == 1 else 'partial' if states else 'unknown'
     return {'reply_mode':'substantive_result','answer_scope':goal.get('reply_mode','whole_goal'),'original_request':request,

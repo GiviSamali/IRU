@@ -57,11 +57,9 @@ try:
         wrap_tool_result_for_llm,
         read_current_step,
         is_answer_clarification_tool,
-        is_answer_failure_tool,
         is_answer_text_tool,
         is_terminal_answer_tool,
         make_run_step,
-        validate_answer_report_failure_payload,
         validate_answer_text_payload,
         validate_tool_call_batch,
         unfinished_execution_result,
@@ -116,11 +114,9 @@ except ImportError:
         wrap_tool_result_for_llm,
         read_current_step,
         is_answer_clarification_tool,
-        is_answer_failure_tool,
         is_answer_text_tool,
         is_terminal_answer_tool,
         make_run_step,
-        validate_answer_report_failure_payload,
         validate_answer_text_payload,
         validate_tool_call_batch,
         unfinished_execution_result,
@@ -182,6 +178,38 @@ BROWSER_TOOL_NAMES = frozenset(name for name, action in APP_WINDOW_ACTIONS.items
 
 async def _run_web_search(cfg: dict, query: str, max_results: int) -> dict:
     return await run_web_search(query, max_results)
+
+
+async def wait_for_worker_clarification(task, question, journal):
+    import time
+    import uuid
+    try:
+        from .worker_scheduler import _finalize_report
+    except ImportError:
+        from worker_scheduler import _finalize_report
+
+    deadline = time.monotonic() + 60
+    task.update(status='waiting_input', commands=list(journal), answer=question,
+                _window_input_deadline=deadline, input_required={
+                    'type':'input_required', 'kind':'worker_clarification',
+                    'question_id':uuid.uuid4().hex, 'question':question, 'options':[],
+                    'phase':'waiting', 'expires_at':time.time()+60,
+                })
+    _finalize_report(task)
+    while True:
+        event = task['input_required']
+        if task.get('cancel_requested'):
+            event['phase'] = 'cancelled'
+            return None
+        if event.get('phase') == 'claimed':
+            event['phase'] = 'answered'
+            return event.pop('reply')
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            event['phase'] = 'expired'
+            task.update(status='running', worker_error_code='input_expired')
+            return None
+        await asyncio.sleep(min(0.2, remaining))
 
 
 async def process_non_pipeline_command(
@@ -268,7 +296,7 @@ async def process_non_pipeline_command(
         if tool.get("function", {}).get("name") == "write_content":
             tool["function"]["parameters"]["properties"]["content"].pop("maxLength", None)
 
-    base_names = {'answer_text', 'answer_ask_clarification', 'answer_report_failure',
+    base_names = {'answer_text', 'answer_ask_clarification',
                   'system_list_tools', 'system_get_last_run_summary', 'system_update_working_notes',
                   'list_dir', 'read_file', 'write_content', 'execute_cmd'}
     chapters = {}
@@ -399,12 +427,23 @@ async def process_non_pipeline_command(
 
     timeout = httpx.Timeout(120.0, connect=10.0)
     max_iterations = min(max_iterations, 20)
+    applied_clarifications = 0
+
+    def current_clarifications():
+        return (runtime_tasks.get(poll_task_id) or {}).get('running_clarifications', [])
+
     async with httpx.AsyncClient(timeout=timeout) as client:
         for iteration in range(max_iterations):
             if is_task_cancel_requested(poll_task_id):
                 return cancelled_result(iteration + 1)
             # Keep completed exchanges, including paged originals. The provider's
             # existing request budget reduces them only when the request is full.
+            clarifications = current_clarifications()
+            for clarification in clarifications[applied_clarifications:]:
+                messages.append({'role':'user', 'content':
+                    'Уточнение текущего поручения в пределах назначенных устройств и разрешений. '
+                    'Сохрани результаты уже выполненных действий и не повторяй их.\n' + clarification})
+            applied_clarifications = len(clarifications)
             if pending_corrections:
                 messages.append({'role':'user','content':'\n'.join(dict.fromkeys(pending_corrections))})
                 pending_corrections.clear()
@@ -451,6 +490,9 @@ async def process_non_pipeline_command(
                 print(f"[llm] request error: {type(exc).__name__}")
                 return provider_failure("llm_request_error", iteration + 1)
 
+            if len(current_clarifications()) != applied_clarifications:
+                last_candidate = ""
+                continue
             choice = data["choices"][0]
             finish_reason = choice.get("finish_reason", "?")
             assistant_msg = {**choice["message"], "role": "assistant"}
@@ -506,6 +548,12 @@ async def process_non_pipeline_command(
             confirmation_epoch = (runtime_tasks.get(poll_task_id) or {}).get('_confirmation_epoch',0)
             try:
                 for tool_call in tool_calls:
+                    if len(current_clarifications()) != applied_clarifications:
+                        append_tool_message(tool_call['id'], append_entry(tool_log_entry(
+                            tool_call['function']['name'],
+                            {'status':'blocked','dispatched':False,'error':'assignment_clarified'},
+                            target_device_id=device_id,iteration=iteration+1)))
+                        continue
                     pending_calls.pop(tool_call['id'], None)
                     action_journal_start = len(commands_log)
                     if is_task_cancel_requested(poll_task_id):
@@ -559,6 +607,21 @@ async def process_non_pipeline_command(
                                 reason = str(fn_args_preview.get("reason") or "").strip()
                                 if not question or not reason:
                                     raise ProtocolValidationError("answer_ask_clarification requires question and reason", GROUNDED_CORRECTION)
+                                if len(tool_calls) != 1:
+                                    raise ProtocolValidationError('Ask a clarification in a single tool call.')
+                                task = runtime_tasks.get(poll_task_id) or {}
+                                if task.get('worker_id'):
+                                    reply = await wait_for_worker_clarification(task, question, commands_log)
+                                    if is_task_cancel_requested(poll_task_id):
+                                        return {'status':'cancelled','answer':'','commands':commands_log,'tasks':[]}
+                                    if reply is not None:
+                                        append_tool_message(tool_call['id'], append_entry(tool_log_entry(
+                                            'worker_clarification_reply', {'status':'success','reply':reply},
+                                            target_device_id=device_id, iteration=iteration+1)))
+                                        add_correction('The tool result contains the user reply to your question. Use it only to resolve that question within the original Assignment and existing permissions.')
+                                        break
+                                    question = 'Ответ не поступил за 60 секунд. Дальнейшие действия остановлены.'
+                                    fn_args_preview = {**fn_args_preview, 'question':question}
                                 append_answer_step(
                                     commands_log,
                                     fn_name,
@@ -569,22 +632,6 @@ async def process_non_pipeline_command(
                                 )
                                 return {
                                     "answer": question,
-                                    "commands": commands_log,
-                                    "tasks": [],
-                                    "training_context": _training_context(device_info),
-                                }
-                            if is_answer_failure_tool(fn_name):
-                                payload = validate_answer_report_failure_payload(fn_args_preview, commands_log)
-                                append_answer_step(
-                                    commands_log,
-                                    fn_name,
-                                    payload,
-                                    target_device_id=target_device,
-                                    hostname=device_info.get("hostname") or target_device,
-                                    iteration=iteration + 1,
-                                )
-                                return {
-                                    "answer": str(payload.get("message") or ""),
                                     "commands": commands_log,
                                     "tasks": [],
                                     "training_context": _training_context(device_info),

@@ -1007,7 +1007,7 @@ DEVICE_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "answer_ask_clarification",
-            "description": "Terminal clarification question. Server-side only.",
+            "description": "Ask only when a system block or tool error prevents progress and the user can resolve it, or when a consequential ambiguity cannot be resolved from the assignment or observations. Do not ask about routine choices. This ends the current run.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1016,24 +1016,6 @@ DEVICE_TOOL_SCHEMAS = [
                     "options": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["question", "reason"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "answer_report_failure",
-            "description": "Terminal failure report. Server-side only.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "message": {"type": "string"},
-                    "reason": {"type": "string"},
-                    "recoverable": {"type": "boolean"},
-                    "suggested_next_action": {"type": "string"},
-                    "basis": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["message", "reason", "recoverable", "suggested_next_action"],
             },
         },
     },

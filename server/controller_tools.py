@@ -53,7 +53,7 @@ def worker_tool_inventory(tools, device_info, *, preserve=False, multiple_target
             if info.get('connected') is False and name not in {
                 'web_search', 'system_list_tools', 'system_get_last_run_summary',
                 'system_update_working_notes', 'answer_text', 'answer_ask_clarification',
-                'answer_report_failure', 'remember_fact', 'forget_fact',
+                'remember_fact', 'forget_fact',
                 'memory_get_stats', 'memory_list_facts',
             }:
                 continue
@@ -66,7 +66,7 @@ def worker_tool_inventory(tools, device_info, *, preserve=False, multiple_target
                 from .controller_shared import file_edit_dispatch_error
             except ImportError:
                 from controller_shared import file_edit_dispatch_error
-            exempt = {'write_content','answer_text','answer_ask_clarification','answer_report_failure',
+            exempt = {'write_content','answer_text','answer_ask_clarification',
                       'system_list_tools','system_get_last_run_summary'}
             if name not in exempt and file_edit_dispatch_error({'preserve_file_bytes': True}, name, {}):
                 continue

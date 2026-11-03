@@ -211,8 +211,7 @@ clarify нужен только для реально отсутствующих
 при нескольких реально равноправных объектах в текущем контексте, а не из-за отсутствия повторного имени.
 task_status выбирай только для вопроса о ходе или результате существующего поручения.
 Для обычного уточнения о завершённой диагностике заполни answer кратким содержательным итогом
-именно выбранной задачи: что наблюдалось и что осталось неизвестным. Используй saved_reports и
-историю как сохранённые данные, не как новое исполнение. Статус команды не определяет достоверность
+именно выбранной задачи, если он известен из диалога. Карточки tasks содержат ссылки на поручения; итог по выбранной задаче сервер получает отдельно. Статус команды не определяет достоверность
 каждого измерения в её выводе: failed может содержать частичные наблюдения, а rc=0 не доказывает вывод модели.
 Не выдавай предполагаемую причину за измеренный факт. Не заменяй итог предложением посмотреть подробности.
 Поручение установить, изменить или обеспечить состояние объекта — delegate, даже если похожая задача уже завершалась.
@@ -290,9 +289,9 @@ Scheduler разрешит только сверку состояния инст
 При обычном вопросе о состоянии выбирай task_status, без нового Worker.
 При замене неуспешного исследования Scheduler перепривяжет его ожидающих потребителей;
 не создавай новые копии документных поручений, уже ожидающих это исследование.
-Для изменения ещё не начатого поручения выбери amend с task_id, task_revision из контекста
-и полным уточнённым objective. Не добавляй действия из предположений. Работающую задачу
-нельзя молча изменить. Для состояния общей цели используй task_status с goal_id.
+Для явного уточнения ожидающего или выполняемого поручения выбери amend с task_id,
+task_revision и полным уточнённым objective. Если поручение нельзя выбрать однозначно,
+задай вопрос. Новое независимое поручение делегируй отдельно. Для состояния общей цели используй task_status с goal_id.
 Метод исполнения и инструменты выбирает Worker.
 Для межустройственного действия выбери все нужные устройства, включая устройство исходного файла.
 Для серверной работы задавай пустой target_device_ids; для действий на устройствах перечисли разрешённые устройства.
@@ -351,33 +350,11 @@ def context_for(user_id, chat_id, message, selected, *, exclude_message_id=None)
         device_records[short]={"device_id":short,"name":str(info.get("hostname") or short)[:80],"platform":str(info.get("os") or "unknown")[:24],
             "registered":short in device_records,"online":bool(dev.get("ws")),"availability":"connection_observed_not_execution_verified",
             "last_seen":dev.get("last_seen") if isinstance(dev.get("last_seen"),(int,float)) else None,"capabilities":[str(cap)[:80] for cap in list((dev.get("activation_summary") or {}).get("capabilities_summary") or [])[:8]]}
-    try:from .context_budget import clip_tokens,estimate_tokens
-    except ImportError:from context_budget import clip_tokens,estimate_tokens
-    jobs=[];saved_report_budget=8192
+    jobs = []
     for row in recent_jobs:
-        payload=json.loads(row["payload"]);snapshot=payload.get("worker_report")
-        report=(snapshot if isinstance(snapshot,dict) and snapshot.get("task_id")==row["task_id"]
-            and snapshot.get("status")==row["state"] else json.loads(row["report"]) if row.get("report") else None)
-        if report and (not isinstance(report, dict) or report.get("task_id") != row["task_id"]
-                       or report.get("status") != row["state"]):
-            report = None
-        if report:
-            report=dict(report)
+        payload = json.loads(row["payload"])
         live=tasks.get(row["task_id"]) or {}
         live_status="waiting_confirmation" if live.get("status")=="confirm" else row["state"]
-        try:
-            from .response_presentation import saved_step_reports
-        except ImportError:
-            from response_presentation import saved_step_reports
-        saved_reports = saved_step_reports(payload) if row["chat_id"] == chat_id else []
-        report_previews=[]
-        allowance=min(4096,saved_report_budget//max(1,len(recent_jobs)-len(jobs)))
-        for saved in saved_reports:
-            text=clip_tokens(saved['text'],allowance)
-            report_previews.append({'step_id':saved['step_id'],'chars':len(saved['text']),
-                'text':text,'truncated':text!=saved['text'],'historical_material_only':True})
-            used=estimate_tokens(text);allowance=max(0,allowance-used);saved_report_budget=max(0,saved_report_budget-used)
-        step_states = (payload.get("task_receipt") or {}).get("step_results") or [s for plan in payload.get("tasks") or [] for s in plan.get("steps") or []]
         objective = payload.get("proposed_objective") or payload.get("message", "")
         jobs.append({"task_id":row["task_id"],"chat_id":row["chat_id"],"in_current_chat":row["chat_id"]==chat_id,"objective":objective,"objective_truncated":False,"status":live_status,"device_ids":[_short_did(d) for d in payload.get("device_ids",[])],
             "goal_id":payload.get("goal_id"),"goal_revision":goals.get(payload.get("goal_id")),
@@ -386,9 +363,8 @@ def context_for(user_id, chat_id, message, selected, *, exclude_message_id=None)
             "dependency_source_task_ids":dependency_sources.get(row["task_id"],[]),
             "replaces_source_task_id":payload.get("replaces_source_task_id"),
             "task_revision":payload.get("assignment_revision",1) if payload.get("goal_id") else None,
-            "created_at":row["created_at"],"requires_user_action":live_status=="waiting_confirmation","report":report,
-            "saved_reports":report_previews,
-            "steps":[{"title":(s.get("title") or s.get("description") or ""),"status":s.get("status")} for s in step_states][:12]})
+            "created_at":row["created_at"],
+            "requires_user_action":live_status in {"waiting_confirmation", "waiting_input"}})
     result={"current_datetime_msk":datetime.now(timezone(timedelta(hours=3))).isoformat(),"history":history,"history_summaries":summaries,"history_selection":selection,"source_messages":cited_sources(user_id,chat_id,summaries,message),"selected_device":selected if isinstance(selected,str) and len(selected)<=128 else None,"devices":list(device_records.values())[:16],"tasks":jobs,"facts":relevant_facts(user_id,message)}
     return result
 
@@ -609,8 +585,10 @@ async def run_turn(cmd, user, chat_id, delegate):
                     expected_revision=choice.task_revision, human_request=cmd.message, objective=choice.objective,
                     memory_authorizations=[proof.model_dump() for proof in choice.memory_authorizations],
                     window_effects=choice.window_effects,
-                    preserve_file_bytes=choice.preserve_file_bytes)
-                answer = "Уточнение сохранено для ожидающего поручения. Версия " + str(result["revision"]) + "."
+                    preserve_file_bytes=choice.preserve_file_bytes, allow_running=True)
+                answer = ("Уточнение принято. Уже отправленное действие может завершиться."
+                          if result["status"] == "running" else
+                          "Уточнение сохранено для ожидающего поручения. Версия " + str(result["revision"]) + ".")
             elif choice.intent=="cancel":
                 if job["state"] not in {"queued","waiting_dependency","running","waiting_confirmation","waiting_input"}:
                     answer="Эта задача уже завершена. Следующую задачу не отменяю."
