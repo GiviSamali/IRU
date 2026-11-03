@@ -176,10 +176,11 @@ TOOLS = [
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Команда для выполнения"
+                        "description": "Команда для выполнения. stdout, stderr и код выхода возвращаются отдельно. Не объединяй потоки только ради захвата вывода."
                     },
+                    "workdir": {"type":"string", "description":"Absolute working directory on the selected device. Applies only to this call."},
                     "artifact_paths": {"type":"array", "maxItems":16, "items":{"type":"string"},
-                        "description":"Absolute paths of final deliverables created/changed by THIS command, not helper scripts. Required: use [] for read-only commands or commands with no final file output."},
+                        "description":"Absolute paths of final deliverables created or changed by this command. Omit when there are no final file outputs."},
                     "observation_contract": {"type":"object", "additionalProperties":False,
                         "description":"Server-only repeat budget, never permission. Two identical successful observations are reused instead of executing a third. For necessary bounded waiting/monitoring declare the condition; for explicitly requested repeated measurements quote the current human request. After the budget, choose another necessary action of the ORIGINAL goal or report remaining work as partial. Do not turn intermediate verification into a separate investigation.",
                         "properties":{"mode":{"type":"string","enum":["once","wait","monitor","measurement"]},
@@ -211,7 +212,7 @@ TOOLS = [
                         "default": False
                     }
                 },
-                "required": ["command", "artifact_paths"]
+                "required": ["command"]
             }
         }
     },

@@ -90,10 +90,13 @@ def _verify_artifact(path):
 
 def execute_cmd(command: str, timeout: int = 30, shell: str = "auto",
                 artifact_paths: list[str] | None = None, _artifact_task_id: str | None = None,
-                preserve_content_paths: list[str] | None = None) -> dict:
+                preserve_content_paths: list[str] | None = None, workdir: str | None = None) -> dict:
     paths = artifact_paths or []
     preserve = preserve_content_paths or []
     try:
+        if workdir is not None and (not isinstance(workdir, str) or not Path(workdir).is_absolute()
+                                    or not Path(workdir).is_dir()):
+            raise ValueError("invalid_workdir")
         if (not isinstance(paths, list) or len(paths) > 16 or any(not isinstance(p,str)
                 or not Path(p).is_absolute() for p in paths)):
             raise ValueError("invalid_artifact_paths")
@@ -108,7 +111,8 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto",
             raise ValueError("file_changed_during_content_snapshot")
     except Exception as exc:
         return {"error":str(exc), "status":"error", "dispatched":False}
-    result = platform_mod.execute_cmd(command, timeout=timeout, shell=shell)
+    result = platform_mod.execute_cmd(command, timeout=timeout, shell=shell,
+                                      **({"workdir": workdir} if workdir is not None else {}))
     if not paths or result.get("returncode") != 0 or result.get("error"):
         return result
     receipts, errors, observations = [], [], []

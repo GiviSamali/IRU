@@ -11,7 +11,7 @@ from pathlib import Path
 name = "Linux"
 
 
-def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
+def execute_cmd(command: str, timeout: int = 30, shell: str = "auto", workdir: str | None = None) -> dict:
     """Выполнить команду через bash. shell параметр игнорируется на Linux."""
     try:
         env = os.environ.copy()
@@ -22,6 +22,7 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
             ["/bin/bash", "-e", "-o", "pipefail", "-c", command],
             capture_output=True,
             timeout=timeout,
+            cwd=workdir,
             env=env,
             encoding="utf-8",
             errors="replace",

@@ -20,7 +20,7 @@ from pathlib import Path
 name = "Windows"
 
 
-def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
+def execute_cmd(command: str, timeout: int = 30, shell: str = "auto", workdir: str | None = None) -> dict:
     """Выполнить команду. По умолчанию — PowerShell.
     Значения shell: auto | powershell | cmd."""
     try:
@@ -42,7 +42,7 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
                 "try { " + command + "; "
                 "if ($global:LASTEXITCODE -is [int] -and $global:LASTEXITCODE -ne 0) "
                 "{ exit $global:LASTEXITCODE } "
-                "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }"
+                "} catch { [Console]::Error.WriteLine(($_ | Out-String).TrimEnd()); exit 1 }"
             )
             shell_cmd = [
                 "powershell", "-NoProfile", "-NonInteractive",
@@ -65,6 +65,7 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto") -> dict:
                 stdout=stdout,
                 stderr=stderr,
                 timeout=timeout,
+                cwd=workdir,
                 env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 startupinfo=si,
