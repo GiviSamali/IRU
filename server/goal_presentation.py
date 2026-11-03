@@ -135,14 +135,12 @@ def include_result_limits(goal, reply):
     blocks = []
     if unresolved:
         blocks.append('Не выполнено:\n' + '\n'.join('- ' + v for v in unresolved))
-    if caveats:
-        blocks.append('Существенные ограничения:\n' + '\n'.join('- ' + v for v in caveats))
     suffix = '\n\n'.join(blocks)
     if suffix and suffix not in result.get('message', ''):
         result['message'] = result.get('message', '').rstrip() + '\n\n' + suffix
     if blocks:
         notice = ('Часть поручения не выполнена. ' if unresolved else '')
-        notice += 'Есть существенные ограничения результата; подробности в чате.' if caveats else 'Подробности в чате.'
+        notice += 'Подробности в чате.'
         spoken = result.get('spoken_message', '')
         if notice not in spoken:
             result['spoken_message'] = (spoken + ' ' + notice).strip() if len(spoken) + len(notice) < 420 else notice
