@@ -22,8 +22,8 @@ from test_tool_only_protocol import _message, _tool_call, _completion_fn
 from test_orchestrator_worker import wait_until
 
 
-def terminal(text, count=1, kind='grounded_report', action=False, sufficient=True, basis=None):
-    return _tool_call('terminal','answer_text',{'answer_type':kind,'text':text,
+def terminal(text, count=1, kind='grounded_report', action=False, sufficient=True, basis=None, status=None):
+    return _tool_call('terminal','answer_text',{'status':status or ('partial' if kind=='partial_report' else 'success'),'answer_type':kind,'text':text,
         'basis':basis if basis is not None else [f'step_{i+1}' for i in range(count)]})
 
 
@@ -405,7 +405,8 @@ def test_confirmed_command_keeps_known_partial_or_uncertainty_visible(world,unce
     steps=[shell('Remove-Item C:/Temp/denied.txt','OK: deletion_verified')]
     text=('Команда могла выполниться; её исход не подтверждён. Отчёт не создан.' if uncertain
           else 'Тестовый файл удалён. Отчёт не создан, задача выполнена частично.')
-    device,_=install(world,steps,terminal(text,kind='partial_report',action=not uncertain,sufficient=False),114)
+    device,_=install(world,steps,terminal(text,kind='partial_report',action=not uncertain,sufficient=False,
+        status='unknown' if uncertain else 'partial'),114)
     device.transport_error=uncertain
     async def scenario():
         scheduler=WorkerScheduler()

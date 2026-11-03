@@ -21,8 +21,9 @@ def entry(tool, result, number=1):
     return {'step_id': f'step_{number}', 'tool_name': tool, 'target_device_id': 'pc', 'result': result}
 
 
-def finish(steps, result='Получен результат.', *, scope='analysis', effects=(), unresolved=(), recommendations=(), open_objects=()):
-    payload=validate_answer_text_payload({'result':result,'unresolved':list(unresolved),'remaining':list(recommendations)},steps)
+def finish(steps, result='Получен результат.', *, scope='analysis', effects=(), unresolved=(), recommendations=(), open_objects=(), status=None):
+    payload=validate_answer_text_payload({'status':status or ('partial' if unresolved else 'success'),
+        'result':result,'unresolved':list(unresolved),'remaining':list(recommendations)},steps)
     append_answer_step(steps,'answer_text',payload,target_device_id='pc')
     return {'task_id':'synthetic','status':'done','device_ids':['pc'],
         'window_effects':list(effects),'commands':steps,'answer':payload['text'],
@@ -51,7 +52,7 @@ def opened_requirement():
 
 
 def test_bcf16d6e_verified_open_is_spoken_by_orchestrator():
-    t=finish([entry('app.open_url',opened())],scope='window',effects=['open'],result='worker material',
+    t=finish([entry('app.open_url',opened())],scope='window',effects=['open'],result='Открытие подтверждено: https://ya.ru',
              open_objects=opened_requirement())
     report=build_worker_report(t)
     assert report['goal_completed'] and report['status']=='success'
@@ -86,7 +87,7 @@ def test_3801d76f_initial_failure_does_not_erase_verified_open():
     steps=[entry('execute_cmd',{'returncode':1,'stdout':'','stderr':'first attempt failed'}),
         entry('app.launch',{**opened(),'window_title':'agent_errors.xlsx — WPS'},2),
         entry('window.list',{'status':'success','windows':[{'title':'agent_errors.xlsx — WPS'}]},3)]
-    t=finish(steps,scope='window',effects=['open'],open_objects=opened_requirement())
+    t=finish(steps,scope='window',effects=['open'],result='Открыт agent_errors.xlsx.',open_objects=opened_requirement())
     report=build_worker_report(t)
     assert report['goal_completed'] and report['error_code'] is None
     assert 'agent_errors.xlsx' in orch.present_worker_result(t,report)['conversational_response']
@@ -99,9 +100,13 @@ def test_f7477289_synthetic_rollback_is_the_final_file_state():
     steps=[entry('write_content',{'status':'ok','verified':True,'committed':True,'path':path,
         'file_sha256':digest(after),'previous_sha256':digest(before),'total_size':len(after)},n)
         for n,before,after in [(4,original,smaller),(18,smaller,original),(19,original,smaller),(20,smaller,original)]]
-    t=finish(steps,scope='general',result='Размер уменьшен до 0.21.');t['assigned_artifacts']=[path]
+    append_answer_step(steps,'answer_text',validate_answer_text_payload({
+        'status':'partial','result':'Изменение отменено; размер остался 0.42.',
+        'unresolved':['Размер не уменьшен']},steps))
+    t={'task_id':'synthetic','status':'done','device_ids':['pc'],'commands':steps,'assigned_artifacts':[path]}
     report=build_worker_report(t)
-    assert not report['goal_completed'] and report['error_code']=='required_file_change_reverted'
+    assert not report['goal_completed'] and report['status']=='partial'
+    assert report['artifacts'][0]['sha256']==digest(original)
     assert 'уменьшен до 0.21' not in orch.present_worker_result(t,report)['conversational_response']
 
 
@@ -224,7 +229,7 @@ def test_goal_assignment_result_and_followup_use_existing_durable_path(owners,mo
 def test_legacy_api_answer_is_orchestrator_reply_not_internal_worker_material(owners,monkeypatch):
     owner,_=owners
     t=task(owner);tid=t['task_id']
-    t.update(finish([entry('app.open_url',opened())],scope='window',effects=['open'],result='internal Worker material',
+    t.update(finish([entry('app.open_url',opened())],scope='window',effects=['open'],result='Открытие подтверждено: https://ya.ru',
                     open_objects=opened_requirement()))
     t.update(task_id=tid,worker_id='worker-1')
     tasks[tid]=t
@@ -233,7 +238,7 @@ def test_legacy_api_answer_is_orchestrator_reply_not_internal_worker_material(ow
         response=asyncio.run(task_routes.api_get_task(tid,None))['task']
         assert response['answer']==response['conversational_response']
         assert 'Открытие подтверждено' in response['answer'] and 'internal Worker material' not in response['answer']
-        assert t['answer']=='internal Worker material'
+        assert t['answer']=='Открытие подтверждено: https://ya.ru'
     finally:tasks.pop(tid,None)
 
 
@@ -249,7 +254,7 @@ from orchestrator import present_worker_result
 from run_journal import validate_answer_text_payload, append_answer_step
 from worker_reports import build_worker_report
 steps=[{'step_id':'step_1','tool_name':'window.control','target_device_id':'pc','result':{'status':'success','completion_state':'success','action':'minimize','summary':'Window minimized'}}]
-payload=validate_answer_text_payload({'result':'Findings','unresolved':[]},steps)
+payload=validate_answer_text_payload({'status':'success','result':'Window minimized'},steps)
 append_answer_step(steps,'answer_text',payload)
 task={'task_id':'flat','status':'done','device_ids':['pc'],'window_effects':['minimize'],'commands':steps,'answer':'Findings'}
 report=build_worker_report(task)

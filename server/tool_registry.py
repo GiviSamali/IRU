@@ -289,9 +289,9 @@ TOOL_METADATA = {
         "category": "app",
         "tool_type": "typed",
         "tool_label": "Запуск приложения",
-        "purpose": "Launch an application as a background process and attempt window verification",
-        "when_to_use": ["launch GUI app", "open file or app and verify it appeared"],
-        "returns": "pid + launch status + optional window",
+        "purpose": "Launch an application or request OS-associated opening of a document/folder",
+        "when_to_use": ["launch GUI app", "open a document or folder in the default application"],
+        "returns": "application launch result, or os_open_accepted + exact requested_object; loading is not implied",
         "danger": "process_start",
     },
     "app.open_url": {
@@ -937,7 +937,7 @@ DEVICE_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "app_launch",
-            "description": "Launch an application command, or open a supported absolute document/folder through its association. Attempt independent object/window observation. Use the requested device and object. Process launch alone does not prove the requested document is open. Do not wait for GUI process exit.",
+            "description": "Launch an application command, or open a supported absolute document/folder through its OS association. For documents/folders os_open_accepted=true confirms only that the OS accepted this exact object's opening request; no PID/window observation is required for ordinary opening. If the user requests verification of document loading, visibility or content, observe it separately with existing tools. Use the requested device and object. Never treat execute_cmd returncode=0 or a window title as proof that a document loaded. Do not wait for GUI process exit.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -990,8 +990,10 @@ DEVICE_TOOL_SCHEMAS = [
     },
     {
         "type": "function",
-        "function": {"name":"answer_text", "description":"Return a compact Worker result for the Orchestrator, not a user-facing reply. Use result for established findings and unresolved only for substantive unfinished requirements of the assigned goal. Optional recommendations belong in remaining and do not block completion. Server links evidence automatically; never claim verified/success or copy hashes/step IDs. Report substantial interpretation limits in caveats.",
-         "parameters":{"type":"object","additionalProperties":False,"anyOf":[{"required":["result"]},{"required":["answer"]}],"properties":{
+        "function": {"name":"answer_text", "description":"Finalize your Assignment with its truthful status after receiving the tool results. Never batch this terminal with actions whose results you have not seen. The journal links current-run evidence automatically; evidence_refs is optional for selecting particular operation step_ids. You alone assess substantive completion against the original request, Assignment and actual results. Correct ordinary tool errors before finishing when possible. success means all required work is done; partial lists unfinished requirements; failed means the requested result was not obtained; unknown preserves an unresolved action outcome without retry. A receipt proves only what it states. OS-accepted document opening does not prove loading or visibility. Return compact findings for the Orchestrator, with material caveats; optional recommendations are not unfinished requirements.",
+         "parameters":{"type":"object","additionalProperties":False,"required":["status"],"anyOf":[{"required":["result"]},{"required":["answer"]}],"properties":{
+             "status":{"type":"string","enum":["success","partial","failed","unknown"]},
+             "evidence_refs":{"type":"array","maxItems":128,"items":{"type":"string"}},
              "result":{"type":"string","minLength":1,"maxLength":8000},
              "caveats":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":1000}},
              "unresolved":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":1000}},

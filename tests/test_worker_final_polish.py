@@ -1,6 +1,7 @@
 """Local fake-provider regressions. No Agent, production or network required."""
 import asyncio
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -203,7 +204,7 @@ def test_safe_write_needs_no_confirmation_notes_or_mandatory_readback():
     async def send(device, action, params):
         sent.append((action, params))
         return {'status': 'success', 'path': params['path'], 'bytes_written': 6,
-                'verified': True, 'committed': True, 'file_sha256': 'a' * 64}
+                'verified': True, 'committed': True, 'file_sha256': hashlib.sha256(params['content'].encode()).hexdigest()}
     result = _run_case([call('write_content', {'path': 'C:/result.txt', 'content': 'result'}),
                         finish('Written')], send_command_fn=send, captured=captured)
     assert [action for action, _ in sent] == ['write_content'] and len(captured) == 2
@@ -250,7 +251,9 @@ def test_error_recovery_stays_inside_twenty_llm_turns():
 def test_unread_required_dependency_cannot_be_hidden_in_optional_remaining(monkeypatch):
     monkeypatch.setitem(tasks, 'pinned-final', {'task_id': 'pinned-final',
         '_pending_pinned_results': {'source': 10}, '_pinned_read_offsets': {}})
-    result = _run_case([finish('Incomplete')], poll_task_id='pinned-final')
+    result = _run_case([finish('Incomplete'),
+        call('answer_text', {'status':'partial','evidence_refs':[], 'result':'Required source remains unread',
+            'unresolved':['Required dependency material was not fully read.']},'honest-final')], poll_task_id='pinned-final')
     assert result['commands'][-1]['result']['unresolved']
     report = build_worker_report({'task_id': 'pinned-final', 'status': 'done', 'commands': result['commands']})
     assert not report['goal_completed']
@@ -264,6 +267,8 @@ def test_artifact_receipt_is_retained_without_inventing_worker_completion():
                                      'file_sha256': 'a' * 64, 'total_size': 6}}]}
     report = build_worker_report(task)
     assert not report['goal_completed'] and report['artifacts'][0]['verified']
-    task['commands'].append({'tool_name': 'answer.text', 'status': 'terminal',
-                             'result': {'_result_contract': 3, 'text': 'Written', 'unresolved': []}})
+    task['commands'][0]['step_id']='step_1'
+    run_journal.append_answer_step(task['commands'],'answer_text',
+        run_journal.validate_answer_text_payload({'status':'success','result':'Written'},
+            task['commands'],require_status=True,task=task),target_device_id='pc')
     assert build_worker_report(task)['goal_completed']

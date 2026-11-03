@@ -226,18 +226,22 @@ def test_research_journal_is_required_material_even_if_answer_is_short():
     assert material[0]['historical_material_only'] and not material[0]['current_execution_evidence']
 
 
+from server.run_journal import append_answer_step, validate_answer_text_payload
+
+
 def test_cli_open_and_native_open_use_same_observed_object_contract():
     observed={'observed_path':'C:/a.docx','title':'a - Word','process':'winword.exe','class_name':'OpusApp'}
     result={'status':'success','requested_object':{'type':'file','path':'C:/a.docx'},
             'observed_object':observed,'object_open_verified':True,'completion_state':'success'}
     reports=[]
     for tool in ('app.launch','app.verify_launch'):
+        journal=[{'step_id':'step_1','tool_name':tool,'target_device_id':'pc','result':result}]
+        append_answer_step(journal,'answer_text',validate_answer_text_payload({
+            'status':'success','text':'Opened the requested document'},journal))
         reports.append(build_worker_report({'task_id':'open','status':'done','device_ids':['pc'],
             'window_effects':['open'],
             'open_objects':[{'type':'file','path':'C:/a.docx'}],
-            'commands':[{'step_id':'step_1','tool_name':tool,'target_device_id':'pc','result':result},
-                        {'tool_name':'answer.text','status':'terminal','result':{
-                            '_result_contract':3,'text':'Opened the requested document','unresolved':[]}}]}))
+            'commands':journal}))
     assert all(r['goal_completed'] for r in reports)
     bad=copy.deepcopy(result);bad['object_open_verified']=False
     report=build_worker_report({'task_id':'open','status':'done','device_ids':['pc'],'window_effects':['open'],
@@ -249,7 +253,7 @@ def test_cli_open_and_native_open_use_same_observed_object_contract():
 
 @pytest.mark.parametrize('method',['office_pptx','execute_cmd'])
 @pytest.mark.parametrize('coverage',['complete','partial'])
-def test_office_and_cli_inline_observation_has_same_content_gate(tmp_path,monkeypatch,method,coverage):
+def test_office_and_cli_receipts_do_not_reassess_worker_content_verdict(tmp_path,monkeypatch,method,coverage):
     from agent.core import actions
     from agent.core.office_tools import office
     path=tmp_path/'result.pptx'
@@ -265,15 +269,18 @@ def test_office_and_cli_inline_observation_has_same_content_gate(tmp_path,monkey
         result=actions.execute_cmd('synthetic creation',artifact_paths=[str(path)],_artifact_task_id='t')
     for receipt in result['artifact_receipts']:receipt['device_id']='pc'
     step={'step_id':'step_1','tool_name':method,'status':'success','target_device_id':'pc','result':result}
-    payload={'_result_contract':3,'text':'Prepared' if coverage=='complete' else 'Required material missing',
-             'unresolved':[] if coverage=='complete' else ['Required material missing']}
+    from server.run_journal import validate_answer_text_payload,append_answer_step
+    journal=[step]
+    payload=validate_answer_text_payload({'status':'success' if coverage=='complete' else 'partial',
+        'result':'Prepared' if coverage=='complete' else 'Required material missing',
+        'unresolved':[] if coverage=='complete' else ['Required material missing']},journal,require_status=True)
+    append_answer_step(journal,'answer_text',payload,target_device_id='pc')
     task={'task_id':'t','status':'done','original_request':'Prepare a factual presentation',
-        'assigned_artifacts':[str(path)],'device_ids':['pc'],'commands':[step,
-            {'tool_name':'answer.text','status':'terminal','result':payload}],'answer':'Prepared'}
+        'assigned_artifacts':[str(path)],'device_ids':['pc'],'commands':journal,'answer':'Prepared'}
     report=build_worker_report(task)
-    assert report['artifacts'][0]['content_observed'] is True
+    assert report['artifacts'][0]['verified'] is True
     assert report['goal_completed']==(coverage=='complete')
-    assert report['artifacts'][0]['content_verified'] is True  # Operation observation does not change with semantic completeness.
+    assert journal[0]['result']==result  # Original native inspection remains in the journal.
 
 
 def test_cli_zero_and_echo_cannot_certify_nonexistent_artifact(tmp_path,monkeypatch):
@@ -383,10 +390,13 @@ def test_substantive_unresolved_is_not_discarded_for_lacking_filename():
     step={'tool_name':'write_content','step_id':'step_1','target_device_id':'pc',
           'result':{'path':path,'committed':True,'verified':True,'file_sha256':'a'*64,'total_size':1}}
     task={'task_id':'t','status':'done','device_ids':['pc'],'assigned_artifacts':[path],
-        'commands':[step,{'tool_name':'answer.text','status':'terminal','result':{
-            '_result_contract':3,'text':'First part','unresolved':['Required comparison not performed']}}]}
+        'commands':[step]}
+    append_answer_step(task['commands'],'answer_text',validate_answer_text_payload({
+        'status':'partial','text':'First part','unresolved':['Required comparison not performed']},task['commands']))
     assert not build_worker_report(task)['goal_completed']
-    task['commands'][-1]['result'].update(unresolved=[],remaining=['Optional further comparison'])
+    task['commands']=[step]
+    append_answer_step(task['commands'],'answer_text',validate_answer_text_payload({
+        'status':'success','text':'Required work completed','remaining':['Optional further comparison']},task['commands']))
     assert build_worker_report(task)['goal_completed']
 
 

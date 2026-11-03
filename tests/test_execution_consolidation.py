@@ -43,8 +43,8 @@ def with_content_check(t, path, content=b'new'):
     steps=t['commands']
     steps.append({'step_id':'step_content','tool_name':'read_file','target_device_id':'pc',
         'result':{'status':'success','path':str(path),'sha256':digest(content),'content':content.decode()}})
-    payload={'text':t['answer']}
-    steps.append({'step_id':'step_final','tool_name':'answer.text','status':'terminal','result':payload})
+    payload=validate_answer_text_payload({'status':'success','text':t['answer']},steps)
+    append_answer_step(steps,'answer_text',payload)
     return t
 
 
@@ -315,7 +315,12 @@ def test_all_accepted_effect_types_must_be_confirmed(tmp_path,file_ok,window_ok)
     if window_ok:steps.append({'step_id':'step_2','tool_name':'window.control','target_device_id':'pc',
         'result':{'status':'success','completion_state':'success','action':'minimize'}})
     t=task(path,steps);t.update(window_effects=['minimize'])
-    if file_ok:with_content_check(t,path)
+    if file_ok and window_ok:
+        with_content_check(t,path)
+    else:
+        append_answer_step(steps,'answer_text',validate_answer_text_payload({
+            'status':'partial','text':'One requested action was completed',
+            'unresolved':['Minimizing the window' if file_ok else 'Writing the file']},steps))
     assert build_worker_report(t)['goal_completed'] is (file_ok and window_ok)
 
 
@@ -324,6 +329,9 @@ def test_one_target_file_cannot_hide_another_required_target_failure(tmp_path):
     t['device_ids']=['pc','other']
     t['commands'].append({'step_id':'step_2','tool_name':'execute_cmd','target_device_id':'other',
         'result':{'returncode':1,'stdout':'','stderr':'failed target'}})
+    append_answer_step(t['commands'],'answer_text',validate_answer_text_payload({
+        'status':'partial','result':'File created on pc; the other target failed',
+        'unresolved':['File on other device was not created']},t['commands']))
     report=build_worker_report(t)
     assert not report['goal_completed'] and report['status']=='partial'
 
@@ -346,15 +354,17 @@ def test_verified_transfer_binds_both_targets_and_actual_digest(tmp_path,valid_h
         'result':{'status':'success','sha256_verified':True,'sha256':digest(b'new') if valid_hash else 'invalid',
             'source_device':'a','target_device':'b','target_path':str(path),'bytes_transferred':3}}
     t=task(path,[step]);t['device_ids']=['a','b']
-    append_answer_step(t['commands'],'answer_text',{'_result_contract':3,'text':t['answer'],'unresolved':[]})
+    terminal={'status':'success','text':'Copy verified'} if valid_hash else {'status':'failed','text':'Copy digest is invalid'}
+    append_answer_step(t['commands'],'answer_text',validate_answer_text_payload(terminal,t['commands']))
     report=build_worker_report(t)
     assert report['goal_completed'] is valid_hash
+    assert bool(report['artifacts']) is valid_hash
 
 
 def test_office_delivery_needs_format_proof_not_only_text_write_hash(tmp_path):
     path=tmp_path/'result.docx'
     report=build_worker_report(task(path,[write_step(path,None,b'plain text, not an Office package')]))
-    assert not report['goal_completed'] and not report['artifacts'][0]['verified']
+    assert not report['goal_completed'] and report['artifacts'][0]['verification_scope']=='file_bytes_only'
 
 
 def test_office_delivery_accepts_actual_native_package_receipt(tmp_path,monkeypatch):
@@ -382,7 +392,7 @@ def test_office_transfer_attests_copy_identity_without_claiming_format_validatio
         'result':{'status':'success','sha256_verified':True,'sha256':digest(b'source bytes'),
             'source_device':'a','target_device':'b','target_path':str(path),'bytes_transferred':12}}
     t=task(path,[step]);t.update(device_ids=['a','b'],original_request='Copy source byte for byte')
-    append_answer_step(t['commands'],'answer_text',{'_result_contract':3,'text':t['answer'],'unresolved':[]})
+    append_answer_step(t['commands'],'answer_text',validate_answer_text_payload({'status':'success','text':t['answer']},t['commands']))
     report=build_worker_report(t)
     assert report['goal_completed'] and report['artifacts'][0]['verification_scope']=='copy_identity'
 

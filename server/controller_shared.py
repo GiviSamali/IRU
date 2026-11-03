@@ -422,6 +422,9 @@ def worker_assignment_scope(task_id):
              "Report and verify completion of this assigned result only.\n"
              + data_only_context("assigned_result", {"objective": objective,
                  "human_authority_request":task.get('original_request') or task.get('message'),
+                 "scope":task.get('assignment_scope') or '',
+                 "constraints":task.get('assignment_constraints') or [],
+                 "open_objects":task.get('open_objects') or [],
                  "window_effects":task.get("window_effects") or [],
                  "preserve_file_bytes":task.get("preserve_file_bytes",False),
                  "expected_artifacts":task.get("assigned_artifacts") or []}))

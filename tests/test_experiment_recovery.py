@@ -147,12 +147,15 @@ def test_ordinary_confirmation_retains_controller_and_does_not_repeat_completed_
     {'returncode':0.0,'stdout':'EDIT OK'},
 ])
 def test_action_proof_cannot_override_negative_or_uncertain_execution(owner,result):
+    from server.run_journal import append_answer_step, validate_answer_text_payload
     task,payload=shell_edit(owner,'EDIT OK')
+    journal = task['commands']
+    journal.pop()
+    append_answer_step(journal, 'answer_text', validate_answer_text_payload({**payload, 'status':'success'}, journal))
     task['commands'][0]['result']=result
     report=build_worker_report(task)
-    assert not report['goal_completed']
-    if result.get('status')=='unknown' or result.get('completion_state')=='unknown' or type(result.get('returncode')) is float:
-        assert report['status']=='unknown'
+    assert report['status']=='unknown' and not report['goal_completed']
+    assert report['error_code']=='worker_evidence_binding_mismatch'
 
 
 def test_internal_memory_proposal_is_normalized_before_audit_and_never_written_automatically(world):
@@ -205,7 +208,8 @@ def test_confirmation_returns_known_no_dispatch_or_unknown_server_restart(world,
             else:await original_wait_for(scheduler.runners[owner['id']],5)
             assert not device.calls
             row=owned_job(task['task_id'],owner['id'])
-            assert row['state']==('blocked' if finish=='timeout' else 'unknown')
+            # Known no-dispatch is returned to Worker; its partial verdict is kept.
+            assert row['state']==('partial' if finish=='timeout' else 'unknown')
             restored=restore_task(row)
             assert not restored.get('_command_confirm_future')
             assert not build_worker_report(restored)['goal_completed']

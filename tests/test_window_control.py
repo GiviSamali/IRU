@@ -300,7 +300,7 @@ def run_actual_window_request(monkeypatch,message,send,completion=None,history=N
     async def worker_decision(**kwargs):
         verified=[r for r in observations if r.get('completion_state')=='success']
         if effects and [r.get('action') for r in verified]==list(effects):
-            return tool_call('answer_text',{'result':'\n'.join(r.get('summary','Verified') for r in verified),'unresolved':[]},'terminal')
+            return tool_call('answer_text',{'status':'success','result':'\n'.join(r.get('summary','Verified') for r in verified),'unresolved':[]},'terminal')
         if observations and observations[-1].get('error')=='window_not_found':
             return tool_call('answer_report_failure',{'message':'Нужное окно не найдено.','reason':'window_not_found',
                 'recoverable':False,'suggested_next_action':''},'terminal')

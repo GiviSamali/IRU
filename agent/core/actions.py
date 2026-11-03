@@ -1419,7 +1419,7 @@ UNSAFE_OPEN_SUFFIXES = {".lnk", ".url", ".hta", ".vbs", ".vbe", ".js", ".jse", "
 # Only these may be opened as documents through their association.
 DOCUMENT_SUFFIXES = {".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".pdf", ".txt", ".md",
                      ".csv", ".rtf", ".odt", ".ods", ".odp", ".png", ".jpg", ".jpeg", ".gif",
-                     ".bmp", ".svg", ".webp"}
+                     ".bmp", ".svg", ".webp", ".zip", ".mp4"}
 OFFICE_PROGIDS = {".pptx": ("PowerPoint.Application", "Presentations"),
                   ".docx": ("Word.Application", "Documents"),
                   ".xlsx": ("Excel.Application", "Workbooks")}
@@ -1604,23 +1604,22 @@ def _app_open_object(kind: str, path_text: str, timeout_sec: float) -> dict:
                 "pid": None, "command": path_text, "requested_object": requested,
                 "launch_state": "failed", "object_open_verified": False,
                 "observed_object": None, "window": None, "next_actions": []}
-    observed = _observe_opened_object(kind, path_text, timeout_sec)
-    window = ({"title": observed["title"], "pid": observed.get("pid"), "visible": True,
-               "process_name": observed.get("process")} if observed else None)
     return {
-        "status": "opened_verified" if observed else "launched",
-        "pid": (observed or {}).get("pid"),
+        "status": "success",
+        "completion_state": "success",
+        "os_open_accepted": True,
+        "pid": None,
         "command": path_text,
         "executable": path_text,
         "args": [],
         "cwd": "",
-        "process_alive": bool(observed),
-        "window": window,
+        "process_alive": None,
+        "window": None,
         "requested_object": requested,
-        "launch_state": "observed" if observed else "requested",
-        "object_open_verified": bool(observed),
-        "observed_object": observed,
-        "next_actions": [] if observed else ["window.verify"],
+        "launch_state": "accepted",
+        "object_open_verified": False,
+        "observed_object": None,
+        "next_actions": [],
     }
 
 
@@ -1634,8 +1633,8 @@ def app_launch(
     timeout_sec: float = 5,
     env: dict | None = None,
 ) -> dict:
-    if not executable and command:
-        candidate = _strip_arg_quotes(str(command).strip())
+    if (not executable and command) or (executable and not args):
+        candidate = _strip_arg_quotes(str(executable or command).strip())
         kind = _open_object_kind(candidate)
         if kind == "unsafe":
             # A shell association for scripts/shortcuts executes code; it is not

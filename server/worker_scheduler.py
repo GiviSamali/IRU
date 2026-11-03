@@ -310,7 +310,8 @@ def goal_view(goal_id, owner, chat_id):
             members.append({"task_id": row["task_id"], "revision": row["revision"],
                             "objective": payload.get("proposed_objective") or payload.get("message"),
                             "expected_artifacts": payload.get("assigned_artifacts") or [],
-                            "status": report.get('status') or row["state"], "report": report, "dependencies": edges,
+                            "status": report.get('status') or (row["state"] if row["state"] not in TERMINAL else 'unknown'),
+                            "report": report, "dependencies": edges,
                             "assignment_scope": payload.get('assignment_scope') or '',
                             "assignment_constraints": payload.get('assignment_constraints') or [],
                             "unresolved":terminal.get('unresolved') or [],
@@ -322,8 +323,7 @@ def goal_view(goal_id, owner, chat_id):
             member["superseded_by"] = replacements.get(member["task_id"])
             member["required_for_goal"] = not bool(member["superseded_by"])
         required = [member for member in members if member["required_for_goal"]]
-        completed = bool(required) and all(member["status"] == "success"
-            and member["report"].get("goal_completed") is True and member["result"] for member in required)
+        completed = bool(required) and all(member["status"] == "success" for member in required)
         states = {member['status'] for member in required}
         by_id = {m['task_id']:m for m in required}
         dependent_blocked = [m['task_id'] for m in required if m['status']=='waiting_dependency' and any(

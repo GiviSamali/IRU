@@ -123,7 +123,7 @@ def test_server_only_loop_passes_real_user_boundary_and_source_options(owned,mon
             return {'choices':[{'message':{'role':'assistant','tool_calls':[{'id':'source','type':'function','function':{
                 'name':'system_get_last_run_summary','arguments':json.dumps({'source_message_range':{'first':mid,'last':mid}})}}]}}]}
         assert 'Точный источник решения.' in messages[-1]['content']
-        payload={'answer_type':'grounded_report','text':'Причина в исходном сообщении.','basis':['step_1']}
+        payload={'status':'success','answer_type':'grounded_report','text':'Причина в исходном сообщении.','basis':['step_1']}
         return {'choices':[{'message':{'role':'assistant','tool_calls':[{'id':'final','type':'function','function':{'name':'answer_text','arguments':json.dumps(payload)}}]}}]}
     monkeypatch.setattr(controller,'_chat_completion_request',complete)
     result=asyncio.run(controller_onboarding.process_onboarding_message('Почему принято решение?',

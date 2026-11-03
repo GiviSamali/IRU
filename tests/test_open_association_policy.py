@@ -23,7 +23,7 @@ def test_code_bearing_or_unknown_association_is_refused(name):
 
 
 @pytest.mark.parametrize("name", ["a.pptx", "b.docx", "c.xlsx", "d.pdf", "e.txt", "f.md",
-                                  "g.csv", "h.png", "i.jpg"])
+                                  "g.csv", "h.png", "i.jpg", "j.mp4", "k.zip"])
 def test_document_association_is_openable(name):
     assert actions._open_object_kind(f"C:/tmp/{name}") == "file"
 
@@ -76,15 +76,55 @@ def test_document_is_opened_through_the_shell_but_not_verified_blindly(monkeypat
     assert no_shell == ["C:/My Docs/report.pptx"]
     assert result["requested_object"] == {"type": "file", "path": "C:/My Docs/report.pptx"}
     assert result["object_open_verified"] is False
-    assert result["status"] == "launched"
+    assert result["status"] == "success"
+    assert result["os_open_accepted"] is True
+    assert result["next_actions"] == []
 
 
-def test_verified_observation_is_reported(monkeypatch, no_shell):
+def test_open_does_not_observe_or_claim_document_loading(monkeypatch, no_shell):
     observed = {"observed_path": "C:/My Docs/report.pptx", "kind": "file",
                 "title": "report - PowerPoint", "process": "POWERPNT.EXE",
                 "class_name": "PPTFrameClass", "matched_name": "report.pptx"}
-    monkeypatch.setattr(actions, "_observe_opened_object", lambda *a, **k: observed)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('ordinary open must not wait for object observation')
+    monkeypatch.setattr(actions, "_observe_opened_object", forbidden)
     result = actions.app_launch(command='C:/My Docs/report.pptx')
-    assert result["object_open_verified"] is True
-    assert result["status"] == "opened_verified"
-    assert result["observed_object"]["observed_path"] == "C:/My Docs/report.pptx"
+    assert result["object_open_verified"] is False
+    assert result["os_open_accepted"] is True
+    assert result["observed_object"] is None
+
+
+def test_os_open_failure_is_not_accepted(monkeypatch, no_shell):
+    def refuse(path):
+        raise OSError('no association')
+    monkeypatch.setattr(actions, '_shell_open_object', refuse)
+    result=actions.app_launch(command='C:/My Docs/report.pptx')
+    assert result['status']=='failed'
+    assert not result.get('os_open_accepted')
+    assert result['error_code']=='shell_open_failed'
+
+
+def test_explicit_object_observation_remains_separate(monkeypatch):
+    monkeypatch.setattr(actions, '_observe_opened_object', lambda *args, **kwargs: None)
+    result=actions.app_verify_launch(pid=123,object_path='C:/My Docs/report.pptx',timeout_sec=0)
+    assert result['object_open_verified'] is False
+    assert result['completion_state']=='unknown'
+
+
+def test_windows_document_open_uses_startfile_not_popen(monkeypatch):
+    called=[]
+    monkeypatch.setattr(actions.os,'name','nt')
+    monkeypatch.setattr(actions.os,'startfile',lambda path:called.append(path),raising=False)
+    def forbidden(*args,**kwargs):
+        raise AssertionError('A document is not an executable')
+    monkeypatch.setattr(actions.subprocess,'Popen',forbidden)
+    monkeypatch.setattr(actions,'_observe_opened_object',forbidden)
+    result=actions.app_launch(command='C:/My Docs/report.pptx')
+    assert called==['C:/My Docs/report.pptx']
+    assert result['os_open_accepted'] is True
+
+
+def test_document_executable_alias_also_uses_association(no_shell):
+    result=actions.app_launch(executable='C:/My Docs/report.pptx')
+    assert no_shell==['C:/My Docs/report.pptx']
+    assert result['os_open_accepted'] is True

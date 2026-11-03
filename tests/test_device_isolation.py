@@ -126,7 +126,8 @@ def setup_broadcast(monkeypatch, failures=(), confirmation=False):
         desktop = kw['device_info']['desktop_path']
         command = f"rm {desktop}/temporary.txt" if confirmation else f"ls {desktop}"
         result = await kw["send_command_fn"](did, "execute_cmd", {"command": command})
-        return {"answer": "finished", "commands": [{"command": command, "device_id": did, "result": result}]}
+        return {"status": "failed" if result['returncode'] else "success", "answer": "finished",
+                "commands": [{"command": command, "device_id": did, "result": result}]}
     monkeypatch.setattr(rt, "send_command_to_agent", send)
     monkeypatch.setattr(rt, "process_nl_command", process)
     return seen, sent

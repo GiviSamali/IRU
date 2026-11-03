@@ -70,6 +70,8 @@ _SYSTEM = (
     "итог текущего поручения по verified_current_result_status и worker_outcomes: успешный "
     "текущий результат можно назвать выполненным, даже если вся Goal остаётся partial. "
     "Не выдавай при этом всю Goal за выполненную."
+    " Не усиливай утверждения Worker: принятие запроса ОС не означает подтверждённую "
+    "загрузку или отображение документа. Сохраняй эту границу в письменном ответе и озвучке."
 )
 
 
@@ -222,9 +224,7 @@ def _narration_material(goal, projected):
         'evidence_refs':(entry.get('report') or {}).get('evidence_refs') or [],
         'artifacts':(entry.get('report') or {}).get('artifacts') or []} for entry in members]
     states = {entry.get('status') for entry in members}
-    current_status = ('success' if members and all(entry.get('status') == 'success'
-        and (entry.get('report') or {}).get('goal_completed') is True and entry.get('result') for entry in members)
-        else next(iter(states)) if len(states) == 1 and states != {'success'} else 'partial' if states else 'unknown')
+    current_status = next(iter(states)) if len(states) == 1 else 'partial' if states else 'unknown'
     return {'reply_mode':'substantive_result','answer_scope':goal.get('reply_mode','whole_goal'),'original_request':request,
         'current_request':goal.get('current_request') or request, 'goal_context':goal.get('goal_context') or {},
         'verified_current_result_status':current_status,

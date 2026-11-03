@@ -5,6 +5,7 @@ import time
 
 from server.controller_non_pipeline import process_non_pipeline_command
 from server.controller_trust import SAFE_DOWNLOAD_LINK_ERROR, sanitize_result_text
+from test_tool_only_protocol import _completion_fn
 
 
 def _make_completion_fn(responses):
@@ -26,11 +27,11 @@ def _make_completion_fn(responses):
                     {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [call]}}]}
                     for call in tool_calls[1:]
                 ]
-                return {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [tool_calls[0]]}}]}
+                return await _completion_fn([{"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [tool_calls[0]]}}]}])(**kwargs)
             if not tool_calls:
                 content = message.get("content") or "ok"
-                return {"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_call("call-answer", content)]}}]}
-        return response
+                return await _completion_fn([{"choices": [{"finish_reason": "tool_calls", "message": {"content": "", "tool_calls": [_answer_call("call-answer", content)]}}]}])(**kwargs)
+        return await _completion_fn([response])(**kwargs)
 
     return _chat_completion_request_fn
 

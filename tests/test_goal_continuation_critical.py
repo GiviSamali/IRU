@@ -21,7 +21,7 @@ def test_server_worker_keeps_its_assignment_after_strict_prompt(monkeypatch):
         if len(captured)==1:
             return {'choices':[{'message':{'tool_calls':[{'id':'search','function':{
                 'name':'web_search','arguments':json.dumps({'query':'RAG research'})}}]}}]}
-        payload={'answer_type':'partial_report','text':'Search failed; no sources yet','basis':['step_1']}
+        payload={'status':'partial','answer_type':'partial_report','text':'Search failed; no sources yet','basis':['step_1']}
         return {'choices':[{'message':{'tool_calls':[{'id':'answer','function':{
             'name':'answer_text','arguments':json.dumps(payload)}}]}}]}
     async def search(*args):return {'error':'controlled HTTP 429'}

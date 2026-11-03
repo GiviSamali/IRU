@@ -133,6 +133,18 @@ def running_progress(task):
 def worker_presentation(task, report=None):
     """One Worker presentation entry point, including restored/voice paths."""
     report=normalized_worker_report(task,report)
+    terminal=next((entry for entry in reversed(task.get('commands') or [])
+        if entry.get('tool_name') in {'answer.text','answer_text'} and entry.get('status')=='terminal'),{})
+    terminal_result = terminal.get('result') or {}
+    if terminal_result.get('_result_contract') == 4 and terminal_result.get('status') == report['status']:
+        # The executor already owns findings, limitations and its verdict.
+        # Do not replace them with a second interpretation of app/window tools.
+        text = report['summary']
+        unfinished = [item for item in report['unresolved'] if item not in text]
+        if unfinished:
+            text += '\n\nНе завершено:\n' + '\n'.join(f'- {item}' for item in unfinished)
+        return {'conversational_response':text,
+                'execution_details':f"Технический статус: {report['status']}.\nИсточники: {', '.join(report['evidence_refs']) or 'нет'}.\n\n{text}"}
     view=render_worker_report(task,report)
     status=report['status']
     if status in {'running','queued','waiting_dependency','waiting_input','waiting_confirmation','blocked','cancelled'}:

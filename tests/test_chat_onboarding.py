@@ -32,7 +32,12 @@ def test_api_chat_uses_onboarding_mode_without_devices(client, monkeypatch):
 
     async def fake_process_onboarding_message(user_message: str, chat_history=None, **kwargs):
         called["onboarding"] += 1
-        return {"answer": f"Onboarding help: {user_message}"}
+        from server.run_journal import append_answer_step, validate_answer_text_payload
+        answer = f"Onboarding help: {user_message}"
+        journal = []
+        terminal = validate_answer_text_payload({"status": "success", "result": answer}, journal)
+        append_answer_step(journal, "answer_text", terminal)
+        return {"answer": answer, "commands": journal}
 
     async def fake_send_command_to_agent(*args, **kwargs):
         called["agent"] += 1
@@ -68,6 +73,6 @@ def test_api_chat_uses_onboarding_mode_without_devices(client, monkeypatch):
     assert task_payload["status"] == "done"
     assert "Onboarding help:" in (task_payload.get("answer") or "")
     assert task_payload["device_ids"] == []
-    assert task_payload.get("commands") == []
+    assert [entry['tool_name'] for entry in task_payload['commands']] == ['answer.text']
     assert called["onboarding"] == 1
     assert called["agent"] == 0

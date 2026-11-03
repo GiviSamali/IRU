@@ -25,16 +25,22 @@ def test_typed_partial_with_sufficient_subset_is_not_replaced_by_first_error():
     assert sanitize_result_text('Всё выполнено.', journal) == 'Всё выполнено.'  # authenticity no longer decides goal
 
 
-def test_two_invalid_bases_stop_without_twenty_protocol_turns():
+def test_two_invalid_refs_can_be_corrected_within_iteration_budget():
     captured = []
+    async def send(device,action,args):
+        import hashlib
+        return {'status':'ok','verified':True,'committed':True,'path':args['path'],
+            'file_sha256':hashlib.sha256(args['content'].encode()).hexdigest()}
+    bad={'status':'success','result':'Done','evidence_refs':['old_step']}
     result = _run_case([
         _message(tool_calls=[_tool_call('read','write_content',{'path':'C:/Temp/observations.txt','content':'observed subset'})]),
-        _message(tool_calls=[_answer_call('bad1','Done', answer_type='grounded_report', basis=['old_step'])]),
-        _message(tool_calls=[_answer_call('bad2','Done', answer_type='grounded_report', basis=['old_step'])]),
-    ], captured=captured, max_iterations=20)
-    assert len(captured) == 2
+        _message(tool_calls=[_tool_call('bad1','answer_text',bad)]),
+        _message(tool_calls=[_tool_call('bad2','answer_text',bad)]),
+        _message(tool_calls=[_answer_call('final','Observed subset saved',status='success')]),
+    ], captured=captured, max_iterations=20,send_command_fn=send)
+    assert len(captured) == 4
     assert result['commands'][-1]['tool_name']=='answer.text'
-    assert not build_worker_report({'task_id':'local','status':'done','commands':result['commands'], 'device_ids':['device-1'],'answer':result['answer']})['goal_completed']
+    assert build_worker_report({'task_id':'local','status':'done','commands':result['commands'], 'device_ids':['device-1'],'answer':result['answer']})['goal_completed']
     assert result['commands'][-1]['result']['basis']==['step_1']
 
 

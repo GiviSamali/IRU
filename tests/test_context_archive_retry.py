@@ -162,7 +162,7 @@ def test_server_controller_reads_archive_summary_then_original(owned,monkeypatch
         if index<3:
             name='system_get_last_run_summary';args=arguments[index]
         else:
-            name='answer_text';args={'answer_type':'grounded_report','text':reason,'basis':['step_3']}
+            name='answer_text';args={'status':'success','answer_type':'grounded_report','text':reason,'basis':['step_3']}
         return {'choices':[{'message':{'role':'assistant','tool_calls':[{'id':f'call-{index}',
             'type':'function','function':{'name':name,'arguments':json.dumps(args)}}]}}]}
     monkeypatch.setattr(controller,'_chat_completion_request',complete)

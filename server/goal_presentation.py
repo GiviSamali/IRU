@@ -16,9 +16,7 @@ ACTIVE = frozenset({"running", "queued", "waiting_confirmation", "waiting_input"
 def goal_presentation(goal: dict) -> dict:
     """A deterministic presentation, not an additional evaluator of Worker prose."""
     members = [m for m in goal.get("tasks") or [] if m.get("required_for_goal", True)]
-    finished = [m for m in members if m.get("status") == "success"
-                and (m.get("report") or {}).get("goal_completed") is True
-                and m.get("result")]
+    finished = [m for m in members if m.get("status") == "success"]
     done = len(finished)
     total = len(members)
     dependent_blocked = goal.get('dependent_blocked') or []

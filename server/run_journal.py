@@ -278,8 +278,12 @@ def is_answer_failure_tool(tool_name: str | None) -> bool:
 
 
 def _next_idx(journal: list[dict[str, Any]]) -> int:
-    existing = [entry.get("idx") for entry in journal if isinstance(entry.get("idx"), int)]
-    return (max(existing) + 1) if existing else 1
+    existing = [len(journal)]
+    for entry in journal:
+        if type(entry.get('idx')) is int:existing.append(entry['idx'])
+        match=re.fullmatch(r'step_(\d+)',str(entry.get('step_id') or ''))
+        if match:existing.append(int(match.group(1)))
+    return max(existing)+1
 
 
 
@@ -367,6 +371,17 @@ def append_tool_step(journal: list[dict[str, Any]], entry: dict[str, Any]) -> di
     return entry
 
 
+def terminal_result_binding(payload, journal):
+    """Bind the accepted verdict to its actual sources, without judging their meaning."""
+    entries={entry.get('step_id'):entry for entry in journal}
+    sources=[]
+    for ref in payload.get('basis') or []:
+        entry=entries.get(ref) or {}
+        sources.append({key:entry.get(key) for key in ('step_id','tool_name','target_device_id','result')})
+    body={'terminal':{key:value for key,value in payload.items() if key!='_evidence_binding'},'sources':sources}
+    return sha256(json.dumps(body,ensure_ascii=False,sort_keys=True,default=str).encode('utf-8')).hexdigest()
+
+
 def append_answer_step(
     journal: list[dict[str, Any]],
     tool_name: str,
@@ -377,6 +392,8 @@ def append_answer_step(
     iteration: int | None = None,
     command: str | None = None,
 ) -> dict[str, Any]:
+    if payload.get('_result_contract')==4:
+        payload={**payload,'_evidence_binding':terminal_result_binding(payload,journal)}
     answer_type = payload.get("answer_type") or payload.get("kind") or "terminal"
     entry = make_run_step(
         journal=journal,
@@ -697,7 +714,8 @@ def serialize_tool_result_for_llm(entry: dict[str, Any], token_budget=None) -> s
 def confirmed_unknown_answer(journal, target_device_id, reason="confirmed_transport_outcome_unknown"):
     """A lost approved-command result must never trigger another execution or a success claim."""
     expired=reason=='confirmation_expired'
-    payload={'answer_type':'partial_report',
+    payload={'status':'failed' if expired else 'unknown',
+             'answer_type':'partial_report',
              'text':'Ошибка связи после отправки подтверждённой команды. Она могла выполниться; результат неизвестен. Дальнейшие действия остановлены, автоматически команду не повторяю.',
              'basis':[journal[-1]['step_id']]}
     if expired:payload['text']='Время ожидания подтверждения истекло. Команда не выполнялась; задача остановлена.'
@@ -837,11 +855,11 @@ def unfinished_execution_result(journal, reason):
                 'terminal_reason': reason}}
 
 
-def validate_answer_text_payload(payload, journal):
-    """Minimal model result; legacy fields are hints, never completion authority."""
+def validate_answer_text_payload(payload, journal, *, require_status=False, task=None):
+    """Validate the executor's terminal contract, before leaving its tool loop."""
     if not isinstance(payload,dict):
         raise ProtocolValidationError('answer_text arguments must be an object')
-    allowed = {'result','unresolved','caveats','answer','text','answer_type','effects','remaining','basis','suggested_fact'}
+    allowed = {'status','evidence_refs','result','unresolved','caveats','answer','text','answer_type','effects','remaining','basis','suggested_fact'}
     if set(payload)-allowed:
         raise ProtocolValidationError('Unknown answer fields; report answer/effects/remaining only.')
     compact = 'result' in payload
@@ -882,6 +900,29 @@ def validate_answer_text_payload(payload, journal):
         result['text']=re.sub(r'\[\[SUGGEST_REMEMBER:\s*(.+?)\s*\|\s*(\w+)\s*\]\]','',text).strip()
         result['suggested_fact']={'text':suggestion.group(1).strip(),'category':suggestion.group(2).strip()}
     if not result['text']:raise ProtocolValidationError('answer_text needs a human answer, not only an internal annotation')
+    status = payload.get('status')
+    if require_status or status is not None:
+        if status not in {'success','partial','failed','unknown'}:
+            raise ProtocolValidationError('terminal_contract_condition: status must be success, partial, failed or unknown')
+        if status == 'success' and unresolved:
+            raise ProtocolValidationError('terminal_contract_condition: success cannot contain unfinished requirements')
+        operations = {entry['step_id']:entry for entry in journal if entry.get('step_id')
+            and (entry.get('tool_type') not in {'system','answer'} or entry.get('tool_name') in {
+                'system.get_last_run_summary','system_get_last_run_summary','system.list_tools','system_list_tools'})
+            and not str(entry.get('tool_name','')).startswith('answer')}
+        refs = payload.get('evidence_refs',list(operations)[-128:])
+        if not isinstance(refs,list) or len(refs)>128 or any(not isinstance(ref,str) or ref not in operations for ref in refs):
+            raise ProtocolValidationError('terminal_contract_condition: evidence_refs must reference existing operation step_ids')
+        for ref in refs:
+            entry = operations[ref]
+            if task and task.get('task_id') and entry.get('task_id') not in (None,task['task_id']):
+                raise ProtocolValidationError('terminal_contract_condition: evidence belongs to another task')
+        needs_instrument = bool(operations or task and (task.get('assigned_artifacts') or task.get('window_effects')))
+        if status == 'success' and needs_instrument and not refs:
+            raise ProtocolValidationError('terminal_contract_condition: success needs referenced instrumental sources')
+        if task and task.get('_action_outcome_unknown') and status != 'unknown':
+            raise ProtocolValidationError('terminal_contract_condition: unresolved mutation outcome requires unknown; do not repeat it')
+        result.update(status=status,basis=list(dict.fromkeys(refs)),_result_contract=4)
     return result
 
 

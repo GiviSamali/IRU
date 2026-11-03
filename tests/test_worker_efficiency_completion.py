@@ -14,6 +14,13 @@ from server.run_journal import compact_search_material, serialize_tool_result_fo
 from server.tool_repeat_guard import mark_read_only_tool_step, find_prior_successful_read_only_tool_step
 from server.tool_completion import normalize_operation_result, confirmed_window_effect
 from server.worker_reports import build_worker_report
+from server.run_journal import append_answer_step, validate_answer_text_payload
+
+def completed_journal(step, text, **fields):
+    journal = [step]
+    append_answer_step(journal, 'answer_text', validate_answer_text_payload(
+        {'status': 'success', 'text': text, **fields}, journal))
+    return journal
 from test_tool_only_protocol import _run_case, _message, _tool_call
 
 
@@ -167,7 +174,8 @@ def test_news_to_pptx_scripted_path_four_worker_turns_no_assessor(monkeypatch):
     assert 'untrusted_tool_data' in json.dumps(seen[2]['messages'])
     assert not any(x.get('phase')=='result_coverage' for x in seen)
     report=build_worker_report({**task,'status':'done','commands':result['commands'],'answer':result['answer']})
-    assert report['goal_completed'] and report['artifacts'][0]['content_verified']
+    assert report['goal_completed'] and report['artifacts'][0]['verified']
+    assert result['commands'][-2]['result']['operation_verified'] is True
 
 
 @pytest.mark.parametrize('result,expected',[
@@ -212,8 +220,7 @@ def test_closed_native_window_is_sufficient_even_when_process_still_alive(monkey
     step={'tool_name':'window.close','result':result,'target_device_id':'pc','step_id':'step_1'}
     assert confirmed_window_effect(step)=='close'
     assert build_worker_report({'task_id':'w','status':'done','device_ids':['pc'],
-        'window_effects':['close'],'commands':[step,{'tool_name':'answer.text','status':'terminal',
-            'result':{'_result_contract':3,'text':'Closed','unresolved':[]}}]})['goal_completed']
+        'window_effects':['close'],'commands':completed_journal(step, 'Closed')})['goal_completed']
 
 
 def test_linux_required_pipeline_failures_are_not_hidden(monkeypatch):
@@ -267,7 +274,7 @@ def test_confirmed_file_evidence_survives_invalid_last_model_reply(monkeypatch):
                      poll_task_id='saved',send_command_fn=send,max_iterations=2)
     report=build_worker_report({**task,'status':'done','commands':result['commands'],'answer':result['answer']})
     assert not report['goal_completed'] and report['artifacts'][0]['sha256']==digest
-    assert report['status']=='partial' and 'terminal_answer_missing' in report['summary']
+    assert report['status']=='unknown' and 'terminal_answer_missing' in report['summary']
 
 
 def test_valid_office_receipt_without_content_coverage_is_not_assignment_success():
@@ -284,17 +291,14 @@ def test_exact_text_write_needs_no_independent_content_approval():
     step={'step_id':'step_1','tool_name':'write_content','target_device_id':'pc','status':'success',
           'result':{'status':'ok','mode':'replace_exact','path':path,'verified':True,'committed':True,'file_sha256':'a'*64,'total_size':5}}
     report=build_worker_report({'task_id':'text','status':'done','preserve_file_bytes':True,'device_ids':['pc'],
-        'assigned_artifacts':[path],'commands':[step,{'tool_name':'answer.text','status':'terminal',
-            'result':{'_result_contract':3,'text':'Written','unresolved':[]}}]})
+        'assigned_artifacts':[path],'commands':completed_journal(step, 'Written')})
     assert report['goal_completed'] and report['artifacts'][0]['verified']
 
 
 
 def test_optional_recommendation_does_not_block_worker_result():
     step=search_step()
-    report=build_worker_report({'task_id':'r','status':'done','commands':[step,
-        {'step_id':'step_2','tool_name':'answer.text','tool_type':'answer','status':'terminal',
-         'result':{'text':'Findings','_result_contract':3,'unresolved':[],'remaining':['Optional reading']}}]})
+    report=build_worker_report({'task_id':'r','status':'done','commands':completed_journal(step, 'Findings', remaining=['Optional reading'])})
     assert report['goal_completed']
 
 

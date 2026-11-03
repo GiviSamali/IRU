@@ -21,7 +21,8 @@ def call(name, args, ident):
 
 
 def terminal():
-    return call('answer_text', {'result': 'Observed', 'unresolved': []}, 'end')
+    return call('answer_text', {'status':'success','evidence_refs':['step_1'],
+        'result': 'Observed', 'unresolved': []}, 'end')
 
 
 def run_requests(monkeypatch, responses, send, *, cfg=None, on_request=None):

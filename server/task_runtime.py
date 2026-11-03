@@ -844,7 +844,7 @@ def _device_operation_outcome(result, task=None, device_id=None):
     context=dict(task or {})
     context.setdefault('task_id',next((c.get('task_id') for c in result.get('commands',[]) if c.get('task_id')),'device-result'))
     if device_id is not None:context['device_ids']=[device_id]
-    context.update(status='done',answer=result.get('answer',''),commands=result.get('commands',[]),
+    context.update(status=result.get('status') or 'done',answer=result.get('answer',''),commands=result.get('commands',[]),
                    task_receipt=result.get('task_receipt') or {})
     status=build_worker_report(context)['status']
     return 'ok' if status=='success' else 'error' if status=='failed' else status
@@ -1620,7 +1620,8 @@ async def continue_window_input(task):
             task.update(status='unknown',worker_error_code='input_result_not_verified',
                         answer='Не могу подтвердить переключение выбранного окна. Повторять действие не буду.')
             return
-        payload = validate_answer_text_payload(render_operation_answer(entry), journal)
+        payload = validate_answer_text_payload({**render_operation_answer(entry),
+            'status':'success','evidence_refs':[entry['step_id']]}, journal,require_status=True,task=task)
         append_answer_step(journal,'answer_text',payload,target_device_id=target)
         task.update(status='done' if result.get('status')=='success' and result.get('completion_state')=='success' else 'unknown',
                     answer=payload['text'], task_receipt=None)

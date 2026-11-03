@@ -67,7 +67,7 @@ def test_foreign_worker_entry_is_never_evidence(name, digest, size, label):
     """A receipt produced by another Task must not satisfy this assignment."""
     rep = report([label], [write_step("task-2", name, digest), answer_step("task-1", [])])
     assert f"{ROOT}/{name}" not in paths(rep)
-    assert rep["error_code"] == "artifact_receipt_missing"
+    assert rep["error_code"] == "legacy_terminal_status_missing"
     assert rep["status"] != "success"
 
 
@@ -109,13 +109,14 @@ def test_ambiguous_candidates_are_not_chosen_arbitrarily():
         write_step("task-1", "one.txt", LIVE[0][1], step="step_1"),
         write_step("task-1", "four.txt", LIVE[1][1], step="step_2"),
     ])
-    assert rep["error_code"] == "artifact_match_ambiguous"
+    assert rep["error_code"] == "terminal_answer_missing"
+    assert len(rep['artifacts'])==2  # Proven receipts are not matched to descriptive goals here.
     assert rep["status"] != "success"
 
 
 def test_missing_file_stays_unconfirmed():
     rep = report([LIVE[0][3]], [answer_step("task-1", [])])
-    assert rep["error_code"] == "artifact_receipt_missing"
+    assert rep["error_code"] == "legacy_terminal_status_missing"
     assert rep["goal_completed"] is False
 
 

@@ -13,7 +13,7 @@ from server.memory_intent_guard import ORIGINAL_WORKER_REQUEST, MEMORY_AUTHORIZA
 from server.runtime_state import tasks, devices
 from server.worker_reports import build_worker_report
 from server.worker_scheduler import WorkerScheduler, init_worker_storage
-from test_tool_only_protocol import _message, _tool_call
+from test_tool_only_protocol import _message, _tool_call, _completion_fn
 
 
 PROJECT = 'C:/SyntheticFF01/project.txt'
@@ -77,7 +77,7 @@ async def controller(responses,send,*,task_id='ff-controller',request='РџСЂ�
     async def completion(**kwargs):
         if captured is not None:captured.append({**kwargs,'messages':copy.deepcopy(kwargs['messages'])})
         assert queue,'Unexpected additional model call'
-        return queue.pop(0)
+        return await _completion_fn([queue.pop(0)])(**kwargs)
     return await process_non_pipeline_command(user_message=request,device_id='pc',
         device_info={'os':'Windows','file_replace_protocol':2},send_command_fn=send,get_file_link_fn=lambda *a:'',
         chat_history=[],user_id=None,chat_id=None,modes={},poll_task_id=task_id,
@@ -127,7 +127,7 @@ def test_mixed_goal_actual_runtime_projects_only_assignment_preserves_authority_
         async def completion(**request):
             captured.append({**request,'messages':copy.deepcopy(request['messages'])})
             assert queue
-            return queue.pop(0)
+            return await _completion_fn([queue.pop(0)])(**request)
         result = await process_non_pipeline_command(**{name:kwargs[name] for name in (
             'user_message','device_id','device_info','send_command_fn','get_file_link_fn','chat_history',
             'user_id','chat_id','modes','poll_task_id','device_tool_fn')},cfg={'model':'fake'},
@@ -182,8 +182,9 @@ def test_verified_open_without_completion_state_survives_followup_observation(to
         steps.append({'step_id':'s2','tool_name':followup,'target_device_id':'pc',
             'result':{'status':'success','window':{'window_id':'a'*32,'title':'Folder'}},
             'window_request':{'action':'find'}})
-    steps.append({'tool_name':'answer.text','status':'terminal','result':{
-        '_result_contract':3,'text':'Requested object opened','unresolved':[]}})
+    from server.run_journal import append_answer_step, validate_answer_text_payload
+    append_answer_step(steps,'answer_text',validate_answer_text_payload({
+        'status':'success','text':'Requested object opened','unresolved':[]},steps))
     task = {'task_id':'open-ff','status':'done','device_ids':['pc'],
         'window_effects':['open'],'commands':steps,'answer':'РћС‚РєСЂС‹С‚РёРµ РїРѕРґС‚РІРµСЂР¶РґРµРЅРѕ.',
         'open_objects':[{'type':'folder','path':'C:/SyntheticFF01','device_id':'pc'} if tool=='app.launch'

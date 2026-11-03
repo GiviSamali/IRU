@@ -99,7 +99,7 @@ def test_stubborn_parser_error_reuses_diagnostic_without_forcing_worker_stop():
     from server.worker_reports import build_worker_report
     report=build_worker_report({**result,'task_id':'stubborn-parser','status':'done'})
     assert report['goal_completed'] is False
-    assert report['status'] == 'failed'
+    assert report['status'] == 'partial'  # The scripted Worker explicitly reports the unresolved requirement.
     assert 'shell_syntax_error' in str(captured[2]['messages'])
 
 

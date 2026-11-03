@@ -38,18 +38,21 @@ def test_file_integrity_is_independent_of_worker_content_completeness(complete):
             'applied_input':{'data':{'elements':[{'text':'Section one'}]}}}
     text='Report complete' if complete else 'Section two is absent.'
     steps=[{'step_id':'step_1','tool_name':'office_docx','target_device_id':'pc','result':result}]
-    payload={'text':text,'_result_contract':3,'unresolved':[] if complete else ['Section two is absent.']}
+    from server.run_journal import validate_answer_text_payload,append_answer_step
+    payload=validate_answer_text_payload({'status':'success' if complete else 'partial',
+        'result':text,'unresolved':[] if complete else ['Section two is absent.']},steps,require_status=True)
     # A legacy assessor must neither revoke the write nor hide missing Worker work.
-    steps.append({'step_id':'step_2','tool_name':'answer.text','tool_type':'answer','status':'terminal','result':payload})
+    append_answer_step(steps,'answer_text',payload,target_device_id='pc')
     task={'task_id':'local','status':'done','device_ids':['pc'],'assigned_artifacts':[path],
           'original_request':'Write sections one and two','answer':text,'commands':steps}
     report=build_worker_report(task)
-    assert report['artifacts'][0]['verified'] and report['artifacts'][0]['content_observed']
+    assert report['artifacts'][0]['verified']
     assert report['goal_completed']==complete
     if not complete:
         assert report['status']=='partial' and 'Section two' in report['summary']
     native['verified']=False
     assert not build_worker_report(task)['goal_completed']
+    assert build_worker_report(task)['error_code']=='worker_evidence_binding_mismatch'
 
 
 

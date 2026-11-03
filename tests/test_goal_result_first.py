@@ -52,12 +52,12 @@ def test_helper_generator_remains_internal_when_final_file_is_verified():
     assert len(response["artifacts"]) == 2
 
 
-def test_missing_proof_cannot_be_upgraded_to_success():
+def test_presentation_does_not_reassess_member_proof():
     goal={"goal_id":"g","goal_completed":False,"tasks":[
         member("bad","success",report={"goal_completed":True},result=None)]}
     result=goal_presentation(goal)
     assert result["status"]!="success"
-    assert result["completed_count"]==0
+    assert result["completed_count"]==1  # Member status is projected; scheduler validates its stored report.
 
 
 def test_failed_source_does_not_leave_goal_stuck_forever():

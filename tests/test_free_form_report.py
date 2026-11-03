@@ -9,6 +9,7 @@ import pytest
 
 from server import orchestrator as orch
 from server.worker_reports import build_worker_report
+from server.run_journal import validate_answer_text_payload, append_answer_step
 
 ROOT = "C:/Users/russa/OneDrive/Desktop/IRU-EC01-LIVE"
 OLD = "c662aeb0e6b88588258a7cb7fa2d8cc37d6bd7d3e017e706ed54b5b6efef8cc1"
@@ -32,12 +33,14 @@ def replace(step="step_2"):
                                        "previous_sha256": OLD}}}
 
 
-def answer(text=MODEL_TEXT, step="step_4"):
+def answer(text=MODEL_TEXT, step="step_4", status='success'):
     return {"task_id": "task-1", "step_id": step, "tool_name": "answer.text", "status": "terminal",
-            "result": {"answer_type": "grounded_report", "text": text, "basis": ["step_2"]}}
+            "result": {"status":status,"answer_type": "grounded_report", "text": text, "basis": ["step_2"]}}
 
 
 def task(commands, artifacts, answer_text=MODEL_TEXT):
+    terminal=commands[-1]['result'];commands=commands[:-1]
+    append_answer_step(commands,'answer_text',validate_answer_text_payload(terminal,commands))
     return {"task_id": "task-1", "worker_id": "worker-1", "status": "done",
             "device_ids": ["givi"],
             "assigned_artifacts": artifacts, "commands": commands, "answer": answer_text}
@@ -51,15 +54,15 @@ def test_free_form_keeps_the_model_words_on_success(monkeypatch):
     assert report["status"] == "success"
     assert MODEL_TEXT in report["summary"]
     assert "Обязательные результаты подтверждены" not in report["summary"]
-    assert NEW in report["summary"]          # the machine fact is still delivered
+    assert report['artifacts'][0]['sha256']==NEW
 
 
 def test_free_form_keeps_words_when_artifact_is_missing(monkeypatch):
     monkeypatch.setenv("IRU_FREE_FORM_REPORT", "1")
-    report = build_worker_report(task([read("step_1", OLD), answer()],
+    report = build_worker_report(task([read("step_1", OLD), answer(status='partial')],
                                       ["summary.txt в папке IRU-EC01-LIVE"]))
     assert report["status"] == "partial"
-    assert report["error_code"] == "artifact_receipt_missing"   # fact preserved
+    assert report['artifacts']==[]
     assert MODEL_TEXT in report["summary"]
     assert "Обязательные файловые результаты не подтверждены" not in report["summary"]
 
@@ -73,10 +76,10 @@ def test_free_form_worker_words_do_not_replace_goal_conversation_fallback(monkey
     assert goal['tasks'][0]['conversational_response'] == MODEL_TEXT
 
 
-def test_default_mode_keeps_the_existing_wording(monkeypatch):
+def test_default_mode_keeps_worker_words_without_legacy_flag(monkeypatch):
     monkeypatch.delenv("IRU_FREE_FORM_REPORT", raising=False)
     report = build_worker_report(task([answer()], ["summary.txt в папке IRU-EC01-LIVE"]))
-    assert "Обязательные файловые результаты не подтверждены" in report["summary"]
+    assert report['status']=='success' and report['summary']==MODEL_TEXT
     goal = {"goal_id": "g1", "status": "partial", "terminal": True, "tasks": [
         {"required_for_goal": True, "conversational_response": MODEL_TEXT, "report": {}}]}
     assert orch.present_goal_result(goal).startswith("Часть поручения выполнить не удалось.")
@@ -88,7 +91,9 @@ def test_free_form_still_hides_unknown_outcome_behind_status(monkeypatch):
     unknown = replace()
     unknown["result"] = {"status": "unknown", "error": "confirmed_transport_outcome_unknown",
                          "dispatched": True}
-    report = build_worker_report(task([read("step_1", OLD), unknown, answer("Готово.")],
-                                      ["project.txt в папке IRU-EC01-LIVE"]))
+    context=task([read("step_1", OLD), unknown, answer("Исход неизвестен.",status='unknown')],
+                                      ["project.txt в папке IRU-EC01-LIVE"])
+    context['_action_outcome_unknown']=True
+    report = build_worker_report(context)
     assert report["status"] == "unknown"
     assert report["goal_completed"] is False

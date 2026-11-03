@@ -53,6 +53,9 @@ def normalize_operation_result(tool_name: str, result: Any) -> str:
     if result.get('error') or status in {'error','failed','blocked','cancelled'} or completion in {'error','failed'}:
         return 'failed'
     # A domain summary cannot override an explicit operation failure/uncertainty.
+    if (tool_name=='window.find' and status=='not_found'
+            and isinstance(result.get('matches'),list)):
+        return 'success'  # The query completed and observed no matching window.
     if (tool_name=='device.check_runtime' and isinstance(result.get('runtime_summary'),dict)
             and status in {None,'','ok','success','done','completed','missing','broken','install_required','degraded'}):return 'success'
     if result.get('error') or status in {'error','failed','blocked','cancelled','missing','not_found','still_running',
@@ -121,7 +124,7 @@ UNSAFE_OPEN_SUFFIXES = {".lnk", ".url", ".hta", ".vbs", ".vbe", ".js", ".jse", "
                         ".cpl", ".jar", ".application", ".gadget", ".cer", ".ins"}
 DOCUMENT_SUFFIXES = {".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".pdf", ".txt", ".md",
                      ".csv", ".rtf", ".odt", ".ods", ".odp", ".png", ".jpg", ".jpeg", ".gif",
-                     ".bmp", ".svg", ".webp", ".zip"}
+                     ".bmp", ".svg", ".webp", ".zip", ".mp4"}
 
 
 def _normalized_path(value):
@@ -190,6 +193,10 @@ def confirmed_window_effect(entry):
         return 'activate' if result.get('status') in {'focused','verified'} else None
     requested = result.get('requested_object')
     if isinstance(requested,dict):
+        if (tool == 'app.launch' and requested.get('type') in {'file','folder','url'}
+                and isinstance(requested.get('path'),str) and requested['path']
+                and result.get('os_open_accepted') is True and result.get('launch_state')=='accepted'):
+            return 'open'  # Accepted by the OS; no claim that the document loaded.
         return 'open' if object_open_proven(requested,result.get('observed_object'),result) else None
     if tool == 'window.control':
         return result.get('action') if result.get('completion_state') == 'success' else None

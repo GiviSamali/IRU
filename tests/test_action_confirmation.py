@@ -180,6 +180,11 @@ def test_simple_model_loop_keeps_journal_without_extra_model_calls(client, monke
             args = json.loads(call['function']['arguments'])
             args.update(answer_type='partial_report', text='Исход команды неизвестен; наблюдение получено.')
             call['function']['arguments'] = json.dumps(args)
+        if call['function']['name'] == 'answer_text':
+            args = json.loads(call['function']['arguments'])
+            args.update(status='unknown' if lost else 'success',
+                        evidence_refs=['step_2' if preview else 'step_1'])
+            call['function']['arguments'] = json.dumps(args)
         return {'choices': [{'message': {'tool_calls': [call]}}]}
     async def process(**kwargs):
         return await process_non_pipeline_command(

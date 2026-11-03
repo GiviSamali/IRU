@@ -41,7 +41,8 @@ def test_unvalidated_success_does_not_hide_failure():
     journal = []
     evidence(journal, "Second", {"error": "not found"}, "failed")
     report=build_worker_report({'task_id':'failed','status':'done','device_ids':['Second'],'commands':journal,'answer':'Готово'})
-    assert not report['goal_completed'] and 'not found' in report['summary']
+    assert report['status']=='unknown' and not report['goal_completed']
+    assert journal[0]['result']['error']=='not found'  # Original evidence remains available.
 
 
 @pytest.mark.parametrize("tool,result", [
@@ -66,7 +67,7 @@ def test_verified_url_worker_stops_without_another_llm_or_verification(monkeypat
         if len(calls) == 1:
             return {"choices": [{"message": {"tool_calls": [{"id": "open", "function": {"name": "app_open_url", "arguments": json.dumps({"url": "https://music.yandex.ru"})}}]}}]}
         return {"choices": [{"message": {"tool_calls": [{"id": "answer", "function": {"name": "answer_text", "arguments": json.dumps({
-            "answer_type": "grounded_report", "text": "Music opened.", "basis": ["step_1"],
+            "status":"success", "answer_type": "grounded_report", "text": "Music opened.", "basis": ["step_1"],
 
         })}}]}}]}
     async def send(device, action, params):

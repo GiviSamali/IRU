@@ -19,7 +19,7 @@ def test_semantic_window_scope_has_no_keyword_shortcut(monkeypatch, user_message
     async def completion(**kwargs):
         llm.append(kwargs)
         if len(llm)>1:
-            return {'choices':[{'message':{'tool_calls':[{'id':'final','function':{'name':'answer_text','arguments':json.dumps({'result':'Window minimized','unresolved':[]})}}]}}]}
+            return {'choices':[{'message':{'tool_calls':[{'id':'final','function':{'name':'answer_text','arguments':json.dumps({'status':'success','result':'Window minimized','unresolved':[]})}}]}}]}
         return {"choices":[{"message":{"tool_calls":[{"id":"window", "function":{
             "name":"window_control", "arguments":json.dumps({"action":"minimize","target":"current"})}}]}}]}
     async def send(device, action, arguments):

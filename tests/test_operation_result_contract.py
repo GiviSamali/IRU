@@ -13,7 +13,7 @@ from server import database as db, task_runtime as runtime
 from server.runtime_state import tasks
 from server.tool_completion import normalize_operation_result
 from server.worker_reports import build_worker_report, operation_facts
-from server.run_journal import make_run_step, append_tool_step, validate_answer_text_payload
+from server.run_journal import make_run_step, append_tool_step, append_answer_step, validate_answer_text_payload
 from server.tool_registry import canonical_tool_name, compact_device_passport, list_tools
 from server.controller_tools import NON_PIPELINE_TOOLS
 from test_tool_only_protocol import _run_case, _message, _tool_call
@@ -35,11 +35,13 @@ def step(tool,result,index=1,device='pc',command=''):
                          result=result,target_device_id=device,command=command)
 
 
-def report(operations,*,artifacts=None,devices=None,unresolved=None,text='Operation completed',**fields):
-    payload=validate_answer_text_payload({'result':text,'unresolved':unresolved or []},operations)
-    end={'step_id':'terminal','tool_name':'answer.text','tool_type':'answer','status':'terminal','result':payload}
+def report(operations,*,artifacts=None,devices=None,unresolved=None,text='Operation completed',status=None,**fields):
+    payload=validate_answer_text_payload({'status':status or ('partial' if unresolved else 'success'),
+        'result':text,'unresolved':unresolved or []},operations)
+    journal=list(operations)
+    append_answer_step(journal,'answer_text',payload)
     return build_worker_report({'task_id':'t','status':'done','device_ids':['pc'] if devices is None else devices,
-        'assigned_artifacts':artifacts or [],'answer':text,'commands':operations+[end],**fields})
+        'assigned_artifacts':artifacts or [],'answer':text,'commands':journal,**fields})
 
 
 def native_write(path='C:/a.txt',text='changed'):
@@ -138,9 +140,10 @@ def test_one_cli_command_can_complete_all_assigned_actions_without_assessor(monk
     assert build_worker_report({**tasks['t'],'status':'done','commands':result['commands'],'answer':result['answer']})['goal_completed']
 
 
-def test_required_missing_second_file_cannot_be_waived_by_worker_or_cli():
+def test_worker_reports_missing_second_file_as_partial():
     operation=step('write_content',native_write('C:/word.txt'))
-    result=report([operation],artifacts=['C:/word.txt','C:/slides.pptx'])
+    result=report([operation],artifacts=['C:/word.txt','C:/slides.pptx'],
+        unresolved=['Slides were not created'])
     assert result['status']=='partial' and not result['goal_completed']
     assert result['artifacts'][0]['verified']
 
@@ -217,7 +220,7 @@ def test_read_runtime_missing_is_successful_observation_not_unknown():
 
 def test_cli_failure_not_overridden_by_success_text_and_whole_cli_requires_a_terminal():
     failed=step('execute_cmd',{'returncode':7,'stdout':'Done'})
-    assert report([failed])['status']=='failed'
+    assert report([failed],status='failed',text='Command failed with exit 7')['status']=='failed'
     success=step('execute_cmd',{'returncode':0})
     assert not build_worker_report({'task_id':'t','status':'done','commands':[success]})['goal_completed']
 
@@ -232,8 +235,8 @@ def test_append_does_not_redecide_normalized_operation(monkeypatch):
 
 def test_broadcast_projection_reuses_worker_report_despite_optional_read_failure():
     operations=[step('write_content',native_write()),step('read_file',{'error':'denied'},index=2)]
-    payload=validate_answer_text_payload({'result':'Saved','unresolved':[]},operations)
-    operations.append({'tool_name':'answer.text','tool_type':'answer','status':'terminal','result':payload})
+    payload=validate_answer_text_payload({'status':'success','result':'Saved'},operations)
+    append_answer_step(operations,'answer_text',payload)
     result={'answer':'Saved','commands':operations}
     assert runtime._device_operation_outcome(result,{'task_id':'t','assigned_artifacts':['C:/a.txt']},'pc')=='ok'
 
@@ -302,10 +305,11 @@ def test_real_system_observation_is_not_discarded_as_protocol_event(tool,result)
 
 
 def test_analysis_of_supplied_text_can_finish_without_unnecessary_tool():
-    end={'step_id':'step_1','tool_name':'answer.text','tool_type':'answer','status':'terminal',
-         'result':{'text':'Summary of the supplied text','_result_contract':3,'unresolved':[]}}
+    journal=[]
+    append_answer_step(journal,'answer_text',validate_answer_text_payload({
+        'status':'success','text':'Summary of the supplied text'},journal))
     outcome=build_worker_report({'task_id':'t','status':'done','device_ids':[],
-        'original_request':'Summarize this provided text','commands':[end]})
+        'original_request':'Summarize this provided text','commands':journal})
     assert outcome['goal_completed'] and outcome['evidence_refs']==['step_1']
 
 
@@ -314,9 +318,10 @@ def test_legacy_launch_binds_actual_native_argv_without_new_required_fields():
     operation=step('app.launch',{'status':'launched_verified','command':'explorer.exe '+path,
         'args':[path],'window':{'visible':True,'title':'Folder'}})
     assert report([operation],window_effects=['open'],open_objects=[{'type':'folder','path':path}])['goal_completed']
-    # Known conflicting identity is not rescued by the submitted command.
+    # Worker receives the conflicting identity and declares the unresolved result.
     operation['result']['observed_object']={'observed_path':'C:/Different'}
-    assert not report([operation],window_effects=['open'],open_objects=[{'type':'folder','path':path}])['goal_completed']
+    assert not report([operation],status='failed',text='A different folder was observed',
+        window_effects=['open'],open_objects=[{'type':'folder','path':path}])['goal_completed']
 
 
 def test_known_new_file_version_blocks_stale_goal_proof_without_revoking_original_write():
@@ -329,7 +334,7 @@ def test_known_new_file_version_blocks_stale_goal_proof_without_revoking_origina
 
 
 @pytest.mark.parametrize('tool,result,expected',[
-    ('list_dir',{'path':'C:/','dirs':[],'files':[]},'failed'),
+    ('list_dir',{'path':'C:/','dirs':[],'files':[]},'unknown'),
     ('execute_cmd',{'returncode':0},'unknown')])
 def test_corrupt_report_refuses_completion_without_inventing_read_mutation(tool,result,expected):
     outcome=report([step(tool,result)],_report_integrity_failed=True)
@@ -378,7 +383,10 @@ def test_runtime_summary_respects_completion_state(completion):
 def test_failed_or_pending_mutation_cannot_be_cured_by_later_read(negative):
     mutate=step('execute_cmd',negative,command='python patch.py')
     read=step('read_file',{'status':'ok','text':'existing','complete':True,'path':'C:/a.txt','file_sha256':'a'*64},index=2)
-    assert not report([mutate,read])['goal_completed']
+    status=normalize_operation_result('execute_cmd',negative)
+    assert status in {'failed','unknown'}
+    result=report([mutate,read],status=status,text='The requested patch was not confirmed')
+    assert result['status']==status and not result['goal_completed']
 
 
 def test_legacy_write_ack_is_successful_operation_without_fabricated_hash_proof():

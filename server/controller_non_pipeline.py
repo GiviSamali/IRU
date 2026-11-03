@@ -460,7 +460,8 @@ async def process_non_pipeline_command(
                         from .controller_trust import sanitize_result_text
                     except ImportError:
                         from controller_trust import sanitize_result_text
-                    payload = validate_answer_text_payload({'answer':sanitize_result_text(last_candidate,commands_log)},commands_log)
+                    payload = validate_answer_text_payload({'status':'unknown','evidence_refs':[],
+                        'answer':sanitize_result_text(last_candidate,commands_log)},commands_log)
                     context = runtime_tasks.get(poll_task_id) or {}
                     if pinned_material_pending(context):
                         payload.setdefault('unresolved', []).append('Required dependency material was not fully read.')
@@ -478,6 +479,7 @@ async def process_non_pipeline_command(
             assistant_msg['tool_calls'] = tool_calls
             messages.append(assistant_msg)
             batch_message_start = len(messages)-1
+            batch_journal_start = len(commands_log)
             pending_calls = {call['id']:call for call in tool_calls}
             confirmation_epoch = (runtime_tasks.get(poll_task_id) or {}).get('_confirmation_epoch',0)
             try:
@@ -514,8 +516,12 @@ async def process_non_pipeline_command(
                     if is_terminal_answer_tool(fn_name):
                         target_device = device_id
                         try:
+                            if len(commands_log)>batch_journal_start:
+                                raise ProtocolValidationError('terminal_contract_condition: tool results from this batch have not been seen by the model; inspect them before deciding the final status. Do not repeat the actions.')
                             if is_answer_text_tool(fn_name):
-                                answer_payload = validate_answer_text_payload(fn_args_preview, commands_log)
+                                answer_payload = validate_answer_text_payload(fn_args_preview, commands_log,
+                                    require_status=True, task={**(runtime_tasks.get(poll_task_id) or {}),
+                                        '_action_outcome_unknown':recovery_only})
                                 answer_payload = sanitize_system_list_tools_answer(answer_payload, commands_log)
                                 try:
                                     from .controller_trust import sanitize_result_text
@@ -525,6 +531,8 @@ async def process_non_pipeline_command(
                                 context = runtime_tasks.get(poll_task_id) or {}
                                 if pinned_material_pending(context):
                                     answer_payload.setdefault('unresolved', []).append('Required dependency material was not fully read.')
+                                    if answer_payload['status']=='success':
+                                        raise ProtocolValidationError('terminal_contract_condition: required dependency material is unread; read it or finish with an honest non-success status')
                                 append_answer_step(commands_log,fn_name,answer_payload,target_device_id=target_device,
                                                    hostname=device_info.get('hostname') or target_device,iteration=iteration+1)
                                 return {'answer':answer_payload['text'],'commands':commands_log,'tasks':[],
@@ -1110,7 +1118,7 @@ async def process_non_pipeline_command(
                             and not is_recovery_observation(fn_name, fn_args,device_os=device_info.get('os'))):
                         # Close the assistant/tool exchange before adding a user correction.
                         # Providers reject a user message between tool_calls and its result.
-                        add_correction("Action outcome is unknown. Do not repeat it or use another mutating tool. Observe with recovery tools, or report partial.")
+                        add_correction("Action outcome is unknown. Do not repeat it or use another mutating tool. Observe with recovery tools; if the mutation outcome remains unresolved, finish with status=unknown.")
                     if (fn_name=='write_content' and tool_result.get('error')=='replacement_source_missing'
                             and tool_result.get('committed') is False and tool_result.get('status')!='unknown'):
                         add_correction('The expected fragment is absent; the file was not changed. Read the current file '

@@ -33,7 +33,9 @@ def task_with_read(outcome='success', count=1):
     text='Прочитан только A; B и C не прочитаны, сравнение не выполнено.' if count==1 else 'A и B равны; C отличается.'
     t={'task_id':'coverage','status':'done','device_ids':['pc'],
        'original_request':REQUEST,'proposed_objective':REQUEST,'answer':text,'commands':steps}
-    payload=validate_answer_text_payload({'result':text,'unresolved':['B и C не прочитаны; сравнение не выполнено.'] if count == 1 else []},steps)
+    status = outcome if outcome in {'failed', 'unknown'} else 'partial' if count == 1 else 'success'
+    payload=validate_answer_text_payload({'status':status,'result':text,
+        'unresolved':['B и C не прочитаны; сравнение не выполнено.'] if count == 1 else []},steps)
     append_answer_step(steps,'answer_text',payload)
     return t
 

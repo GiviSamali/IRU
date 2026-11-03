@@ -10,6 +10,7 @@ from server import controller_non_pipeline as normal
 from server import database, task_runtime, browser_bridge
 from server.controller_tools import NON_PIPELINE_TOOLS
 from server.runtime_state import tasks
+from test_tool_only_protocol import _completion_fn
 
 PAGE = {"title":"Chat", "url":"https://fixture.test/chat", "origin":"https://fixture.test", "document_id":"doc", "revision":"1"}
 ELEMENT = {"tab_id":7,"document_id":"doc","revision":"1","element_id":"field"}
@@ -43,7 +44,7 @@ def run_normal(monkeypatch,message,responses,send,history=None, *, real_completi
         return await original_send(device,operation,params)
     async def completion(**kw):
         if real_completion: return await real_completion(**kw)
-        return next(queue)
+        return await _completion_fn([next(queue)])(**kw)
     return asyncio.run(normal.process_non_pipeline_command(user_message=message,device_id="givi",device_info={"os":"Windows"},
         send_command_fn=send,get_file_link_fn=lambda *a:"",chat_history=history or [],user_id=None,chat_id=None,modes={},poll_task_id=task_id,
         cfg=cfg_override or {"model":"mock"},system_msg="system",machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,
@@ -211,7 +212,7 @@ def test_full_browser_controller_flow_rereads_after_changes_and_refreshes_stale_
 
 
 def grounded(text="Получен ответ: тест", basis=None):
-    return call("answer_text",{"answer_type":"grounded_report","text":text,"basis":basis or ["step_1"]})
+    return call("answer_text",{"status":"success","answer_type":"grounded_report","text":text,"basis":basis or ["step_1"]})
 
 
 def test_tabs_question_is_one_call_and_reports_current_tabs(monkeypatch):

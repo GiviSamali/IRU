@@ -25,6 +25,7 @@ def _answer_call(call_id: str, text: str) -> dict:
         "function": {
             "name": "answer_text",
             "arguments": json.dumps({
+                "status": "success",
                 "answer_type": "pure_text",
                 "text": text,
                 "basis": [],
