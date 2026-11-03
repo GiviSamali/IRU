@@ -653,10 +653,11 @@ DEVICE_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "system_list_tools",
-            "description": "List compact available tools grouped by category. Use before choosing a capability when unsure.",
+            "description": "List compact available tools grouped by category. For a Worker, open_chapters activates selected chapters on the next turn. Use together when several are needed.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "open_chapters": {"type": "array", "items": {"type": "string"}, "maxItems": 16},
                     "category": {
                         "type": "string",
                         "enum": ["all", "system", "memory", "device", "files", "python", "window", "app", "artifact", "web", "answer", "office"],

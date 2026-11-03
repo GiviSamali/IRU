@@ -256,9 +256,9 @@ async def process_non_pipeline_command(
     commands_log = []
     recovery_only = bool(runtime_tasks.get(poll_task_id, {}).get("_action_outcome_unknown"))
     try:
-        from .controller_tools import file_tools_for_device, worker_tool_inventory
+        from .controller_tools import RECOVERY_LIST_DIR, file_tools_for_device, worker_tool_inventory
     except ImportError:
-        from controller_tools import file_tools_for_device, worker_tool_inventory
+        from controller_tools import RECOVERY_LIST_DIR, file_tools_for_device, worker_tool_inventory
     file_preservation_task = runtime_tasks.get(poll_task_id, {})
     non_pipeline_tools = worker_tool_inventory(DEFAULT_CONTROLLER_TOOLS, device_info,
         preserve=file_preservation_task.get("preserve_file_bytes",False))
@@ -275,6 +275,45 @@ async def process_non_pipeline_command(
     for tool in non_pipeline_tools:
         if tool.get("function", {}).get("name") == "write_content":
             tool["function"]["parameters"]["properties"]["content"].pop("maxLength", None)
+
+    # Only scheduled Workers use the chapter inventory. Legacy direct callers
+    # and public catalog queries keep their existing contract.
+    chapter_mode = bool(file_preservation_task.get('worker_id') or (usage_context or {}).get('worker_execution'))
+    base_names = {'answer_text', 'answer_ask_clarification', 'answer_report_failure',
+                  'system_list_tools', 'system_get_last_run_summary', 'system_update_working_notes',
+                  'list_dir', 'read_file', 'write_content', 'execute_cmd'}
+    chapters = {}
+    opened_chapters = set()
+    if chapter_mode:
+        try:
+            from .tool_registry import TOOL_METADATA, canonical_tool_name
+        except ImportError:
+            from tool_registry import TOOL_METADATA, canonical_tool_name
+        # A primary device's capabilities do not describe all assigned devices.
+        multiple_targets = len(file_preservation_task.get('device_ids') or []) > 1
+        if device_info.get('connected') is not False and device_id not in ('server', '', None):
+            if 'list_dir' not in tool_schemas:
+                non_pipeline_tools.append(RECOVERY_LIST_DIR)
+                tool_schemas['list_dir'] = RECOVERY_LIST_DIR
+        non_pipeline_tools = [
+            tool for tool in non_pipeline_tools
+            if not tool['function']['description'].startswith('BLOCKED for this Assignment')
+            and (multiple_targets or not tool['function']['description'].startswith('UNAVAILABLE on current device'))
+        ]
+        for tool in non_pipeline_tools:
+            name = tool['function']['name']
+            if name not in base_names:
+                category = TOOL_METADATA.get(canonical_tool_name(name), {}).get('category') or 'other'
+                chapters.setdefault(category, set()).add(name)
+        contents = ', '.join(f"{chapter} ({', '.join(sorted(names))})"
+                             for chapter, names in sorted(chapters.items()))
+        messages[0]['content'] += (
+            "\nTool chapters for this Assignment: " + contents +
+            ". Use the base tools directly. Open any needed chapters together with "
+            "system_list_tools(open_chapters=[...]) before using their tools. Their callable schemas arrive on the next turn "
+            "and remain available for this Assignment. Opening a chapter grants no permission. "
+            "Read actual tool results before deciding the next action or finishing."
+        )
 
     if user_id is not None or chat_id is not None:
         previous_failed = get_last_run_summary(
@@ -389,8 +428,11 @@ async def process_non_pipeline_command(
                 messages.append({'role':'user','content':'\n'.join(dict.fromkeys(pending_corrections))})
                 pending_corrections.clear()
             final_turn = iteration == max_iterations - 1
-            turn_tools=([t for t in non_pipeline_tools if t['function']['name'] == 'answer_text']
-                        if final_turn else non_pipeline_tools)
+            visible_names = base_names | {name for chapter in opened_chapters for name in chapters[chapter]}
+            turn_tools = [tool for tool in non_pipeline_tools
+                          if (tool['function']['name'] == 'answer_text' if final_turn
+                              else not chapter_mode or tool['function']['name'] in visible_names)]
+            offered_names = {tool['function']['name'] for tool in turn_tools}
             set_current_step(poll_task_id, "ИРУ думает...")
             # The accepted Assignment is already pinned in system_msg. Expose
             # the existing turn budget without another plan/report/context layer.
@@ -508,6 +550,13 @@ async def process_non_pipeline_command(
                             target_device_id=device_id,iteration=iteration+1)))
                         continue
 
+                    if chapter_mode and fn_name not in offered_names:
+                        append_tool_message(tool_call['id'], append_entry(tool_log_entry(fn_name,
+                            {'status':'blocked','dispatched':False,'error':'tool_not_offered_this_turn'},
+                            target_device_id=device_id,iteration=iteration+1)))
+                        add_correction('Use offered tools only. Open the relevant chapter for the next turn.')
+                        continue
+
                     if (pinned_material_pending(runtime_tasks.get(poll_task_id) or {})
                             and fn_name not in {"system_get_last_run_summary", "system_list_tools", "system_update_working_notes", "answer_text", "answer_ask_clarification", "answer_report_failure"}):
                         append_tool_message(tool_call['id'],append_entry(tool_log_entry(fn_name,
@@ -604,7 +653,7 @@ async def process_non_pipeline_command(
                         file_edit_error = file_edit_dispatch_error(file_preservation_task, fn_name, fn_args)
                     if file_preservation_task.get('preserve_file_bytes') and (file_edit_error or fn_name not in {
                             'answer_text','answer_ask_clarification','answer_report_failure',
-                            'list_dir','read_file','write_content','system_get_last_run_summary','system_update_working_notes','device_get_passport'}):
+                            'list_dir','read_file','write_content','system_list_tools','system_get_last_run_summary','system_update_working_notes','device_get_passport'}):
                         append_tool_message(tool_call['id'], append_entry(tool_log_entry(fn_name,
                             {'status':'blocked','error':file_edit_error or 'file_preservation_requires_native_replacement',
                              'dispatched':False,'committed':False}, command='[blocked file edit]',
@@ -774,16 +823,32 @@ async def process_non_pipeline_command(
                         set_current_step(poll_task_id, "Формирую ссылку на файл")
 
                     if fn_name == "system_list_tools":
-                        tool_result = {"status":"success", **list_tools(fn_args.get("category", "all"))}
-                        available_files = {tool['function']['name']:tool['function']
-                            for tool in file_tools_for_device(DEFAULT_CONTROLLER_TOOLS, device_info)}
-                        if 'files' in tool_result:
-                            tool_result['files'] = [item for item in tool_result['files']
-                                if item['name'] != 'read_file' or 'read_file' in available_files]
-                            for item in tool_result['files']:
-                                if item['name'] == 'write_content':
-                                    item['purpose'] = available_files['write_content']['description']
-                                    item['when_to_use'] = ['Only modes negotiated for this device']
+                        requested = fn_args.get('open_chapters')
+                        if chapter_mode and requested is not None and (
+                                not isinstance(requested, list) or len(requested) > 16
+                                or any(not isinstance(chapter, str) for chapter in requested)):
+                            tool_result = {'status':'failed','error':'invalid_tool_chapters','dispatched':False}
+                        elif chapter_mode and requested is not None:
+                            unknown = sorted(set(requested) - chapters.keys())
+                            opened_chapters.update(chapter for chapter in requested if chapter in chapters)
+                            tool_result = {
+                                'status': 'success',
+                                'opened_chapters': sorted(opened_chapters),
+                                'unknown_chapters': unknown,
+                                'available_next_turn': sorted({name for chapter in opened_chapters
+                                                               for name in chapters[chapter]}),
+                            }
+                        else:
+                            tool_result = {"status":"success", **list_tools(fn_args.get("category", "all"))}
+                            available_files = {tool['function']['name']:tool['function']
+                                for tool in file_tools_for_device(DEFAULT_CONTROLLER_TOOLS, device_info)}
+                            if 'files' in tool_result:
+                                tool_result['files'] = [item for item in tool_result['files']
+                                    if item['name'] != 'read_file' or 'read_file' in available_files]
+                                for item in tool_result['files']:
+                                    if item['name'] == 'write_content':
+                                        item['purpose'] = available_files['write_content']['description']
+                                        item['when_to_use'] = ['Only modes negotiated for this device']
                         append_entry(tool_log_entry(
                             fn_name,
                             tool_result,

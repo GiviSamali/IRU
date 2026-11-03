@@ -83,7 +83,7 @@ def worker_tool_inventory(tools, device_info, *, preserve=False):
             prop['description']='UNAVAILABLE on current device: requires object_observation_protocol=1. '+prop['description']
         if reason:fn['description']='UNAVAILABLE on current device: '+reason+'. '+fn['description']
         if preserve and name not in {'list_dir','read_file','write_content','answer_text',
-                'answer_ask_clarification','answer_report_failure','system_get_last_run_summary','system_update_working_notes','device_get_passport'}:
+                'answer_ask_clarification','answer_report_failure','system_list_tools','system_get_last_run_summary','system_update_working_notes','device_get_passport'}:
             fn['description']='BLOCKED for this Assignment by accepted byte-preservation constraint. '+fn['description']
     return result
 
