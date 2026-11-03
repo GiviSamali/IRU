@@ -330,8 +330,22 @@ def goal_view(goal_id, owner, chat_id):
             by_id.get(e['source_task_id'],{}).get('status') in {'failed','partial','unknown','cancelled','blocked'} for e in m['dependencies'])]
         active = any(m['status'] in ACTIVE_STATES or m['status']=='queued' or
                      m['status']=='waiting_dependency' and m['task_id'] not in dependent_blocked for m in required)
-        status = ('success' if completed else 'running' if active else 'unknown' if 'unknown' in states
-                  else 'cancelled' if states=={'cancelled'} else 'partial' if states.intersection({'success','partial'}) else 'failed')
+        if completed:
+            status = 'success'
+        elif active:
+            status = 'running'
+        elif 'unknown' in states:
+            status = 'unknown'
+        elif states & {'success', 'partial'}:
+            status = 'partial'
+        elif 'failed' in states:
+            status = 'failed'
+        elif 'blocked' in states or dependent_blocked:
+            status = 'blocked'
+        elif states == {'cancelled'}:
+            status = 'cancelled'
+        else:
+            status = 'unknown'
         return {**dict(goal),'status':status,'goal_completed':completed,'terminal':not active,
                 'dependent_blocked':dependent_blocked,'tasks':members}
 
