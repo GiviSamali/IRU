@@ -95,6 +95,26 @@ def find_prior_successful_read_only_tool_step(
     return None
 
 
+def repeated_search_observation(journal: list[dict[str, Any]]) -> str | None:
+    """Link identical fresh search observations without reusing stale results."""
+    latest = journal[-1] if journal else {}
+    key = latest.get('repeat_guard_key')
+    result = latest.get('result') or {}
+    if latest.get('tool_name') != 'web_search' or not key or latest.get('status') != 'success':
+        return None
+    sources = result.get('results')
+    if not sources:
+        return None
+    for entry in reversed(journal[:-1]):
+        if entry.get('repeat_guard_key') != key or entry.get('status') != 'success':
+            continue
+        previous = entry.get('result') or {}
+        if previous.get('results') == sources and previous.get('answer') == result.get('answer'):
+            return entry.get('step_id')
+        break
+    return None
+
+
 def repeated_command_observation(journal: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Feedback only: identical execution is never assumed safe to skip."""
     if not journal:

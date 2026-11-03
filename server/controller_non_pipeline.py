@@ -46,6 +46,7 @@ try:
         find_prior_successful_read_only_tool_step,
         mark_read_only_tool_step,
         repeated_command_observation,
+        repeated_search_observation,
         unchanged_command_evidence,
         command_observation_key,
     )
@@ -108,6 +109,7 @@ except ImportError:
         find_prior_successful_read_only_tool_step,
         mark_read_only_tool_step,
         repeated_command_observation,
+        repeated_search_observation,
         unchanged_command_evidence,
         command_observation_key,
     )
@@ -387,7 +389,7 @@ async def process_non_pipeline_command(
                 messages.append({'role':'user','content':'\n'.join(dict.fromkeys(pending_corrections))})
                 pending_corrections.clear()
             final_turn = iteration == max_iterations - 1
-            turn_tools=([t for t in non_pipeline_tools if is_terminal_answer_tool(t['function']['name'])]
+            turn_tools=([t for t in non_pipeline_tools if t['function']['name'] == 'answer_text']
                         if final_turn else non_pipeline_tools)
             set_current_step(poll_task_id, "ИРУ думает...")
             # The accepted Assignment is already pinned in system_msg. Expose
@@ -410,7 +412,7 @@ async def process_non_pipeline_command(
                     messages=turn_messages,
                     tools=turn_tools,
                     max_tokens=cfg.get("max_tokens", 32768),
-                    tool_choice="auto",
+                    tool_choice="required" if final_turn and turn_tools else "auto",
                     # The transient budget message precedes the real user turn.
                     usage_context={**(usage_context or {}), "phase": phase,"context_current_user_index":current_user_index+1,
                                    "preserve_worker_tool_context": True},
@@ -500,7 +502,7 @@ async def process_non_pipeline_command(
                         add_correction('Correct invalid tool arguments; independent completed actions must not be replayed.')
                         continue
 
-                    if final_turn and not is_terminal_answer_tool(fn_name):
+                    if final_turn and fn_name != "answer_text":
                         append_tool_message(tool_call['id'],append_entry(tool_log_entry(fn_name,
                             {'status':'blocked','dispatched':False,'error':'final_turn_actions_disabled'},
                             target_device_id=device_id,iteration=iteration+1)))
@@ -1129,6 +1131,12 @@ async def process_non_pipeline_command(
                             or tool_result.get("committed") is False) and tool_result.get("status") != "unknown"):
                         add_correction("This operation was not committed. Do not repeat identical arguments: correct the stated "
                             "error or use another authorized method. If an updated agent is required, report that limitation.")
+                    prior_search = repeated_search_observation(commands_log)
+                    if prior_search:
+                        add_correction(
+                            f"The fresh search returned the same sources and excerpts as {prior_search}. "
+                            "Use what you already found or target a specific missing fact."
+                        )
                     repeated = repeated_command_observation(commands_log)
                     if repeated:
                         add_correction(

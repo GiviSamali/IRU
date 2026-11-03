@@ -202,6 +202,11 @@ async def _chat_completion_request(
         )
     )
 
+    if (request_json.get("tool_choice") == "required" and model.startswith("deepseek-")
+            and len(tools or []) == 1 and tools[0]["function"]["name"] == "answer_text"):
+        request_json["thinking"] = {"type": "disabled"}
+        request_json.pop("reasoning_effort", None)
+
     # DeepSeek thinking tool calls require preserved reasoning history and omit
     # tool_choice. Server-side cardinality/terminal validation remains mandatory.
     thinking = request_json.get("thinking", {}).get("type") == "enabled"
