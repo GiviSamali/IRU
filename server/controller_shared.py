@@ -437,9 +437,11 @@ def worker_assignment_scope(task_id):
               "successful shell return code alone never proves that YOU delivered or changed it. "
               "Do not misattribute a sibling Worker's output to this task.\n")
     if task.get('preserve_file_bytes'):
-        block += ('\nMandatory file preservation: use read_file to observe complete text and SHA-256, '
+        block += ('\nMandatory file preservation: for an explicit addition at the end, use native '
+                  'write_content with append=true and no replacement parameters. For a targeted '
+                  'replacement, use read_file to observe complete text and SHA-256, '
                   'then write_content with expected_text, expected_sha256 and the confirmed match count. '
-                  'Never reconstruct the whole file, append, run shell code or use another mutation tool. '
+                  'Never reconstruct the whole file, run shell code or use another mutation tool. '
                   'If the device lacks this protocol, report the limitation without a workaround.\n')
         block += ('Preservation proves only bytes outside the selected spans; it does not prove that '
                   'the file or spans match the human intent. Discovery stays within the original human '
@@ -458,6 +460,11 @@ def file_edit_dispatch_error(task, action, params):
         return None
     if action != 'write_content':
         return 'file_preservation_requires_native_replacement'
+    if params.get('append') is True:
+        if params.get('_write_transaction') or any(params.get(field) is not None for field in
+                ('expected_text', 'expected_sha256', 'expected_matches')):
+            return 'append_cannot_use_replacement_parameters'
+        return None
     import re
     if (not isinstance(params.get('expected_text'),str) or not params['expected_text']
             or not isinstance(params.get('expected_sha256'),str)

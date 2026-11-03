@@ -75,7 +75,7 @@ def normalize_operation_result(tool_name: str, result: Any) -> str:
                 and type(result.get('bytes_written')) is int and result['bytes_written']>=0):
             return 'success'  # Legacy write acknowledgement, not an invented hash receipt.
         intended=result.get('expected_content_sha256') or result.get('content_sha256')
-        if (not result.get('append') and result.get('mode') not in {'replace','replace_exact'}
+        if (not result.get('append') and result.get('mode') not in {'append','replace','replace_exact'}
                 and intended and result.get('file_sha256') and intended!=result['file_sha256']):return 'unknown'
         return 'success' if (result.get('verified') is True and result.get('committed') is True
             and isinstance(result.get('path'),str) and isinstance(result.get('file_sha256'),str)

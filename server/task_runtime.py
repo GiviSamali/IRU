@@ -1082,6 +1082,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if not target_dev or target_dev.get("user_id") != user_id:
                 raise RuntimeError(f"Нет доступа к устройству '{target_device_id}'")
             if (task.get('preserve_file_bytes') and action == 'write_content'
+                    and params.get('append') is not True
                     and (target_dev.get('info') or {}).get('file_replace_protocol') != 2):
                 return {'status':'error','error':'agent_update_required_for_native_edit_workflow',
                         'dispatched':False,'committed':False}

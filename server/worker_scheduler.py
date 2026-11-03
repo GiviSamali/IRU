@@ -680,10 +680,10 @@ class WorkerScheduler:
             raise ValueError("goal_device_not_owned")
         if type(template.get("preserve_file_bytes", False)) is not bool:
             raise ValueError("invalid_file_preservation_constraint")
-        # The legacy top-level flag can constrain a single deliverable, never
-        # silently widen its scope to independent assignments in a mixed Goal.
+        # A mixed Goal can carry a legacy flag alongside scoped constraints.
+        # Require a target for that flag without applying it to sibling work.
         if (template.get("preserve_file_bytes") and len(assignments) > 1
-                and any(item.get("preserve_file_bytes") is not True for item in assignments)):
+                and not any(item.get("preserve_file_bytes") is True for item in assignments)):
             raise ValueError("mixed_goal_requires_assignment_file_constraints")
         assignment_devices = {}
         assignment_effects = {}

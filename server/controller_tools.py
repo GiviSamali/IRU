@@ -7,7 +7,7 @@ except ImportError:
 
 EXECUTE_CMD_DESCRIPTION = (
     "Execute PowerShell/CMD/Bash commands and available programs on the selected device. "
-    "Execute the assigned operation and check its available result within this call. Propagate EACH required failure immediately (including nested programs and pipeline stages); a later successful command must not mask an earlier failure. "
+    "Execute the assigned operation and check its available result within this call. When composing multiple commands, explicitly check required exit codes before continuing. The shell receipt does not guarantee detection of every intermediate failure. "
     "Returncode zero confirms execution, not the whole user goal; echo OK is not evidence. "
     "Use artifact_paths for final changed files and preserve_content_paths for formatting-only Office edits. "
     "Ownership, path restrictions, exact-action confirmations, preservation and unknown-outcome guards apply."
@@ -22,7 +22,7 @@ WRITE_CONTENT_DESCRIPTION = (
     "For a limited edit read_file first, then set expected_text to the exact original fragment and content to its replacement; "
     "expected_matches is the confirmed number of occurrences (default 1); every occurrence must match that count. "
     "bind expected_sha256 to the observed file hash. The agent preserves other bytes and verifies the committed file. "
-    "Overwrite replaces the entire file; neither overwrite nor append guarantees preservation. Verify the requested change and preservation against the original before claiming success. "
+    "Overwrite replaces the entire file; for an explicitly requested addition at EOF, use append=true without replacement parameters. Native append retains existing bytes. "
     "Suitable for scripts, HTML, JSON, TXT, CSV, Markdown, "
     "and source code. Office documents can be produced by Office tools or verified command artifacts. "
     "For unsupported binary documents, use existing execute_cmd/Python capabilities "
@@ -51,16 +51,11 @@ def file_tools_for_device(tools, device_info, *, preserve=False):
         if name == 'write_content':
             props = fn['parameters']['properties']
             if protocol != 2:
-                if preserve:
-                    continue
                 for field in ('expected_text','expected_sha256','expected_matches'):
                     props.pop(field,None)
                 fn['description'] = ('Create text or perform an explicitly requested full overwrite. '
                     'The native read/hash + exact replacement workflow is unavailable on this device. '
                     'Do not use overwrite for a limited edit.')
-            if preserve:
-                fn['parameters']['required'] = ['path','content','expected_text','expected_sha256']
-                props.pop('append',None)
         result.append(tool)
     return result
 
@@ -81,6 +76,10 @@ def worker_tool_inventory(tools, device_info, *, preserve=False):
         if name=='app_verify_launch' and info.get('object_observation_protocol')!=1:
             prop=fn['parameters']['properties']['object_path']
             prop['description']='UNAVAILABLE on current device: requires object_observation_protocol=1. '+prop['description']
+        if preserve and name == 'write_content':
+            fn['description'] = ('For this Assignment, use append=true for an explicit addition at EOF '
+                'without replacement parameters. For a targeted replacement, use expected_text and '
+                'expected_sha256 from the native read. Full overwrite is blocked.')
         if reason:fn['description']='UNAVAILABLE on current device: '+reason+'. '+fn['description']
         if preserve and name not in {'list_dir','read_file','write_content','answer_text',
                 'answer_ask_clarification','answer_report_failure','system_list_tools','system_get_last_run_summary','system_update_working_notes','device_get_passport'}:
@@ -129,7 +128,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "write_content",
-            "description": "Записать новое содержимое или выполнить запрошенную полную замену файла. Для ограниченного изменения предпочитай надёжное локальное преобразование оригинала существующими средствами; длина текста сама по себе не требует полной перезаписи. append добавляет текст, но не гарантирует сохранность исходных элементов.",
+            "description": "Записать новое содержимое или выполнить запрошенную полную замену файла. Для ограниченного изменения предпочитай надёжное локальное преобразование оригинала существующими средствами; длина текста сама по себе не требует полной перезаписи. append=true добавляет текст в конец, сохраняя исходные байты. Для добавления не передавай параметры точной замены.",
             "parameters": {
                 "type": "object",
                 "properties": {

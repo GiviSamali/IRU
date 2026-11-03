@@ -302,6 +302,8 @@ async def process_non_pipeline_command(
         ]
         for tool in non_pipeline_tools:
             name = tool['function']['name']
+            if name == 'execute_cmd':
+                tool['function']['parameters']['properties'].pop('long_running', None)
             if name not in base_names:
                 category = TOOL_METADATA.get(canonical_tool_name(name), {}).get('category') or 'other'
                 chapters.setdefault(category, set()).add(name)
@@ -440,7 +442,7 @@ async def process_non_pipeline_command(
             turn_messages.insert(1, {'role': 'system', 'content':
                 f'Worker LLM turns remaining, including this one: {max_iterations-iteration}/{max_iterations}. '
                 'Keep the original goal and Assignment constraints. Preparation is not the result.'
-                + (' FINAL TURN: use a terminal tool now, with result, unresolved and caveats. No new actions.'
+                + (' FINAL TURN: call answer_text now with status, result, unresolved and caveats. Include any missing information in unresolved.'
                    if final_turn else '')})
             print(f"[llm] iteration {iteration + 1}/{max_iterations}, messages={len(messages)}")
             try:
@@ -558,11 +560,12 @@ async def process_non_pipeline_command(
                         continue
 
                     if (pinned_material_pending(runtime_tasks.get(poll_task_id) or {})
-                            and fn_name not in {"system_get_last_run_summary", "system_list_tools", "system_update_working_notes", "answer_text", "answer_ask_clarification", "answer_report_failure"}):
+                            and fn_name not in {"system_get_last_run_summary", "system_list_tools", "system_update_working_notes", "answer_text", "answer_ask_clarification", "answer_report_failure"}
+                            and not is_recovery_observation(fn_name, fn_args_preview, device_os=device_info.get("os"))):
                         append_tool_message(tool_call['id'],append_entry(tool_log_entry(fn_name,
                             {'status':'blocked','dispatched':False,'error':'dependency_material_not_fully_read'},
                             target_device_id=device_id,iteration=iteration+1)))
-                        add_correction("Read all pinned dependency material via system_get_last_run_summary and each next_offset before taking other actions. The manifest is not the full material.")
+                        add_correction("Read all pinned dependency material via system_get_last_run_summary and each next_offset before taking actions that can change state. The manifest is not the full material.")
                         continue
                     if is_terminal_answer_tool(fn_name):
                         target_device = device_id
@@ -838,6 +841,20 @@ async def process_non_pipeline_command(
                                 'available_next_turn': sorted({name for chapter in opened_chapters
                                                                for name in chapters[chapter]}),
                             }
+                        elif chapter_mode:
+                            category = fn_args.get('category', 'all')
+                            tool_result = {'status': 'success'}
+                            for schema in non_pipeline_tools:
+                                fn = schema['function']
+                                name = fn['name']
+                                group = TOOL_METADATA.get(canonical_tool_name(name), {}).get('category') or 'other'
+                                if category not in ('all', group):
+                                    continue
+                                tool_result.setdefault(group, []).append({
+                                    'name': name,
+                                    'purpose': fn['description'],
+                                    'available_this_turn': name in offered_names,
+                                })
                         else:
                             tool_result = {"status":"success", **list_tools(fn_args.get("category", "all"))}
                             available_files = {tool['function']['name']:tool['function']

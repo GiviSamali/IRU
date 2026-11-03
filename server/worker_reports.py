@@ -206,7 +206,7 @@ def build_worker_report(task):
                     continue
                 if tool == "write_content" and result.get("verified") is True and result.get("committed") is True:
                     artifact.update(size_bytes=result.get("total_size"),sha256=result.get("file_sha256"))
-                    complete_input=result.get('mode') not in {'replace','replace_exact'}
+                    complete_input=result.get('mode') not in {'append','replace','replace_exact'}
                     artifact.update(content_observed=complete_input,content_verified=complete_input,
                                     verification_scope='file_bytes_only')
                 transferred = tool == "transfer_file" and result.get("sha256_verified") is True
