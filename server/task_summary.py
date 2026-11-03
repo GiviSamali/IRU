@@ -179,11 +179,6 @@ def get_last_run_summary(
                 if type(report_offset) is not int or not 0 <= report_offset < len(text):
                     return {"status":"blocked", "error":"invalid_result_offset"}
                 end = min(len(text), report_offset + 4000)
-                live = tasks.get(exclude_task_id)
-                if live and live.get('user_id') == user_id and live.get('chat_id') == chat_id:
-                    progress = live.setdefault('_pinned_read_offsets', {})
-                    if report_offset <= progress.get(pinned['result_id'], 0):
-                        progress[pinned['result_id']] = max(end, progress.get(pinned['result_id'], 0))
                 return {"status":"success", "source_task_id":source_task_id,
                     "result_id":pinned['result_id'], "sha256":pinned['sha256'], "schema_version":1,
                     "historical_material_only":True, "current_execution_evidence":False,

@@ -168,10 +168,10 @@ def test_execution_permission_preserves_exact_action_identity(command):
     assert a['fingerprint']!=b['fingerprint']
 
 
-def test_unavailable_capabilities_do_not_disappear():
-    tools=worker_tool_inventory(NON_PIPELINE_TOOLS,{})
-    assert len(tools)==len(NON_PIPELINE_TOOLS)
-    assert 'UNAVAILABLE' in next(t['function']['description'] for t in tools if t['function']['name']=='read_file')
+def test_inventory_filters_unsupported_single_device_tools():
+    names = {tool['function']['name'] for tool in worker_tool_inventory(NON_PIPELINE_TOOLS, {})}
+    assert {'read_file', 'office_docx', 'app_verify_launch'}.isdisjoint(names)
+    assert {'execute_cmd', 'answer_text', 'system_list_tools'} <= names
 
 
 def test_compact_history_can_retrieve_full_own_step(monkeypatch):

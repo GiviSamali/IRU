@@ -123,7 +123,7 @@ def test_failed_result_never_becomes_done(scenario,result):
     {'returncode':0.0,'stdout':'OK: optimistic'},
     {'status':[],'returncode':0,'stdout':'OK: optimistic'},
     {'returncode':0,'completion_state':'partial_success','stdout':'OK: optimistic'},
-    {'returncode':0,'stdout':'OK: launch_requested long_running','status':'launch_requested'},
+    {'returncode':0,'stdout':'OK: launch_requested','status':'launch_requested'},
 ])
 def test_unknown_or_launch_only_result_never_claims_proven_success(scenario,result):
     scenario.agent.result=result;approve(scenario);task=finished(scenario)

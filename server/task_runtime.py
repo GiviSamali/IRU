@@ -1015,15 +1015,12 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         async def send_fn(target_device_id, action, params):
             observation_device = devices.get(target_device_id if ':' in target_device_id else _dk(user_id,target_device_id)) if isinstance(target_device_id,str) else None
             target_os = ((observation_device or {}).get('info') or {}).get('os','unknown')
-            if (task.get('window_effects') and action=='window.control'
-                    and params.get('action') not in {'active','list','find','monitors',*task['window_effects']}):
+            window_effect = (params.get('action') if action == 'window.control' else
+                             {'window.focus': 'activate', 'window.close': 'close',
+                              'app.close': 'close'}.get(action))
+            if (task.get('window_effects') and window_effect is not None
+                    and window_effect not in {'active','list','find','monitors',*task['window_effects']}):
                 return {'status':'blocked','error':'unrequested_window_action','dispatched':False}
-            try:
-                from .controller_shared import pinned_material_pending
-            except ImportError:
-                from controller_shared import pinned_material_pending
-            if pinned_material_pending(task) and not is_recovery_observation(action, params,device_os=target_os):
-                return {"status":"blocked", "error":"dependency_material_not_fully_read"}
             if task.get("_action_outcome_unknown") and not is_recovery_observation(action, params,device_os=target_os):
                 return {"status":"blocked", "error":"mutation_blocked_after_unknown"}
             if task.get("worker_id"):
@@ -1555,7 +1552,6 @@ async def run_onboarding_task(task_id: str, user_id: int, message: str, chat_id:
                 "poll_task_id": task_id,
                 "route": "onboarding",
                 "phase": "onboarding",
-                "worker_execution": bool(task.get("worker_id")),
             },
         )
         answer = result.get("answer", "")

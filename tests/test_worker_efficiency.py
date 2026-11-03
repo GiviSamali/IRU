@@ -13,7 +13,6 @@ from server.run_journal import (validate_answer_text_payload, ProtocolValidation
     latest_file_states, unfinished_execution_result, compact_write_content_result)
 from server.worker_reports import bounded_report_summary
 from server.worker_scheduler import dependency_context
-from server.tool_repeat_guard import unchanged_command_evidence, command_observation_key
 from test_tool_only_protocol import _run_case, _message, _tool_call, _answer_call, _answer_payload
 
 
@@ -88,14 +87,14 @@ def syntax_error():
             'error':None, 'error_type':'shell_syntax_error'}
 
 
-def test_stubborn_parser_error_reuses_diagnostic_without_forcing_worker_stop():
+def test_stubborn_parser_error_returns_fresh_failures_until_worker_finishes():
     sent, captured = [], []
     async def send(*args):
         sent.append(args); return syntax_error()
     result = _run_case([call('broken')]*16+[_message(tool_calls=[_tool_call('end','answer_text',
         {'result':'Command not executed successfully','unresolved':['Syntax not corrected']})])],
         send_command_fn=send, captured=captured, max_iterations=20)
-    assert len(sent) == 2 and len(captured) == 17
+    assert len(sent) == 16 and len(captured) == 17
     from server.worker_reports import build_worker_report
     report=build_worker_report({**result,'task_id':'stubborn-parser','status':'done'})
     assert report['goal_completed'] is False
@@ -113,13 +112,6 @@ def test_parser_error_allows_corrected_method():
     result=_run_case(responses,send_command_fn=send,max_iterations=20)
     assert sent==['broken','broken','corrected']
     assert result['answer']=='Observed only'
-
-
-def test_unknown_outcome_is_not_reused_as_safe_failure():
-    args={'command':'broken','artifact_paths':[]}
-    e={'command':'broken','target_device_id':'pc','status':'failed',
-       'execution_key':command_observation_key(args),'result':{**syntax_error(),'status':'unknown'}}
-    assert unchanged_command_evidence([e,e],args,'pc','') is None
 
 
 def file_step(number, before, after):

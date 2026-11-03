@@ -38,17 +38,13 @@ try:
     from .task_summary import get_last_run_summary  # type: ignore
     from .tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from .tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
-    from .tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
+    from .tool_registry import tool_log_entry, tool_log_fields  # type: ignore
     from .tool_repeat_guard import (  # type: ignore
-        replacement_attempt_key,
-        unchanged_replacement_rejection,
         duplicate_read_only_tool_message,
         find_prior_successful_read_only_tool_step,
         mark_read_only_tool_step,
         repeated_command_observation,
         repeated_search_observation,
-        unchanged_command_evidence,
-        command_observation_key,
     )
     from .run_journal import (  # type: ignore
         GROUNDED_CORRECTION,
@@ -101,17 +97,13 @@ except ImportError:
     from task_summary import get_last_run_summary  # type: ignore
     from tool_arg_validation import validate_and_sanitize_tool_args  # type: ignore
     from tool_list_grounding import sanitize_system_list_tools_answer  # type: ignore
-    from tool_registry import list_tools, tool_log_entry, tool_log_fields  # type: ignore
+    from tool_registry import tool_log_entry, tool_log_fields  # type: ignore
     from tool_repeat_guard import (  # type: ignore
-        replacement_attempt_key,
-        unchanged_replacement_rejection,
         duplicate_read_only_tool_message,
         find_prior_successful_read_only_tool_step,
         mark_read_only_tool_step,
         repeated_command_observation,
         repeated_search_observation,
-        unchanged_command_evidence,
-        command_observation_key,
     )
     from run_journal import (  # type: ignore
         GROUNDED_CORRECTION,
@@ -216,9 +208,9 @@ async def process_non_pipeline_command(
     usage_context: dict | None = None,
 ) -> dict:
     try:
-        from .controller_shared import worker_assignment_scope, pinned_material_pending
+        from .controller_shared import worker_assignment_scope
     except ImportError:
-        from controller_shared import worker_assignment_scope, pinned_material_pending
+        from controller_shared import worker_assignment_scope
     try:
         from .tool_completion import normalize_operation_result
     except ImportError:
@@ -240,7 +232,6 @@ async def process_non_pipeline_command(
     except ImportError:
         from browser_policy import BrowserTaskPolicy, recent_browser_context, validate_browser_arguments
     browser_policy = BrowserTaskPolicy(user_message, device_id, chat_history)
-    expected_window_actions = list((runtime_tasks.get(poll_task_id) or {}).get("window_effects") or [])
     non_pipeline_tools = deepcopy(DEFAULT_CONTROLLER_TOOLS)
     messages = [{"role": "system", "content": system_msg}]
     context = recent_browser_context(chat_history, device_id=device_id)
@@ -256,12 +247,13 @@ async def process_non_pipeline_command(
     commands_log = []
     recovery_only = bool(runtime_tasks.get(poll_task_id, {}).get("_action_outcome_unknown"))
     try:
-        from .controller_tools import RECOVERY_LIST_DIR, file_tools_for_device, worker_tool_inventory
+        from .controller_tools import RECOVERY_LIST_DIR, worker_tool_inventory
     except ImportError:
-        from controller_tools import RECOVERY_LIST_DIR, file_tools_for_device, worker_tool_inventory
+        from controller_tools import RECOVERY_LIST_DIR, worker_tool_inventory
     file_preservation_task = runtime_tasks.get(poll_task_id, {})
     non_pipeline_tools = worker_tool_inventory(DEFAULT_CONTROLLER_TOOLS, device_info,
-        preserve=file_preservation_task.get("preserve_file_bytes",False))
+        preserve=file_preservation_task.get("preserve_file_bytes", False),
+        multiple_targets=len(file_preservation_task.get("device_ids") or []) > 1)
     tool_schemas = {
         tool.get("function", {}).get("name"): tool
         for tool in [*DEFAULT_CONTROLLER_TOOLS, *(non_pipeline_tools or [])]
@@ -276,46 +268,33 @@ async def process_non_pipeline_command(
         if tool.get("function", {}).get("name") == "write_content":
             tool["function"]["parameters"]["properties"]["content"].pop("maxLength", None)
 
-    # Only scheduled Workers use the chapter inventory. Legacy direct callers
-    # and public catalog queries keep their existing contract.
-    chapter_mode = bool(file_preservation_task.get('worker_id') or (usage_context or {}).get('worker_execution'))
     base_names = {'answer_text', 'answer_ask_clarification', 'answer_report_failure',
                   'system_list_tools', 'system_get_last_run_summary', 'system_update_working_notes',
                   'list_dir', 'read_file', 'write_content', 'execute_cmd'}
     chapters = {}
     opened_chapters = set()
-    if chapter_mode:
-        try:
-            from .tool_registry import TOOL_METADATA, canonical_tool_name
-        except ImportError:
-            from tool_registry import TOOL_METADATA, canonical_tool_name
-        # A primary device's capabilities do not describe all assigned devices.
-        multiple_targets = len(file_preservation_task.get('device_ids') or []) > 1
-        if device_info.get('connected') is not False and device_id not in ('server', '', None):
-            if 'list_dir' not in tool_schemas:
-                non_pipeline_tools.append(RECOVERY_LIST_DIR)
-                tool_schemas['list_dir'] = RECOVERY_LIST_DIR
-        non_pipeline_tools = [
-            tool for tool in non_pipeline_tools
-            if not tool['function']['description'].startswith('BLOCKED for this Assignment')
-            and (multiple_targets or not tool['function']['description'].startswith('UNAVAILABLE on current device'))
-        ]
-        for tool in non_pipeline_tools:
-            name = tool['function']['name']
-            if name == 'execute_cmd':
-                tool['function']['parameters']['properties'].pop('long_running', None)
-            if name not in base_names:
-                category = TOOL_METADATA.get(canonical_tool_name(name), {}).get('category') or 'other'
-                chapters.setdefault(category, set()).add(name)
-        contents = ', '.join(f"{chapter} ({', '.join(sorted(names))})"
-                             for chapter, names in sorted(chapters.items()))
-        messages[0]['content'] += (
-            "\nTool chapters for this Assignment: " + contents +
-            ". Use the base tools directly. Open any needed chapters together with "
-            "system_list_tools(open_chapters=[...]) before using their tools. Their callable schemas arrive on the next turn "
-            "and remain available for this Assignment. Opening a chapter grants no permission. "
-            "Read actual tool results before deciding the next action or finishing."
-        )
+    try:
+        from .tool_registry import TOOL_METADATA, canonical_tool_name
+    except ImportError:
+        from tool_registry import TOOL_METADATA, canonical_tool_name
+    if device_info.get('connected') is not False and device_id not in ('server', '', None):
+        if 'list_dir' not in tool_schemas:
+            non_pipeline_tools.append(RECOVERY_LIST_DIR)
+            tool_schemas['list_dir'] = RECOVERY_LIST_DIR
+    for tool in non_pipeline_tools:
+        name = tool['function']['name']
+        if name not in base_names:
+            category = TOOL_METADATA.get(canonical_tool_name(name), {}).get('category') or 'other'
+            chapters.setdefault(category, set()).add(name)
+    contents = ', '.join(f"{chapter} ({', '.join(sorted(names))})"
+                         for chapter, names in sorted(chapters.items()))
+    messages[0]['content'] += (
+        "\nTool chapters for this Assignment: " + contents +
+        ". Use the base tools directly. Open any needed chapters together with "
+        "system_list_tools(open_chapters=[...]) before using their tools. Their callable schemas arrive on the next turn "
+        "and remain available for this Assignment. Opening a chapter grants no permission. "
+        "Read actual tool results before deciding the next action or finishing."
+    )
 
     if user_id is not None or chat_id is not None:
         previous_failed = get_last_run_summary(
@@ -433,7 +412,7 @@ async def process_non_pipeline_command(
             visible_names = base_names | {name for chapter in opened_chapters for name in chapters[chapter]}
             turn_tools = [tool for tool in non_pipeline_tools
                           if (tool['function']['name'] == 'answer_text' if final_turn
-                              else not chapter_mode or tool['function']['name'] in visible_names)]
+                              else tool['function']['name'] in visible_names)]
             offered_names = {tool['function']['name'] for tool in turn_tools}
             set_current_step(poll_task_id, "ИРУ думает...")
             # The accepted Assignment is already pinned in system_msg. Expose
@@ -508,9 +487,6 @@ async def process_non_pipeline_command(
                         from controller_trust import sanitize_result_text
                     payload = validate_answer_text_payload({'status':'unknown','evidence_refs':[],
                         'answer':sanitize_result_text(last_candidate,commands_log)},commands_log)
-                    context = runtime_tasks.get(poll_task_id) or {}
-                    if pinned_material_pending(context):
-                        payload.setdefault('unresolved', []).append('Required dependency material was not fully read.')
                     append_answer_step(commands_log,'answer_text',payload,target_device_id=device_id)
                     return {'answer':payload['text'],'commands':commands_log,'tasks':[]}
                 break
@@ -552,21 +528,13 @@ async def process_non_pipeline_command(
                             target_device_id=device_id,iteration=iteration+1)))
                         continue
 
-                    if chapter_mode and fn_name not in offered_names:
+                    if fn_name not in offered_names:
                         append_tool_message(tool_call['id'], append_entry(tool_log_entry(fn_name,
                             {'status':'blocked','dispatched':False,'error':'tool_not_offered_this_turn'},
                             target_device_id=device_id,iteration=iteration+1)))
                         add_correction('Use offered tools only. Open the relevant chapter for the next turn.')
                         continue
 
-                    if (pinned_material_pending(runtime_tasks.get(poll_task_id) or {})
-                            and fn_name not in {"system_get_last_run_summary", "system_list_tools", "system_update_working_notes", "answer_text", "answer_ask_clarification", "answer_report_failure"}
-                            and not is_recovery_observation(fn_name, fn_args_preview, device_os=device_info.get("os"))):
-                        append_tool_message(tool_call['id'],append_entry(tool_log_entry(fn_name,
-                            {'status':'blocked','dispatched':False,'error':'dependency_material_not_fully_read'},
-                            target_device_id=device_id,iteration=iteration+1)))
-                        add_correction("Read all pinned dependency material via system_get_last_run_summary and each next_offset before taking actions that can change state. The manifest is not the full material.")
-                        continue
                     if is_terminal_answer_tool(fn_name):
                         target_device = device_id
                         try:
@@ -582,11 +550,6 @@ async def process_non_pipeline_command(
                                 except ImportError:
                                     from controller_trust import sanitize_result_text
                                 answer_payload['text'] = sanitize_result_text(answer_payload['text'],commands_log)
-                                context = runtime_tasks.get(poll_task_id) or {}
-                                if pinned_material_pending(context):
-                                    answer_payload.setdefault('unresolved', []).append('Required dependency material was not fully read.')
-                                    if answer_payload['status']=='success':
-                                        raise ProtocolValidationError('terminal_contract_condition: required dependency material is unread; read it or finish with an honest non-success status')
                                 append_answer_step(commands_log,fn_name,answer_payload,target_device_id=target_device,
                                                    hostname=device_info.get('hostname') or target_device,iteration=iteration+1)
                                 return {'answer':answer_payload['text'],'commands':commands_log,'tasks':[],
@@ -647,30 +610,18 @@ async def process_non_pipeline_command(
                             add_correction("Browser arguments must match the fixed schema; no script/selector or coercion is allowed.")
                             continue
 
-                    file_edit_error = None
-                    if file_preservation_task.get('preserve_file_bytes') and fn_name == 'write_content':
+                    if file_preservation_task.get('preserve_file_bytes') and fn_name not in {
+                            'system_list_tools', 'system_get_last_run_summary'}:
                         try:
                             from .controller_shared import file_edit_dispatch_error
                         except ImportError:
                             from controller_shared import file_edit_dispatch_error
                         file_edit_error = file_edit_dispatch_error(file_preservation_task, fn_name, fn_args)
-                    if file_preservation_task.get('preserve_file_bytes') and (file_edit_error or fn_name not in {
-                            'answer_text','answer_ask_clarification','answer_report_failure',
-                            'list_dir','read_file','write_content','system_list_tools','system_get_last_run_summary','system_update_working_notes','device_get_passport'}):
-                        append_tool_message(tool_call['id'], append_entry(tool_log_entry(fn_name,
-                            {'status':'blocked','error':file_edit_error or 'file_preservation_requires_native_replacement',
-                             'dispatched':False,'committed':False}, command='[blocked file edit]',
-                            target_device_id=device_id, hostname=device_id, iteration=iteration+1)))
-                        continue
-                    if (expected_window_actions and fn_name == 'window_control'
-                            and fn_args.get('action') not in {'active','list','find','monitors',*expected_window_actions}):
-                        append_tool_message(tool_call['id'],append_entry(tool_log_entry(fn_name,
-                            {'status':'blocked','error':'unrequested_window_action','dispatched':False},
-                            target_device_id=device_id,iteration=iteration+1)))
-                        continue
-                    # Success on one PC is not completion of an explicit action on another.
-
-
+                        if file_edit_error:
+                            append_tool_message(tool_call['id'],append_entry(tool_log_entry(fn_name,
+                                {'status':'blocked','error':file_edit_error,'dispatched':False},
+                                target_device_id=device_id,iteration=iteration+1)))
+                            continue
                     clean_args, arg_warnings, arg_error = validate_and_sanitize_tool_args(
                         fn_name,
                         fn_args,
@@ -732,33 +683,6 @@ async def process_non_pipeline_command(
                         rewritten_launch, rewrite_error = rewrite_python_app_launch_command(fn_args.get("command", ""), python_receipt)
                         fn_args.update(rewritten_launch)
 
-                    prior_static = (unchanged_command_evidence(commands_log, fn_args, target_device,
-                        human_request) if fn_name == 'execute_cmd' else
-                        unchanged_replacement_rejection(commands_log,repeat_guard_args,target_device) if fn_name == 'write_content' else None)
-                    if prior_static:
-                        source_id = prior_static['step_id']
-                        messages.append({'role':'tool','tool_call_id':tool_call['id'],'content':json.dumps({
-                            'status':'reused_observation','dispatched':False,'source_step_id':source_id,
-                            'previous_attempt_status':prior_static.get('status'),
-                            'outcome_note':'Reusing diagnostic data does not establish success or absence of side effects.',
-                            'trust_level':'untrusted_tool_data',
-                            'evidence':json.loads(serialize_tool_result_for_llm(prior_static))},ensure_ascii=False)})
-                        record_lifecycle_event('recovery',source='protocol_recovery',iteration=iteration+1,tool_name=fn_name,step_index=prior_static.get('idx'))
-                        if fn_name == 'write_content':
-                            add_correction('The Agent was NOT called again. The unchanged replacement already failed with '
-                                'replacement_source_missing and committed=false in '+source_id+'. This is not transport unknown. '
-                                'Read the current file with read_file, then choose corrected arguments from its text and SHA-256, '
-                                'or explain that the requested value is absent or already in the desired state. '
-                                'Reading inside the accepted task needs no new permission. Do not invent another write.')
-                            continue
-                        add_correction('The device was NOT called. Reuse the result or error in '+source_id+
-                            '. For a syntax error correct the command or use write_content expected_text for an exact edit. ORIGINAL assigned goal: '
-                            +(assigned_objective or user_message)+
-                            '\nSelect a DIFFERENT necessary action for the remaining authorized work (including final verification and cleanup when assigned), '
-                            'or answer_text partial_report with the precise unfinished requirements. Do not request new permission for already assigned work. '
-                            'An unchanged rejected call does not consume another device action; correct its cause.')
-                        continue
-
                     prior_read_only_step = find_prior_successful_read_only_tool_step(commands_log, fn_name, repeat_guard_args)
                     if prior_read_only_step:
                         duplicate_message = duplicate_read_only_tool_message(fn_name, prior_read_only_step)
@@ -777,7 +701,6 @@ async def process_non_pipeline_command(
                     if is_task_cancel_requested(poll_task_id):
                         return cancelled_result(iteration + 1)
 
-                    fn_args.pop('observation_contract', None)
                     if command_budget is not None:
                         command_budget.register(fn_name, fn_args.get("command", ""))
 
@@ -827,11 +750,11 @@ async def process_non_pipeline_command(
 
                     if fn_name == "system_list_tools":
                         requested = fn_args.get('open_chapters')
-                        if chapter_mode and requested is not None and (
+                        if requested is not None and (
                                 not isinstance(requested, list) or len(requested) > 16
                                 or any(not isinstance(chapter, str) for chapter in requested)):
                             tool_result = {'status':'failed','error':'invalid_tool_chapters','dispatched':False}
-                        elif chapter_mode and requested is not None:
+                        elif requested is not None:
                             unknown = sorted(set(requested) - chapters.keys())
                             opened_chapters.update(chapter for chapter in requested if chapter in chapters)
                             tool_result = {
@@ -841,7 +764,7 @@ async def process_non_pipeline_command(
                                 'available_next_turn': sorted({name for chapter in opened_chapters
                                                                for name in chapters[chapter]}),
                             }
-                        elif chapter_mode:
+                        else:
                             category = fn_args.get('category', 'all')
                             tool_result = {'status': 'success'}
                             for schema in non_pipeline_tools:
@@ -855,17 +778,6 @@ async def process_non_pipeline_command(
                                     'purpose': fn['description'],
                                     'available_this_turn': name in offered_names,
                                 })
-                        else:
-                            tool_result = {"status":"success", **list_tools(fn_args.get("category", "all"))}
-                            available_files = {tool['function']['name']:tool['function']
-                                for tool in file_tools_for_device(DEFAULT_CONTROLLER_TOOLS, device_info)}
-                            if 'files' in tool_result:
-                                tool_result['files'] = [item for item in tool_result['files']
-                                    if item['name'] != 'read_file' or 'read_file' in available_files]
-                                for item in tool_result['files']:
-                                    if item['name'] == 'write_content':
-                                        item['purpose'] = available_files['write_content']['description']
-                                        item['when_to_use'] = ['Only modes negotiated for this device']
                         append_entry(tool_log_entry(
                             fn_name,
                             tool_result,
@@ -994,10 +906,7 @@ async def process_non_pipeline_command(
                         ))
 
                     elif fn_name == "execute_cmd":
-                        is_long_running = fn_args.pop("long_running", False)
                         try:
-                            if is_long_running:
-                                fn_args["timeout"] = 5
                             # A transport timeout is not an agent launch receipt.
                             tool_result = await send_command_fn(target_device, "execute_cmd", fn_args)
                             print(
@@ -1192,10 +1101,6 @@ async def process_non_pipeline_command(
                         commands_log[-1]["result"]["arg_warnings"] = existing_warnings + arg_warnings
                     if fn_name == "window_control":
                         commands_log[-1]["window_request"] = dict(fn_args)
-                    if fn_name == 'execute_cmd':
-                        commands_log[-1]['execution_key'] = command_observation_key({**repeat_guard_args,'command':fn_args.get('command')})
-                    elif fn_name == 'write_content':
-                        commands_log[-1]['replacement_key'] = replacement_attempt_key(repeat_guard_args)
                     mark_read_only_tool_step(commands_log[-1], fn_name, repeat_guard_args)
                     append_tool_message(tool_call["id"], commands_log[-1])
                     if (tool_result.get('error') == 'confirmed_transport_outcome_unknown'
@@ -1209,10 +1114,6 @@ async def process_non_pipeline_command(
                             'with read_file and choose the exact replacement from observed text and SHA-256. '
                             'If it already has the requested value, report that observation without pretending a new write. '
                             'Do not ask for permission to perform this already-authorized read.')
-                    elif (tool_result.get("error") and (tool_result.get("dispatched") is False
-                            or tool_result.get("committed") is False) and tool_result.get("status") != "unknown"):
-                        add_correction("This operation was not committed. Do not repeat identical arguments: correct the stated "
-                            "error or use another authorized method. If an updated agent is required, report that limitation.")
                     prior_search = repeated_search_observation(commands_log)
                     if prior_search:
                         add_correction(

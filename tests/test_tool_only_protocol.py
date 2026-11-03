@@ -972,7 +972,7 @@ def test_write_content_then_execute_cmd_marker_does_not_skip_verification():
     assert result["answer"] == "File written and window observed"
 
 
-def test_execute_cmd_long_running_timeout_remains_unconfirmed():
+def test_execute_cmd_transport_timeout_remains_unconfirmed():
     sent = []
 
     async def _send(device_id, action, params):
@@ -984,7 +984,7 @@ def test_execute_cmd_long_running_timeout_remains_unconfirmed():
     result = _run_case([
         _message(tool_calls=[_tool_call("call-exec", "execute_cmd", {
             "command": "python gui.py",
-            "long_running": True,
+            "timeout": 5,
         })]),
         _message(tool_calls=[_answer_call("final", "Запуск не подтверждён", answer_type="partial_report", basis=["step_1"],status='unknown')]),
     ], send_command_fn=_send)
@@ -1129,12 +1129,12 @@ def test_goal_worker_iteration_limit_uses_existing_answer_only_repair(monkeypatc
     assert not build_worker_report({**result,'task_id':'budget-goal','status':'done'})['goal_completed']
 
 
-def test_common_long_running_transport_timeout_keeps_original_error():
+def test_common_command_transport_timeout_keeps_original_error():
     sent=[]
     async def send(device,action,params):
         sent.append((action,dict(params)))
         raise TimeoutError("Таймаут выполнения команды")
-    result=_run_case([_message(tool_calls=[_tool_call("exec","execute_cmd",{"command":"start application","long_running":True})]),
+    result=_run_case([_message(tool_calls=[_tool_call("exec","execute_cmd",{"command":"start application","timeout":5})]),
         _message(tool_calls=[_answer_call("final","Запуск не подтверждён",answer_type="partial_report",basis=["step_1"])])],
         user_message="Launch application",send_command_fn=send)
     assert [action for action,_ in sent]==["execute_cmd"] and sent[0][1]["timeout"]==5

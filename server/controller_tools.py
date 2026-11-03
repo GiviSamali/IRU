@@ -33,58 +33,45 @@ WRITE_CONTENT_DESCRIPTION = (
 )
 
 
-def file_tools_for_device(tools, device_info, *, preserve=False):
-    """Advertise only negotiated native file modes; dispatch rechecks the target."""
+def worker_tool_inventory(tools, device_info, *, preserve=False, multiple_targets=False):
+    """Return callable schemas for the known capabilities and Assignment constraints."""
     from copy import deepcopy
-    protocol = (device_info or {}).get('file_replace_protocol')
-    result = []
-    for source in tools:
-        tool = deepcopy(source)
+    result=deepcopy([tool for tool in tools
+                     if tool['function']['name'] not in {'window_focus', 'window_close'}])
+    info=device_info or {}
+    available = []
+    for tool in result:
         fn = tool['function']
         name = fn['name']
-        if preserve and name not in {'list_dir','read_file','write_content','answer_text',
-                'answer_ask_clarification','answer_report_failure',
-                'system_get_last_run_summary','device_get_passport'}:
-            continue
-        if name == 'read_file' and protocol != 2:
-            continue
-        if name == 'write_content':
-            props = fn['parameters']['properties']
-            if protocol != 2:
-                for field in ('expected_text','expected_sha256','expected_matches'):
-                    props.pop(field,None)
-                fn['description'] = ('Create text or perform an explicitly requested full overwrite. '
-                    'The native read/hash + exact replacement workflow is unavailable on this device. '
-                    'Do not use overwrite for a limited edit.')
-        result.append(tool)
-    return result
-
-
-def worker_tool_inventory(tools, device_info, *, preserve=False):
-    """Full contracts; availability is metadata, dispatch remains authoritative."""
-    from copy import deepcopy
-    result=deepcopy(tools)
-    info=device_info or {}
-    for tool in result:
-        fn=tool['function']; name=fn['name']; reason=None
-        if name=='read_file' and info.get('file_replace_protocol')!=2:
-            reason='requires file_replace_protocol=2 on the selected device'
-        elif name.startswith('office_') and info.get('office_tools_version')!=1:
-            reason='requires office_tools_version=1 on the selected device'
-        if info.get('connected') is False and name not in {'web_search','system_list_tools','system_get_last_run_summary','system_update_working_notes','answer_text','answer_ask_clarification','answer_report_failure','remember_fact','forget_fact','memory_get_stats','memory_list_facts'}:
-            reason='no connected target device in this Assignment'
-        if name=='app_verify_launch' and info.get('object_observation_protocol')!=1:
-            prop=fn['parameters']['properties']['object_path']
-            prop['description']='UNAVAILABLE on current device: requires object_observation_protocol=1. '+prop['description']
+        if not multiple_targets:
+            if name == 'read_file' and info.get('file_replace_protocol') != 2:
+                continue
+            if name.startswith('office_') and info.get('office_tools_version') != 1:
+                continue
+            if name == 'app_verify_launch' and info.get('object_observation_protocol') != 1:
+                continue
+            if info.get('connected') is False and name not in {
+                'web_search', 'system_list_tools', 'system_get_last_run_summary',
+                'system_update_working_notes', 'answer_text', 'answer_ask_clarification',
+                'answer_report_failure', 'remember_fact', 'forget_fact',
+                'memory_get_stats', 'memory_list_facts',
+            }:
+                continue
         if preserve and name == 'write_content':
             fn['description'] = ('For this Assignment, use append=true for an explicit addition at EOF '
                 'without replacement parameters. For a targeted replacement, use expected_text and '
                 'expected_sha256 from the native read. Full overwrite is blocked.')
-        if reason:fn['description']='UNAVAILABLE on current device: '+reason+'. '+fn['description']
-        if preserve and name not in {'list_dir','read_file','write_content','answer_text',
-                'answer_ask_clarification','answer_report_failure','system_list_tools','system_get_last_run_summary','system_update_working_notes','device_get_passport'}:
-            fn['description']='BLOCKED for this Assignment by accepted byte-preservation constraint. '+fn['description']
-    return result
+        if preserve:
+            try:
+                from .controller_shared import file_edit_dispatch_error
+            except ImportError:
+                from controller_shared import file_edit_dispatch_error
+            exempt = {'write_content','answer_text','answer_ask_clarification','answer_report_failure',
+                      'system_list_tools','system_get_last_run_summary'}
+            if name not in exempt and file_edit_dispatch_error({'preserve_file_bytes': True}, name, {}):
+                continue
+        available.append(tool)
+    return available
 
 
 RECOVERY_LIST_DIR = {"type": "function", "function": {
@@ -92,29 +79,6 @@ RECOVERY_LIST_DIR = {"type": "function", "function": {
     "parameters": {"type": "object", "properties": {"path": {"type": "string"},
                    "device_id": {"type": "string"}}, "required": ["path"]}}}
 
-
-def recovery_observation_tools(tools):
-    """Reuse existing observation tools and the agent's internal directory reader."""
-    from copy import deepcopy
-    try:
-        from .api_support import is_recovery_observation
-    except ImportError:
-        from api_support import is_recovery_observation
-    result = []
-    for tool in [*tools, RECOVERY_LIST_DIR]:
-        name = tool["function"]["name"]
-        if name in {"office_docx","office_xlsx","office_pptx"}:
-            tool = deepcopy(tool)
-            tool["function"]["parameters"]["properties"]["action"]["enum"] = ["inspect"]
-        elif name == "window_control":
-            tool = deepcopy(tool)
-            tool["function"]["parameters"]["properties"]["action"]["enum"] = ["active", "list", "find", "monitors"]
-        elif not is_recovery_observation(name, {}) and name not in {
-                "answer_text", "answer_ask_clarification", "answer_report_failure"}:
-            continue
-        if not any(item["function"]["name"] == name for item in result):
-            result.append(tool)
-    return result
 
 TOOLS = [
     *DEVICE_TOOL_SCHEMAS,
@@ -180,21 +144,6 @@ TOOLS = [
                     "workdir": {"type":"string", "description":"Absolute working directory on the selected device. Applies only to this call."},
                     "artifact_paths": {"type":"array", "maxItems":16, "items":{"type":"string"},
                         "description":"Absolute paths of final deliverables created or changed by this command. Omit when there are no final file outputs."},
-                    "observation_contract": {"type":"object", "additionalProperties":False,
-                        "description":"Server-only repeat budget, never permission. Two identical successful observations are reused instead of executing a third. For necessary bounded waiting/monitoring declare the condition; for explicitly requested repeated measurements quote the current human request. After the budget, choose another necessary action of the ORIGINAL goal or report remaining work as partial. Do not turn intermediate verification into a separate investigation.",
-                        "properties":{"mode":{"type":"string","enum":["once","wait","monitor","measurement"]},
-                            "max_samples":{"type":"integer","minimum":2,"maximum":10,
-                                "description":"Maximum identical successive successful samples before evidence reuse; a changed result resets this no-progress streak."},
-                            "condition":{"type":"string","minLength":1,"maxLength":300},
-                            "human_quote":{"type":"string","maxLength":400}},
-                        "required":["mode","max_samples","condition"]},
-                    "preserve_content_paths": {"type":"array","maxItems":16,"items":{"type":"string"},
-                        "description":"Existing DOCX/XLSX/PPTX files being formatted only. Must also be in artifact_paths. Agent snapshots and compares content; mismatch yields no verified receipt. Shell changes already made are not automatically rolled back."},
-                    "timeout": {
-                        "type": "integer",
-                        "description": "Таймаут в секундах (по умолчанию 30)",
-                        "default": 30
-                    },
                     "shell": {
                         "type": "string",
                         "enum": ["auto", "powershell", "cmd", "bash"],
@@ -204,11 +153,6 @@ TOOLS = [
                     "device_id": {
                         "type": "string",
                         "description": "ID устройства для выполнения. Если не указан — текущее устройство."
-                    },
-                    "long_running": {
-                        "type": "boolean",
-                        "description": "Для команды, которая может не завершиться сама: ограничивает ожидание исполнения на агенте до 5 секунд. Не запускает процесс в фоне и не гарантирует запуск. Таймаут не подтверждает выполнение; проверяй фактическое состояние отдельным инструментом. Для фонового запуска используй существующий инструмент app.launch.",
-                        "default": False
                     }
                 },
                 "required": ["command"]

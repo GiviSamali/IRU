@@ -459,6 +459,12 @@ def file_edit_dispatch_error(task, action, params):
                   'device.get_cached_passport', 'system_update_working_notes', 'system.update_working_notes'}:
         return None
     if action != 'write_content':
+        try:
+            from .api_support import is_recovery_observation
+        except ImportError:
+            from api_support import is_recovery_observation
+        if is_recovery_observation(action, params):
+            return None
         return 'file_preservation_requires_native_replacement'
     if params.get('append') is True:
         if params.get('_write_transaction') or any(params.get(field) is not None for field in
@@ -477,12 +483,6 @@ def file_edit_dispatch_error(task, action, params):
     return None
 
 
-
-
-def pinned_material_pending(task):
-    pending = task.get("_pending_pinned_results") or {}
-    offsets = task.get("_pinned_read_offsets") or {}
-    return any(offsets.get(result_id, 0) < total for result_id, total in pending.items())
 
 
 def build_memory_block(machine_guid: str | None, user_id: str | None = None,

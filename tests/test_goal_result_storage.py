@@ -285,10 +285,9 @@ def test_pending_amendment_cannot_overrule_a_dispatch_marker(storage, marker):
         assert c.execute("SELECT COUNT(*) FROM worker_task_revisions").fetchone()[0] == 0
 
 
-def test_pinned_material_pages_keep_full_content_hash_and_contiguous_progress(storage):
+def test_pinned_material_pages_keep_full_content_hash_and_support_selective_read(storage):
     from server.task_summary import get_last_run_summary
     from server.runtime_state import tasks
-    from server.controller_shared import pinned_material_pending
     prepare_goal(storage)
     task, report = freeze(storage)
     owner, chat = storage
@@ -298,7 +297,6 @@ def test_pinned_material_pages_keep_full_content_hash_and_contiguous_progress(st
         row = c.execute("SELECT * FROM worker_results").fetchone()
         c.execute("UPDATE worker_jobs SET payload=? WHERE task_id='consumer'", (json.dumps(consumer),))
         c.execute("INSERT INTO worker_dependencies VALUES(?,?,?)", ("consumer", "source", row["result_id"]))
-        consumer["_pending_pinned_results"] = {row["result_id"]:len(row["content"])}
     tasks["consumer"] = consumer
     try:
         def page(offset):
@@ -306,8 +304,6 @@ def test_pinned_material_pages_keep_full_content_hash_and_contiguous_progress(st
                 source_task_id="source", report_offset=offset, allowed_devices={"pc"})
         later = page(4000)
         assert later["status"] == "success"
-        assert consumer["_pinned_read_offsets"].get(later["result_id"], 0) == 0
-        assert pinned_material_pending(consumer)
         chunks, offset = [], 0
         while offset is not None:
             result = page(offset)
@@ -318,7 +314,6 @@ def test_pinned_material_pages_keep_full_content_hash_and_contiguous_progress(st
         assert text == row["content"]
         assert hashlib.sha256(text.encode()).hexdigest() == row["sha256"]
         assert json.loads(text)["answer"] == task["answer"]
-        assert not pinned_material_pending(consumer)
         assert page(len(text))["error"] == "invalid_result_offset"
     finally:
         tasks.pop("consumer", None)

@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'agent'))
 from core import actions
 from server import database as db
 from server.controller_shared import file_edit_dispatch_error
-from server.controller_tools import NON_PIPELINE_TOOLS, file_tools_for_device
+from server.controller_tools import NON_PIPELINE_TOOLS, worker_tool_inventory
 from server.run_journal import compact_write_content_result
 
 
@@ -191,24 +191,6 @@ def test_native_exact_request_and_read_remain_available():
         'expected_sha256':'0'*64,'expected_matches':4}) is None
 
 
-@pytest.mark.parametrize('protocol', [None, 1, 2])
-def test_negotiated_tools_do_not_offer_unsupported_modes(protocol):
-    info = {'file_replace_protocol':protocol}
-    normal = {t['function']['name']:t['function'] for t in file_tools_for_device(NON_PIPELINE_TOOLS,info)}
-    assert 'execute_cmd' in normal
-    assert ('read_file' in normal) == (protocol == 2)
-    props = normal['write_content']['parameters']['properties']
-    assert ('expected_text' in props) == (protocol == 2)
-    assert ('expected_matches' in props) == (protocol == 2)
-    restricted = {t['function']['name']:t['function'] for t in
-                  file_tools_for_device(NON_PIPELINE_TOOLS,info,preserve=True)}
-    assert 'execute_cmd' not in restricted
-    assert ('write_content' in restricted) == (protocol == 2)
-    assert 'list_dir' in restricted
-    if 'write_content' in restricted:
-        assert 'expected_sha256' in restricted['write_content']['parameters']['required']
-
-
 def test_server_independently_negotiates_actual_target_and_keeps_path_policy(monkeypatch):
     from server import task_runtime as runtime
     sent = []
@@ -364,7 +346,7 @@ def test_mixed_goal_scopes_file_constraint_to_assignment_and_amend_cannot_remove
         created = result['tasks']
         assert [task['preserve_file_bytes'] for task in created] == [False,True,False]
         assert 'office_docx' in {t['function']['name'] for t in
-            file_tools_for_device(NON_PIPELINE_TOOLS,{'file_replace_protocol':2},preserve=created[0]['preserve_file_bytes'])}
+            worker_tool_inventory(NON_PIPELINE_TOOLS,{'file_replace_protocol':2,'office_tools_version':1},preserve=created[0]['preserve_file_bytes'])}
         assert file_edit_dispatch_error(created[0],'office_docx',{'action':'create'}) is None
         assert file_edit_dispatch_error(created[1],'execute_cmd',{})
         assert file_edit_dispatch_error(created[2],'execute_cmd',{}) is None
