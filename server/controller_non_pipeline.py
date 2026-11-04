@@ -279,10 +279,9 @@ async def process_non_pipeline_command(
         from .controller_tools import RECOVERY_LIST_DIR, worker_tool_inventory
     except ImportError:
         from controller_tools import RECOVERY_LIST_DIR, worker_tool_inventory
-    file_preservation_task = runtime_tasks.get(poll_task_id, {})
+    current_task = runtime_tasks.get(poll_task_id, {})
     non_pipeline_tools = worker_tool_inventory(DEFAULT_CONTROLLER_TOOLS, device_info,
-        preserve=file_preservation_task.get("preserve_file_bytes", False),
-        multiple_targets=len(file_preservation_task.get("device_ids") or []) > 1)
+        multiple_targets=len(current_task.get("device_ids") or []) > 1)
     tool_schemas = {
         tool.get("function", {}).get("name"): tool
         for tool in [*DEFAULT_CONTROLLER_TOOLS, *(non_pipeline_tools or [])]
@@ -672,18 +671,6 @@ async def process_non_pipeline_command(
                             add_correction("Browser arguments must match the fixed schema; no script/selector or coercion is allowed.")
                             continue
 
-                    if file_preservation_task.get('preserve_file_bytes') and fn_name not in {
-                            'system_list_tools', 'system_get_last_run_summary'}:
-                        try:
-                            from .controller_shared import file_edit_dispatch_error
-                        except ImportError:
-                            from controller_shared import file_edit_dispatch_error
-                        file_edit_error = file_edit_dispatch_error(file_preservation_task, fn_name, fn_args)
-                        if file_edit_error:
-                            append_tool_message(tool_call['id'],append_entry(tool_log_entry(fn_name,
-                                {'status':'blocked','error':file_edit_error,'dispatched':False},
-                                target_device_id=device_id,iteration=iteration+1)))
-                            continue
                     clean_args, arg_warnings, arg_error = validate_and_sanitize_tool_args(
                         fn_name,
                         fn_args,
@@ -1175,7 +1162,7 @@ async def process_non_pipeline_command(
                     if (fn_name=='write_content' and tool_result.get('error')=='replacement_source_missing'
                             and tool_result.get('committed') is False and tool_result.get('status')!='unknown'):
                         add_correction('The expected fragment is absent; the file was not changed. Read the current file '
-                            'with read_file and choose the exact replacement from observed text and SHA-256. '
+                            'with read_file and choose the exact replacement from the observed text. '
                             'If it already has the requested value, report that observation without pretending a new write. '
                             'Do not ask for permission to perform this already-authorized read.')
                     prior_search = repeated_search_observation(commands_log)

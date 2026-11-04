@@ -331,7 +331,7 @@ TOOL_METADATA = {
             "write scripts, HTML, JSON, TXT, CSV, Markdown, or source code",
             "long or multiline generated content would be unsafe/noisy in execute_cmd",
             "create or overwrite a text file",
-            "replace confirmed occurrences using expected_text, content, expected_sha256 and negotiated expected_matches",
+            "replace confirmed occurrences using expected_text, content, negotiated expected_matches and an optional revision hash on protocol 3",
         ],
         "returns": "compact write evidence: path, append, encoding, chars_written, bytes_written, content_sha256, preview and OK/NO/ERROR summary",
         "danger": "write",

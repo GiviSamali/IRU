@@ -104,17 +104,6 @@ def test_cli_diagnostic_result_is_owned_by_worker(local_db,monkeypatch):
 
 
 
-def test_preservation_flag_alone_does_not_allow_overwrite(local_db,monkeypatch):
-    task={'task_id':'t','preserve_file_bytes':True,'assigned_artifacts':['C:/x.txt']}
-    monkeypatch.setitem(tasks,'t',task)
-    sent=[]
-    async def send(*args):sent.append(args);return {'status':'ok'}
-    result=_run_case([_message(tool_calls=[_tool_call('bad','write_content',{'path':'C:/x.txt','content':'Written'})]),
-                      answer('Not changed')],poll_task_id='t',send_command_fn=send)
-    assert not sent and result['commands'][0]['result']['dispatched'] is False
-
-
-
 def answer(text='Observed'):
     return _message(tool_calls=[_tool_call('final','answer_text',{'result':text,'unresolved':[]})])
 
@@ -143,7 +132,7 @@ def test_pptx_search_counts_all_llm_calls(local_db,monkeypatch,record_property):
 @pytest.mark.parametrize('stale_first',[False,True])
 def test_confirmed_exact_edit_does_not_reassess_bytes(local_db,monkeypatch,stale_first):
     agent=FileAgent();captured=[]
-    task={'task_id':'exact','preserve_file_bytes':True,
+    task={'task_id':'exact',
           'proposed_objective':'Replace draft with ready','assigned_artifacts':[PROJECT],'device_ids':['device-1']}
     monkeypatch.setitem(tasks,'exact',task)
     replies=([_message(tool_calls=[_tool_call('stale','write_content',{

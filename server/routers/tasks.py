@@ -123,7 +123,7 @@ async def execute_worker(task):
 scheduler.execute = execute_worker
 
 
-async def submit_worker(user, chat_id, message, target_ids, modes, *, request_key=None, context_summary="", objective="", broadcast=False, source_task_ids=(), history_snapshot=None, assignments=None, goal_id=None, goal_revision=None, memory_authorizations=None, window_effects=None, preserve_file_bytes=False):
+async def submit_worker(user, chat_id, message, target_ids, modes, *, request_key=None, context_summary="", objective="", broadcast=False, source_task_ids=(), history_snapshot=None, assignments=None, goal_id=None, goal_revision=None, memory_authorizations=None, window_effects=None):
     if len(target_ids) != len(set(target_ids)):
         raise ValueError("duplicate_target_device")
     for did in target_ids:
@@ -142,9 +142,6 @@ async def submit_worker(user, chat_id, message, target_ids, modes, *, request_ke
     task['memory_authorizations']=memory_authorizations or []
     task['memory_authority_request']=message
     task['window_effects']=window_effects or []
-    if type(preserve_file_bytes) is not bool:
-        raise ValueError('invalid_file_preservation_constraint')
-    task['preserve_file_bytes']=preserve_file_bytes
     task['context_history']=history_snapshot if history_snapshot is not None else capture_history(chat_id)
     task['worker_context']=build_worker_context(user['id'],chat_id,message,target_ids,task['context_history'],source_task_ids,
         objective=task['proposed_objective'],context_summary=task['proposed_context_summary'])
@@ -182,7 +179,6 @@ class NLCommand(BaseModel):
 
 
 class PendingTaskAmendment(BaseModel):
-    preserve_file_bytes: bool = Field(default=False, strict=True)
     chat_id: int
     expected_revision: int = Field(ge=1)
     message: str = Field(min_length=1, max_length=4000)
@@ -351,8 +347,7 @@ async def nl_command(cmd: NLCommand, request: Request):
             assignments=assignments,
             goal_id=choice.goal_id,goal_revision=choice.goal_revision,
             memory_authorizations=[proof.model_dump() for proof in choice.memory_authorizations],
-            window_effects=choice.window_effects,
-            preserve_file_bytes=choice.preserve_file_bytes)
+            window_effects=choice.window_effects)
     try:
         return await run_turn(cmd,user,chat_id,delegate)
     except ValueError:
@@ -483,8 +478,7 @@ async def api_amend_pending_task(task_id: str, body: PendingTaskAmendment, reque
     user = get_current_user(request)
     try:
         result = scheduler.amend_pending(task_id, user["id"], body.chat_id,
-            expected_revision=body.expected_revision, human_request=body.message, objective=body.message,
-            preserve_file_bytes=body.preserve_file_bytes)
+            expected_revision=body.expected_revision, human_request=body.message, objective=body.message)
         return {"status": "ok", **result}
     except ValueError as exc:
         code = str(exc)

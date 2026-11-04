@@ -356,16 +356,19 @@ async def send_command_to_agent(
         if action == 'write_content' and any(params.get(field) is not None
                 for field in ('expected_text','expected_sha256','expected_matches')):
             try:
-                from .controller_shared import file_edit_dispatch_error
+                from .controller_shared import exact_text_replacement_error
             except ImportError:
-                from controller_shared import file_edit_dispatch_error
-            exact_error = file_edit_dispatch_error({'preserve_file_bytes':True}, action, params)
+                from controller_shared import exact_text_replacement_error
+            exact_error = exact_text_replacement_error(params)
             if exact_error:
                 return {'status':'error', 'error':exact_error, 'dispatched':False, 'committed':False}
-            if (((dev or {}).get('info') or {}).get('file_replace_protocol') not in (1, 2)
-                    or params.get('expected_matches') is not None
-                    and ((dev or {}).get('info') or {}).get('file_replace_protocol') != 2):
+            protocol = (dev.get('info') or {}).get('file_replace_protocol')
+            if protocol not in (1, 2, 3) or (protocol == 1 and params.get('expected_matches') is not None):
                 return {'status':'error', 'error':'agent_update_required_for_exact_replacement',
+                        'dispatched':False, 'committed':False}
+
+            if protocol in (1, 2) and params.get('expected_sha256') is None:
+                return {'status':'error', 'error':'expected_sha256_required_by_agent',
                         'dispatched':False, 'committed':False}
 
     if action=='app.verify_launch' and params.get('object_path') is not None:
@@ -373,7 +376,7 @@ async def send_command_to_agent(
             return {'status':'blocked','error':'agent_update_required_for_object_observation','dispatched':False}
 
     if action == 'get_file_content' and params.get('text_only'):
-        if ((dev or {}).get('info') or {}).get('file_replace_protocol') != 2:
+        if (dev.get('info') or {}).get('file_replace_protocol') not in (2, 3):
             return {'status':'error','error':'agent_update_required_for_text_read','dispatched':False}
 
     if not dev:
@@ -1050,13 +1053,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                         raw=params.get(key)
                         if not isinstance(raw,str) or _dk(user_id,raw) not in task["device_ids"]:
                             return {"status":"failed","error":"device_outside_worker_assignment"}
-            try:
-                from .controller_shared import file_edit_dispatch_error
-            except ImportError:
-                from controller_shared import file_edit_dispatch_error
-            constraint_error = file_edit_dispatch_error(task, action, params)
-            if constraint_error:
-                return {"status":"blocked", "error":constraint_error, "dispatched":False, "committed":False}
             if action.startswith("web."):
                 if not isinstance(target_device_id,str) or ":" in target_device_id:
                     return {"status":"failed","error":"target_device_not_found"}
@@ -1097,11 +1093,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             target_dev = devices.get(target_dk)
             if not target_dev or target_dev.get("user_id") != user_id:
                 raise RuntimeError(f"Нет доступа к устройству '{target_device_id}'")
-            if (task.get('preserve_file_bytes') and action == 'write_content'
-                    and params.get('append') is not True
-                    and (target_dev.get('info') or {}).get('file_replace_protocol') != 2):
-                return {'status':'error','error':'agent_update_required_for_native_edit_workflow',
-                        'dispatched':False,'committed':False}
             if action in {"office_docx", "office_xlsx", "office_pptx"}:
                 if (target_dev.get("info") or {}).get("office_tools_version") != 1:
                     return {"status":"error","error":"office_agent_update_required","dispatched":False}
@@ -1206,13 +1197,6 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
         async def device_tool_impl(tool_name: str, args: dict) -> dict:
             if task.get("_action_outcome_unknown") and not is_recovery_observation(tool_name, args):
                 return {"status":"blocked", "error":"mutation_blocked_after_unknown"}
-            try:
-                from .controller_shared import file_edit_dispatch_error
-            except ImportError:
-                from controller_shared import file_edit_dispatch_error
-            constraint_error = file_edit_dispatch_error(task, tool_name, args)
-            if constraint_error:
-                return {"status":"blocked", "error":constraint_error, "dispatched":False}
             if is_task_cancel_requested(task_id):
                 return {"status": "cancelled", "error": "Task cancellation requested before starting next device tool"}
             requested = str(args.get("device_id") or device_id)

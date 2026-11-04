@@ -282,7 +282,7 @@ def test_exact_text_write_needs_no_independent_content_approval():
     path='C:/x.txt'
     step={'step_id':'step_1','tool_name':'write_content','target_device_id':'pc','status':'success',
           'result':{'status':'ok','mode':'replace_exact','path':path,'verified':True,'committed':True,'file_sha256':'a'*64,'total_size':5}}
-    report=build_worker_report({'task_id':'text','status':'done','preserve_file_bytes':True,'device_ids':['pc'],
+    report=build_worker_report({'task_id':'text','status':'done','device_ids':['pc'],
         'assigned_artifacts':[path],'commands':completed_journal(step, 'Written')})
     assert report['goal_completed'] and report['artifacts'][0]['verified']
 

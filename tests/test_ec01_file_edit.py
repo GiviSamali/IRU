@@ -14,8 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'agent'))
 from core import actions
 from server import database as db
-from server.controller_shared import file_edit_dispatch_error
-from server.controller_tools import NON_PIPELINE_TOOLS, worker_tool_inventory
+from server.controller_tools import NON_PIPELINE_TOOLS
 from server.run_journal import compact_write_content_result
 
 
@@ -96,7 +95,16 @@ def test_two_simultaneous_calls_with_same_basis_commit_once(tmp_path):
     assert path.read_bytes() == b'0.21'
 
 
-def test_external_change_before_commit_is_retained(tmp_path, monkeypatch):
+def test_exact_replace_without_hash_preserves_unrelated_edits(tmp_path):
+    path = tmp_path / 'file.txt'
+    current = b'0.42\r\nother line changed\r\n'
+    path.write_bytes(current)
+    result = edit(path, current, expected_sha256=None)
+    assert result['committed'] and path.read_bytes() == b'0.21\r\nother line changed\r\n'
+
+
+@pytest.mark.parametrize('with_hash', [True, False])
+def test_external_change_before_commit_is_retained(tmp_path, monkeypatch, with_hash):
     path = tmp_path / 'file.txt'
     path.write_bytes(b'0.42')
     write = actions._write_content
@@ -104,7 +112,7 @@ def test_external_change_before_commit_is_retained(tmp_path, monkeypatch):
         path.write_bytes(b'other writer')
         return write(*args, **kwargs)
     monkeypatch.setattr(actions, '_write_content', conflicting)
-    result = edit(path, b'0.42')
+    result = edit(path, b'0.42', expected_sha256=sha(b'0.42') if with_hash else None)
     assert result['committed'] is False and 'changed_before_commit' in result['error']
     assert path.read_bytes() == b'other writer'
 
@@ -172,25 +180,6 @@ def test_native_read_does_not_bind_text_to_a_changed_version(tmp_path, monkeypat
     assert 'text' not in result and 'file_sha256' not in result
 
 
-@pytest.mark.parametrize('action,args', [
-    ('execute_cmd', {'command':'arbitrary shell', 'preserve_file_bytes':False}),
-    ('write_content', {'path':'C:/Temp/a.txt','content':'reconstructed whole file'}),
-    ('write_content', {'expected_text':'old','expected_sha256':'0'*64,'append':True}),
-    ('office_docx', {'action':'edit'}), ('transfer_file', {}),
-    ('device_prepare_runtime', {}), ('unknown.action', {}),
-])
-def test_accepted_constraint_blocks_all_non_native_mutation_paths(action, args):
-    assert file_edit_dispatch_error({'preserve_file_bytes':True}, action, args)
-    assert file_edit_dispatch_error({'preserve_file_bytes':False}, action, args) is None
-
-
-def test_native_exact_request_and_read_remain_available():
-    task = {'preserve_file_bytes':True}
-    assert file_edit_dispatch_error(task,'get_file_content',{}) is None
-    assert file_edit_dispatch_error(task,'write_content',{'expected_text':'old',
-        'expected_sha256':'0'*64,'expected_matches':4}) is None
-
-
 def test_server_independently_negotiates_actual_target_and_keeps_path_policy(monkeypatch):
     from server import task_runtime as runtime
     sent = []
@@ -218,6 +207,14 @@ def test_server_independently_negotiates_actual_target_and_keeps_path_policy(mon
     with pytest.raises(RuntimeError,match='BLOCKED'):
         send('write_content',{**args,'path':'C:/Windows/file.txt','expected_matches':4})
     assert len(sent) == 3
+    without_hash = {key: value for key, value in args.items() if key != 'expected_sha256'}
+    rejected = send('write_content', without_hash)
+    assert rejected['error'] == 'expected_sha256_required_by_agent' and not rejected['dispatched']
+    assert len(sent) == 3
+    dev['info']['file_replace_protocol'] = 3
+    send('write_content', without_hash)
+    send('get_file_content', {'path': args['path'], 'text_only': True})
+    assert sent[3]['params'] == without_hash and sent[4]['action'] == 'get_file_content'
 
 
 def test_rejected_exact_request_does_not_claim_replacement_text_is_whole_file_hash():
@@ -226,66 +223,20 @@ def test_rejected_exact_request_does_not_claim_replacement_text_is_whole_file_ha
     assert 'expected_content_sha256' not in compact and compact['committed'] is False
 
 
-def test_scheduler_persists_constraint_and_assignment_cannot_downgrade(tmp_path, monkeypatch):
-    from server.worker_scheduler import WorkerScheduler, init_worker_storage
-    from server.runtime_state import tasks
-    monkeypatch.setattr(db,'DB_PATH',tmp_path / 'ec01.sqlite')
-    db.init_db()
-    init_worker_storage()
-    user = db.create_user('ec01-owner')
-    chat = db.create_chat(user['id'],'EC01')['id']
-    scheduler = WorkerScheduler()
-    monkeypatch.setattr(scheduler,'ensure_runner',lambda owner:None)
-    base = {'user_id':user['id'],'chat_id':chat,'message':'Replace four values',
-            'device_ids':[f"{user['id']}:pc"], 'preserve_file_bytes':True}
-    result = asyncio.run(scheduler.submit_goal(base,[{'key':'edit','objective':'Exact edit',
-        'preserve_file_bytes':False}],request_key='protected'))
-    try:
-        task = result['tasks'][0]
-        assert task['preserve_file_bytes'] is True
-        with db.get_db() as connection:
-            saved = json.loads(connection.execute('SELECT payload FROM worker_jobs WHERE task_id=?',
-                (task['task_id'],)).fetchone()[0])
-        assert saved['preserve_file_bytes'] is True
-    finally:
-        for task in result['tasks']:
-            tasks.pop(task['task_id'],None)
-
-
-def run_controller(responses, send, monkeypatch, tmp_path, *, protected=True, captured=None):
+def run_controller(responses, send, monkeypatch, tmp_path, *, captured=None):
     from server.controller_non_pipeline import process_non_pipeline_command
     from server.runtime_state import tasks
     from test_tool_only_protocol import _completion_fn
     monkeypatch.setattr(db,'DB_PATH',tmp_path / 'controller.sqlite')
     db.init_db()
     monkeypatch.setitem(tasks,'ec01-controller',{'task_id':'ec01-controller','goal_id':'goal',
-        'proposed_objective':'Replace four values without changing other bytes',
-        'preserve_file_bytes':protected})
+        'proposed_objective':'Replace four values without changing other bytes'})
     return asyncio.run(process_non_pipeline_command(user_message='Replace four values', device_id='pc',
         device_info={'os':'Windows','file_replace_protocol':2}, send_command_fn=send,
         get_file_link_fn=lambda *a:'',chat_history=[],user_id=None,chat_id=None,modes={},
         poll_task_id='ec01-controller',cfg={'model':'mock'},system_msg='system',
         machine_guid=None,mem_user_id=None,non_pipeline_tools=NON_PIPELINE_TOOLS,max_iterations=6,
         pick_model_fn=lambda *a:'mock',chat_completion_request_fn=_completion_fn(responses,captured)))
-
-
-@pytest.mark.parametrize('protected', [False, True])
-def test_worker_cannot_bypass_accepted_constraint_but_ordinary_task_keeps_tools(tmp_path, monkeypatch, protected):
-    from test_tool_only_protocol import _message, _tool_call, _answer_call
-    sent = []
-    async def send(device, action, params):
-        sent.append(action)
-        return {'status':'ok','returncode':0,'stdout':'observed','stderr':''}
-    result = run_controller([
-        _message(tool_calls=[_tool_call('shell','execute_cmd',{'command':'opaque mutation'})]),
-        _message(tool_calls=[_tool_call('overwrite','write_content',{'path':'C:/Temp/file.txt','content':'whole file'})]),
-        _message(tool_calls=[_answer_call('end','Изменение не подтверждено.',answer_type='partial_report',basis=['step_1','step_2'])]),
-    ],send,monkeypatch,tmp_path,protected=protected)
-    if protected:
-        assert sent == []
-        assert all(entry['result'].get('dispatched') is False for entry in result['commands'][:2])
-    else:
-        assert sent == ['execute_cmd','write_content']
 
 
 def test_unknown_outcome_blocks_second_mutation_but_allows_native_read(tmp_path, monkeypatch):
@@ -311,88 +262,15 @@ def test_unknown_outcome_blocks_second_mutation_but_allows_native_read(tmp_path,
     ],send,monkeypatch,tmp_path)
     assert sent == ['write_content','get_file_content']
     assert path.read_bytes() == b'0.21 0.21 0.21 0.21\r\n'
-    assert any(entry['result'].get('error') == 'mutation_blocked_after_unknown' for entry in result['commands'])
+    assert any(entry['result'].get('error') in {'mutation_blocked_after_unknown', 'tool_not_offered_this_turn'}
+               for entry in result['commands'])
 
 
-def test_intake_constraint_is_strict_and_registration_preserves_negotiation(monkeypatch):
-    from pydantic import ValidationError
-    from server.orchestrator import Decision, Assignment
+def test_registration_preserves_exact_replacement_negotiation(monkeypatch):
     from core import runtime
-    assert Decision(intent='delegate',preserve_file_bytes=True).preserve_file_bytes
-    with pytest.raises(ValidationError):
-        Assignment(key='edit',objective='Edit file',preserve_file_bytes='true')
     monkeypatch.setattr(runtime,'collect_system_info',lambda **kw:{'file_replace_protocol':2})
     monkeypatch.setattr(runtime,'load_device_passport_cache',lambda:None)
     assert runtime.build_registration_payload('pc','test')['file_replace_protocol'] == 2
-
-
-def test_mixed_goal_scopes_file_constraint_to_assignment_and_amend_cannot_remove_it(tmp_path,monkeypatch):
-    from server.worker_scheduler import WorkerScheduler, init_worker_storage
-    from server.runtime_state import tasks
-    monkeypatch.setattr(db,'DB_PATH',tmp_path / 'mixed.sqlite')
-    db.init_db()
-    init_worker_storage()
-    user = db.create_user('mixed-owner')
-    chat = db.create_chat(user['id'],'Mixed')['id']
-    scheduler = WorkerScheduler()
-    monkeypatch.setattr(scheduler,'ensure_runner',lambda owner:None)
-    base = {'user_id':user['id'],'chat_id':chat,'message':'Create doc, edit text and analyse',
-            'device_ids':[f"{user['id']}:pc"], 'preserve_file_bytes':False}
-    assignments = [{'key':'doc','objective':'Create a document'},
-        {'key':'edit','objective':'Replace a value','preserve_file_bytes':True},
-        {'key':'analysis','objective':'Analyse data'}]
-    result = asyncio.run(scheduler.submit_goal(base,assignments,request_key='mixed'))
-    try:
-        created = result['tasks']
-        assert [task['preserve_file_bytes'] for task in created] == [False,True,False]
-        assert 'office_docx' in {t['function']['name'] for t in
-            worker_tool_inventory(NON_PIPELINE_TOOLS,{'file_replace_protocol':2,'office_tools_version':1},preserve=created[0]['preserve_file_bytes'])}
-        assert file_edit_dispatch_error(created[0],'office_docx',{'action':'create'}) is None
-        assert file_edit_dispatch_error(created[1],'execute_cmd',{})
-        assert file_edit_dispatch_error(created[2],'execute_cmd',{}) is None
-        amended = scheduler.amend_pending(created[1]['task_id'],user['id'],chat,expected_revision=1,
-            human_request='Keep the same exact edit',objective='Exact edit remains',preserve_file_bytes=False)
-        assert amended['revision'] == 2
-        assert tasks[created[1]['task_id']]['preserve_file_bytes'] is True
-        with db.get_db() as connection:
-            saved = [json.loads(connection.execute('SELECT payload FROM worker_jobs WHERE task_id=?',
-                (task['task_id'],)).fetchone()[0]) for task in created]
-        assert [task['preserve_file_bytes'] for task in saved] == [False,True,False]
-        with pytest.raises(ValueError,match='mixed_goal_requires_assignment_file_constraints'):
-            asyncio.run(scheduler.submit_goal({**base,'preserve_file_bytes':True},assignments,request_key='ambiguous'))
-    finally:
-        for task in result['tasks']:
-            tasks.pop(task['task_id'],None)
-
-
-def test_retry_cannot_drop_prior_task_preservation(tmp_path,monkeypatch):
-    from server.worker_scheduler import WorkerScheduler, init_worker_storage
-    from server.runtime_state import tasks
-    monkeypatch.setattr(db,'DB_PATH',tmp_path / 'retry.sqlite')
-    db.init_db()
-    init_worker_storage()
-    user = db.create_user('retry-owner')
-    chat = db.create_chat(user['id'],'Retry')['id']
-    scheduler = WorkerScheduler()
-    monkeypatch.setattr(scheduler,'ensure_runner',lambda owner:None)
-    base = {'user_id':user['id'],'chat_id':chat,'message':'Edit text',
-            'device_ids':[f"{user['id']}:pc"]}
-    original = asyncio.run(scheduler.submit_goal(base,[{'key':'edit','objective':'Exact edit',
-        'preserve_file_bytes':True}],request_key='original'))
-    admitted = list(original['tasks'])
-    try:
-        source = admitted[0]['task_id']
-        with db.get_db() as connection:
-            connection.execute("UPDATE worker_jobs SET state='partial' WHERE task_id=?",(source,))
-        tasks[source]['status'] = 'partial'
-        retried = asyncio.run(scheduler.submit_goal(base,[{'key':'retry','objective':'Retry exact edit',
-            'preserve_file_bytes':False,'replaces_source_task_id':source}],request_key='retry',
-            goal_id=original['goal_id'],expected_revision=1))
-        admitted.extend(retried['tasks'])
-        assert retried['tasks'][0]['preserve_file_bytes'] is True
-    finally:
-        for task in admitted:
-            tasks.pop(task['task_id'],None)
 
 
 def test_discovery_and_explicit_read_route_keep_device_out_of_native_parameters(tmp_path,monkeypatch):
@@ -448,30 +326,16 @@ def test_native_read_completeness_is_separate_from_model_visibility(monkeypatch,
             assert text.startswith(shown['result']['text']) and len(shown['result']['text']) < len(text)
 
 
-def test_protection_context_does_not_claim_selection_or_human_authority_is_verified(monkeypatch):
-    from server.runtime_state import tasks
-    from server.controller_shared import worker_assignment_scope
-    monkeypatch.setitem(tasks,'scope-test',{'goal_id':'goal','proposed_objective':'Edit permitted file',
-        'preserve_file_bytes':True})
-    _,block = worker_assignment_scope('scope-test')
-    assert 'original human message remains the permission ceiling' in block
-    assert 'does not prove that the file or spans match the human intent' in block
-    assert 'llm_text_complete=true' in block
-
-
-@pytest.mark.parametrize('protocol,target,error', [
-    (1,'givi','agent_update_required_for_native_edit_workflow'),
-    (2,'foreign','device_outside_worker_assignment')])
-def test_runtime_checks_old_agent_workflow_and_assignment_device_before_transport(client,monkeypatch,protocol,target,error):
+def test_runtime_checks_assignment_device_before_exact_write(client,monkeypatch):
     from server import task_runtime as runtime
     from test_browser_runtime_guards import setup_runtime
     user,key,chat = setup_runtime(client,monkeypatch)
-    runtime.devices[key]['info']['file_replace_protocol'] = protocol
-    runtime.tasks['guard-task'].update(preserve_file_bytes=True,worker_id='worker-1',
+    runtime.devices[key]['info']['file_replace_protocol'] = 2
+    runtime.tasks['guard-task'].update(worker_id='worker-1',
         device_ids=[key],chat_id=chat,message='Replace a text value')
     observed = []
     async def process(**kwargs):
-        result = await kwargs['send_command_fn'](target,'write_content',{'path':'C:/Temp/file.txt',
+        result = await kwargs['send_command_fn']('foreign','write_content',{'path':'C:/Temp/file.txt',
             'expected_text':'old','content':'new','expected_sha256':sha(b'old')})
         observed.append(result)
         return {'answer':'Edit not dispatched','commands':[],'tasks':[]}
@@ -480,7 +344,7 @@ def test_runtime_checks_old_agent_workflow_and_assignment_device_before_transpor
     monkeypatch.setattr(runtime,'process_nl_command',process)
     monkeypatch.setattr(runtime,'send_command_to_agent',forbidden)
     asyncio.run(runtime.run_nl_task('guard-task',user['id'],'Replace a text value',[key],chat))
-    assert len(observed) == 1 and observed[0]['error'] == error
+    assert len(observed) == 1 and observed[0]['error'] == 'device_outside_worker_assignment'
 
 
 def test_read_tool_contract_carries_no_file_write_permission():

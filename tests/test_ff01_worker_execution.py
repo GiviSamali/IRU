@@ -147,7 +147,7 @@ def test_mixed_goal_actual_runtime_projects_only_assignment_preserves_authority_
                 'message':human,'original_request':human,'context_history':[{'role':'user','content':human}],
                 'device_ids':[key],'modes':{},'memory_authorizations':[{'operation':'remember_fact',
                     'human_quote':'Р—Р°РїРѕРјРЅРё: С‚РµСЃС‚РѕРІС‹Р№ С†РІРµС‚ Р·РµР»С‘РЅС‹Р№.'}]},[
-                    {'key':'project','objective':objectives[0],'preserve_file_bytes':True,'artifacts':[PROJECT]},
+                    {'key':'project','objective':objectives[0],'artifacts':[PROJECT]},
                     {'key':'lite','objective':objectives[1],'artifacts':[LITE]}],request_key='mixed-ff')
             await asyncio.wait_for(scheduler.runners[owner['id']],timeout=10)
             assert seen == objectives
@@ -242,8 +242,7 @@ def test_open_then_minimize_sequence_accepts_object_verified_launch(owner,monkey
     assert report['goal_completed']
 
 
-def test_source_missing_repeated_requests_still_allow_read_and_corrected_replacement(owner,monkeypatch):
-    monkeypatch.setitem(tasks,'ff-controller',{'preserve_file_bytes':True})
+def test_source_missing_repeated_requests_still_allow_read_and_corrected_replacement(owner):
     agent = FileAgent(b'status=draft\r\n')
     wrong = replacement(old='draft-v0')
     result = asyncio.run(controller([call('write_content',wrong,'bad1'),call('write_content',wrong,'bad2'),

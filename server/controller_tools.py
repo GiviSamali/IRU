@@ -21,7 +21,7 @@ WRITE_CONTENT_DESCRIPTION = (
     "Canonical tool for creating text content or performing an explicitly requested full replacement. Prefer it for long, multiline, or generated new content. "
     "For a limited edit read_file first, then set expected_text to the exact original fragment and content to its replacement; "
     "expected_matches is the confirmed number of occurrences (default 1); every occurrence must match that count. "
-    "bind expected_sha256 to the observed file hash. The agent preserves other bytes and verifies the committed file. "
+    "Use expected_sha256 to bind the edit to the whole observed revision when needed or when the target Agent requires it. The agent preserves other bytes and verifies the committed file. "
     "Overwrite replaces the entire file; for an explicitly requested addition at EOF, use append=true without replacement parameters. Native append retains existing bytes. "
     "Suitable for scripts, HTML, JSON, TXT, CSV, Markdown, "
     "and source code. Office documents can be produced by Office tools or verified command artifacts. "
@@ -33,7 +33,7 @@ WRITE_CONTENT_DESCRIPTION = (
 )
 
 
-def worker_tool_inventory(tools, device_info, *, preserve=False, multiple_targets=False):
+def worker_tool_inventory(tools, device_info, *, multiple_targets=False):
     """Return callable schemas for the known capabilities and Assignment constraints."""
     from copy import deepcopy
     result=deepcopy([tool for tool in tools
@@ -49,7 +49,7 @@ def worker_tool_inventory(tools, device_info, *, preserve=False, multiple_target
                     continue
                 if info.get('python_session_protocol') == 1:
                     fn['parameters']['properties'].pop('timeout', None)
-            if name == 'read_file' and info.get('file_replace_protocol') != 2:
+            if name == 'read_file' and info.get('file_replace_protocol') not in (2, 3):
                 continue
             if name.startswith('office_') and info.get('office_tools_version') != 1:
                 continue
@@ -61,19 +61,6 @@ def worker_tool_inventory(tools, device_info, *, preserve=False, multiple_target
                 'remember_fact', 'forget_fact',
                 'memory_get_stats', 'memory_list_facts',
             }:
-                continue
-        if preserve and name == 'write_content':
-            fn['description'] = ('For this Assignment, use append=true for an explicit addition at EOF '
-                'without replacement parameters. For a targeted replacement, use expected_text and '
-                'expected_sha256 from the native read. Full overwrite is blocked.')
-        if preserve:
-            try:
-                from .controller_shared import file_edit_dispatch_error
-            except ImportError:
-                from controller_shared import file_edit_dispatch_error
-            exempt = {'write_content','answer_text','answer_ask_clarification',
-                      'system_list_tools','system_get_last_run_summary'}
-            if name not in exempt and file_edit_dispatch_error({'preserve_file_bytes': True}, name, {}):
                 continue
         available.append(tool)
     return available
@@ -99,7 +86,7 @@ TOOLS = [
     }},
     RECOVERY_LIST_DIR,
     {"type":"function", "function": {
-        "name":"read_file", "description":"Read complete bounded text and byte SHA-256 without newline conversion; never returns a partial file. Requires file_replace_protocol=2.",
+        "name":"read_file", "description":"Read complete bounded text and byte SHA-256 without newline conversion; never returns a partial file. Requires file_replace_protocol 2 or 3.",
         "parameters":{"type":"object", "properties":{
             "path":{"type":"string"}, "encoding":{"type":"string", "default":"utf-8"},
             "device_id":{"type":"string"}}, "required":["path"]}}},
@@ -122,9 +109,9 @@ TOOLS = [
                     "expected_text": {"type": "string", "minLength": 1, "maxLength": 64000,
                         "description": "Exact fragment to replace; omit for a complete write. Newlines must match. Missing, overlapping or unexpected match counts leave the file unchanged."},
                     "expected_sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$",
-                        "description": "Required with expected_text: SHA-256 of the observed original file. Prevents stale edits and repeated mutations."},
+                        "description": "Optional revision check with expected_text on file_replace_protocol 3. Older Agents require the observed SHA-256."},
                     "expected_matches": {"type":"integer", "minimum":1, "maximum":100000,
-                        "description":"Confirmed exact occurrence count; default 1. Requires file_replace_protocol=2."},
+                        "description":"Confirmed exact occurrence count; default 1. Requires file_replace_protocol 2 or 3."},
                     "append": {
                         "type": "boolean",
                         "description": "true = дописать в конец; false = перезаписать. По умолчанию false.",

@@ -284,7 +284,8 @@ def _replace_content(path, expected, replacement, encoding, expected_sha256, app
     try:
         if append or transaction or not isinstance(expected, str) or not expected:
             raise ValueError("invalid_exact_replacement")
-        if not isinstance(expected_sha256, str) or not re.fullmatch('[a-fA-F0-9]{64}', expected_sha256):
+        if expected_sha256 is not None and (not isinstance(expected_sha256, str)
+                or not re.fullmatch('[a-fA-F0-9]{64}', expected_sha256)):
             raise ValueError("replacement_requires_observed_sha256")
         count = 1 if expected_matches is None else expected_matches
         if type(count) is not int or not 1 <= count <= 100000:
@@ -498,7 +499,7 @@ def collect_system_info(device_id: str = "") -> dict:
         "office_tools_version": 1,
         "object_observation_protocol": 1 if os.name == "nt" else 0,
         "file_write_protocol": 2,
-        "file_replace_protocol": 2,
+        "file_replace_protocol": 3,
         "artifact_receipt_protocol": 1,
         "python_session_protocol": 2,
         "office_content_preservation_version": 1,

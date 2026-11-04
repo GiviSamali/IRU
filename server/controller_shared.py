@@ -426,7 +426,6 @@ def worker_assignment_scope(task_id):
                  "constraints":task.get('assignment_constraints') or [],
                  "open_objects":task.get('open_objects') or [],
                  "window_effects":task.get("window_effects") or [],
-                 "preserve_file_bytes":task.get("preserve_file_bytes",False),
                  "expected_artifacts":task.get("assigned_artifacts") or []}))
     block += ("\nOnly this Worker's deliverable is in scope. Choose the necessary tools and perform "
               "ordinary discovery, setup and verification inside this same task; do not delegate them "
@@ -436,47 +435,20 @@ def worker_assignment_scope(task_id):
               "the requested content using current-run observations. An already existing file or a "
               "successful shell return code alone never proves that YOU delivered or changed it. "
               "Do not misattribute a sibling Worker's output to this task.\n")
-    if task.get('preserve_file_bytes'):
-        block += ('\nMandatory file preservation: for an explicit addition at the end, use native '
-                  'write_content with append=true and no replacement parameters. For a targeted '
-                  'replacement, use read_file to observe complete text and SHA-256, '
-                  'then write_content with expected_text, expected_sha256 and the confirmed match count. '
-                  'Never reconstruct the whole file, run shell code or use another mutation tool. '
-                  'If the device lacks this protocol, report the limitation without a workaround.\n')
-        block += ('Preservation proves only bytes outside the selected spans; it does not prove that '
-                  'the file or spans match the human intent. Discovery stays within the original human '
-                  'authority ceiling. Agent read completeness is not model visibility: claim full inspection '
-                  'only when read_file projection llm_text_complete=true. Truncated/omitted text is unseen; '
-                  'do not reconstruct it or claim that all file content was inspected.\n')
     return objective, block
 
 
-def file_edit_dispatch_error(task, action, params):
-    """Enforce the accepted Task constraint independently of Worker tool arguments."""
-    if not task.get('preserve_file_bytes'):
-        return None
-    if action in {'get_file_content', 'read_file', 'list_dir', 'device_get_passport', 'device.get_passport',
-                  'device.get_cached_passport', 'system_update_working_notes', 'system.update_working_notes'}:
-        return None
-    if action != 'write_content':
-        try:
-            from .api_support import is_recovery_observation
-        except ImportError:
-            from api_support import is_recovery_observation
-        if is_recovery_observation(action, params):
-            return None
-        return 'file_preservation_requires_native_replacement'
+def exact_text_replacement_error(params):
     if params.get('append') is True:
-        if params.get('_write_transaction') or any(params.get(field) is not None for field in
-                ('expected_text', 'expected_sha256', 'expected_matches')):
-            return 'append_cannot_use_replacement_parameters'
-        return None
+        return 'append_cannot_use_replacement_parameters'
     import re
+    expected_hash = params.get('expected_sha256')
     if (not isinstance(params.get('expected_text'),str) or not params['expected_text']
-            or not isinstance(params.get('expected_sha256'),str)
-            or not re.fullmatch('[a-fA-F0-9]{64}',params['expected_sha256'])
-            or params.get('append') or params.get('_write_transaction')):
-        return 'file_preservation_requires_exact_basis'
+            or params.get('_write_transaction')):
+        return 'replacement_requires_expected_text'
+    if expected_hash is not None and (not isinstance(expected_hash, str)
+            or not re.fullmatch('[a-fA-F0-9]{64}', expected_hash)):
+        return 'invalid_expected_sha256'
     count = params.get('expected_matches',1)
     if type(count) is not int or not 1 <= count <= 100000:
         return 'invalid_expected_matches'

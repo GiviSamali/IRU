@@ -147,18 +147,6 @@ def test_write_self_verified_without_readback():
     assert [a for _,a,_ in agent.sent]==['write_content']
 
 
-def test_file_preservation_visible_cli_cannot_bypass(monkeypatch):
-    from test_ff01_worker_execution import FileAgent, PROJECT
-    agent=FileAgent();seen=[]
-    monkeypatch.setitem(tasks,'preserve',{'task_id':'preserve','preserve_file_bytes':True})
-    result=_run_case([_message(tool_calls=[_tool_call('x','execute_cmd',{'command':'rewrite'})]),
-                      answer('Blocked',['not changed'])],poll_task_id='preserve',device_info={'file_replace_protocol':2},
-                      send_command_fn=agent.send,captured=seen)
-    assert not agent.sent and result['commands'][0]['result']['dispatched'] is False
-    schema=next(t for t in seen[0]['tools'] if t['function']['name']=='execute_cmd')
-    assert 'BLOCKED' in schema['function']['description']
-
-
 @pytest.mark.parametrize('command',['python helper.py','powershell -EncodedCommand Zm9v',
     "python -c \"import os;os.remove('x')\"",'echo OK','curl https://example.invalid'])
 def test_execution_permission_preserves_exact_action_identity(command):

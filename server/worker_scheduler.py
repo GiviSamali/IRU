@@ -605,7 +605,7 @@ class WorkerScheduler:
         connection.execute("INSERT INTO worker_owner_capacity VALUES(?,?) ON CONFLICT(owner_user_id) DO UPDATE SET capacity=excluded.capacity",
                            (owner, self.max_active_workers))
 
-    def amend_pending(self, task_id, owner, chat_id, *, expected_revision, human_request, objective, memory_authorizations=None, window_effects=None, preserve_file_bytes=False, allow_running=False):
+    def amend_pending(self, task_id, owner, chat_id, *, expected_revision, human_request, objective, memory_authorizations=None, window_effects=None, allow_running=False):
         """CAS guards the original accepted payload and the dispatch boundary.
 
         Devices, dependencies and result identity cannot be changed by this API.
@@ -651,7 +651,6 @@ class WorkerScheduler:
             if running:
                 task["assignment_revision"] = expected_revision + 1
                 task.setdefault("running_clarifications", []).append(human_request)
-                task["preserve_file_bytes"] = task.get("preserve_file_bytes", False) or preserve_file_bytes
             else:
                 authority = task.get("original_request") or task["message"]
                 task.update(message=authority + "\n\nУточнение пользователя:\n" + human_request, proposed_objective=objective,
@@ -660,10 +659,7 @@ class WorkerScheduler:
                 # An amendment does not inherit permission to store facts from an
                 # older request; only the new current human decision may supply it.
                 task.update(memory_authorizations=proofs, memory_authority_request=human_request)
-                if type(preserve_file_bytes) is not bool:
-                    raise ValueError("invalid_file_preservation_constraint")
-                task.update(window_effects=new_effects,
-                            preserve_file_bytes=task.get("preserve_file_bytes",False) or preserve_file_bytes)
+                task.update(window_effects=new_effects)
             c.execute("UPDATE worker_jobs SET payload=?,updated_at=? WHERE task_id=?", (json.dumps(task, ensure_ascii=False), time.time(), task_id))
             metadata = db.message_task_metadata(task, task_id=task_id)
             c.execute("UPDATE messages SET task_metadata=? WHERE id=? AND chat_id=? AND role='assistant'",
@@ -673,7 +669,7 @@ class WorkerScheduler:
         if running:
             live.update(assignment_revision=task["assignment_revision"],
                         running_clarifications=task["running_clarifications"],
-                        preserve_file_bytes=task["preserve_file_bytes"], history_metadata=metadata)
+                        history_metadata=metadata)
         elif task_id in tasks:
             tasks[task_id].update(task)
             tasks[task_id]["history_metadata"] = metadata
@@ -693,24 +689,12 @@ class WorkerScheduler:
         if any(":" not in did or did.split(":", 1)[0] != str(owner)
                for did in template.get("device_ids") or []):
             raise ValueError("goal_device_not_owned")
-        if type(template.get("preserve_file_bytes", False)) is not bool:
-            raise ValueError("invalid_file_preservation_constraint")
-        # A mixed Goal can carry a legacy flag alongside scoped constraints.
-        # Require a target for that flag without applying it to sibling work.
-        if (template.get("preserve_file_bytes") and len(assignments) > 1
-                and not any(item.get("preserve_file_bytes") is True for item in assignments)):
-            raise ValueError("mixed_goal_requires_assignment_file_constraints")
         assignment_devices = {}
         assignment_effects = {}
-        assignment_preservation = {}
         base_effects = template.get("window_effects") or []
         validate_window_effects(base_effects)
         allowed_devices = template.get("device_ids") or []
         for assignment in assignments:
-            if type(assignment.get("preserve_file_bytes", False)) is not bool:
-                raise ValueError("invalid_file_preservation_constraint")
-            assignment_preservation[assignment['key']] = (assignment.get('preserve_file_bytes',False)
-                or len(assignments) == 1 and template.get('preserve_file_bytes',False))
             if (not isinstance(assignment.get('scope',''),str) or len(assignment.get('scope',''))>2000
                     or not isinstance(assignment.get('constraints',[]),list) or len(assignment.get('constraints',[]))>16
                     or any(not isinstance(value,str) or not value.strip() or len(value)>1000
@@ -743,7 +727,6 @@ class WorkerScheduler:
             "memory_authorizations":template.get("memory_authorizations") or [],
             "memory_authority_request":template.get("memory_authority_request"),
             "window_effects":base_effects,
-            "preserve_file_bytes":template.get("preserve_file_bytes",False),
         }).encode()).hexdigest()
         admitted = []
         rebound = {}
@@ -794,7 +777,6 @@ class WorkerScheduler:
                     if not source or not goal_id or source["goal_id"]!=goal_id:
                         raise ValueError("dependency_scope_mismatch")
                     source_payload = json.loads(source['payload'])
-                    assignment_preservation[assignment['key']] |= source_payload.get('preserve_file_bytes',False)
                     if source["state"] not in {"partial","failed"} and not (
                             source['state']=='unknown' and unknown_recovery_required(source_payload)):
                         raise ValueError("replacement_source_not_failed")
@@ -858,7 +840,6 @@ class WorkerScheduler:
                         task['_action_outcome_unknown'] = True
                 task["device_ids"] = assignment_devices[key]
                 task["window_effects"] = assignment_effects[key]
-                task["preserve_file_bytes"] = assignment_preservation[key]
                 if assignment.get("target_device_ids") is not None:
                     task["broadcast"] = False
                 # A Goal member never publishes its own chat bubble: the single
