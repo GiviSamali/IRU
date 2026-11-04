@@ -92,13 +92,16 @@ def test_optional_voice_presentation_failure_keeps_dialogue_decision(client,monk
 
 
 @pytest.mark.parametrize('repair_ok',[True,False])
-@pytest.mark.parametrize('invalid_format',['json','extra_fields'])
+@pytest.mark.parametrize('invalid_format',['json','extra_fields','depends_on','required_source_task_ids'])
 def test_invalid_decision_has_one_format_retry_before_any_handoff(client,monkeypatch,repair_ok,caplog,invalid_format):
  user=owner();requests=[];delegated=[]
  malformed=payload({})
  malformed['choices'][0]['message']['tool_calls'][0]['function']['arguments']='{"intent":"delegate","objective":"bad "quote"}'
  if invalid_format == 'extra_fields':
   malformed=payload({'intent':'delegate','objective':'Create the requested file','scope':'desktop','constraints':[]})
+ if invalid_format in {'depends_on','required_source_task_ids'}:
+  malformed=payload({'intent':'delegate','assignments':[{'key':'new','objective':'Create the requested file',
+      'replaces_source_task_id':'old',invalid_format:['source']}]})
  repaired=payload({'intent':'delegate','objective':'Create the requested file'})
  async def completion(*args,**kwargs):
   assert not delegated
@@ -128,7 +131,12 @@ def test_invalid_decision_has_one_format_retry_before_any_handoff(client,monkeyp
  else:
   assert state['status']=='failed'
   expected = 'дважды' if invalid_format == 'json' else 'не соответствует схеме'
-  assert expected in reply['answer']
+  if invalid_format in {'depends_on','required_source_task_ids'}:
+   assert state['orchestrator_error_stage']=='decision_validation'
+   assert 'replacement_must_be_independent' in caplog.text
+   assert 'A replacement assignment cannot have' in requests[1][0][-1]['content']
+  else:
+   assert expected in reply['answer']
   assert 'устройство' not in reply['answer'] and 'bad' not in caplog.text
 
 @pytest.mark.parametrize("accepted", [True, False])

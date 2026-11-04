@@ -280,7 +280,7 @@ def _log_failure(task_id,stage,exc):
         "traceback":[{"file":f.filename.replace("\\","/").rsplit("/",1)[-1],"line":f.lineno,"function":f.name}
                      for f in traceback.extract_tb(exc.__traceback__)]}
     code=str(exc)
-    if code in HANDOFF_ERRORS or code in {"invalid_orchestrator_decision","orchestrator_invalid_json","orchestrator_response_truncated","missing_objective","target_device_required","task_not_found","ambiguous_task_reference","missing_answer"}:record["error_code"]=code
+    if code in HANDOFF_ERRORS or code in {"invalid_orchestrator_decision","orchestrator_invalid_json","orchestrator_response_truncated","missing_objective","target_device_required","task_not_found","ambiguous_task_reference","missing_answer","replacement_must_be_independent"}:record["error_code"]=code
     shape=getattr(exc,"orchestrator_response_shape",None)
     if isinstance(shape,dict):record["response_shape"]=shape
     response=getattr(exc,"response",None)
@@ -331,26 +331,40 @@ async def decide(message, context, *, user_id, chat_id, task_id):
                 shape={"tool_call_count":len(calls),"expected_function":len(calls)==1 and calls[0].get("function",{}).get("name")=="orchestrator_decision"}
                 if not shape["expected_function"]:raise ValueError("invalid_orchestrator_decision")
                 stage="decision_validation"
+                correction = ""
                 try:
-                    decision=Decision.model_validate_json(calls[0]["function"].get("arguments") or "{}")
+                    decision = Decision.model_validate_json(calls[0]["function"].get("arguments") or "{}")
                 except ValidationError as exc:
                     errors = {error['type'] for error in exc.errors(include_input=False, include_url=False)}
                     if not errors or not errors <= {'json_invalid', 'extra_forbidden'}:
                         raise
+                    invalid_json = errors == {'json_invalid'}
                     if attempt:
-                        if errors == {'json_invalid'}:
+                        if invalid_json:
                             raise ValueError("orchestrator_invalid_json") from exc
                         raise
-                    format_error = ("contained invalid JSON" if errors == {'json_invalid'}
-                                    else "contained fields outside the schema")
-                    messages=[*messages,{"role":"system","content":
-                        f"Your previous orchestrator_decision arguments {format_error} and were discarded. "
-                        "No action was executed. Return exactly one orchestrator_decision matching the supplied schema. "
-                        "Use only its fields at each nesting level and escape quotes and newlines inside strings. "
-                        "Base the decision only on the original request and context. Do not add permissions or actions."}]
-                    continue
-                return decision,{"entity":"orchestrator","elapsed_ms":int((time.monotonic()-started)*1000),
-                    "llm_calls":attempt+1,"usage":usage,"snapshot_calls":0}
+                    correction = ("The arguments contained invalid JSON. Escape quotes and newlines inside strings."
+                                  if invalid_json else "The arguments contained fields outside the schema. "
+                                  "Use only the supplied fields at each nesting level.")
+                else:
+                    if decision.intent == 'delegate' and any(
+                        item.replaces_source_task_id and (item.depends_on or item.required_source_task_ids)
+                        for item in decision.assignments
+                    ):
+                        if attempt:
+                            raise ValueError("replacement_must_be_independent")
+                        correction = (
+                            "A replacement assignment cannot have depends_on or required_source_task_ids. "
+                            "Use source_task_ids for relevant historical context only. If a real dependency is "
+                            "required, reconsider whether this is a replacement. Preserve the user's requested result."
+                        )
+                    else:
+                        return decision,{"entity":"orchestrator","elapsed_ms":int((time.monotonic()-started)*1000),
+                            "llm_calls":attempt+1,"usage":usage,"snapshot_calls":0}
+                messages = [*messages, {"role":"system", "content":
+                    "Your previous orchestrator_decision was discarded. No action was executed. "
+                    + correction + " Return exactly one decision matching the supplied schema, based only "
+                    "on the original request and context. Do not add permissions or actions."}]
     except Exception as exc:
         exc.orchestrator_stage=stage
         if shape is not None:exc.orchestrator_response_shape=shape
@@ -593,6 +607,8 @@ async def run_turn(cmd, user, chat_id, delegate):
             "orchestrator_invalid_json":"Не удалось обработать ответ модели: она дважды вернула некорректный формат. Новое выполнение не начато. Повторите сообщение.",
             "orchestrator_response_truncated":"Ответ модели оказался неполным. Новое выполнение не начато. Повторите сообщение.",
             "ambiguous_task_reference":"Уточните, о какой задаче идёт речь. Действие не выполнено."}.get(str(exc),"Не удалось обработать реплику безопасно. Уточните поручение, устройство или ID задачи; новое выполнение не начато.")
+        if failure_stage == 'decision_validation' and str(exc) == 'replacement_must_be_independent':
+            error_message = "Модель связала повтор поручения с обязательной зависимостью. Поручение не передано исполнителю."
         if failure_stage == 'decision_validation' and isinstance(exc, ValidationError):
             error_message = "Модель вернула ответ, который не соответствует схеме. Поручение не передано исполнителю."
         if failure_stage=='handoff':
