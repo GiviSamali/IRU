@@ -74,6 +74,26 @@ def _migrate_device_profile_ownership(conn):
         raise
 
 
+def app_experience_note(owner_id, device_id, executable_identity, *, note=None, source_task_id=None, step_id=None):
+    key = (owner_id, device_id, executable_identity)
+    with get_db() as conn:
+        if note is None:
+            row = conn.execute(
+                "SELECT note, verified_at FROM app_experience "
+                "WHERE owner_id=? AND device_id=? AND executable_identity=?", key,
+            ).fetchone()
+            return {"status": "success", "found": row is not None, **(dict(row) if row else {})}
+        cursor = conn.execute("""
+            INSERT INTO app_experience(owner_id, device_id, executable_identity, note, source_task_id, step_id, verified_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(owner_id, device_id, executable_identity) DO UPDATE SET
+                note=excluded.note, source_task_id=excluded.source_task_id,
+                step_id=excluded.step_id, verified_at=excluded.verified_at
+            WHERE app_experience.note<>excluded.note
+        """, (*key, note, source_task_id, step_id, time.time()))
+        return {"status": "success", "saved": cursor.rowcount == 1}
+
+
 def init_db():
     """Create tables if not exist. Create admin user."""
     with get_db() as conn:
@@ -83,6 +103,17 @@ def init_db():
                 token       TEXT    UNIQUE NOT NULL,
                 name        TEXT    NOT NULL,
                 created_at  REAL    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS app_experience (
+                owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                device_id TEXT NOT NULL,
+                executable_identity TEXT NOT NULL,
+                note TEXT NOT NULL CHECK(length(note) BETWEEN 1 AND 1000),
+                source_task_id TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                verified_at REAL NOT NULL,
+                PRIMARY KEY(owner_id, device_id, executable_identity)
             );
 
             CREATE TABLE IF NOT EXISTS chats (

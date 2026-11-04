@@ -196,6 +196,81 @@ def test_unknown_mutation_is_not_replayed_even_when_model_requests_it():
     assert result['commands'][-1]['result']['status']=='unknown'
 
 
+def test_fresh_read_can_reconcile_unknown_without_repeating_write():
+    sent = []
+
+    async def send(device, action, args):
+        sent.append(action)
+        if action == 'execute_cmd':
+            return {'status': 'unknown', 'error': 'confirmed_transport_outcome_unknown'}
+        return {'status': 'ok', 'path': 'C:/x.txt', 'text': 'hello'}
+
+    result = _run_case([
+        _message(tool_calls=[_tool_call('write', 'execute_cmd', {'command': 'Set-Content C:/x.txt hello'})]),
+        _message(tool_calls=[_tool_call('retry', 'execute_cmd', {'command': 'Set-Content C:/x.txt hello'})]),
+        _message(tool_calls=[_tool_call('read', 'read_file', {'path': 'C:/x.txt'})]),
+        _message(tool_calls=[_tool_call('done', 'answer_text', {
+            'status': 'success', 'evidence_refs': ['step_3'], 'result': 'The file contains hello.'})]),
+    ], send_command_fn=send, device_info={'os': 'Windows', 'file_replace_protocol': 3})
+    assert sent == ['execute_cmd', 'get_file_content']
+    assert result['commands'][0]['unknown_mutation'] is True
+    assert result['commands'][-1]['result']['_reconciled_unknown'] is True
+    report = build_worker_report({'task_id': 't', 'status': 'done', 'device_ids': ['device-1'],
+                                  '_action_outcome_unknown': True, **result})
+    assert report['status'] == 'success'
+
+
+@pytest.mark.parametrize('source', [
+    {'tool_name': 'read_file', 'target_device_id': 'other', 'recovery_observation': True},
+    {'tool_name': 'read_file', 'target_device_id': 'pc'},
+    {'tool_name': 'system.list_tools', 'target_device_id': 'pc', 'recovery_observation': True},
+])
+def test_unknown_requires_a_fresh_observation_from_the_affected_device(source):
+    steps = [
+        {**operation('unknown'), 'unknown_mutation': True},
+        {'step_id': 'step_2', 'result': {'status': 'success'}, **source},
+    ]
+    with pytest.raises(ProtocolValidationError, match='mutation outcome'):
+        validate_answer_text_payload({'status': 'success', 'evidence_refs': ['step_2'], 'result': 'Done'},
+                                     steps, task={'_action_outcome_unknown': True})
+
+
+@pytest.mark.parametrize('source', [
+    {**operation(), 'tool_name': 'system.list_tools', 'tool_type': 'system'},
+    operation('failed', error='OS refused'),
+])
+def test_service_or_failed_call_does_not_prove_an_expected_effect(source):
+    with pytest.raises(ProtocolValidationError, match='instrumental sources'):
+        validate_answer_text_payload({'status': 'success', 'evidence_refs': ['step_1'], 'result': 'Done'},
+                                     [source], task={'window_effects': ['open']})
+
+
+def test_linked_previous_unknown_uses_only_current_observation(monkeypatch):
+    import json
+    from server import worker_scheduler
+
+    task = {'task_id': 'new', 'user_id': 1, 'chat_id': 2, 'goal_id': 'goal',
+            'device_ids': ['1:pc'], 'replaces_source_task_id': 'old',
+            'source_task_ids': ['old'], '_action_outcome_unknown': True}
+    old = {'goal_id': 'goal', 'device_ids': ['1:pc'],
+           'commands': [{**operation('unknown'), 'task_id': 'old'}]}
+    monkeypatch.setattr(worker_scheduler, 'owned_job',
+                        lambda task_id, user_id: {'chat_id': 2, 'payload': json.dumps(old)})
+    source = worker_scheduler.prior_unknown_source(task)
+    assert source == {'task_id': 'old', 'step_id': 'step_1', 'device_id': 'pc'}
+    assert worker_scheduler.prior_unknown_source({**task, 'source_task_ids': []}) is None
+    assert worker_scheduler.prior_unknown_source({**task, 'chat_id': 3}) is None
+
+    observation = {'task_id': 'new', 'step_id': 'step_1', 'tool_name': 'read_file',
+                   'target_device_id': 'pc', 'recovery_observation': True,
+                   'result': {'status': 'success', 'text': 'current text'}}
+    payload = validate_answer_text_payload(
+        {'status': 'success', 'evidence_refs': ['step_1'], 'result': 'Current text confirmed.'},
+        [observation], task=task, prior_unknown_device=source['device_id'])
+    assert payload['_reconciled_unknown'] is True
+    assert payload['basis'] == ['step_1']
+
+
 def test_evidence_linking_is_automatic_for_normal_terminal():
     captured=[]
     result=_run_case([

@@ -274,12 +274,26 @@ async def process_non_pipeline_command(
     messages.append({"role": "user", "content": user_message})
     current_user_index=len(messages)-1
     commands_log = []
-    recovery_only = bool(runtime_tasks.get(poll_task_id, {}).get("_action_outcome_unknown"))
+    current_task = runtime_tasks.get(poll_task_id) or {}
+    recovery_only = bool(current_task.get("_action_outcome_unknown"))
+    prior_unknown = None
+    if recovery_only and current_task.get('replaces_source_task_id'):
+        try:
+            from .worker_scheduler import prior_unknown_source
+        except ImportError:
+            from worker_scheduler import prior_unknown_source
+        prior_unknown = prior_unknown_source(current_task)
+        if prior_unknown:
+            messages[0]['content'] += (
+                "\nReconcile the previous unknown mutation using fresh observations only. "
+                f"Historical journal reference: source_task_id={prior_unknown['task_id']}, "
+                f"step_id={prior_unknown['step_id']}, device={prior_unknown['device_id']}. "
+                "The historical step identifies what to check. Cite fresh current-run evidence for the result."
+            )
     try:
         from .controller_tools import RECOVERY_LIST_DIR, worker_tool_inventory
     except ImportError:
         from controller_tools import RECOVERY_LIST_DIR, worker_tool_inventory
-    current_task = runtime_tasks.get(poll_task_id, {})
     non_pipeline_tools = worker_tool_inventory(DEFAULT_CONTROLLER_TOOLS, device_info,
         multiple_targets=len(current_task.get("device_ids") or []) > 1)
     tool_schemas = {
@@ -605,7 +619,8 @@ async def process_non_pipeline_command(
                             if is_answer_text_tool(fn_name):
                                 answer_payload = validate_answer_text_payload(fn_args_preview, commands_log,
                                     require_status=True, task={**(runtime_tasks.get(poll_task_id) or {}),
-                                        '_action_outcome_unknown':recovery_only})
+                                        '_action_outcome_unknown':recovery_only},
+                                     prior_unknown_device=prior_unknown['device_id'] if prior_unknown else None)
                                 answer_payload = sanitize_system_list_tools_answer(answer_payload, commands_log)
                                 try:
                                     from .controller_trust import sanitize_result_text
@@ -706,7 +721,8 @@ async def process_non_pipeline_command(
                         f"-> device={target_device}"
                     )
 
-                    if recovery_only and not is_recovery_observation(fn_name, fn_args,device_os=device_info.get('os')):
+                    observation = is_recovery_observation(fn_name, fn_args, device_os=device_info.get('os'))
+                    if recovery_only and not observation:
                         entry = append_entry(_command_log_entry(fn_name, "[blocked after unknown]", target_device,
                             device_info, {"status": "blocked", "error": "mutation_blocked_after_unknown"}, iteration + 1))
                         append_tool_message(tool_call["id"], entry)
@@ -904,6 +920,26 @@ async def process_non_pipeline_command(
                             hostname=None,
                             iteration=iteration + 1,
                         ))
+
+                    elif fn_name == "app_experience":
+                        proof = next((entry for entry in commands_log
+                                      if entry.get('step_id') == fn_args.get('step_id')), None)
+                        if fn_args['action'] == 'save' and (
+                            not proof or proof.get('tool_type') in {'system', 'answer'}
+                            or proof.get('task_id') not in (None, poll_task_id)
+                            or (proof.get('target_device_id') or '').split(':', 1)[-1] != target_device.split(':', 1)[-1]
+                            or normalize_operation_result(proof.get('tool_name') or '', proof.get('result')) != 'success'
+                        ):
+                            tool_result = {"status": "failed", "error": "app_experience_requires_current_successful_step"}
+                        elif device_tool_fn is None:
+                            tool_result = {"status": "unavailable", "error": "app_experience_unavailable"}
+                        else:
+                            try:
+                                tool_result = await device_tool_fn(fn_name, {**fn_args, "device_id": target_device})
+                            except Exception:
+                                tool_result = {"status": "unavailable", "error": "app_experience_unavailable"}
+                        append_entry(tool_log_entry(fn_name, tool_result, target_device_id=target_device,
+                                                    iteration=iteration + 1))
 
                     elif fn_name.startswith("device_"):
                         if device_tool_fn is None:
@@ -1141,17 +1177,22 @@ async def process_non_pipeline_command(
                             tool_result,
                             iteration + 1,
                         ))
-                    if (normalize_operation_result(fn_name, tool_result) == 'unknown'
-                            and not is_recovery_observation(fn_name, fn_args,device_os=device_info.get('os'))):
+                    outcome = normalize_operation_result(fn_name, tool_result)
+                    if outcome == 'unknown' and not observation:
+                        commands_log[-1]['unknown_mutation'] = True
                         if not recovery_only:
                             add_correction(
                                 "Action outcome is unknown. Check the actual effect with available observations "
                                 "such as read_file, Office inspect, or a window observation. Do not rerun the "
-                                "mutation. If the effect cannot be established, finish with status=unknown."
+                                "mutation. If a fresh observation establishes the requested state, cite its step_id "
+                                "in evidence_refs and report what was observed without claiming the missing receipt. "
+                                "If the effect cannot be established, finish with status=unknown."
                             )
                         recovery_only = True
                         if poll_task_id in runtime_tasks:
                             runtime_tasks[poll_task_id]['_action_outcome_unknown'] = True
+                    if recovery_only and observation and outcome == 'success':
+                        commands_log[-1]['recovery_observation'] = True
                     if arg_warnings and isinstance(commands_log[-1].get("result"), dict):
                         existing_warnings = list(commands_log[-1]["result"].get("arg_warnings") or [])
                         commands_log[-1]["result"]["arg_warnings"] = existing_warnings + arg_warnings

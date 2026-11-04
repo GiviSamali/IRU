@@ -1208,6 +1208,41 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if not target_dev or target_dev.get("user_id") != user_id:
                 return {"status": "unavailable", "device_id": requested, "error": f"Нет доступа к устройству '{requested}'"}
             target_short = _short_did(target_key)
+            if tool_name == "app_experience":
+                if not task.get("worker_id") or (target_dev.get("info") or {}).get("app_experience_protocol") != 1:
+                    return {"status": "unavailable", "error": "app_experience_unavailable"}
+                action = args.get("action")
+                pid = args.get("pid")
+                note = args.get("note")
+                step_id = args.get("step_id")
+                if action not in {"get", "save"} or type(pid) is not int or not 0 < pid <= 0xFFFFFFFF:
+                    return {"status": "failed", "error": "invalid_app_experience_arguments"}
+                if action == "save":
+                    if not isinstance(note, str) or not 1 <= len(note.strip()) <= 1000 or not step_id:
+                        return {"status": "failed", "error": "invalid_app_experience_note"}
+                    note = note.strip()
+                    if (_re.search(r"(?i)bearer\s+|(?:password|token|api[_ -]?key|secret)\s*[:=]|```", note)
+                            or _re.search(r"[a-zA-Z]:[\\/]", note)):
+                        return {"status": "failed", "error": "app_experience_note_contains_private_data_or_code"}
+                connection = target_dev.get("ws")
+                try:
+                    receipt = await asyncio.wait_for(
+                        send_command_to_agent(target_key, "app.executable_identity", {"pid": pid}, user_id=user_id),
+                        timeout=3,
+                    )
+                except (RuntimeError, asyncio.TimeoutError):
+                    return {"status": "unavailable", "error": "app_identity_unavailable"}
+                identity = receipt.get("executable_identity")
+                if (devices.get(target_key) is not target_dev or target_dev.get("ws") is not connection
+                        or receipt.get("status") != "success"
+                        or not isinstance(identity, str) or not _re.fullmatch(r"[0-9a-f]{64}", identity)):
+                    return {"status": "unavailable", "error": "app_identity_unavailable"}
+                try:
+                    from .database import app_experience_note
+                except ImportError:
+                    from database import app_experience_note
+                return app_experience_note(user_id, target_short, identity,
+                    note=note if action == "save" else None, source_task_id=task_id, step_id=step_id)
             if tool_name == "device_get_passport":
                 profile = get_device_profile(target_short, user_id=user_id)
                 return compact_device_passport(target_short, target_dev, profile)
@@ -1322,7 +1357,12 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if is_task_cancel_requested(task_id):
                 return cancellation_payload(result.get("commands", []))
             task_receipt = result.get("task_receipt")
-            if task.get("_action_outcome_unknown") and not (task_receipt or {}).get("task_status"):
+            reconciled = any(
+                entry.get('tool_name') == 'answer.text' and entry.get('status') == 'terminal'
+                and (entry.get('result') or {}).get('_reconciled_unknown') is True
+                for entry in result.get('commands') or []
+            )
+            if task.get("_action_outcome_unknown") and not reconciled and not (task_receipt or {}).get("task_status"):
                 task_receipt = {**(task_receipt or {}), "task_status": "partial",
                                 "terminal_reason": "agent_outcome_unknown"}
             if activation_markers:

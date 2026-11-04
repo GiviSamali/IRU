@@ -39,6 +39,7 @@ CANONICAL_TOOL_NAMES = {
     "window_focus": "window.focus",
     "window_close": "window.close",
     "app_launch": "app.launch",
+    "app_experience": "app.experience",
     "app_open_url": "app.open_url",
     "app_verify_launch": "app.verify_launch",
     "app_close": "app.close",
@@ -55,6 +56,11 @@ CANONICAL_TOOL_NAMES = {
 
 
 TOOL_METADATA = {
+    "app.experience": {
+        "category": "app", "tool_type": "system", "tool_label": "App experience",
+        "purpose": "Optionally retrieve or update a verified method for an observed open application",
+        "returns": "Technical note or availability status; never current execution evidence", "danger": "safe",
+    },
     "system.update_working_notes": {
         "category": "system", "tool_type": "system", "tool_label": "Рабочие заметки Worker",
         "purpose": "Optionally retain important findings and current-run step references across context pruning",

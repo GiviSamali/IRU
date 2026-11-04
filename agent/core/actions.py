@@ -502,6 +502,7 @@ def collect_system_info(device_id: str = "") -> dict:
         "file_replace_protocol": 3,
         "artifact_receipt_protocol": 1,
         "python_session_protocol": 2,
+        "app_experience_protocol": 1 if os.name == "nt" else 0,
         "office_content_preservation_version": 1,
         "device_id": device_id,
         "os": platform.system(),
@@ -1082,7 +1083,7 @@ def _process_alive(pid: int | None) -> bool | None:
         return None
 
 
-def _windows_process_name(pid: int) -> str:
+def _windows_process_path(pid: int) -> str:
     try:
         import ctypes
         from ctypes import wintypes
@@ -1096,12 +1097,43 @@ def _windows_process_name(pid: int) -> str:
             size = wintypes.DWORD(32768)
             buffer = ctypes.create_unicode_buffer(size.value)
             if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
-                return Path(buffer.value).name
+                return buffer.value
         finally:
             kernel32.CloseHandle(handle)
     except Exception:
         return ""
     return ""
+
+
+def _windows_process_name(pid: int) -> str:
+    path = _windows_process_path(pid)
+    return Path(path).name if path else ""
+
+
+def app_executable_identity(pid: int) -> dict:
+    if os.name != "nt" or type(pid) is not int or not 0 < pid <= 0xFFFFFFFF:
+        return {"status": "unavailable", "error": "app_identity_unavailable"}
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    visible = False
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    @callback_type
+    def find_window(hwnd, _):
+        nonlocal visible
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        visible = owner.value == pid and bool(user32.IsWindowVisible(hwnd))
+        return not visible
+
+    user32.EnumWindows(find_window, 0)
+    path = _windows_process_path(pid) if visible else ""
+    if not path or not Path(path).is_absolute():
+        return {"status": "unavailable", "error": "app_identity_unavailable"}
+    normalized = os.path.normcase(os.path.normpath(os.path.realpath(path)))
+    return {"status": "success", "executable_identity": hashlib.sha256(normalized.encode("utf-8")).hexdigest()}
 
 
 def _window_record(hwnd: int, *, title: str, class_name: str, pid: int, visible: bool, minimized: bool, foreground: bool, bounds: dict) -> dict:
@@ -2140,6 +2172,7 @@ ACTIONS = {
     "window.verify": lambda **params: window_verify(**params),
     "window.focus": lambda **params: window_focus(**params),
     "window.close": lambda **params: window_close(**params),
+    "app.executable_identity": app_executable_identity,
     "app.launch": lambda **params: app_launch(**params),
     "app.open_url": lambda **params: app_open_url(**params),
     "app.verify_launch": lambda **params: app_verify_launch(**params),

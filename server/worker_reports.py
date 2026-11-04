@@ -259,7 +259,9 @@ def build_worker_report(task):
         status = raw
     elif raw == 'confirm':
         status = 'waiting_confirmation'
-    elif raw in {'unknown','interrupted'} or evidence_binding_error or task.get('_report_integrity_failed') or task.get('_action_outcome_unknown'):
+    elif (raw in {'unknown','interrupted'} or evidence_binding_error or task.get('_report_integrity_failed')
+          or (task.get('_action_outcome_unknown') and not (
+              payload.get('_result_contract') == 4 and payload.get('_reconciled_unknown') is True))):
         status = 'unknown'
     elif raw=='blocked' or (receipt.get('answer_source')=='confirmation_result' and receipt.get('task_status')=='blocked'):
         status = 'blocked'

@@ -27,22 +27,55 @@ ACTIVE_STATES = ("running", "waiting_confirmation", "waiting_input")
 WINDOW_EFFECTS = frozenset({"list","find","active","monitors","activate","minimize","maximize","restore","left","right","move_monitor","close","open"})
 
 
-def unknown_recovery_required(payload):
-    """Persist uncertainty across explicitly requested follow-ups, never replay it."""
+def _last_unknown_mutation(payload):
+    """Find the journal entry anchoring recovery, including pre-marker journals."""
     try:
         from .worker_reports import operation_facts
         from .api_support import is_recovery_observation
     except ImportError:
         from worker_reports import operation_facts
         from api_support import is_recovery_observation
-    if payload.get('_action_outcome_unknown'):return True
-    for entry in payload.get('commands') or []:
+    for entry in reversed(payload.get('commands') or []):
+        if entry.get('unknown_mutation') is True:
+            return entry
         if entry.get('tool_type') in {'system','answer'} or operation_facts(entry)!='unknown':continue
         result=entry.get('result') if isinstance(entry.get('result'),dict) else {}
         params={'command':entry.get('command'),'action':result.get('action') or (entry.get('window_request') or {}).get('action'),
                 'mode':result.get('mode')}
-        if not is_recovery_observation(entry.get('tool_name') or entry.get('action') or '',params):return True
-    return False
+        if not is_recovery_observation(entry.get('tool_name') or entry.get('action') or '', params):
+            return entry
+    return None
+
+
+def unknown_recovery_required(payload):
+    return bool(payload.get('_action_outcome_unknown') or _last_unknown_mutation(payload))
+
+
+def prior_unknown_source(task):
+    """Resolve a replacement's unknown through owned, linked task journals."""
+    source_id = task.get('replaces_source_task_id')
+    consumer = task
+    seen = {task.get('task_id')}
+    while source_id and source_id not in seen:
+        if source_id not in (consumer.get('source_task_ids') or []):
+            return None
+        seen.add(source_id)
+        row = owned_job(source_id, task.get('user_id'))
+        if not row or row['chat_id'] != task.get('chat_id'):
+            return None
+        consumer = json.loads(row['payload'])
+        if (consumer.get('goal_id') != task.get('goal_id')
+                or set(consumer.get('device_ids') or []) != set(task.get('device_ids') or [])):
+            return None
+        entry = _last_unknown_mutation(consumer)
+        if entry is not None:
+            device = entry.get('target_device_id') or entry.get('device_id')
+            allowed = {value.split(':', 1)[-1] for value in task.get('device_ids') or []}
+            if device and device.split(':', 1)[-1] in allowed and entry.get('step_id'):
+                return {'task_id': source_id, 'step_id': entry['step_id'], 'device_id': device.split(':', 1)[-1]}
+            return None
+        source_id = consumer.get('replaces_source_task_id')
+    return None
 
 
 

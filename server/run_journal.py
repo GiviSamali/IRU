@@ -855,7 +855,32 @@ def unfinished_execution_result(journal, reason):
                 'terminal_reason': reason}}
 
 
-def validate_answer_text_payload(payload, journal, *, require_status=False, task=None):
+def _instrumental_source(entry):
+    name = canonical_tool_name(entry.get('tool_name') or entry.get('action') or '')
+    return entry.get('tool_type') not in {'system', 'answer'} and not name.startswith(('system.', 'answer.'))
+
+
+def _has_fresh_recovery_source(journal, refs, prior_unknown_device):
+    # A read before the last uncertain mutation cannot establish its outcome.
+    index = -1
+    device = prior_unknown_device
+    for i in range(len(journal) - 1, -1, -1):
+        if journal[i].get('unknown_mutation') is True:
+            index = i
+            device = journal[i].get('target_device_id') or journal[i].get('device_id')
+            break
+    if device:
+        device = device.split(':', 1)[-1]
+    return bool(device) and any(
+        entry.get('step_id') in refs and entry.get('recovery_observation') is True
+        and (entry.get('target_device_id') or '').split(':', 1)[-1] == device and _instrumental_source(entry)
+        and canonical_tool_name(entry.get('tool_name') or entry.get('action') or '') != 'web_search'
+        and not canonical_tool_name(entry.get('tool_name') or entry.get('action') or '').startswith(('device.', 'memory.'))
+        for entry in journal[index + 1:]
+    )
+
+
+def validate_answer_text_payload(payload, journal, *, require_status=False, task=None, prior_unknown_device=None):
     """Validate the executor's terminal contract, before leaving its tool loop."""
     if not isinstance(payload,dict):
         raise ProtocolValidationError('answer_text arguments must be an object')
@@ -917,11 +942,22 @@ def validate_answer_text_payload(payload, journal, *, require_status=False, task
             entry = operations[ref]
             if task and task.get('task_id') and entry.get('task_id') not in (None,task['task_id']):
                 raise ProtocolValidationError('terminal_contract_condition: evidence belongs to another task')
-        needs_instrument = bool(operations or task and (task.get('assigned_artifacts') or task.get('window_effects')))
-        if status == 'success' and needs_instrument and not refs:
+        recovering = bool(task and task.get('_action_outcome_unknown'))
+        if recovering and status != 'unknown':
+            if status not in {'success', 'partial'} or not _has_fresh_recovery_source(journal, refs, prior_unknown_device):
+                raise ProtocolValidationError('terminal_contract_condition: unresolved mutation outcome requires unknown or a referenced fresh observation from the affected device; do not repeat it')
+            result['_reconciled_unknown'] = True
+        needs_effect = bool(task and (task.get('assigned_artifacts') or task.get('window_effects') or task.get('open_objects')))
+        if status == 'success' and operations and not refs:
             raise ProtocolValidationError('terminal_contract_condition: success needs referenced instrumental sources')
-        if task and task.get('_action_outcome_unknown') and status != 'unknown':
-            raise ProtocolValidationError('terminal_contract_condition: unresolved mutation outcome requires unknown; do not repeat it')
+        if status == 'success' and (needs_effect or any(map(_instrumental_source, operations.values()))):
+            sources = [operations[ref] for ref in refs if _instrumental_source(operations[ref])]
+            if not sources or (needs_effect and not any(
+                entry.get('tool_status') == 'success'
+                or operation_step_status(entry.get('tool_name') or entry.get('action') or '', entry.get('result')) == 'success'
+                for entry in sources
+            )):
+                raise ProtocolValidationError('terminal_contract_condition: success needs referenced instrumental sources supporting the result')
         result.update(status=status,basis=list(dict.fromkeys(refs)),_result_contract=4)
     return result
 
