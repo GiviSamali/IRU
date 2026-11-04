@@ -411,3 +411,20 @@ test('window question is spoken once without finishing the Worker; its result re
   h.spoken[1].onSpeaking();h.spoken[1].resolve();await Promise.resolve();
   assert.equal(h.listening,true);
 });
+
+test('admission and terminal speech use separate requests for the same Goal', async () => {
+  const heard = [];
+  const h = setup({
+    speak: (id, signal, onSpeaking, phase) => { heard.push({id, phase}); return Promise.resolve(); },
+  });
+  const ticket = h.session.beginRequest();
+  h.session.taskAccepted('goal', ticket);
+  h.session.taskAccepted('goal', ticket);
+  assert.deepEqual(heard, []);
+  h.session.endRequest(ticket, 'goal');
+  assert.deepEqual(heard, [{id:'goal', phase:{admission:true}}]);
+  await Promise.resolve();
+  h.session.taskFinished('goal', {answer:'Done'});
+  h.session.taskFinished('goal', {answer:'Done'});
+  assert.deepEqual(heard, [{id:'goal', phase:{admission:true}}, {id:'goal', phase:undefined}]);
+});

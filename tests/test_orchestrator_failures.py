@@ -126,3 +126,71 @@ def test_invalid_json_has_one_format_retry_before_any_handoff(client,monkeypatch
  else:
   assert state['status']=='failed' and 'дважды' in reply['answer']
   assert 'устройство' not in reply['answer'] and 'bad' not in caplog.text
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_delegate_acknowledges_only_after_admission(client, monkeypatch, accepted):
+    user = owner()
+    answer = "Проверю состояние сервера."
+
+    async def completion(*args, **kwargs):
+        return payload({"intent": "delegate", "objective": "Проверить сервер",
+                        "answer": answer, "spoken_response": answer})
+
+    async def delegate(choice, **kwargs):
+        assert choice.answer == answer
+        if not accepted:
+            raise ValueError("worker_queue_full")
+        return {"task_id": "worker", "goal_id": "goal", "status": "queued"}
+
+    monkeypatch.setattr(orch, "_chat_completion_request", completion)
+    monkeypatch.setattr(orch, "load_llm_config", lambda: {"model": "mock"})
+    cmd = SimpleNamespace(message="Проверь состояние сервера", request_id="admission",
+                          device_id=None, modes={}, broadcast=False)
+    reply = asyncio.run(orch.run_turn(cmd, user, user["chat_id"], delegate))
+    assert (reply["answer"] == answer) is accepted
+    assert reply["has_admission_speech"] is accepted
+    row = db.get_messages(user["chat_id"])[-1]
+    assert row["content"] == reply["answer"]
+    assert (row.get("spokenResponse") == answer) is accepted
+
+
+def test_contextual_music_discussion_stays_in_dialogue(client, monkeypatch):
+    user = owner()
+    for role, content in [
+        ("user", "Открой презентацию."),
+        ("assistant", "Открыл презентацию."),
+        ("user", "Хм, надо тебя к Яндекс Музыке подключить."),
+        ("assistant", "Можно обсудить, как подключить музыку."),
+    ]:
+        db.add_message(user["chat_id"], role, content)
+    exchanges = [
+        ("Не, нужно сделать красиво. Я тебя по такому принципу строю, не для денег, ты типа отражение моих возможностей",
+         "Ты строишь ИРУ как продолжение своих возможностей, и интеграция музыки должна этому соответствовать."),
+        ("Почему ты уточнил?", "Я ошибочно принял обсуждение за подготовку поручения."),
+        ("Мне кажется, понятно было, что про твоё строение", "Да, речь была о том, как устроена ИРУ."),
+    ]
+    expected = iter(exchanges)
+
+    async def completion(*args, **kwargs):
+        message, answer = next(expected)
+        messages = args[3]
+        assert "Яндекс Музыке" in messages[1]["content"]
+        assert messages[2]["content"] == message
+        return payload({"intent": "conversation", "answer": answer})
+
+    async def delegate(*args, **kwargs):
+        pytest.fail("Discussion must not create an assignment")
+
+    monkeypatch.setattr(orch, "_chat_completion_request", completion)
+    monkeypatch.setattr(orch, "load_llm_config", lambda: {"model": "mock"})
+
+    async def run():
+        for index, (message, answer) in enumerate(exchanges):
+            cmd = SimpleNamespace(message=message, request_id=f"music-{index}",
+                                  device_id=None, modes={}, broadcast=False)
+            reply = await orch.run_turn(cmd, user, user["chat_id"], delegate)
+            assert reply["answer"] == answer
+            assert not reply["worker_task_id"]
+            assert tasks[reply["task_id"]]["dialogue_intent"] == "conversation"
+
+    asyncio.run(run())

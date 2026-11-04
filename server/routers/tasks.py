@@ -669,12 +669,13 @@ async def api_get_task(task_id: str, request: Request):
             presentation = {"status": "unknown", "terminal": True,
                             "message": "Результат цели недоступен или её чат удалён.",
                             "artifacts": []}
+        answer = presentation["message"] if presentation["terminal"] else (task.get("answer") or presentation["message"])
         response_task.update(
             kind="goal", result_first=True, goal_presentation=presentation,
             status="done" if presentation["terminal"] else "running",
             presentation_status=presentation["status"],
-            conversational_response=presentation["message"],
-            answer=presentation["message"])
+            conversational_response=answer,
+            answer=answer)
     return {"status": "ok", "task": response_task}
 
 

@@ -42,7 +42,8 @@
       }, Math.max(0, activeUntil - now()));
     }
     async function drain() {
-      if (!enabled || busy() || playback) return;
+      const admissionReady = !requests.size && queue[0]?.admission;
+      if (!enabled || (busy() && !admissionReady) || playback) return;
       if (continuous && (utterance || now()<humanUntil)) {
         if (!reportTimer) reportTimer=later(()=>{reportTimer=null;drain();},Math.max(100,humanUntil-now()));
         return;
@@ -57,7 +58,7 @@
       try {
         await io.speak(taskId, controller.signal, () => {
           if (!controller.signal.aborted && enabled && epoch === savedEpoch) { heard = true; setPhase('speaking'); io.listen(true); }
-        }, item.confirmation || item.question);
+        }, item.confirmation || item.question || (item.admission ? {admission:true} : undefined));
         if (item.confirmation && !controller.signal.aborted && enabled && epoch === savedEpoch) commandHeard = heard;
       } catch (error) {
         if (!controller.signal.aborted && enabled && epoch === savedEpoch) io.error(error);
@@ -90,7 +91,12 @@
     }
     function endRequest(ticket, taskId) {
       if (!enabled || !ticket || ticket.epoch !== epoch || !requests.delete(ticket)) return;
-      if (taskId) {tasks.add(taskId);if (!continuous || !backgroundTasks.has(taskId)) {if(!playback)pause();}else drain();} else drain();
+      if (taskId) {
+        tasks.add(taskId);
+        if ((!continuous || !backgroundTasks.has(taskId)) && !queue[0]?.admission) {
+          if (!playback) pause();
+        } else drain();
+      } else drain();
     }
     function requestLost(ticket) {
       if (enabled && ticket?.epoch===epoch && requests.has(ticket)) {if(continuous){requests.delete(ticket);resume(true);}else disable();}
@@ -99,6 +105,11 @@
       if (!enabled || (ticket !== undefined && (!ticket || ticket.epoch !== epoch)) || finished.has(taskId)) return;
       if (tasks.has(taskId) && (!continuous || backgroundTasks.has(taskId) === background)) return;
       tasks.add(taskId);if(continuous && background){backgroundTasks.add(taskId);drain();}else pause();
+    }
+    function taskAccepted(taskId, ticket) {
+      if (!enabled || !ticket || ticket.epoch !== epoch || !requests.has(ticket)
+          || queue.some(item => item.id === taskId && item.admission)) return;
+      queue.unshift({id:taskId,admission:true});
     }
     const heardQuestions = new Set();
     function taskInputRequired(taskId, task) {
@@ -115,6 +126,7 @@
       const background=backgroundTasks.delete(taskId);
       if (commandConfirmation?.taskId === taskId) commandConfirmation = null;
       finished.add(taskId);
+      queue = queue.filter(item => item.id !== taskId || !item.admission);
       if (typeof task?.answer === 'string' && task.answer.trim()) {
         queue.push({id:taskId,background,order:task?.created_at || now()});
       }
@@ -211,7 +223,7 @@
         }).catch(error => { if (enabled && epoch === savedEpoch) { io.error(error); resume(true); } });
       }, 1000);
     }
-    return { enable, disable, beginRequest, endRequest, requestLost, watchTask, taskFinished, taskInputRequired, taskLost,
+    return { enable, disable, beginRequest, endRequest, requestLost, watchTask, taskAccepted, taskFinished, taskInputRequired, taskLost,
       taskPaused, commandDecisionResolved, transcript, stopSpeech, get enabled() { return enabled; }, get phase() { return phase; } };
   }
   if (typeof module !== 'undefined' && module.exports) module.exports = { createVoiceSession };

@@ -49,7 +49,8 @@ def _piper_device(user_id: int, device_id: str | None) -> str:
 
 @router.post("/tasks/{task_id}/speech")
 async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0),
-                      confirmation: str | None = None, question: str | None = None, provider: str = "yandex", device_id: str | None = None):
+                      confirmation: str | None = None, question: str | None = None, provider: str = "yandex", device_id: str | None = None,
+                      admission: bool = False):
     user = get_current_user(request)
     if provider not in {"yandex", "piper", "elevenlabs"}:
         raise HTTPException(400, "Неизвестный обработчик озвучки")
@@ -71,11 +72,15 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
     except ImportError:
         from window_policy import silent_window_success
         from browser_policy import silent_browser_success
-    # A delegated Goal is projected from frozen Worker Reports, not from the
-    # initiating Orchestrator turn (whose answer is intentionally empty).
+    # Admission speech belongs to the initiating turn. Final Goal speech uses frozen Worker Reports.
     # Reading this endpoint cannot start, retry, or grant a Worker permission.
     goal_speech_task = None
-    if task.get("kind") == "orchestrator" and task.get("result_first") and task.get("goal_id"):
+    if admission and (confirmation is not None or question is not None or task.get("kind") != "orchestrator"
+                      or task.get("dialogue_intent") != "delegate" or task.get("status") != "done"
+                      or not task.get("goal_id") or not task.get("dialogue_spoken_response")
+                      or task.get("dialogue_speech_answer") != task.get("answer")):
+        return Response(status_code=204)
+    if not admission and task.get("kind") == "orchestrator" and task.get("result_first") and task.get("goal_id"):
         try:
             from ..worker_scheduler import goal_view
             from ..goal_presentation import goal_presentation
@@ -124,7 +129,7 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
     if task.get("status") not in TERMINAL_STATUSES and not ordinary and not input_question:
         raise HTTPException(409, "Задача ещё не завершена")
     human_answer = goal_speech_task["answer"] if goal_speech_task else (task.get("answer") or "")
-    # An empty written handoff can still have optional context-bound speech.
+    # Use the spoken version of the same Orchestrator reply when available.
     if not goal_speech_task and task.get("kind")=="orchestrator" and task.get("dialogue_speech_answer")==task.get("answer"):
         human_answer = task.get("dialogue_spoken_response") or human_answer
     if task.get("worker_id") and not ordinary:
@@ -144,7 +149,7 @@ async def task_speech(task_id: str, request: Request, part: int = Query(0, ge=0)
         raise HTTPException(429, "Озвучка занята. Попробуйте позже")
     _active_users.add(user_id)
     try:
-        if not ordinary:
+        if not ordinary and not admission:
             parts = await voice.spoken_parts(goal_speech_task or task)
         if part >= len(parts):
             raise HTTPException(404, "Часть ответа не найдена")

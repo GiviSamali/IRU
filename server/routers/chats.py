@@ -73,8 +73,9 @@ async def api_get_messages(chat_id: int, request: Request):
         if presentation is None:
             message.update(content="Результат цели недоступен.",taskStatus="unknown",taskKind="goal")
         else:
-            message.update(content=presentation["message"],taskStatus=presentation["status"],
-                           conversationalResponse=presentation['message'],
+            answer = presentation["message"] if presentation["terminal"] else (message.get("content") or presentation["message"])
+            message.update(content=answer,taskStatus=presentation["status"],
+                           conversationalResponse=answer,
                            taskKind="goal",goalPresentation=presentation)
     return {"status": "ok", "messages": messages}
 

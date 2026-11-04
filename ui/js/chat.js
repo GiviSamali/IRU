@@ -937,13 +937,15 @@ async function sendMessage(options = {}) {
       voiceTaskId = data.task_id;
       // Задача запущена в фоне — начинаем polling
       if (msgIndex >= 0) Object.assign(state.messages[msgIndex], {
-        _taskId:data.task_id,...(data.goal_id ? {goalId:data.goal_id,resultFirst:true,taskKind:'goal'} : {})
+        _taskId:data.task_id,...(data.goal_id ? {goalId:data.goal_id,resultFirst:true,taskKind:'goal',content:data.answer || ''} : {})
       });
       if (!state.pendingTasks.some(item => item.task_id === data.task_id))
         state.pendingTasks.push({task_id:data.task_id,msgIndex,chatId:sourceChatId,
           kind:data.goal_id ? 'goal' : data.response_type === 'orchestrator' ? 'orchestrator' : 'worker',
           goalId:data.goal_id||null});
       updateStopButton();
+      if (msgIndex >= 0 && data.goal_id && data.answer) renderMessages();
+      if (data.has_admission_speech) window.iruVoice?.taskAccepted?.(data.task_id,voiceTicket);
       pollTask(data.task_id,msgIndex,voiceTicket,sourceChatId);
       // Result First: one Orchestrator message follows the whole Goal. Internal
       // Workers stay in Operations; do not create chat messages or voice turns.
