@@ -19,7 +19,6 @@ def payload(arguments):
 
 @pytest.mark.parametrize('bad,stage,error_type',[
  ({'choices':[{'finish_reason':'stop','message':{'content':'ordinary text','tool_calls':[]}}]},'llm_response','ValueError'),
- (payload({'intent':'conversation','answer':'reply','scope':None}),'decision_validation','ValidationError'),
  (payload({'intent':'conversation','answer':'reply','target_device_ids':[None]}),'decision_validation','ValidationError'),
 ])
 def test_failed_decision_is_diagnosed_and_does_not_poison_following_turns(client,monkeypatch,caplog,bad,stage,error_type):
@@ -93,10 +92,13 @@ def test_optional_voice_presentation_failure_keeps_dialogue_decision(client,monk
 
 
 @pytest.mark.parametrize('repair_ok',[True,False])
-def test_invalid_json_has_one_format_retry_before_any_handoff(client,monkeypatch,repair_ok,caplog):
+@pytest.mark.parametrize('invalid_format',['json','extra_fields'])
+def test_invalid_decision_has_one_format_retry_before_any_handoff(client,monkeypatch,repair_ok,caplog,invalid_format):
  user=owner();requests=[];delegated=[]
  malformed=payload({})
  malformed['choices'][0]['message']['tool_calls'][0]['function']['arguments']='{"intent":"delegate","objective":"bad "quote"}'
+ if invalid_format == 'extra_fields':
+  malformed=payload({'intent':'delegate','objective':'Create the requested file','scope':'desktop','constraints':[]})
  repaired=payload({'intent':'delegate','objective':'Create the requested file'})
  async def completion(*args,**kwargs):
   assert not delegated
@@ -124,7 +126,9 @@ def test_invalid_json_has_one_format_retry_before_any_handoff(client,monkeypatch
  if repair_ok:
   assert state['status']=='done' and state['orchestrator_metrics']['llm_calls']==2
  else:
-  assert state['status']=='failed' and 'дважды' in reply['answer']
+  assert state['status']=='failed'
+  expected = 'дважды' if invalid_format == 'json' else 'не соответствует схеме'
+  assert expected in reply['answer']
   assert 'устройство' not in reply['answer'] and 'bad' not in caplog.text
 
 @pytest.mark.parametrize("accepted", [True, False])

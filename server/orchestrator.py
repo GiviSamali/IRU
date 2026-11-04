@@ -137,7 +137,7 @@ SYSTEM = """Ты ИРУ, собеседник пользователя и Орк
 - amend — явное уточнение выполняемого или ожидающего поручения. Укажи task_id, task_revision и полный уточнённый objective в пределах разрешённого. Независимое новое поручение делегируй отдельно.
 
 ## Делегирование
-Сохрани результат, условия, ограничения и полномочия исходного запроса. objective описывает требуемый результат, scope — границы объекта, периода и охвата, constraints — существенные требования и ограничения. context_summary передаёт только нужный контекст. Условное действие остаётся условным. Не добавляй обязательный формат, способ исполнения, проверки, подтверждения или дополнительные эффекты от себя. Не сужай цель ради простоты выполнения. Разрешение действовать с одним объектом не распространяется на соседние объекты или родительский каталог.
+Сохрани результат, условия, ограничения и полномочия исходного запроса. objective описывает требуемый результат, scope — границы объекта, периода и охвата, constraints — существенные требования и ограничения. `scope` и `constraints` указывай только внутри элементов `assignments`. context_summary передаёт только нужный контекст. Условное действие остаётся условным. Не добавляй обязательный формат, способ исполнения, проверки, подтверждения или дополнительные эффекты от себя. Не сужай цель ради простоты выполнения. Разрешение действовать с одним объектом не распространяется на соседние объекты или родительский каталог.
 Назначай одну Task на неделимый результат. Поиск, подготовка среды и другие технические шаги относятся к Worker. Если запрошено несколько самостоятельных результатов, укажи assignments с уникальными key, objective и реальными depends_on. Не связывай независимые задачи. Если нескольким результатам действительно нужно общее исследование, достаточно одной задачи на сбор фактов и источников. Каждому потребителю назначай его собственный результат.
 В artifacts перечисляй только обязательные выходные файлы, которые данный Worker должен создать или изменить, с известным именем или путём. Каждый элемент требует файловой квитанции. Для чтения, открытия и ответа в чате artifacts пуст. Входной файл не становится выходным артефактом. Не придумывай имя ради заполнения поля.
 Указывай запрошенные window_effects. Для открытия используй open и передавай известный обязательный объект в open_objects с type, точным path или URL и устройством, если оно известно. Если объект ещё нужно найти, оставь поиск Worker. Принятие запроса ОС достаточно для обычного открытия, если пользователь не запросил видимость или проверку загрузки. Виртуальный рабочий стол не подменяй физическим монитором.
@@ -334,16 +334,20 @@ async def decide(message, context, *, user_id, chat_id, task_id):
                 try:
                     decision=Decision.model_validate_json(calls[0]["function"].get("arguments") or "{}")
                 except ValidationError as exc:
-                    # Repair syntax once. Schema/permission errors remain strict; nothing has executed.
-                    if not all(e["type"]=="json_invalid" for e in exc.errors(include_input=False,include_url=False)):
+                    errors = {error['type'] for error in exc.errors(include_input=False, include_url=False)}
+                    if not errors or not errors <= {'json_invalid', 'extra_forbidden'}:
                         raise
                     if attempt:
-                        raise ValueError("orchestrator_invalid_json") from exc
+                        if errors == {'json_invalid'}:
+                            raise ValueError("orchestrator_invalid_json") from exc
+                        raise
+                    format_error = ("contained invalid JSON" if errors == {'json_invalid'}
+                                    else "contained fields outside the schema")
                     messages=[*messages,{"role":"system","content":
-                        "Your previous orchestrator_decision arguments were invalid JSON and were discarded. "
-                        "No action was executed. Return exactly one orchestrator_decision with valid JSON "
-                        "matching the schema, based only on the original human request and context. "
-                        "Escape quotes and newlines inside strings. Do not add permissions or actions."}]
+                        f"Your previous orchestrator_decision arguments {format_error} and were discarded. "
+                        "No action was executed. Return exactly one orchestrator_decision matching the supplied schema. "
+                        "Use only its fields at each nesting level and escape quotes and newlines inside strings. "
+                        "Base the decision only on the original request and context. Do not add permissions or actions."}]
                     continue
                 return decision,{"entity":"orchestrator","elapsed_ms":int((time.monotonic()-started)*1000),
                     "llm_calls":attempt+1,"usage":usage,"snapshot_calls":0}
@@ -589,6 +593,8 @@ async def run_turn(cmd, user, chat_id, delegate):
             "orchestrator_invalid_json":"Не удалось обработать ответ модели: она дважды вернула некорректный формат. Новое выполнение не начато. Повторите сообщение.",
             "orchestrator_response_truncated":"Ответ модели оказался неполным. Новое выполнение не начато. Повторите сообщение.",
             "ambiguous_task_reference":"Уточните, о какой задаче идёт речь. Действие не выполнено."}.get(str(exc),"Не удалось обработать реплику безопасно. Уточните поручение, устройство или ID задачи; новое выполнение не начато.")
+        if failure_stage == 'decision_validation' and isinstance(exc, ValidationError):
+            error_message = "Модель вернула ответ, который не соответствует схеме. Поручение не передано исполнителю."
         if failure_stage=='handoff':
             error_message=HANDOFF_ERRORS.get(str(exc),error_message if str(exc) in {'worker_queue_full','daily_command_limit_exceeded'}
                 else 'Не удалось подтвердить передачу поручения исполнителю. Причина сохранена в диагностике.')
