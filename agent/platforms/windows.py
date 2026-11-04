@@ -83,7 +83,7 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto", workdir: s
                 "error": None,
             }
     except subprocess.TimeoutExpired:
-        return {"stdout": "", "stderr": "", "returncode": -1,
+        return {"status": "unknown", "timed_out": True, "stdout": "", "stderr": "", "returncode": -1,
                 "error": f"Таймаут: команда выполнялась дольше {timeout} сек"}
     except (FileNotFoundError, PermissionError) as e:
         return {"status":"failed","dispatched":False,"stdout":"","stderr":str(e),"returncode":-1,"error":str(e)}

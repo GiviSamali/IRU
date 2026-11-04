@@ -53,7 +53,9 @@ class PythonSessions:
         for task_id in list(self.processes):
             await self.close(task_id)
 
-    async def run(self, task_id, code):
+    async def run(self, task_id, code, timeout=120):
+        if type(timeout) is not int or not 1 <= timeout <= 600:
+            return {"status": "failed", "dispatched": False, "error": "invalid_python_timeout"}
         if not isinstance(code, str) or not code.strip() or len(code) > 32000:
             return {"status": "failed", "dispatched": False, "error": "invalid_python_code"}
         process = self.processes.get(task_id)
@@ -80,7 +82,7 @@ class PythonSessions:
             return json.loads(await process.stdout.readline())
 
         try:
-            result = await asyncio.wait_for(exchange(), timeout=20)
+            result = await asyncio.wait_for(exchange(), timeout=timeout)
             if not isinstance(result, dict) or result.get("status") not in {"success", "failed"}:
                 raise ValueError("invalid_python_reply")
             return result

@@ -500,7 +500,7 @@ def collect_system_info(device_id: str = "") -> dict:
         "file_write_protocol": 2,
         "file_replace_protocol": 2,
         "artifact_receipt_protocol": 1,
-        "python_session_protocol": 1,
+        "python_session_protocol": 2,
         "office_content_preservation_version": 1,
         "device_id": device_id,
         "os": platform.system(),

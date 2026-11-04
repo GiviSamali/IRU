@@ -260,7 +260,7 @@ class AgentRuntime:
                     await self._python_sessions.close(task_id)
                     result = {"status": "success"}
                 else:
-                    result = await self._python_sessions.run(task_id, params.get("code"))
+                    result = await self._python_sessions.run(task_id, params.get("code"), params.get("timeout", 120))
                 return {"id": cmd_id, "status": "ok", "result": result}
             if action_name == "voice.synthesize":
                 from .voice import synthesize

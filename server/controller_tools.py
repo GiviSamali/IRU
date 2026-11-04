@@ -44,8 +44,11 @@ def worker_tool_inventory(tools, device_info, *, preserve=False, multiple_target
         fn = tool['function']
         name = fn['name']
         if not multiple_targets:
-            if name == 'python_run' and info.get('python_session_protocol') != 1:
-                continue
+            if name == 'python_run':
+                if info.get('python_session_protocol') not in {1, 2}:
+                    continue
+                if info.get('python_session_protocol') == 1:
+                    fn['parameters']['properties'].pop('timeout', None)
             if name == 'read_file' and info.get('file_replace_protocol') != 2:
                 continue
             if name.startswith('office_') and info.get('office_tools_version') != 1:
@@ -89,6 +92,8 @@ TOOLS = [
         "description":"Run Python code in the selected device's IRU virtual environment. Globals persist within this task. Returns stdout, stderr and execution error. After an error inspect actual state before repeating a mutation.",
         "parameters":{"type":"object", "properties":{
             "code":{"type":"string", "maxLength":32000},
+            "timeout":{"type":"integer", "minimum":1, "maximum":600, "default":120,
+                       "description":"Maximum execution time in seconds. Returns immediately when execution finishes."},
             "device_id":{"type":"string"},
         }, "required":["code"], "additionalProperties":False},
     }},
@@ -151,6 +156,8 @@ TOOLS = [
                         "type": "string",
                         "description": "Команда для выполнения. stdout, stderr и код выхода возвращаются отдельно. Не объединяй потоки только ради захвата вывода."
                     },
+                    "timeout": {"type":"integer", "minimum":1, "maximum":600, "default":120,
+                                "description":"Maximum execution time in seconds. Returns immediately when execution finishes."},
                     "workdir": {"type":"string", "description":"Absolute working directory on the selected device. Applies only to this call."},
                     "artifact_paths": {"type":"array", "maxItems":16, "items":{"type":"string"},
                         "description":"Absolute paths of final deliverables created or changed by this command. Omit when there are no final file outputs."},

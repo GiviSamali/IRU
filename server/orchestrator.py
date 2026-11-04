@@ -1,4 +1,5 @@
 """A bounded dialogue/routing call. No device-execution tools are exposed here."""
+import asyncio
 import json
 import logging
 import os
@@ -378,6 +379,53 @@ def context_for(user_id, chat_id, message, selected, *, exclude_message_id=None)
 
 
 
+async def observe_routing_windows(user_id, context):
+    """Read a small, fresh window snapshot from the selected online device."""
+    if context.get("broadcast_requested"):
+        return None
+    selected = context.get("selected_devices") or []
+    if len(selected) > 1:
+        return None
+    selected_id = (selected or [context.get("selected_device")])[0]
+    online = {key: dev for key, dev in get_user_devices(user_id).items() if dev.get("ws")}
+    if selected_id:
+        online = {key: dev for key, dev in online.items() if selected_id in (key, _short_did(key))}
+    if len(online) != 1:
+        return None
+    target, device = next(iter(online.items()))
+    if str((device.get("info") or {}).get("os") or "").lower() != "windows":
+        return None
+    try:
+        from .task_runtime import send_command_to_agent
+    except ImportError:
+        from task_runtime import send_command_to_agent
+    try:
+        result = await asyncio.wait_for(
+            send_command_to_agent(target, "window.list", {"limit": 24}, user_id=user_id),
+            timeout=2,
+        )
+    except (RuntimeError, asyncio.TimeoutError):
+        return None
+    if result.get("error") or not isinstance(result.get("windows"), list):
+        return None
+
+    windows = []
+    focused = None
+    for item in result["windows"][:24]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "")[:160]
+        if not title and item.get("foreground") is not True:
+            continue
+        window = {"title": title, "app": str(item.get("process_name") or "")[:80],
+                  "minimized": item.get("minimized") is True}
+        windows.append(window)
+        if item.get("foreground") is True:
+            focused = window
+    return {"device_id": _short_did(target), "collected_at": result.get("collected_at"),
+            "windows": windows, "focused_window": focused}
+
+
 logger=logging.getLogger("iru.orchestrator")
 
 HANDOFF_ERRORS = {
@@ -497,6 +545,9 @@ async def run_turn(cmd, user, chat_id, delegate):
             choice=Decision(intent="conversation",answer="Продолжаю исходную задачу.")
             stats={"entity":"orchestrator","llm_calls":0,"snapshot_calls":0}
         else:
+            windows = await observe_routing_windows(owner, routing_context)
+            if windows is not None:
+                routing_context["window_snapshot"] = windows
             choice,stats=await decide(cmd.message,routing_context,user_id=owner,chat_id=chat_id,task_id=tid)
         if choice.intent=='delegate':
             replacements=[a.replaces_source_task_id for a in choice.assignments if a.replaces_source_task_id]

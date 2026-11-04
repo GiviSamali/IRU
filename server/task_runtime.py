@@ -276,6 +276,13 @@ async def send_command_to_agent(
     if not dev or (user_id is not None and dev.get("user_id") != user_id):
         raise RuntimeError(f"target_device_not_found: {device_id}")
     user_id = dev.get("user_id")
+    if action in {"execute_cmd", "python.run"}:
+        timeout = params.get("timeout", 120)
+        if type(timeout) is not int or not 1 <= timeout <= 600:
+            raise ValueError("invalid_command_timeout")
+        if action == "python.run" and (dev.get("info") or {}).get("python_session_protocol") != 2:
+            if "timeout" in params:
+                raise ValueError("python_timeout_agent_update_required")
     if action in {'app.launch', 'app.close', 'window.close', 'python.run'}:
         assessment=(confirmation.consume(device_id,action,params) if isinstance(confirmation,ConfirmedAction)
                     else assess_action(action,params))
@@ -375,6 +382,10 @@ async def send_command_to_agent(
     ws = dev.get("ws")
     if not callable(getattr(ws, "send_text", None)):
         raise RuntimeError("agent_connection_unavailable")
+    if action == "execute_cmd" or (
+        action == "python.run" and (dev.get("info") or {}).get("python_session_protocol") == 2
+    ):
+        params = {**params, "timeout": timeout}
     cmd_id = str(uuid.uuid4())[:8]
     msg = json.dumps({
         "type": "command",
@@ -385,12 +396,8 @@ async def send_command_to_agent(
     wait_timeout = 60.0
     if action.startswith("file.transfer_"):
         wait_timeout = 1560.0
-    if action == "execute_cmd":
-        try:
-            cmd_timeout = int(params.get("timeout", 30) or 30)
-        except Exception:
-            cmd_timeout = 30
-        wait_timeout = max(60.0, float(cmd_timeout) + 15.0)
+    if action in {"execute_cmd", "python.run"}:
+        wait_timeout = max(60.0, float(params.get("timeout", 20)) + 15.0)
     elif action in {"write_content", "get_file_content", "office_docx", "office_xlsx", "office_pptx"}:
         wait_timeout = 90.0
     elif action == "device.prepare_runtime":
@@ -1113,7 +1120,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if action == "python.run":
                 if not task.get("worker_id") or is_broadcast:
                     return {"status":"blocked", "error":"python_requires_single_worker", "dispatched":False}
-                if (target_dev.get("info") or {}).get("python_session_protocol") != 1:
+                if (target_dev.get("info") or {}).get("python_session_protocol") not in {1, 2}:
                     return {"status":"failed", "error":"python_session_agent_update_required", "dispatched":False}
                 if python_target is not None and (target_dk != python_target or target_dev.get("ws") is not python_connection):
                     return {"status":"blocked", "error":"python_session_device_or_connection_changed", "dispatched":False}
