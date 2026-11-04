@@ -848,7 +848,7 @@ async def process_non_pipeline_command(
                         append_entry(tool_log_entry(fn_name, tool_result,
                             command='[working notes]', target_device_id=None, iteration=iteration+1))
                     elif fn_name == "system_get_last_run_summary":
-                        if fn_args.get('step_id'):
+                        if fn_args.get('step_id') and not fn_args.get('source_task_id'):
                             tool_result = read_current_step(commands_log, fn_args['step_id'],
                                 fn_args.get('report_offset', 0), fn_args.get('expected_source_sha256'))
                         else:
@@ -858,6 +858,7 @@ async def process_non_pipeline_command(
                             include_success=bool(fn_args.get("include_success", True)),
                             exclude_task_id=poll_task_id,
                             source_task_id=fn_args.get("source_task_id"),
+                            step_id=fn_args.get("step_id"),
                             source_message_ids=fn_args.get("source_message_ids"),
                             summary_archive_offset=fn_args.get("summary_archive_offset"),source_summary_id=fn_args.get("source_summary_id"),
                             source_message_range=fn_args.get("source_message_range"),expected_source_sha256=fn_args.get("expected_source_sha256"),

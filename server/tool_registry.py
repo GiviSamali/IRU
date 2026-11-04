@@ -677,7 +677,7 @@ DEVICE_TOOL_SCHEMAS = [
                 "properties": {
                     "chat_id": {"type": "integer", "description": "Optional current chat id."},
                     "include_success": {"type": "boolean", "default": True},
-                    "step_id": {"type":"string","description":"Read the full current Worker journal entry in report_offset pages without re-executing its tool."},
+                    "step_id": {"type":"string","description":"Read a journal entry in report_offset pages without re-executing it. With source_task_id, reads a historical step in this chat."},
                     "source_task_id": {"type": "string", "description": "Owned source task in the current chat; use the referenced task id from worker handoff."},
                     "expected_source_sha256": {"type":"string","description":"For original-message or current step_id pages, pass sha256 from the first page to reject changed source material."},
                     "summary_archive_offset": {"type":"integer","minimum":0,"description":"Browse the owned chat summary directory in bounded pages. Follow next_arguments, including for vague references without lexical matches."},

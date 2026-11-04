@@ -133,6 +133,7 @@ def get_last_run_summary(
     expected_source_sha256: str | None = None,
     summary_archive_offset: int | None = None,
     source_summary_id: str | None = None,
+    step_id: str | None = None,
 ) -> dict[str, Any]:
     if summary_archive_offset is not None or source_summary_id is not None:
         try:from .context_history import summary_archive
@@ -155,7 +156,7 @@ def get_last_run_summary(
         if not row or chat_id is None or row['chat_id'] != chat_id or source_task_id == exclude_task_id:
             return {"status": "blocked", "error": "source_task_not_owned_or_in_chat"}
         consumer = owned_job(exclude_task_id, user_id) if exclude_task_id else None
-        if consumer and json.loads(consumer['payload']).get('goal_id'):
+        if step_id is None and consumer and json.loads(consumer['payload']).get('goal_id'):
             try:
                 from .worker_scheduler import pinned_results, _result_json
             except ImportError:
@@ -189,6 +190,19 @@ def get_last_run_summary(
         report = source.get('worker_report') or {}
         if not allowed_devices or not report.get('target_device_ids') or not set(report['target_device_ids']).issubset(allowed_devices):
             return {"status": "blocked", "error": "source_device_out_of_scope"}
+        if step_id is not None:
+            try:
+                from .run_journal import read_current_step
+            except ImportError:
+                from run_journal import read_current_step
+            entries = [entry for entry in source.get('commands') or []
+                       if (entry.get('target_device_id') or entry.get('device_id') or '').split(':')[-1]
+                       in allowed_devices]
+            result = read_current_step(entries, step_id, report_offset, expected_source_sha256)
+            if result.get('status') != 'success':
+                return result
+            return {**result, 'source_task_id': source_task_id, 'historical_material_only': True,
+                    'current_execution_evidence': False, 'representation': 'historical_journal_entry_json_page'}
         saved = saved_step_reports(source)
         text = '\n\n'.join(r['text'] for r in saved)
         offset = max(0, report_offset)
