@@ -211,6 +211,8 @@ def assess_action(action, params, inspection=None):
     independent dispatch requirements.
     """
     command = str(params.get("command") or "") if action in {"execute_cmd","app.launch"} else ""
+    if action == "python.run":
+        command = str(params.get("code") or "")
     read_only = action=='execute_cmd' and read_only_execute_command(params,
         device_os=(inspection.get('os') or 'unknown') if inspection is not None else None)
     denied = not read_only and any(pattern.search(command) for pattern in _dangerous_re)

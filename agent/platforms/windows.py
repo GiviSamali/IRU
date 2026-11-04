@@ -28,7 +28,8 @@ def execute_cmd(command: str, timeout: int = 30, shell: str = "auto", workdir: s
             "chcp 65001 > $null; "
             "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
             "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
-            "$OutputEncoding = [System.Text.Encoding]::UTF8; "
+            # Native stdin must not start with the UTF-8 preamble.
+            "$OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
         )
 
         if shell == "cmd":

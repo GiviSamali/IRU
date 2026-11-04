@@ -9,6 +9,7 @@ from typing import Any
 import websockets
 
 from .actions import ACTIONS, collect_system_info
+from .python_session import PythonSessions
 from .local_state import load_device_passport_cache
 from .state import AgentState
 
@@ -37,6 +38,7 @@ class AgentRuntime:
         state: AgentState,
     ) -> None:
         self._config = dict(config)
+        self._python_sessions = PythonSessions()
         self._agent_version = agent_version
         self._logger = logger
         self._state = state
@@ -237,6 +239,7 @@ class AgentRuntime:
                     queue.get_nowait()
                 queue.put_nowait(None)
             await asyncio.gather(*consumers, return_exceptions=True)
+            await self._python_sessions.close_all()
 
     async def _handle_command(self, cmd: dict) -> dict:
         cmd_id = cmd.get("id", "")
@@ -249,6 +252,16 @@ class AgentRuntime:
             self._format_params_for_log(action_name, params),
         )
         try:
+            if action_name in {"python.run", "python.close"}:
+                task_id = params.get("_python_task_id")
+                if not isinstance(task_id, str) or not task_id:
+                    raise ValueError("python_task_binding_missing")
+                if action_name == "python.close":
+                    await self._python_sessions.close(task_id)
+                    result = {"status": "success"}
+                else:
+                    result = await self._python_sessions.run(task_id, params.get("code"))
+                return {"id": cmd_id, "status": "ok", "result": result}
             if action_name == "voice.synthesize":
                 from .voice import synthesize
                 result = await asyncio.to_thread(synthesize, params.get("text"), self._config)

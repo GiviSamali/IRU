@@ -276,12 +276,20 @@ async def send_command_to_agent(
     if not dev or (user_id is not None and dev.get("user_id") != user_id):
         raise RuntimeError(f"target_device_not_found: {device_id}")
     user_id = dev.get("user_id")
-    if action in {'app.launch', 'app.close', 'window.close'}:
+    if action in {'app.launch', 'app.close', 'window.close', 'python.run'}:
         assessment=(confirmation.consume(device_id,action,params) if isinstance(confirmation,ConfirmedAction)
                     else assess_action(action,params))
         if assessment['decision']=='DENY':raise RuntimeError('BLOCKED: command_forbidden')
         if assessment['decision']=='CONFIRM' and not isinstance(confirmation,ConfirmedAction):
             raise ActionConfirmationRequired(assessment)
+    if action == "python.run":
+        try:
+            validate_execute_command_paths_for_device(
+                params.get("code") or "", dev.get("info") or {},
+                get_device_profile(_short_did(device_id), user_id=user_id),
+            )
+        except ValueError:
+            raise RuntimeError(f"BLOCKED: {PATH_SCOPE_ERROR}")
     if action == "execute_cmd":
         cmd_text = params.get("command", "")
         profile = get_device_profile(_short_did(device_id), user_id=user_id)
@@ -1012,7 +1020,11 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 task.pop("_command_confirm_future", None)
                 task.pop("confirm_data", None)
 
+        python_connection = None
+        python_target = None
+
         async def send_fn(target_device_id, action, params):
+            nonlocal python_connection, python_target
             observation_device = devices.get(target_device_id if ':' in target_device_id else _dk(user_id,target_device_id)) if isinstance(target_device_id,str) else None
             target_os = ((observation_device or {}).get('info') or {}).get('os','unknown')
             window_effect = (params.get('action') if action == 'window.control' else
@@ -1098,6 +1110,15 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             if params.get("preserve_content") or params.get("preserve_content_paths"):
                 if (target_dev.get("info") or {}).get("office_content_preservation_version") != 1:
                     return {"status":"error","error":"agent_update_required_for_content_preservation","dispatched":False}
+            if action == "python.run":
+                if not task.get("worker_id") or is_broadcast:
+                    return {"status":"blocked", "error":"python_requires_single_worker", "dispatched":False}
+                if (target_dev.get("info") or {}).get("python_session_protocol") != 1:
+                    return {"status":"failed", "error":"python_session_agent_update_required", "dispatched":False}
+                if python_target is not None and (target_dk != python_target or target_dev.get("ws") is not python_connection):
+                    return {"status":"blocked", "error":"python_session_device_or_connection_changed", "dispatched":False}
+                python_target, python_connection = target_dk, target_dev.get("ws")
+                params = {**params, "_python_task_id":task_id}
             if action == "execute_cmd" and params.get("artifact_paths"):
                 if (target_dev.get("info") or {}).get("artifact_receipt_protocol") != 1:
                     return {"status":"error", "error":"agent_update_required_for_artifact_receipts", "dispatched":False}
@@ -1122,6 +1143,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
             try:
                 result = await send_owned_command(target_dk, action, params, user_id=user_id)
 
+                if action == "python.run" and result.get("status") == "unknown":
+                    task["_action_outcome_unknown"] = True
                 return result
             except RuntimeError as exc:
                 if isinstance(exc, AgentOutcomeUnknown):
@@ -1134,7 +1157,7 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 pending = ConfirmedAction(target_dk, action, params, assessment)
                 connection = target_dev.get("ws")
                 refusal = await wait_for_confirmation(target_device_id, action, params, assessment,
-                    params.get("command") or f"{action}: pid={params.get('pid')}, force={params.get('force', False)}")
+                    params.get("command") or params.get("code") or f"{action}: pid={params.get('pid')}, force={params.get('force', False)}")
                 if refusal:
                     return {"status":"blocked", "error":refusal, "dispatched":False}
                 # Repeat mutable boundaries after the human wait, without reclassifying risk.
@@ -1153,6 +1176,8 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                     # Local revalidation failed before delivery; no action was sent.
                     return {"status":"blocked", "error":"confirmed_action_not_dispatched", "reason": str(exc), "dispatched":False}
 
+                if action == "python.run" and result.get("status") == "unknown":
+                    task["_action_outcome_unknown"] = True
                 return result
 
 
@@ -1356,6 +1381,13 @@ async def run_nl_task(task_id: str, user_id: int, message: str, device_ids: list
                 "answer": f"Ошибка: {error_text}" if error_text else "Произошла внутренняя ошибка. Попробуйте ещё раз.",
                 "commands": received_commands(),
             }
+        finally:
+            if python_target and (devices.get(python_target) or {}).get("ws") is python_connection:
+                try:
+                    await asyncio.wait_for(send_command_to_agent(python_target, "python.close",
+                        {"_python_task_id":task_id}, user_id=user_id), timeout=3)
+                except (RuntimeError, asyncio.TimeoutError):
+                    logger.warning("Could not acknowledge Python session cleanup for task %s", task_id)
 
     if is_task_cancel_requested(task_id):
         finish_cancelled()

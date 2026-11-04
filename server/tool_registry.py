@@ -50,6 +50,7 @@ CANONICAL_TOOL_NAMES = {
     "write_content": "write_content",
     "read_file": "read_file",
     "execute_cmd": "execute_cmd",
+    "python_run": "python.run",
 }
 
 

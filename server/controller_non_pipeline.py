@@ -152,6 +152,7 @@ def _command_log_entry(action: str, command: str, target_device: str, device_inf
 
 
 APP_WINDOW_ACTIONS = {
+    "python_run": "python.run",
     "list_dir": "list_dir",
     "read_file": "get_file_content",
     "web_focus": "web.focus",
@@ -298,7 +299,7 @@ async def process_non_pipeline_command(
 
     base_names = {'answer_text', 'answer_ask_clarification',
                   'system_list_tools', 'system_get_last_run_summary', 'system_update_working_notes',
-                  'list_dir', 'read_file', 'write_content', 'execute_cmd'}
+                  'list_dir', 'read_file', 'write_content', 'execute_cmd', 'python_run'}
     chapters = {}
     opened_chapters = set()
     try:
@@ -947,7 +948,7 @@ async def process_non_pipeline_command(
                         append_entry(tool_log_entry(
                             fn_name,
                             tool_result,
-                            command=fn_args.get("command") or f"[tool] {agent_action}",
+                            command=fn_args.get("command") or fn_args.get("code") or f"[tool] {agent_action}",
                             target_device_id=target_device,
                             hostname=device_info.get("hostname") or target_device,
                             iteration=iteration + 1,

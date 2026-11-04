@@ -44,6 +44,8 @@ def worker_tool_inventory(tools, device_info, *, preserve=False, multiple_target
         fn = tool['function']
         name = fn['name']
         if not multiple_targets:
+            if name == 'python_run' and info.get('python_session_protocol') != 1:
+                continue
             if name == 'read_file' and info.get('file_replace_protocol') != 2:
                 continue
             if name.startswith('office_') and info.get('office_tools_version') != 1:
@@ -82,6 +84,14 @@ RECOVERY_LIST_DIR = {"type": "function", "function": {
 
 TOOLS = [
     *DEVICE_TOOL_SCHEMAS,
+    {"type":"function", "function":{
+        "name":"python_run",
+        "description":"Run Python code in the selected device's IRU virtual environment. Globals persist within this task. Returns stdout, stderr and execution error. After an error inspect actual state before repeating a mutation.",
+        "parameters":{"type":"object", "properties":{
+            "code":{"type":"string", "maxLength":32000},
+            "device_id":{"type":"string"},
+        }, "required":["code"], "additionalProperties":False},
+    }},
     RECOVERY_LIST_DIR,
     {"type":"function", "function": {
         "name":"read_file", "description":"Read complete bounded text and byte SHA-256 without newline conversion; never returns a partial file. Requires file_replace_protocol=2.",
