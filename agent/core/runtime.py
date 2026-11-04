@@ -195,6 +195,7 @@ class AgentRuntime:
         """
         ordinary = asyncio.Queue(maxsize=32)
         speech = asyncio.Queue(maxsize=1)
+        window_observations = asyncio.Queue(maxsize=1)
         sending = asyncio.Lock()
 
         async def reply(payload):
@@ -209,7 +210,8 @@ class AgentRuntime:
                 payload = await self._handle_command(cmd)
                 await reply(payload)
 
-        consumers = [asyncio.create_task(consume(ordinary)), asyncio.create_task(consume(speech))]
+        queues = (ordinary, speech, window_observations)
+        consumers = [asyncio.create_task(consume(queue)) for queue in queues]
         try:
             while not self._stop_event.is_set():
                 for consumer in consumers:
@@ -224,7 +226,10 @@ class AgentRuntime:
                 if data.get("type") != "command":
                     continue
                 cmd = data.get("payload", {})
-                queue = speech if cmd.get("action") == "voice.synthesize" else ordinary
+                queue = {
+                    "voice.synthesize": speech,
+                    "window.list": window_observations,
+                }.get(cmd.get("action"), ordinary)
                 try:
                     queue.put_nowait(cmd)
                 except asyncio.QueueFull:
@@ -234,7 +239,7 @@ class AgentRuntime:
         finally:
             # Drop only commands that have not started. Cancelling to_thread
             # would leave its real action running across a reconnect.
-            for queue in (ordinary, speech):
+            for queue in queues:
                 while not queue.empty():
                     queue.get_nowait()
                 queue.put_nowait(None)

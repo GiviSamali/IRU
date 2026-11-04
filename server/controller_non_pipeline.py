@@ -450,9 +450,23 @@ async def process_non_pipeline_command(
                 pending_corrections.clear()
             final_turn = iteration == max_iterations - 1
             visible_names = base_names | {name for chapter in opened_chapters for name in chapters[chapter]}
+            if recovery_only:
+                visible_names = (visible_names - {"python_run", "write_content"}) | {
+                    "office_docx", "office_xlsx", "office_pptx", "window_control", "app_verify_launch",
+                }
             turn_tools = [tool for tool in non_pipeline_tools
                           if (tool['function']['name'] == 'answer_text' if final_turn
                               else tool['function']['name'] in visible_names)]
+            if recovery_only and not final_turn:
+                for index, tool in enumerate(turn_tools):
+                    name = tool['function']['name']
+                    if name not in {"office_docx", "office_xlsx", "office_pptx", "window_control"}:
+                        continue
+                    tool = deepcopy(tool)
+                    action_schema = tool['function']['parameters']['properties']['action']
+                    action_schema['enum'] = (["active", "list", "find", "monitors"]
+                                             if name == "window_control" else ["inspect"])
+                    turn_tools[index] = tool
             offered_names = {tool['function']['name'] for tool in turn_tools}
             set_current_step(poll_task_id, "ИРУ думает...")
             # The accepted Assignment is already pinned in system_msg. Expose
@@ -709,7 +723,7 @@ async def process_non_pipeline_command(
                         entry = append_entry(_command_log_entry(fn_name, "[blocked after unknown]", target_device,
                             device_info, {"status": "blocked", "error": "mutation_blocked_after_unknown"}, iteration + 1))
                         append_tool_message(tool_call["id"], entry)
-                        add_correction("The action may already have executed. Use only recovery observation tools or report a partial result; never repeat it.")
+                        add_correction("The action may already have executed. Use only recovery observations. If the effect cannot be established, finish with status=unknown; never repeat the mutation.")
                         continue
 
                     canonical_browser_tool = APP_WINDOW_ACTIONS.get(fn_name, fn_name)
@@ -1142,6 +1156,12 @@ async def process_non_pipeline_command(
                         ))
                     if (normalize_operation_result(fn_name, tool_result) == 'unknown'
                             and not is_recovery_observation(fn_name, fn_args,device_os=device_info.get('os'))):
+                        if not recovery_only:
+                            add_correction(
+                                "Action outcome is unknown. Check the actual effect with available observations "
+                                "such as read_file, Office inspect, or a window observation. Do not rerun the "
+                                "mutation. If the effect cannot be established, finish with status=unknown."
+                            )
                         recovery_only = True
                         if poll_task_id in runtime_tasks:
                             runtime_tasks[poll_task_id]['_action_outcome_unknown'] = True
@@ -1152,11 +1172,6 @@ async def process_non_pipeline_command(
                         commands_log[-1]["window_request"] = dict(fn_args)
                     mark_read_only_tool_step(commands_log[-1], fn_name, repeat_guard_args)
                     append_tool_message(tool_call["id"], commands_log[-1])
-                    if (tool_result.get('error') == 'confirmed_transport_outcome_unknown'
-                            and not is_recovery_observation(fn_name, fn_args,device_os=device_info.get('os'))):
-                        # Close the assistant/tool exchange before adding a user correction.
-                        # Providers reject a user message between tool_calls and its result.
-                        add_correction("Action outcome is unknown. Do not repeat it or use another mutating tool. Observe with recovery tools; if the mutation outcome remains unresolved, finish with status=unknown.")
                     if (fn_name=='write_content' and tool_result.get('error')=='replacement_source_missing'
                             and tool_result.get('committed') is False and tool_result.get('status')!='unknown'):
                         add_correction('The expected fragment is absent; the file was not changed. Read the current file '
